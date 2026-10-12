@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::project_interface::{
     MAX_PROJECT_DIAGNOSTICS, ProjectDiagnosticProjection, ProjectInterfaceProjection,
     retain_recent_diagnostics,
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 
 impl HostShared {
     pub(super) fn project_interface(
@@ -15,12 +17,14 @@ impl HostShared {
         request.negotiate().map_err(|error| {
             project_interface_failure(RuntimeHostError::request(
                 error.code(),
-                "negotiate_project_interface",
+                HostLocation::NegotiateProjectInterface,
                 RuntimeErrorCode::ProtocolInvalid,
             ))
         })?;
         let current_ledger_position = self.ledger.latest_sequence().map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("project_runtime_position"))
+            RequestFailure::poison_without_terminal(ledger_error(
+                HostLocation::ProjectRuntimePosition,
+            ))
         })?;
         let decision_page = request
             .decision_page()
@@ -33,27 +37,30 @@ impl HostShared {
             });
         if ledger_position == 0 || ledger_position > current_ledger_position {
             return Err(project_interface_failure(RuntimeHostError::request(
-                "project_decision_cursor_invalid",
-                "project_runtime_interface",
+                SharedCode::ProjectDecisionCursorInvalid,
+                HostLocation::ProjectRuntimeInterface,
                 RuntimeErrorCode::ProtocolInvalid,
             )));
         }
         // The live fact store answers the position it has replayed exactly through (Workflow
         // #317 item E); any other position replays the ledger.
-        let live_facts =
-            lock(&self.facts, "project_runtime_facts")?.active_records_if_at(ledger_position);
+        let live_facts = lock(&self.facts, HostLocation::ProjectRuntimeFacts)?
+            .active_records_if_at(ledger_position);
         let facts = match live_facts {
             Some(facts) => facts,
             None => InstanceFactStore::active_records_at(&self.ledger, ledger_position)
                 .map_err(RequestFailure::poison_without_terminal)?,
         };
-        let approvals = lock(&self.approval_records, "project_runtime_approvals")?
-            .records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let approvals = lock(
+            &self.approval_records,
+            HostLocation::ProjectRuntimeApprovals,
+        )?
+        .records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
+        .map_err(RequestFailure::poison_without_terminal)?;
         // Every policy dispatch writer appends and applies under the policy guard (Workflow
         // #191 U5-F1), so taking it after reading the position sees every event up to it.
         let (catalog, decisions) = {
-            let policy = lock(self.policy()?, "project_runtime_policy")?;
+            let policy = lock(self.policy()?, HostLocation::ProjectRuntimePolicy)?;
             (
                 policy
                     .active_loaded_at(&self.ledger, ledger_position)
@@ -64,8 +71,8 @@ impl HostShared {
         if decisions.snapshot_ledger_position != ledger_position {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "project_snapshot_position_mismatch",
-                    "project_runtime_interface",
+                    HostCode::ProjectSnapshotPositionMismatch,
+                    HostLocation::ProjectRuntimeInterface,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -83,12 +90,12 @@ impl HostShared {
         let actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal } = state
         else {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "project_state_observation_kind",
+                HostLocation::ProjectStateObservationKind,
             )));
         };
         let current_ledger_position = source.sequence;
         let status = status.with_source(source).map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("project_state_source"))
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::ProjectStateSource))
         })?;
         let response = ProjectInterfaceProjection {
             ledger_position,
@@ -137,7 +144,7 @@ impl HostShared {
                     .query_page(query.clone(), after, upper, MAX_PROJECT_DIAGNOSTICS)
                     .map_err(|_| {
                         RequestFailure::poison_without_terminal(ledger_error(
-                            "project_runtime_diagnostics",
+                            HostLocation::ProjectRuntimeDiagnostics,
                         ))
                     })?;
                 let exhausted = page.len() < MAX_PROJECT_DIAGNOSTICS;
@@ -170,14 +177,16 @@ impl HostShared {
         &self,
         request: &RuntimeSubscriptionRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut subscription = self
-            .ledger
-            .subscribe(request.cursor())
-            .map_err(|_| RequestFailure::poison(ledger_error("subscribe_runtime_events"), None))?;
+        let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|_| {
+            RequestFailure::poison(ledger_error(ContractLocation::SubscribeRuntimeEvents), None)
+        })?;
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(request.wait_ms()))
             .ok_or_else(|| {
-                RequestFailure::poison(protocol_error("subscribe_runtime_events"), None)
+                RequestFailure::poison(
+                    protocol_error(ContractLocation::SubscribeRuntimeEvents),
+                    None,
+                )
             })?;
         let mut events = Vec::with_capacity(usize::from(request.max_events()));
         let mut first_receive = true;
@@ -227,7 +236,7 @@ impl HostShared {
                                 .and_then(|page| page.at_snapshot(event.sequence()))
                                 .map_err(|_| {
                                     RequestFailure::poison(
-                                        protocol_error("project_runtime_subscription"),
+                                        protocol_error(HostLocation::ProjectRuntimeSubscription),
                                         None,
                                     )
                                 })?;
@@ -236,14 +245,14 @@ impl HostShared {
                                 .map_err(|error| {
                                     if error.is_fatal() {
                                         RequestFailure::poison(
-                                            ledger_error("project_runtime_subscription"),
+                                            ledger_error(HostLocation::ProjectRuntimeSubscription),
                                             None,
                                         )
                                     } else {
                                         RequestFailure::request(
-                                            RuntimeHostError::request(
+                                            RuntimeHostError::relayed_request(
                                                 error.code(),
-                                                "project_runtime_subscription",
+                                                HostLocation::ProjectRuntimeSubscription.as_str(),
                                                 RuntimeErrorCode::ProtocolInvalid,
                                             ),
                                             RuntimeReceiptState::Denied,
@@ -261,12 +270,15 @@ impl HostShared {
                         events.push(projected);
                     }
                 }
-                Err(error) if error.code() == "subscription_timeout" => {
+                Err(error)
+                    if error.code()
+                        == actingcommand_ledger::LedgerCode::SubscriptionTimeout.as_str() =>
+                {
                     break events.is_empty();
                 }
                 Err(_) => {
                     return Err(RequestFailure::poison(
-                        ledger_error("receive_runtime_subscription"),
+                        ledger_error(HostLocation::ReceiveRuntimeSubscription),
                         None,
                     ));
                 }
@@ -274,7 +286,7 @@ impl HostShared {
         };
         let batch = RuntimeEventBatch::new(events, subscription.resume_cursor(), timed_out)
             .map_err(|_| {
-                RequestFailure::poison(protocol_error("build_runtime_event_batch"), None)
+                RequestFailure::poison(protocol_error(HostLocation::BuildRuntimeEventBatch), None)
             })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -294,12 +306,12 @@ impl HostShared {
             .project_view_page(query.clone(), profile, request.clone())
             .map_err(|error| {
                 if error.is_fatal() {
-                    RequestFailure::poison(ledger_error("query_runtime_events"), None)
+                    RequestFailure::poison(ledger_error(ContractLocation::QueryRuntimeEvents), None)
                 } else {
                     RequestFailure::request(
-                        RuntimeHostError::request(
+                        RuntimeHostError::relayed_request(
                             error.code(),
-                            "query_runtime_events",
+                            ContractLocation::QueryRuntimeEvents.as_str(),
                             RuntimeErrorCode::ProtocolInvalid,
                         ),
                         RuntimeReceiptState::Denied,
@@ -325,11 +337,11 @@ impl HostShared {
         })?;
         let actingcommand_contract::RuntimeObservedState::ControlPlane { status } = state else {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "runtime_state_observation_kind",
+                HostLocation::RuntimeStateObservationKind,
             )));
         };
         let status = status.with_source(source).map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("runtime_state_source"))
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
         })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -384,7 +396,7 @@ impl HostShared {
         }) = observed.payload().runtime_state()
         else {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "runtime_state_observation_missing",
+                HostLocation::RuntimeStateObservationMissing,
             )));
         };
         let source = actingcommand_contract::RuntimeStateSource {
@@ -394,7 +406,7 @@ impl HostShared {
             sampled_completed_at_unix_ms: *sampled_completed_at_unix_ms,
         };
         source.validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("runtime_state_source"))
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
         })?;
         let state = state.clone();
         Ok((state, source))
@@ -408,32 +420,38 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         // The game of each configured policy identity (Workflow #308 slice 4a-2), read and
         // released before the registry lock; a host without policy inputs names no game.
-        let configured_games = lock(&self.policy_inputs, "read_runtime_status_policy_games")?
-            .as_ref()
-            .map(|inputs| {
-                inputs
-                    .instance_identities()
-                    .map(|identity| (identity.instance_id.to_owned(), identity.game_id.to_owned()))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let configured_games = lock(
+            &self.policy_inputs,
+            HostLocation::ReadRuntimeStatusPolicyGames,
+        )?
+        .as_ref()
+        .map(|inputs| {
+            inputs
+                .instance_identities()
+                .map(|identity| (identity.instance_id.to_owned(), identity.game_id.to_owned()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
         // Workflow #191 ps1: the scheduling pauses, read and released before the registry lock.
         let scheduling_pause = lock(
             &self.scheduling_pause,
-            "read_runtime_status_scheduling_pause",
+            HostLocation::ReadRuntimeStatusSchedulingPause,
         )?
         .clone();
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
-        let instances = lock(&self.registered_instances, "read_runtime_status_registry")?
-            .values()
-            .map(|instance| {
-                let resolved = self.resolve_registered_backend(instance)?;
-                Ok((instance.clone(), resolved))
-            })
-            .collect::<Result<Vec<_>, RequestFailure>>()?;
-        let scheduler = lock(&self.scheduler, "read_runtime_status_scheduler")?;
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ReadRuntimeStatusRegistry,
+        )?
+        .values()
+        .map(|instance| {
+            let resolved = self.resolve_registered_backend(instance)?;
+            Ok((instance.clone(), resolved))
+        })
+        .collect::<Result<Vec<_>, RequestFailure>>()?;
+        let scheduler = lock(&self.scheduler, HostLocation::ReadRuntimeStatusScheduler)?;
         let mut projected = Vec::with_capacity(instances.len());
         for (instance, resolved) in instances {
             let instance_id = instance.instance_id();
@@ -441,8 +459,8 @@ impl HostShared {
             let queued_request_count =
                 u32::try_from(scheduler.queued_count(instance_id)).map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "runtime_status_queue_count_overflow",
-                        "project_runtime_control_plane_status",
+                        HostCode::RuntimeStatusQueueCountOverflow,
+                        HostLocation::ProjectRuntimeControlPlaneStatus,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -475,8 +493,8 @@ impl HostShared {
                 )
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "runtime_status_projection_invalid",
-                        "project_runtime_control_plane_status",
+                        HostCode::RuntimeStatusProjectionInvalid,
+                        HostLocation::ProjectRuntimeControlPlaneStatus,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?
@@ -487,8 +505,8 @@ impl HostShared {
                 .and_then(|status| status.with_pause(pause))
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "runtime_status_projection_invalid",
-                        "project_runtime_control_plane_status",
+                        HostCode::RuntimeStatusProjectionInvalid,
+                        HostLocation::ProjectRuntimeControlPlaneStatus,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?,
@@ -498,8 +516,8 @@ impl HostShared {
             .and_then(|status| status.with_scheduling_pause(scheduling_pause.global_state()))
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "runtime_status_projection_invalid",
-                    "project_runtime_control_plane_status",
+                    HostCode::RuntimeStatusProjectionInvalid,
+                    HostLocation::ProjectRuntimeControlPlaneStatus,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -511,18 +529,18 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let (state, source) = self.observe_runtime_state(validated, || {
-            let status = lock(self.monitor_registry()?, "read_monitor_registry")?
+            let status = lock(self.monitor_registry()?, HostLocation::ReadMonitorRegistry)?
                 .status(self.owner_epoch)
                 .map_err(RequestFailure::poison_without_terminal)?;
             Ok(actingcommand_contract::RuntimeObservedState::Monitor { status })
         })?;
         let actingcommand_contract::RuntimeObservedState::Monitor { status } = state else {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "monitor_state_observation_kind",
+                HostLocation::MonitorStateObservationKind,
             )));
         };
         let status = status.with_source(source).map_err(|_| {
-            RequestFailure::poison_without_terminal(ledger_error("monitor_state_source"))
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::MonitorStateSource))
         })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,

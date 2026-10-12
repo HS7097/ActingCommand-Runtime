@@ -63,10 +63,10 @@ fn is_v2_row(record: &TaskDiagnosticRecord) -> bool {
     }
 }
 
-fn invalid(code: &'static str) -> ForensicError {
+fn invalid(code: Code) -> ForensicError {
     ForensicError::new(
         code,
-        "read_task_diagnostic",
+        ForensicsLocation::ReadTaskDiagnostic.location(),
         "task diagnostic data withheld; see its native reference",
     )
 }
@@ -76,9 +76,9 @@ fn line(reader: &mut BufReader<ArtifactReader>) -> ForensicResult<Vec<u8>> {
     reader
         .take((MAX_TASK_DIAGNOSTIC_RECORD_BYTES + 3) as u64)
         .read_until(b'\n', &mut bytes)
-        .map_err(|_| invalid("task_diagnostic_read_failed"))?;
+        .map_err(|_| invalid(ForensicsCode::TaskDiagnosticReadFailed.code()))?;
     if bytes.len() > MAX_TASK_DIAGNOSTIC_RECORD_BYTES + 2 {
-        return Err(invalid("task_diagnostic_record_limit"));
+        return Err(invalid(ForensicsCode::TaskDiagnosticRecordLimit.code()));
     }
     Ok(bytes)
 }
@@ -95,13 +95,13 @@ pub(super) fn is_task_stream(
     }
     let mut reader = BufReader::new(
         open_projected_stream(root, artifact)
-            .map_err(|_| invalid("task_diagnostic_open_failed"))?,
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticOpenFailed.code()))?,
     );
     let mut first = Vec::new();
     (&mut reader)
         .take(2049)
         .read_until(b'\n', &mut first)
-        .map_err(|_| invalid("task_diagnostic_read_failed"))?;
+        .map_err(|_| invalid(ForensicsCode::TaskDiagnosticReadFailed.code()))?;
     if first.len() > 2048 {
         return Ok(false);
     }
@@ -110,15 +110,15 @@ pub(super) fn is_task_stream(
     };
     let mut bytes = header.to_vec();
     bytes.push(b'}');
-    let header: TaskDiagnosticHeader =
-        serde_json::from_slice(&bytes).map_err(|_| invalid("task_diagnostic_header_invalid"))?;
+    let header: TaskDiagnosticHeader = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid(ForensicsCode::TaskDiagnosticHeaderInvalid.code()))?;
     if !is_task_stream_schema(&header.schema_version) {
         return Ok(false);
     }
     reader
         .into_inner()
         .finish()
-        .map_err(|_| invalid("task_diagnostic_integrity_failed"))?;
+        .map_err(|_| invalid(ForensicsCode::TaskDiagnosticIntegrityFailed.code()))?;
     Ok(true)
 }
 
@@ -145,14 +145,14 @@ fn page(
     }
     let mut reader = BufReader::new(
         open_projected_stream(root, artifact)
-            .map_err(|_| invalid("task_diagnostic_open_failed"))?,
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticOpenFailed.code()))?,
     );
     let first = line(&mut reader)?;
     if let Some(header_bytes) = first.strip_suffix(b",\"records\":[\n") {
         let mut header_bytes = header_bytes.to_vec();
         header_bytes.push(b'}');
         let value: serde_json::Value = serde_json::from_slice(&header_bytes)
-            .map_err(|_| invalid("task_diagnostic_header_invalid"))?;
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticHeaderInvalid.code()))?;
         let schema = value
             .get("schema_version")
             .and_then(|v| v.as_str())
@@ -162,12 +162,12 @@ fn page(
             reader
                 .into_inner()
                 .finish()
-                .map_err(|_| invalid("task_diagnostic_integrity_failed"))?;
+                .map_err(|_| invalid(ForensicsCode::TaskDiagnosticIntegrityFailed.code()))?;
             output.state = "unknown_schema";
             return Ok(output);
         }
-        let header: TaskDiagnosticHeader =
-            serde_json::from_value(value).map_err(|_| invalid("task_diagnostic_header_invalid"))?;
+        let header: TaskDiagnosticHeader = serde_json::from_value(value)
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticHeaderInvalid.code()))?;
         let v1 = header.schema_version == TASK_DIAGNOSTIC_SCHEMA;
         if event.links().request_id() != Some(&header.request_id)
             || event.links().correlation_id() != Some(&header.correlation_id)
@@ -176,7 +176,9 @@ fn page(
             || event.links().instance_id() != Some(&header.instance_id)
             || event.links().lease_id() != Some(&header.lease_id)
         {
-            return Err(invalid("task_diagnostic_identity_mismatch"));
+            return Err(invalid(
+                ForensicsCode::TaskDiagnosticIdentityMismatch.code(),
+            ));
         }
         let after = options
             .cursor
@@ -189,43 +191,45 @@ fn page(
                 break;
             }
             if bytes.is_empty() {
-                return Err(invalid("task_diagnostic_unsealed"));
+                return Err(invalid(ForensicsCode::TaskDiagnosticUnsealed.code()));
             }
             let bytes = if total == 0 {
                 bytes.as_slice()
             } else {
                 bytes
                     .strip_prefix(b",")
-                    .ok_or_else(|| invalid("task_diagnostic_framing_invalid"))?
+                    .ok_or_else(|| invalid(ForensicsCode::TaskDiagnosticFramingInvalid.code()))?
             };
             let record: TaskDiagnosticRecord = serde_json::from_slice(bytes)
-                .map_err(|_| invalid("task_diagnostic_record_invalid"))?;
+                .map_err(|_| invalid(ForensicsCode::TaskDiagnosticRecordInvalid.code()))?;
             if v1 && is_v2_row(&record) {
-                return Err(invalid("task_diagnostic_record_invalid"));
+                return Err(invalid(ForensicsCode::TaskDiagnosticRecordInvalid.code()));
             }
             total = total
                 .checked_add(1)
-                .ok_or_else(|| invalid("task_diagnostic_record_limit"))?;
+                .ok_or_else(|| invalid(ForensicsCode::TaskDiagnosticRecordLimit.code()))?;
             if record.index != total
                 || record
                     .parent_index
                     .is_some_and(|parent| parent == 0 || parent >= total)
             {
-                return Err(invalid("task_diagnostic_record_order_invalid"));
+                return Err(invalid(
+                    ForensicsCode::TaskDiagnosticRecordOrderInvalid.code(),
+                ));
             }
             if record.index > after && output.records.len() < limit {
                 output.records.push(record);
             }
         }
         if !line(&mut reader)?.is_empty() {
-            return Err(invalid("task_diagnostic_trailing_data"));
+            return Err(invalid(ForensicsCode::TaskDiagnosticTrailingData.code()));
         }
         reader
             .into_inner()
             .finish()
-            .map_err(|_| invalid("task_diagnostic_integrity_failed"))?;
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticIntegrityFailed.code()))?;
         if after > total {
-            return Err(invalid("task_diagnostic_cursor_invalid"));
+            return Err(invalid(ForensicsCode::TaskDiagnosticCursorInvalid.code()));
         }
         let last = output.records.last().map_or(after, |record| record.index);
         output.next_cursor = (last < total).then(|| TaskDiagnosticCursor {
@@ -247,14 +251,14 @@ fn page(
             bytes.extend_from_slice(&next);
         }
         if bytes.len() > MAX_TASK_DIAGNOSTIC_RECORD_BYTES {
-            return Err(invalid("legacy_diagnostic_read_limit"));
+            return Err(invalid(ForensicsCode::LegacyDiagnosticReadLimit.code()));
         }
         reader
             .into_inner()
             .finish()
-            .map_err(|_| invalid("task_diagnostic_integrity_failed"))?;
-        let document: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| invalid("legacy_diagnostic_invalid"))?;
+            .map_err(|_| invalid(ForensicsCode::TaskDiagnosticIntegrityFailed.code()))?;
+        let document: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| invalid(ForensicsCode::LegacyDiagnosticInvalid.code()))?;
         let schema = document
             .get("schema_version")
             .and_then(|value| value.as_str());
@@ -283,7 +287,7 @@ fn page(
                 .as_ref()
                 .map_or(0, |cursor| cursor.after_index);
             if after > 1 {
-                return Err(invalid("task_diagnostic_cursor_invalid"));
+                return Err(invalid(ForensicsCode::TaskDiagnosticCursorInvalid.code()));
             }
             output.total_records = Some(1);
             if after == 0 && limit > 0 {
@@ -308,7 +312,7 @@ pub(super) fn expand(
     report: &mut TaskEvidenceReport,
 ) -> ForensicResult<()> {
     if options.limit == 0 || options.limit > MAX_TASK_DIAGNOSTIC_PAGE_RECORDS {
-        return Err(invalid("task_diagnostic_page_limit"));
+        return Err(invalid(ForensicsCode::TaskDiagnosticPageLimit.code()));
     }
     let mut remaining = options.limit;
     let mut cursor_found = options.cursor.is_none();
@@ -335,7 +339,7 @@ pub(super) fn expand(
                     continue;
                 }
                 if cursor.sha256 != artifact.sha256 {
-                    return Err(invalid("task_diagnostic_cursor_mismatch"));
+                    return Err(invalid(ForensicsCode::TaskDiagnosticCursorMismatch.code()));
                 }
                 cursor_found = true;
             }
@@ -369,7 +373,9 @@ pub(super) fn expand(
         }
     }
     if !cursor_found {
-        return Err(invalid("task_diagnostic_cursor_outside_window"));
+        return Err(invalid(
+            ForensicsCode::TaskDiagnosticCursorOutsideWindow.code(),
+        ));
     }
     let runs = report
         .page

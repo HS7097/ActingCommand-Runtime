@@ -24,9 +24,11 @@ pub const TASK_SELECTION_RECORD_MAX_BYTES: usize = 64 * 1024;
 /// Entries of the decision-level reason chain, as for a policy dispatch.
 pub const TASK_SELECTION_MAX_REASONS: usize = 128;
 /// The record's compact JSON exceeds [`TASK_SELECTION_RECORD_MAX_BYTES`].
-pub const SELECTION_RECORD_TOO_LARGE: &str = "selection_record_too_large";
+pub const SELECTION_RECORD_TOO_LARGE: crate::outcome::Code =
+    crate::codes::SanitizationCode::SelectionRecordTooLarge.code();
 
-const INVALID: &str = "invalid_task_selection_record";
+const INVALID: crate::outcome::Code =
+    crate::codes::SanitizationCode::InvalidTaskSelectionRecord.code();
 
 /// The selection policy the step evaluated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

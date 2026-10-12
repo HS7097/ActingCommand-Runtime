@@ -3,6 +3,7 @@
 //! Typed client-action and approval records accepted by Runtime IPC.
 
 use crate::SanitizationError;
+use crate::codes::SanitizationCode;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
@@ -42,6 +43,7 @@ pub struct ClientActionRecord {
     surface_id: String,
     control_id: String,
     kind: ClientActionKind,
+    /// Checked by the registered instance alias rule (`validate_instance_alias`), bytes unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     instance_alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,13 +73,18 @@ impl ClientActionRecord {
         validate_identifier(&self.surface_id, "surface_id")?;
         validate_identifier(&self.control_id, "control_id")?;
         if let Some(instance_alias) = &self.instance_alias {
-            validate_identifier(instance_alias, "instance_alias")?;
+            crate::validate_instance_alias(instance_alias).map_err(|_| {
+                SanitizationError::new(
+                    SanitizationCode::InvalidInteractionIdentifier,
+                    "instance_alias",
+                )
+            })?;
         }
         match (&self.kind, &self.value) {
             (ClientActionKind::Button, None) | (ClientActionKind::Command, None) => Ok(()),
             (ClientActionKind::Input | ClientActionKind::Command, Some(value)) => value.validate(),
             _ => Err(SanitizationError::new(
-                "invalid_client_action_value",
+                SanitizationCode::InvalidClientActionValue,
                 "client_action",
             )),
         }
@@ -130,7 +137,7 @@ impl ClientActionValue {
             }
             Self::Boolean(_) | Self::Integer(_) => Ok(()),
             _ => Err(SanitizationError::new(
-                "invalid_client_action_value",
+                SanitizationCode::InvalidClientActionValue,
                 "client_action_value",
             )),
         }
@@ -155,7 +162,7 @@ impl OwnerUnlockActor {
             return Ok(());
         }
         Err(SanitizationError::new(
-            "invalid_owner_unlock_actor",
+            SanitizationCode::InvalidOwnerUnlockActor,
             "owner_unlock_actor",
         ))
     }
@@ -250,7 +257,7 @@ impl ApprovalTarget {
         };
         if *catalog_version == 0 || !canonical_sha256(catalog_hash) {
             return Err(SanitizationError::new(
-                "invalid_approval_target",
+                SanitizationCode::InvalidApprovalTarget,
                 "approval_target",
             ));
         }
@@ -280,6 +287,41 @@ impl ApprovalTarget {
     }
 }
 
+/// The reason an approval decision names: an identifier its author chose, not a registered
+/// code (Workflow #378 A2a, decision D8). It is built only through [`ApprovalReasonCode::new`]
+/// or by decoding, and both apply the interaction identifier rule.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ApprovalReasonCode(String);
+
+impl ApprovalReasonCode {
+    pub fn new(value: impl Into<String>) -> Result<Self, SanitizationError> {
+        let value = value.into();
+        validate_identifier(&value, "reason_code")?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ApprovalReasonCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ApprovalReasonCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(|error| serde::de::Error::custom(error.code()))
+    }
+}
+
 /// One typed approval, rejection, pin, or revocation recorded by Runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -287,7 +329,7 @@ pub struct ApprovalDecisionRecord {
     approval_id: String,
     disposition: ApprovalDisposition,
     target: ApprovalTarget,
-    reason_code: String,
+    reason_code: ApprovalReasonCode,
 }
 
 impl ApprovalDecisionRecord {
@@ -295,13 +337,13 @@ impl ApprovalDecisionRecord {
         approval_id: impl Into<String>,
         disposition: ApprovalDisposition,
         target: ApprovalTarget,
-        reason_code: impl Into<String>,
+        reason_code: ApprovalReasonCode,
     ) -> Result<Self, SanitizationError> {
         let record = Self {
             approval_id: approval_id.into(),
             disposition,
             target,
-            reason_code: reason_code.into(),
+            reason_code,
         };
         record.validate()?;
         Ok(record)
@@ -309,10 +351,13 @@ impl ApprovalDecisionRecord {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if !self.approval_id.starts_with("approval:") {
-            return Err(SanitizationError::new("invalid_approval_id", "approval_id"));
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidApprovalId,
+                "approval_id",
+            ));
         }
         validate_identifier(&self.approval_id, "approval_id")?;
-        validate_identifier(&self.reason_code, "reason_code")?;
+        validate_identifier(self.reason_code.as_str(), "reason_code")?;
         self.target.validate()
     }
 
@@ -328,7 +373,7 @@ impl ApprovalDecisionRecord {
         &self.target
     }
 
-    pub fn reason_code(&self) -> &str {
+    pub const fn reason_code(&self) -> &ApprovalReasonCode {
         &self.reason_code
     }
 }
@@ -343,7 +388,7 @@ fn validate_identifier(value: &str, field: &'static str) -> Result<(), Sanitizat
         })
     {
         return Err(SanitizationError::new(
-            "invalid_interaction_identifier",
+            SanitizationCode::InvalidInteractionIdentifier,
             field,
         ));
     }
@@ -389,7 +434,7 @@ mod tests {
             Some(ClientActionValue::PathSafeString("../secret".to_owned())),
         )
         .expect_err("path traversal must not enter the ledger");
-        assert_eq!(error.code(), "invalid_client_action_value");
+        assert_eq!(error.code().as_str(), "invalid_client_action_value");
 
         ClientActionRecord::new(
             "settings",
@@ -413,7 +458,7 @@ mod tests {
                 catalog_hash: hash(),
                 catalog_version: 1,
             },
-            "user_confirmed",
+            crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
         )
         .expect("approval");
         assert!(record.disposition().grants_authority());
@@ -433,7 +478,7 @@ mod tests {
                 "approval:fixture-b",
                 ApprovalDisposition::Rejected,
                 target,
-                "user_rejected",
+                crate::ApprovalReasonCode::new("user_rejected").expect("approval reason"),
             )
             .expect("typed approval target");
         }
@@ -447,9 +492,9 @@ mod tests {
                 catalog_hash: hash(),
                 catalog_version: 1,
             },
-            "user_confirmed",
+            crate::ApprovalReasonCode::new("user_confirmed").expect("approval reason"),
         )
         .expect_err("approval prefix is required");
-        assert_eq!(error.code(), "invalid_approval_id");
+        assert_eq!(error.code().as_str(), "invalid_approval_id");
     }
 }

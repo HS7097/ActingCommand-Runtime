@@ -83,6 +83,49 @@ a version of that id that was active, and `catalog_activation_not_newer` without
 When present, the manifest carries `policy.catalog_transition.kind` and
 `policy.catalog_transition.expected_active_catalog_hash` (`explicit`).
 
+The optional `policy.monitor` (Workflow #397) sets the policy monitor's own connection to its
+Runtime: the subscription through which the daemon learns of new ledger events and wakes its
+policy driver.
+
+```json
+{"policy":{"monitor":{"io_timeout_ms":15000,"retry_limit":5,"retry_backoff_ms":1000,"retry_backoff_max_ms":30000}}}
+```
+
+- `io_timeout_ms` (default `15000`, range `1000..=60000`): the I/O timeout of that connection
+  (connect, request, receipt). The subscription is answered at once, so the timeout only
+  matters while the host is slow to answer; the former 5 s did not cover a host at 100 % CPU.
+- `retry_limit` (default `5`, range `0..=100`): how many transient failures in a row the
+  monitor retries. A transient failure is a receipt header that did not arrive within
+  `io_timeout_ms` (`runtime_receipt_header_failed` with I/O kind `timed_out`, or
+  `would_block`) for a request sent to this Runtime. Each retry writes the warning
+  `policy_monitor_request_retried` (values `attempts`, `limit_count`, `io_kind`,
+  `operation`, `retry_after_ms`, `os_error` when the OS gave one) as a `WARN actingd:` line
+  and an `OUTCOME actingd:` line on stderr, waits, and sends the request again on a fresh
+  connection from the same cursor, so no event is missed. A request that succeeds starts the
+  count again. One failure more than `retry_limit` in a row writes
+  `policy_monitor_retries_exhausted` (error, the same values without `retry_after_ms`) and
+  stops the daemon with that request's failure, as before: `runtime.failed` at stage
+  `runtime.lifecycle.policy_monitor` and the `FATAL actingd: monitor:` line. `0` retries
+  nothing.
+- `retry_backoff_ms` (default `1000`, range `1..=600000`) and `retry_backoff_max_ms` (default
+  `30000`, range `retry_backoff_ms..=600000`; when absent, at least `retry_backoff_ms`): the
+  wait after the first failure in a row, doubled after each further one, at most
+  `retry_backoff_max_ms`. The daemon keeps checking for a fatal error, a shutdown, its driver
+  and an install drain while it waits.
+
+Every other failure of the monitor's request stops the daemon at once, as before, and so does
+a connection that reaches a Runtime other than the one the daemon hosts (another owner epoch
+or process id in the runtime info file): `policy_monitor_runtime_identity_changed`. Dropping
+the timed-out connection may make the Runtime record its own `runtime.failed` (stage
+`runtime.ipc.request_read`) when its late answer finds the connection closed. A value outside
+its range fails with `policy_monitor_config_invalid`, stage `assemble`; unknown fields are
+refused as everywhere else. With a `policy` section the manifest carries
+`policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
+`policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, each `explicit`
+when the file named it. `policy.monitor` is actingd-config revision 5
+(`contracts/component-interfaces.md`): an earlier Runtime refuses a file that names it, and a
+file without it keeps its revision.
+
 ## Result
 
 Exactly one JSON object is written to stdout on both outcomes.
@@ -103,13 +146,16 @@ one entry per group; the real object carries every key listed below):
 configuration. Omission reports an enabled subsystem with reason `flag absent`
 and a `true` parameter from `default`. Explicit `false` reports a disabled
 subsystem with reason `configured off` and a `false` parameter from `explicit`.
-The first periodic round can process eligible historical frames; rounds do not
-require low disk capacity. Existing verified/success/close, summary/settlement,
-pin, material-use and intent/outcome protections and round budgets apply.
-Explicit `false` disables periodic retention and new periodic evictions; startup
-still completes previously committed pending `EvictionIntent` records. The
-manifest reports effective configuration, not evidence that a round or deletion
-has occurred.
+When enabled, the frame cleaner (Workflow #375 R5d, `contracts/ledger-store.md`,
+"Frame cleaner") removes due frames and moves error and Lab frames into
+`<state root>\kept\` within 2 s of the start: its first sweep covers every
+historical frame that is due, and it does not wait for low disk capacity. It
+records nothing in the ledger, so the first removal or move makes the state root
+one-way: an earlier Runtime refuses to start on it. Explicit `false` runs no
+sweep, and actingd prints `actingd frame_retention disabled` once at start;
+startup still completes previously committed pending `EvictionIntent` records.
+The manifest reports effective configuration, not evidence that a sweep or
+deletion has occurred.
 
 `frame_retention_failed_run_successes` (K, default `3`, range `1..=1024`) and
 `frame_retention_failed_run_days` (T, default `7`, range `1..=36500`) configure
@@ -123,6 +169,8 @@ even when periodic retention is disabled. Days convert to milliseconds within
 Confirmed close, summary/settlement, material binding and permanent evidence
 protections still apply. GlobalLedger seals the effective K/T and original
 terminal with the chosen eligibility basis in the original eviction intent.
+Since Workflow #375 R5d the cleaner admits no eviction intent, so K and T gate
+nothing; both keys are still validated and reported.
 
 `frame_retention_dedup_error` (boolean, default `true`) and
 `frame_retention_dedup_lab` (boolean, default `false`) are the frame classes'
@@ -226,7 +274,8 @@ revision.
     the per-instance keys below, the
     `capacity_thresholds.*` bytes, the performance monitor's
     `performance_monitor.pressure_start_samples` /
-    `performance_monitor.pressure_end_samples` and, when the section is
+    `performance_monitor.pressure_end_samples`, with a `policy` section the
+    `policy.monitor.*` settings (Workflow #397, described above) and, when the section is
     present, the `agent_dispatcher.*` budget; plus the values the daemon
     applies without a file field: `scheduler.*`, `policy_cadence.*`,
     `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
@@ -331,7 +380,8 @@ catalog plan startup would make (see "Catalog Lineage" in
 `contracts/scheduling/README.md` and the driver's approval rules in
 `contracts/client-interactions.md`), with the same decision and approval
 functions. It reads the state root's ledger without the owner lock and without
-referenced material (SQLite read-only). In one read transaction it
+referenced material (SQLite read-only), and without the whole-file
+`PRAGMA quick_check`. In one read transaction it
 authenticates the keyed head, checks that the stored sequences are exactly 1 to
 the head, and reads and authenticates only the head record and the records the
 plan uses: `state.migrated`, the four `catalog.*` transition types and
@@ -339,8 +389,11 @@ plan uses: `state.migrated`, the four `catalog.*` transition types and
 read, so the preview does not establish their integrity; startup and
 `actingd ledger-maintenance verify` check every record. A segment ledger is read
 whole. The command then reads the State documents through a read-only view of
-the same database and the catalog generations from their immutable directories;
-the configured catalog is compiled in memory, nothing is staged. The ledger read is bounded to
+the same database, opened the same way, and the catalog generations from their
+immutable directories; the configured catalog is compiled in memory, nothing is
+staged. Page-level damage in parts of the file the preview does not read is
+found by startup and `actingd ledger-maintenance verify`, which run
+`PRAGMA quick_check(1)` when they open the database. The ledger read is bounded to
 60 seconds, well under the 90 seconds `acsetup` gives this command, so a slow
 read fails with the reader's own `ledger_read_budget_exceeded` at stage
 `policy_state`. A missing state root is previewed as a fresh one; an existing root
@@ -362,11 +415,8 @@ The result carries `policy_plan`:
 - `approvals` lists the approval ids startup would record, approve again and
   revoke.
 - `phase_ms` is the time of each phase in milliseconds: `compile` (the
-  configured catalog), `ledger` (opening the database, including its whole-file
-  `PRAGMA quick_check(1)`, then the head, contiguity and the records above; the
-  check sets the cost, which grows with `runtime-state.sqlite`: about 24 ms per MB
-  when the file is not cached and about 1.2 ms per MB when it is, measured at
-  550 MB),
+  configured catalog), `ledger` (opening the database without its whole-file
+  check, then the head, contiguity and the records above),
   `projection` (the State documents, the catalog lineage and the active
   generation), `approvals` (the approval decisions, the plan and its approvals)
   and `total`. A fresh or absent state root reads no ledger.
@@ -688,7 +738,7 @@ then `R\tools\platform-tools\adb.exe`. Under the A/B layout an `actingd` in
 `<root>` that the lock names: its adb is `<root>\tools\platform-tools\adb.exe`,
 never a slot's (Workflow #359). acsetup runs `check-config` with the `actingd`
 of the slot it prepares, so that check sees and hashes the root's adb; acsetup
-runs nothing from its staging directory. A development build, the H3 check of
+runs nothing from its staging directory. A development build, the boot smoke of
 the exact-SHA build and a staging directory named after the zip files (older
 acsetup) are no install root and behave as before.
 

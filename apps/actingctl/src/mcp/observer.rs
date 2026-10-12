@@ -7,8 +7,10 @@
 use super::runs;
 use super::runtime::{Connected, Location, read_bounded};
 use super::tools::{
-    self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+    self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
+use crate::codes::ActingctlCode;
+use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_contract::{
     ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition, LedgerView,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectedEvent,
@@ -59,7 +61,7 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
                 "daemon".to_owned(),
                 json!({
                     "online": false,
-                    "error": {"code": error.code(), "message": error.message()},
+                    "error": {"code": error.code_spelling(), "message": error.message()},
                 }),
             );
             result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
@@ -162,7 +164,7 @@ fn instance_row(
             json!({
                 "revision": pause.revision,
                 "stage": pause.stage,
-                "reason_code": pause.reason_code,
+                "pause_reason": pause.pause_reason,
             }),
         );
     }
@@ -189,13 +191,13 @@ pub(super) fn select_instance<'s>(
     });
     let selected = matching.next().ok_or_else(|| {
         ToolError::usage(
-            "instance_unknown",
+            RuntimeErrorCode::InstanceUnknown,
             format!("no configured instance has the alias, instance_id or ADB port {selector}"),
         )
     })?;
     if matching.next().is_some() {
         return Err(ToolError::usage(
-            "instance_ambiguous",
+            ActingctlCode::InstanceAmbiguous,
             format!("{selector} names more than one instance; pass its alias or instance_id"),
         ));
     }
@@ -234,7 +236,7 @@ fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
                 install.insert("build".to_owned(), Value::Object(build));
             }
             Err(reason) => warnings.push(json!({
-                "code": "install_build_manifest_unreadable",
+                "code": ActingctlCode::InstallBuildManifestUnreadable.as_str(),
                 "message": reason,
             })),
         }
@@ -292,7 +294,7 @@ pub(super) fn events(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
                     |error| {
                         ToolError::new(
                             "runtime",
-                            "cursor_encode_failed",
+                            ActingctlCode::CursorEncodeFailed,
                             format!("cannot form the next cursor: {error}"),
                         )
                     },
@@ -409,7 +411,7 @@ fn text_of(value: Value) -> String {
 
 fn cursor_invalid() -> ToolError {
     ToolError::usage(
-        "cursor_invalid",
+        ActingctlCode::CursorInvalid,
         "this cursor belongs to another query, Runtime connection or server process; read again from the first page without a cursor",
     )
 }
@@ -429,7 +431,7 @@ pub(super) fn encode_cursor(
         .ok_or_else(|| {
             ToolError::new(
                 "runtime",
-                "cursor_encode_failed",
+                ActingctlCode::CursorEncodeFailed,
                 "the Runtime cursor carries no query fingerprint",
             )
         })?;
@@ -512,7 +514,7 @@ pub(super) fn material(context: &ToolContext<'_>, arguments: &Map<String, Value>
 fn parse_material_ref(reference: &str) -> Result<(LedgerEventPosition, ArtifactId), ToolError> {
     let invalid = || {
         ToolError::usage(
-            "material_ref_invalid",
+            ActingctlCode::MaterialRefInvalid,
             "ref must be a materials[].ref from ac_events (<seq>:<event_id>:<artifact_id>)",
         )
     };
@@ -543,7 +545,7 @@ fn resolve_material(
     let request = RuntimeEventQueryPageRequest::new(1, None).map_err(|error| {
         ToolError::new(
             "runtime",
-            "material_query_invalid",
+            ActingctlCode::MaterialQueryInvalid,
             format!("cannot form the event query: {error}"),
         )
     })?;
@@ -564,7 +566,7 @@ fn resolve_material(
         .cloned()
         .ok_or_else(|| {
             ToolError::usage(
-                "material_ref_unknown",
+                ActingctlCode::MaterialRefUnknown,
                 "the ledger holds no such event and material at this sequence",
             )
         })?;
@@ -588,7 +590,7 @@ fn material_text(
         ArtifactMediaType::ApplicationJson | ArtifactMediaType::TextPlain
     ) {
         return Err(ToolError::usage(
-            "material_not_text",
+            ActingctlCode::MaterialNotText,
             format!(
                 "this material is {}; read it with mode export",
                 text_of(json!(artifact.media_type))
@@ -634,7 +636,7 @@ fn material_text(
     };
     let text = utf8_prefix(&bytes).ok_or_else(|| {
         ToolError::usage(
-            "material_not_text",
+            ActingctlCode::MaterialNotText,
             "the bytes at this offset are not UTF-8 text; start at 0 or at a next_offset, or use mode export",
         )
     })?;
@@ -686,7 +688,7 @@ fn material_export(
     let artifact = &material.artifact;
     if artifact.byte_count > MAX_EXPORT_BYTES as u64 {
         return Err(ToolError::usage(
-            "material_too_large",
+            ActingctlCode::MaterialTooLarge,
             format!(
                 "the material has {} bytes; ac_material exports at most {MAX_EXPORT_BYTES}",
                 artifact.byte_count
@@ -747,20 +749,21 @@ fn material_export(
 }
 
 /// The Runtime answered the read without the material: its state, limit and typed failure
-/// are passed on as they are.
+/// are passed on as they are. Without a failure the code is `material_<state>`, actingctl's own
+/// dynamic family, which A5 splits into one fixed code with a `material_state` value.
 fn material_unavailable(
     state: RuntimeMaterialReadState,
     limit: Option<RuntimeMaterialReadLimit>,
     failure: Option<&RuntimeMaterialReadFailure>,
 ) -> ToolError {
     let state_text = text_of(json!(state));
-    let code = failure.map_or_else(
+    let relayed_code = failure.map_or_else(
         || format!("material_{state_text}"),
         |failure| failure.code.clone(),
     );
-    ToolError::new(
+    ToolError::coded(
         "runtime",
-        code,
+        ToolCode::Relayed { relayed_code },
         format!("the Runtime did not provide the material (state {state_text})"),
     )
     .with_detail("material_state", json!(state))
@@ -790,7 +793,7 @@ pub(super) fn export_bytes(
     let failed = |action: &str, path: &Path, error: io::Error| {
         ToolError::new(
             "runtime",
-            "material_export_failed",
+            ActingctlCode::MaterialExportFailed,
             format!("{action} {}: {error}", path.display()),
         )
         .with_detail("path", json!(path.display().to_string()))

@@ -2,7 +2,10 @@
 
 //! Runtime bridge from immutable strategic reports to the existing proposal compiler.
 
+use crate::codes::HostCode;
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CatalogDeclarationPatch, CatalogProposal, MAX_PROPOSAL_PATCHES, ProjectedArtifactReference,
     ProposalDocument, ProposalKind, ProposalPatchOperation, ProposalPreview, RuntimeErrorCode,
@@ -28,7 +31,7 @@ impl StrategicPlanPreparation {
         preview: Option<ProposalPreview>,
     ) -> RuntimeHostResult<Self> {
         if proposal.is_some() != preview.is_some() {
-            return Err(fatal("strategy_plan_shape_invalid"));
+            return Err(fatal(HostCode::StrategyPlanShapeInvalid));
         }
         Ok(Self {
             report,
@@ -66,9 +69,9 @@ pub(crate) fn build_strategy_proposal(
         .map(|instance| instance.instance_id.as_str())
         .collect::<BTreeSet<_>>();
     let tasks: TasksDocument = serde_json::from_slice(&sources.tasks.bytes)
-        .map_err(|_| fatal("strategy_catalog_source_invalid"))?;
+        .map_err(|_| fatal(HostCode::StrategyCatalogSourceInvalid))?;
     let activity: ActivityDocument = serde_json::from_slice(&sources.activity.bytes)
-        .map_err(|_| fatal("strategy_catalog_source_invalid"))?;
+        .map_err(|_| fatal(HostCode::StrategyCatalogSourceInvalid))?;
     let task_removals = tasks
         .tasks
         .iter()
@@ -129,9 +132,9 @@ pub(crate) fn build_strategy_proposal(
         .and_then(|value| value.checked_add(4))
         .and_then(|value| value.checked_add(task_additions.len()))
         .and_then(|value| value.checked_add(profile_additions.len()))
-        .ok_or_else(|| request("strategy_patch_budget_exceeded"))?;
+        .ok_or_else(|| request(HostCode::StrategyPatchBudgetExceeded))?;
     if patch_count > MAX_PROPOSAL_PATCHES {
-        return Err(request("strategy_patch_budget_exceeded"));
+        return Err(request(HostCode::StrategyPatchBudgetExceeded));
     }
     let mut patches = Vec::with_capacity(patch_count);
     for index in task_removals.into_iter().rev() {
@@ -165,7 +168,7 @@ pub(crate) fn build_strategy_proposal(
         ProposalKind::CatalogDiff { patches },
     )
     .map(Some)
-    .map_err(|_| request("strategy_proposal_invalid"))
+    .map_err(|_| request(HostCode::StrategyProposalInvalid))
 }
 
 fn remove_patch(
@@ -173,7 +176,7 @@ fn remove_patch(
     path: String,
 ) -> RuntimeHostResult<CatalogDeclarationPatch> {
     CatalogDeclarationPatch::new(document, ProposalPatchOperation::Remove, path, None)
-        .map_err(|_| request("strategy_patch_invalid"))
+        .map_err(|_| request(HostCode::StrategyPatchInvalid))
 }
 
 fn version_patches(version: u64) -> RuntimeHostResult<Vec<CatalogDeclarationPatch>> {
@@ -191,7 +194,7 @@ fn version_patches(version: u64) -> RuntimeHostResult<Vec<CatalogDeclarationPatc
             "/catalog/catalog_version",
             Some(version.to_string()),
         )
-        .map_err(|_| fatal("strategy_version_patch_invalid"))
+        .map_err(|_| fatal(HostCode::StrategyVersionPatchInvalid))
     })
     .collect()
 }
@@ -201,23 +204,24 @@ fn add_patch(
     path: &'static str,
     value: &impl serde::Serialize,
 ) -> RuntimeHostResult<CatalogDeclarationPatch> {
-    let value = serde_json::to_string(value).map_err(|_| fatal("strategy_patch_encode_failed"))?;
+    let value =
+        serde_json::to_string(value).map_err(|_| fatal(HostCode::StrategyPatchEncodeFailed))?;
     CatalogDeclarationPatch::new(document, ProposalPatchOperation::Add, path, Some(value))
-        .map_err(|_| request("strategy_patch_invalid"))
+        .map_err(|_| request(HostCode::StrategyPatchInvalid))
 }
 
-fn request(code: &'static str) -> RuntimeHostError {
+fn request(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "prepare_strategic_report",
+        ContractLocation::PrepareStrategicReport,
         RuntimeErrorCode::InvalidRequest,
     )
 }
 
-fn fatal(code: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "prepare_strategic_report",
+        ContractLocation::PrepareStrategicReport,
         RuntimeErrorCode::RuntimeFatal,
     )
 }

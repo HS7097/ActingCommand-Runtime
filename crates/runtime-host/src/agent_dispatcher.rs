@@ -2,7 +2,11 @@
 
 //! Runtime-owned durable session state for a detachable Agent Dispatcher sidecar.
 
+use crate::codes::{HostCode, HostLocation};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     AgentAttentionState, AgentCapabilityContract, AgentPayload, AgentResponseDisposition,
     AgentSessionBudget, AgentSessionContext, AgentSessionEventData, AgentSessionId,
@@ -10,8 +14,19 @@ use actingcommand_contract::{
     EventPayload, EventQuery, EventType, InstanceId, PolicyPayload, PolicyPlanningSignalKind,
     ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode, TerminalEvent,
 };
-use actingcommand_ledger::{GlobalLedger, PersistedEvent};
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerResult, PersistedEvent};
 use std::collections::BTreeMap;
+
+/// The event types an `EventPayload::Agent` record can have; the Ledger checks every record's
+/// type against its payload, so these types select exactly the Agent records.
+const AGENT_EVENT_TYPES: [EventType; 6] = [
+    EventType::AgentWakeRequested,
+    EventType::AgentSessionStarted,
+    EventType::AgentSessionResumed,
+    EventType::AgentResponseRecorded,
+    EventType::AgentSessionCompleted,
+    EventType::AgentSessionEscalated,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDispatcherConfig {
@@ -27,15 +42,15 @@ impl AgentDispatcherConfig {
     ) -> RuntimeHostResult<Self> {
         let budget = AgentSessionBudget::new(max_attempts, max_session_ms).map_err(|_| {
             request(
-                "agent_dispatcher_config_invalid",
-                "configure_agent_dispatcher",
+                SharedCode::AgentDispatcherConfigInvalid,
+                HostLocation::ConfigureAgentDispatcher,
             )
         })?;
         let capabilities =
             AgentCapabilityContract::read_only(max_projection_events).map_err(|_| {
                 request(
-                    "agent_dispatcher_config_invalid",
-                    "configure_agent_dispatcher",
+                    SharedCode::AgentDispatcherConfigInvalid,
+                    HostLocation::ConfigureAgentDispatcher,
                 )
             })?;
         Ok(Self {
@@ -53,7 +68,7 @@ impl AgentDispatcherConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentWakeRecord {
     data: AgentWakeData,
     event_sequence: u64,
@@ -93,7 +108,7 @@ pub(crate) enum AgentResponsePreparation {
     Replay(AgentSessionStatus),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct AgentDispatcherState {
     wakes: BTreeMap<AgentWakeId, AgentWakeRecord>,
     wakes_by_trigger: BTreeMap<actingcommand_contract::EventId, AgentWakeId>,
@@ -104,7 +119,7 @@ pub(crate) struct AgentDispatcherState {
     response_requests: BTreeMap<RequestId, AgentSessionEventData>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AgentResumeRecord {
     session_id: AgentSessionId,
     correlation_id: CorrelationId,
@@ -117,10 +132,43 @@ impl AgentDispatcherState {
         ledger: &GlobalLedger,
         instance_ids_by_alias: &BTreeMap<String, InstanceId>,
     ) -> RuntimeHostResult<Self> {
+        Self::recover_paged(ledger, instance_ids_by_alias, RECOVERY_PAGE_EVENTS)
+    }
+
+    /// Workflow #381 R4a: reads only the planning signals and the Agent records, each type in
+    /// pages of at most `page_events` events pinned to one ledger position, and folds them as
+    /// the whole-ledger read did.
+    pub(crate) fn recover_paged(
+        ledger: &GlobalLedger,
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+        page_events: usize,
+    ) -> RuntimeHostResult<Self> {
+        let (signals, agent_events) = read_recovery_events(ledger, page_events)
+            .map_err(|_| ledger_error(HostLocation::RecoverAgentDispatcher))?;
+        Self::fold(&signals, &agent_events, instance_ids_by_alias)
+    }
+
+    /// The fold before Workflow #381 R4a, over one whole-ledger read; the reference the paged
+    /// recovery is checked against.
+    #[cfg(test)]
+    pub(crate) fn recover_whole_ledger_for_test(
+        ledger: &GlobalLedger,
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+    ) -> RuntimeHostResult<Self> {
         let events = ledger
             .query(EventQuery::default())
-            .map_err(|_| ledger_error("recover_agent_dispatcher"))?;
-        let source_events = events
+            .map_err(|_| ledger_error(crate::codes::HostLocation::RecoverAgentDispatcher))?;
+        Self::fold(&events, &events, instance_ids_by_alias)
+    }
+
+    /// Folds the Agent records of `agent_events` in ledger order, checking each wake against
+    /// the planning signals of `signal_events`.
+    fn fold(
+        signal_events: &[PersistedEvent],
+        agent_events: &[PersistedEvent],
+        instance_ids_by_alias: &BTreeMap<String, InstanceId>,
+    ) -> RuntimeHostResult<Self> {
+        let source_events = signal_events
             .iter()
             .filter_map(|event| {
                 let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal)) =
@@ -154,7 +202,7 @@ impl AgentDispatcherState {
             })
             .collect::<BTreeMap<_, _>>();
         let mut state = Self::default();
-        for event in &events {
+        for event in agent_events {
             if matches!(event.payload(), EventPayload::Agent(_)) {
                 state.apply_event(event, Some(&source_events))?;
             }
@@ -182,18 +230,24 @@ impl AgentDispatcherState {
     }
 
     pub(crate) fn wake(&self, wake_id: AgentWakeId) -> RuntimeHostResult<&AgentWakeRecord> {
-        self.wakes
-            .get(&wake_id)
-            .ok_or_else(|| request("agent_wake_unknown", "start_agent_session"))
+        self.wakes.get(&wake_id).ok_or_else(|| {
+            request(
+                HostCode::AgentWakeUnknown,
+                ContractLocation::StartAgentSession,
+            )
+        })
     }
 
     pub(crate) fn session(
         &self,
         session_id: AgentSessionId,
     ) -> RuntimeHostResult<&AgentSessionStatus> {
-        self.sessions
-            .get(&session_id)
-            .ok_or_else(|| request("agent_session_unknown", "read_agent_session"))
+        self.sessions.get(&session_id).ok_or_else(|| {
+            request(
+                HostCode::AgentSessionUnknown,
+                HostLocation::ReadAgentSession,
+            )
+        })
     }
 
     pub(crate) fn prepare_start(
@@ -210,12 +264,24 @@ impl AgentDispatcherState {
         }
         let scope = (wake.data.correlation_id(), wake.data.instance_id());
         if self.active_by_scope.contains_key(&scope) {
-            return Err(fatal("agent_session_scope_conflict", "start_agent_session"));
+            return Err(fatal(
+                HostCode::AgentSessionScopeConflict,
+                ContractLocation::StartAgentSession,
+            ));
         }
         let status = AgentSessionStatus::started(session_id, wake.data(), started_at_unix_ms)
-            .map_err(|_| request("agent_session_invalid", "start_agent_session"))?;
-        let data = AgentSessionEventData::new(status, None)
-            .map_err(|_| fatal("agent_session_event_invalid", "start_agent_session"))?;
+            .map_err(|_| {
+                request(
+                    HostCode::AgentSessionInvalid,
+                    ContractLocation::StartAgentSession,
+                )
+            })?;
+        let data = AgentSessionEventData::new(status, None).map_err(|_| {
+            fatal(
+                HostCode::AgentSessionEventInvalid,
+                ContractLocation::StartAgentSession,
+            )
+        })?;
         Ok(AgentSessionPreparation::New(data))
     }
 
@@ -235,27 +301,38 @@ impl AgentDispatcherState {
                 })
             } else {
                 Err(fatal(
-                    "agent_resume_request_conflict",
-                    "resume_agent_session",
+                    HostCode::AgentResumeRequestConflict,
+                    ContractLocation::ResumeAgentSession,
                 ))
             };
         }
         if self.response_requests.contains_key(&request_id) {
             return Err(request(
-                "agent_resume_request_conflict",
-                "resume_agent_session",
+                HostCode::AgentResumeRequestConflict,
+                ContractLocation::ResumeAgentSession,
             ));
         }
         let current = self.session(session_id)?;
         if current.expired_at(observed_at_unix_ms) {
-            return Err(request("agent_session_expired", "resume_agent_session"));
+            return Err(request(
+                HostCode::AgentSessionExpired,
+                ContractLocation::ResumeAgentSession,
+            ));
         }
-        let status = current
-            .resumed(observed_at_unix_ms)
-            .map_err(|_| request("agent_session_not_active", "resume_agent_session"))?;
+        let status = current.resumed(observed_at_unix_ms).map_err(|_| {
+            request(
+                SharedCode::AgentSessionNotActive,
+                ContractLocation::ResumeAgentSession,
+            )
+        })?;
         AgentSessionEventData::new(status, None)
             .map(AgentResumePreparation::New)
-            .map_err(|_| fatal("agent_session_event_invalid", "resume_agent_session"))
+            .map_err(|_| {
+                fatal(
+                    HostCode::AgentSessionEventInvalid,
+                    ContractLocation::ResumeAgentSession,
+                )
+            })
     }
 
     pub(crate) fn prepare_response(
@@ -269,43 +346,65 @@ impl AgentDispatcherState {
                 Ok(AgentResponsePreparation::Replay(existing.status().clone()))
             } else {
                 Err(fatal(
-                    "agent_response_request_conflict",
-                    "record_agent_response",
+                    HostCode::AgentResponseRequestConflict,
+                    ContractLocation::RecordAgentResponse,
                 ))
             };
         }
         if self.resume_requests.contains_key(&request_id) {
             return Err(request(
-                "agent_response_request_conflict",
-                "record_agent_response",
+                HostCode::AgentResponseRequestConflict,
+                ContractLocation::RecordAgentResponse,
             ));
         }
         let current = self.session(response.session_id())?;
         if current.expired_at(runtime_observed_at_unix_ms) {
-            return Err(request("agent_session_expired", "record_agent_response"));
+            return Err(request(
+                HostCode::AgentSessionExpired,
+                ContractLocation::RecordAgentResponse,
+            ));
         }
-        let status =
-            match response.disposition() {
-                AgentResponseDisposition::Completed => current
-                    .completed(runtime_observed_at_unix_ms)
-                    .map_err(|_| request("agent_session_not_active", "record_agent_response"))?,
-                AgentResponseDisposition::RetryableFailure => current
-                    .retry_or_escalate(runtime_observed_at_unix_ms)
-                    .map_err(|_| request("agent_session_not_active", "record_agent_response"))?,
-                AgentResponseDisposition::NeedsHuman => current
-                    .escalated(runtime_observed_at_unix_ms)
-                    .map_err(|_| request("agent_session_not_active", "record_agent_response"))?,
-            };
-        let data = AgentSessionEventData::new(status.clone(), Some(response.clone()))
-            .map_err(|_| fatal("agent_session_event_invalid", "record_agent_response"))?;
+        let status = match response.disposition() {
+            AgentResponseDisposition::Completed => current
+                .completed(runtime_observed_at_unix_ms)
+                .map_err(|_| {
+                request(
+                    SharedCode::AgentSessionNotActive,
+                    ContractLocation::RecordAgentResponse,
+                )
+            })?,
+            AgentResponseDisposition::RetryableFailure => current
+                .retry_or_escalate(runtime_observed_at_unix_ms)
+                .map_err(|_| {
+                    request(
+                        SharedCode::AgentSessionNotActive,
+                        ContractLocation::RecordAgentResponse,
+                    )
+                })?,
+            AgentResponseDisposition::NeedsHuman => current
+                .escalated(runtime_observed_at_unix_ms)
+                .map_err(|_| {
+                    request(
+                        SharedCode::AgentSessionNotActive,
+                        ContractLocation::RecordAgentResponse,
+                    )
+                })?,
+        };
+        let data =
+            AgentSessionEventData::new(status.clone(), Some(response.clone())).map_err(|_| {
+                fatal(
+                    HostCode::AgentSessionEventInvalid,
+                    ContractLocation::RecordAgentResponse,
+                )
+            })?;
         Ok(match status.state() {
             AgentAttentionState::Active => AgentResponsePreparation::Retry(data),
             AgentAttentionState::Completed => AgentResponsePreparation::Complete(data),
             AgentAttentionState::PausedNeedsHuman => AgentResponsePreparation::Escalate(data),
             AgentAttentionState::PausedNeedsAgent => {
                 return Err(fatal(
-                    "agent_session_transition_invalid",
-                    "record_agent_response",
+                    HostCode::AgentSessionTransitionInvalid,
+                    ContractLocation::RecordAgentResponse,
                 ));
             }
         })
@@ -327,12 +426,24 @@ impl AgentDispatcherState {
                     "session_timeout",
                     now_unix_ms,
                 )
-                .map_err(|_| fatal("agent_timeout_response_invalid", "expire_agent_sessions"))?;
-                let status = status
-                    .escalated(now_unix_ms)
-                    .map_err(|_| fatal("agent_timeout_status_invalid", "expire_agent_sessions"))?;
-                AgentSessionEventData::new(status, Some(response))
-                    .map_err(|_| fatal("agent_session_event_invalid", "expire_agent_sessions"))
+                .map_err(|_| {
+                    fatal(
+                        HostCode::AgentTimeoutResponseInvalid,
+                        HostLocation::ExpireAgentSessions,
+                    )
+                })?;
+                let status = status.escalated(now_unix_ms).map_err(|_| {
+                    fatal(
+                        HostCode::AgentTimeoutStatusInvalid,
+                        HostLocation::ExpireAgentSessions,
+                    )
+                })?;
+                AgentSessionEventData::new(status, Some(response)).map_err(|_| {
+                    fatal(
+                        HostCode::AgentSessionEventInvalid,
+                        HostLocation::ExpireAgentSessions,
+                    )
+                })
             })
             .collect()
     }
@@ -354,13 +465,17 @@ impl AgentDispatcherState {
                     },
                     ProjectionProfile::Normal,
                 )
-                .map_err(|_| ledger_error("project_agent_context"))?;
+                .map_err(|_| ledger_error(HostLocation::ProjectAgentContext))?;
             projection.append(&mut events);
         }
         projection.sort_by_key(|event| event.sequence);
         projection.dedup_by_key(|event| event.sequence);
-        AgentSessionContext::new(status, projection)
-            .map_err(|_| fatal("agent_context_invalid", "project_agent_context"))
+        AgentSessionContext::new(status, projection).map_err(|_| {
+            fatal(
+                HostCode::AgentContextInvalid,
+                HostLocation::ProjectAgentContext,
+            )
+        })
     }
 
     pub(crate) fn apply_event(
@@ -369,7 +484,10 @@ impl AgentDispatcherState {
         source_events: Option<&BTreeMap<actingcommand_contract::EventId, AgentWakeSource>>,
     ) -> RuntimeHostResult<()> {
         let EventPayload::Agent(payload) = event.payload() else {
-            return Err(fatal("agent_event_family_invalid", "apply_agent_event"));
+            return Err(fatal(
+                HostCode::AgentEventFamilyInvalid,
+                HostLocation::ApplyAgentEvent,
+            ));
         };
         match payload {
             AgentPayload::WakeRequested(payload) => {
@@ -385,16 +503,25 @@ impl AgentDispatcherState {
                         })
                     })
                 {
-                    return Err(fatal("agent_wake_links_invalid", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentWakeLinksInvalid,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
                 if let Some(existing) = self.wakes.get(&wake.wake_id()) {
                     if existing.data != *wake || existing.event_sequence != event.sequence() {
-                        return Err(fatal("agent_wake_identity_conflict", "apply_agent_event"));
+                        return Err(fatal(
+                            HostCode::AgentWakeIdentityConflict,
+                            HostLocation::ApplyAgentEvent,
+                        ));
                     }
                     return Ok(());
                 }
                 if self.wakes_by_trigger.contains_key(&wake.trigger_event_id()) {
-                    return Err(fatal("agent_wake_trigger_conflict", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentWakeTriggerConflict,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
                 self.wakes_by_trigger
                     .insert(wake.trigger_event_id(), wake.wake_id());
@@ -428,7 +555,10 @@ impl AgentDispatcherState {
             || status.correlation_id() != wake.data.correlation_id()
             || event.links().instance_id() != Some(&status.instance_id())
         {
-            return Err(fatal("agent_session_links_invalid", "apply_agent_event"));
+            return Err(fatal(
+                HostCode::AgentSessionLinksInvalid,
+                HostLocation::ApplyAgentEvent,
+            ));
         }
         let event_type = event.event_type();
         let previous = self.sessions.get(&status.session_id()).cloned();
@@ -439,82 +569,116 @@ impl AgentDispatcherState {
                     || status.state() != AgentAttentionState::Active
                     || status.attempts_used() != 1
                 {
-                    return Err(fatal("agent_session_start_conflict", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentSessionStartConflict,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
             }
             EventType::AgentSessionResumed => {
-                let previous = previous
-                    .as_ref()
-                    .ok_or_else(|| fatal("agent_session_resume_missing", "apply_agent_event"))?;
+                let previous = previous.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::AgentSessionResumeMissing,
+                        HostLocation::ApplyAgentEvent,
+                    )
+                })?;
                 if previous.state() != AgentAttentionState::Active
                     || status.state() != AgentAttentionState::Active
                     || status.attempts_used() != previous.attempts_used()
                 {
-                    return Err(fatal("agent_session_resume_invalid", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentSessionResumeInvalid,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
             }
             EventType::AgentResponseRecorded => {
-                let previous = previous
-                    .as_ref()
-                    .ok_or_else(|| fatal("agent_session_response_missing", "apply_agent_event"))?;
+                let previous = previous.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::AgentSessionResponseMissing,
+                        HostLocation::ApplyAgentEvent,
+                    )
+                })?;
                 if previous.state() != AgentAttentionState::Active
                     || status.state() != AgentAttentionState::Active
                     || status.attempts_used() != previous.attempts_used().saturating_add(1)
                 {
-                    return Err(fatal("agent_session_response_invalid", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentSessionResponseInvalid,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
             }
             EventType::AgentSessionCompleted | EventType::AgentSessionEscalated => {
-                let previous = previous
-                    .as_ref()
-                    .ok_or_else(|| fatal("agent_session_terminal_missing", "apply_agent_event"))?;
+                let previous = previous.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::AgentSessionTerminalMissing,
+                        HostLocation::ApplyAgentEvent,
+                    )
+                })?;
                 if previous.state() != AgentAttentionState::Active
                     || !matches!(
                         status.state(),
                         AgentAttentionState::Completed | AgentAttentionState::PausedNeedsHuman
                     )
                 {
-                    return Err(fatal("agent_session_terminal_invalid", "apply_agent_event"));
+                    return Err(fatal(
+                        HostCode::AgentSessionTerminalInvalid,
+                        HostLocation::ApplyAgentEvent,
+                    ));
                 }
             }
-            _ => return Err(fatal("agent_session_event_invalid", "apply_agent_event")),
+            _ => {
+                return Err(fatal(
+                    HostCode::AgentSessionEventInvalid,
+                    HostLocation::ApplyAgentEvent,
+                ));
+            }
         }
-        let resume_request =
-            if event_type == EventType::AgentSessionResumed {
-                let request_id =
-                    event.links().request_id().copied().ok_or_else(|| {
-                        fatal("agent_resume_request_missing", "apply_agent_event")
-                    })?;
-                let correlation_id = event.links().correlation_id().copied().ok_or_else(|| {
-                    fatal("agent_resume_correlation_missing", "apply_agent_event")
-                })?;
-                if self.resume_requests.contains_key(&request_id)
-                    || self.response_requests.contains_key(&request_id)
-                {
-                    return Err(fatal("agent_resume_request_conflict", "apply_agent_event"));
-                }
-                Some((request_id, correlation_id))
-            } else {
-                None
-            };
+        let resume_request = if event_type == EventType::AgentSessionResumed {
+            let request_id = event.links().request_id().copied().ok_or_else(|| {
+                fatal(
+                    HostCode::AgentResumeRequestMissing,
+                    HostLocation::ApplyAgentEvent,
+                )
+            })?;
+            let correlation_id = event.links().correlation_id().copied().ok_or_else(|| {
+                fatal(
+                    HostCode::AgentResumeCorrelationMissing,
+                    HostLocation::ApplyAgentEvent,
+                )
+            })?;
+            if self.resume_requests.contains_key(&request_id)
+                || self.response_requests.contains_key(&request_id)
+            {
+                return Err(fatal(
+                    HostCode::AgentResumeRequestConflict,
+                    HostLocation::ApplyAgentEvent,
+                ));
+            }
+            Some((request_id, correlation_id))
+        } else {
+            None
+        };
         let response_request_id = if let Some(response) = data.response() {
-            let request_id = event
-                .links()
-                .request_id()
-                .copied()
-                .ok_or_else(|| fatal("agent_response_request_missing", "apply_agent_event"))?;
+            let request_id = event.links().request_id().copied().ok_or_else(|| {
+                fatal(
+                    HostCode::AgentResponseRequestMissing,
+                    HostLocation::ApplyAgentEvent,
+                )
+            })?;
             if self.response_requests.contains_key(&request_id)
                 || self.resume_requests.contains_key(&request_id)
             {
                 return Err(fatal(
-                    "agent_response_request_conflict",
-                    "apply_agent_event",
+                    HostCode::AgentResponseRequestConflict,
+                    HostLocation::ApplyAgentEvent,
                 ));
             }
             if response.session_id() != status.session_id() {
                 return Err(fatal(
-                    "agent_response_session_mismatch",
-                    "apply_agent_event",
+                    SharedCode::AgentResponseSessionMismatch,
+                    HostLocation::ApplyAgentEvent,
                 ));
             }
             Some(request_id)
@@ -528,7 +692,10 @@ impl AgentDispatcherState {
                 .get(&scope)
                 .is_some_and(|session_id| *session_id != status.session_id())
         {
-            return Err(fatal("agent_session_scope_conflict", "apply_agent_event"));
+            return Err(fatal(
+                HostCode::AgentSessionScopeConflict,
+                HostLocation::ApplyAgentEvent,
+            ));
         }
         if let Some(previous) = previous
             && previous.state() == AgentAttentionState::Active
@@ -563,17 +730,33 @@ impl AgentDispatcherState {
     }
 }
 
-fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+/// The planning signals and the Agent records through one ledger position, each in ledger order.
+fn read_recovery_events(
+    ledger: &GlobalLedger,
+    page_events: usize,
+) -> GlobalLedgerResult<(Vec<PersistedEvent>, Vec<PersistedEvent>)> {
+    let through = ledger.latest_sequence()?;
+    let signals = read_event_types(
+        ledger,
+        &[EventType::PolicyPlanningSignalObserved],
+        through,
+        page_events,
+    )?;
+    let agent_events = read_event_types(ledger, &AGENT_EVENT_TYPES, through, page_events)?;
+    Ok((signals, agent_events))
+}
+
+fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
-fn ledger_error(operation: &'static str) -> RuntimeHostError {
+fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "agent_ledger_failure",
+        HostCode::AgentLedgerFailure,
         operation,
         RuntimeErrorCode::LedgerFailure,
     )

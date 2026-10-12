@@ -33,6 +33,8 @@ pub use candidate_identity::{
     CandidateIdentityTemplate, normalize_name,
 };
 
+pub use codes::RecognitionPackCode;
+
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
     CandidateFeatureDeclaration, CandidateFeatureValue, CandidateIntegerDeclaration,
@@ -3917,7 +3919,8 @@ mod tests {
                 .scene_context(&scene)
                 .project_candidates("choices")
                 .unwrap_err()
-                .code(),
+                .code()
+                .as_str(),
             "candidate_samples_unavailable"
         );
     }
@@ -5967,7 +5970,10 @@ mod tests {
                 .scene_context(&scene)
                 .project_candidates("layout/rows")
                 .expect_err("four matches exceed three instances");
-            assert_eq!(overflow.code(), "candidate_projection_budget_exceeded");
+            assert_eq!(
+                overflow.code().as_str(),
+                "candidate_projection_budget_exceeded"
+            );
             assert_eq!(overflow.item(), "candidates");
             assert_eq!(
                 overflow.detail(),
@@ -5982,7 +5988,7 @@ mod tests {
                 .expect_err("the search runs past its limit at row 11");
             assert_eq!(
                 incomplete.code(),
-                RecognitionPackCode::CandidateSearchIncomplete.as_str()
+                RecognitionPackCode::CandidateSearchIncomplete.code()
             );
             assert_eq!(
                 RecognitionPackCode::CandidateSearchIncomplete.category(),

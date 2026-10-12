@@ -19,18 +19,22 @@ The existing exact-artifact downloader understands this layout and the historica
 fixed two-executable Runtime layout whose manifest omits the field. It continues
 to reject incomplete or unexpected payloads. The separate Tools artifact carries
 `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`,
-`actingcommand-device-test.exe`, the watchdog launcher `actingwatch.exe` and,
+the watchdog launcher `actingwatch.exe` and,
 under `platform-tools/`, the official Android platform-tools 37.0.1 files
 `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt` and
 `source.properties`. Its own manifest declares
-`tools_payload_layout: "platform-tools-v3"` and binds all ten files.
+`tools_payload_layout: "platform-tools-v3"` and binds all nine files.
 The OCR and NN engine is linked into `actingcommand-actingd.exe`; no vision
 provider DLL ships (Workflow #360), and actingd reads its models from the vision
 root named by the configuration's `vision` section. The downloader still accepts
-the historical `platform-tools-v2` layout (the same files without
-`actingwatch.exe`), the historical `platform-tools-v1` layout (the
+`platform-tools-v3` Tools artifacts built before v0.11.6 (the same files plus
+`actingcommand-device-test.exe`), the historical `platform-tools-v2` layout (those
+ten files without `actingwatch.exe`), the historical `platform-tools-v1` layout (the
 `platform-tools-v2` files plus `ac_fastdeploy_ppocr.dll`) and the five-file Tools
 layout whose manifest omits the field, and rejects any other layout.
+
+The device-test probe `actingcommand-device-test.exe` is retired (v0.11.6), and the
+Tools artifact no longer contains it.
 
 `actingctl watchdog status` / `run-once` and the launcher `actingwatch.exe`
 (Workflow #374) start an A/B installation's Runtime again after an end without a
@@ -97,13 +101,31 @@ workers=… sql_read_ms=… verify_ms=… material_ms=… restore_ms=…
 deadline_ms=120000`. Follow its timings as the state root grows: the open
 still has a 120 s deadline, and acsetup waits 60 s for a Runtime it starts.
 
+Kept frames (Workflow #375): this release moves the screenshots it keeps for
+errors and for Lab into `<state root>\kept\<date>\…`. Delete a folder to delete
+them, with Shift+Delete or `Remove-Item -Recurse`; Explorer's Delete keeps them in
+the Recycle Bin. Other screenshots are deleted automatically: near-duplicates once
+their run has ended, resource readings after 7 days, the rest after a day.
+Near-duplicates inside the 30 s before an error are also deleted, and Lab
+screenshots are all kept; to change either, add `"frame_retention_dedup_error":
+false` or `"frame_retention_dedup_lab": true` to `actingd.config.json`, commit it
+with `acsetup --commit-config` and restart actingd. A change applies only to
+screenshots not yet moved into a folder. The cleaner runs while
+`frame_retention_enabled` is on (the default), and prints one
+`actingd frame_retention pass …` line per sweep that visited frames; with it off,
+actingd prints `actingd frame_retention disabled` once at start. Keep `kept`
+a plain folder on the state root's volume: a junction there makes reads of
+kept screenshots fail with `artifact_kept_walk_failed`, and moving a leaf out
+by hand counts as deleting it. Once a screenshot has been deleted or moved, or
+once the file names either switch, v0.11.4 can no longer open this state root.
+
 check-config's catalog preview (Workflow #375) now reads only the catalog and
 approval records (authenticated, with the ledger head and contiguity) instead of
 every ledger record; startup and `ledger-maintenance verify` still check every
-record. Its `ledger` phase includes the whole-file `PRAGMA quick_check(1)` when
-the database is opened, which now sets its cost: about 24 ms per MB of
-`runtime-state.sqlite` when the file is not cached (about 13 s at 550 MB) and
-about 1.2 ms per MB when it is (about 0.7 s).
+record. It no longer runs the whole-file `PRAGMA quick_check(1)` when it opens
+the database, so its cost no longer grows with the size of
+`runtime-state.sqlite` (it was about 13 s at 550 MB on a file not in the cache).
+Startup and `ledger-maintenance verify` still run that check.
 
 Rollback: an explicit `acsetup --rollback` runs the target slot's own cold
 ledger gate. Rolling back from this release to v0.11.3 or earlier therefore

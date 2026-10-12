@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
     ArtifactWriteContext, ArtifactWriteRequest, FramePersistenceCandidate, FrameStore,
     FrameStoreConfig, FrameStoreEvent, FrameStoreFrameInput, FrameStoreOutcome, StoredArtifact,
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactPayloadDraft, ArtifactProducer,
     ArtifactRedactionState, ArtifactReference, AuditInput, CapturePayloadDraft,
@@ -44,14 +46,18 @@ impl Default for CapturePipelineConfig {
 impl CapturePipelineConfig {
     fn validate(&self) -> ArtifactStoreResult<()> {
         if self.cadence_ms == 0 {
-            return Err(ArtifactStoreError::fatal(
-                "invalid_capture_policy",
-                "open_capture_pipeline",
+            return Err(ArtifactStoreError::new(
+                SharedCode::InvalidCapturePolicy.code(),
+                ContractLocation::OpenCapturePipeline.location(),
                 "capture cadence must be positive",
             ));
         }
         self.frame_store.validate().map_err(|error| {
-            ArtifactStoreError::fatal("invalid_frame_store_config", "open_capture_pipeline", error)
+            ArtifactStoreError::new(
+                StoreCode::InvalidFrameStoreConfig.code(),
+                ContractLocation::OpenCapturePipeline.location(),
+                error.to_string(),
+            )
         })
     }
 }
@@ -104,9 +110,9 @@ pub fn build_capture_pipeline_summary(
         .checked_add(counts.dropped)
         .and_then(|count| count.checked_add(counts.persisted))
         .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "capture_summary_count_overflow",
-                "build_capture_summary",
+            ArtifactStoreError::new(
+                SharedCode::CaptureSummaryCountOverflow.code(),
+                StoreLocation::BuildCaptureSummary.location(),
                 "capture accounting exceeds u64",
             )
         })?;
@@ -136,17 +142,17 @@ pub fn capture_summary_record(
         .iter()
         .map(|frame| {
             let frame_index = u64::try_from(frame.frame_index).map_err(|_| {
-                ArtifactStoreError::fatal(
-                    "capture_summary_bound_exceeded",
-                    "build_capture_summary_record",
+                ArtifactStoreError::new(
+                    SharedCode::CaptureSummaryBoundExceeded.code(),
+                    StoreLocation::BuildCaptureSummaryRecord.location(),
                     "capture frame index exceeds u64",
                 )
             })?;
             CapturePersistedEvidence::new(frame_index, frame.artifact.project(true)).map_err(
                 |error| {
-                    ArtifactStoreError::fatal(
+                    ArtifactStoreError::new(
                         error.code(),
-                        "build_capture_summary_record",
+                        StoreLocation::BuildCaptureSummaryRecord.location(),
                         error.to_string(),
                     )
                 },
@@ -162,9 +168,9 @@ pub fn capture_summary_record(
                 .map(u64::try_from)
                 .transpose()
                 .map_err(|_| {
-                    ArtifactStoreError::fatal(
-                        "capture_summary_bound_exceeded",
-                        "build_capture_summary_record",
+                    ArtifactStoreError::new(
+                        SharedCode::CaptureSummaryBoundExceeded.code(),
+                        StoreLocation::BuildCaptureSummaryRecord.location(),
                         "pinned frame index exceeds u64",
                     )
                 })?;
@@ -174,9 +180,9 @@ pub fn capture_summary_record(
                 pin.artifact.as_ref().map(|artifact| artifact.project(true)),
             )
             .map_err(|error| {
-                ArtifactStoreError::fatal(
+                ArtifactStoreError::new(
                     error.code(),
-                    "build_capture_summary_record",
+                    StoreLocation::BuildCaptureSummaryRecord.location(),
                     error.to_string(),
                 )
             })
@@ -192,9 +198,9 @@ pub fn capture_summary_record(
         pinned,
     )
     .map_err(|error| {
-        ArtifactStoreError::fatal(
+        ArtifactStoreError::new(
             error.code(),
-            "build_capture_summary_record",
+            StoreLocation::BuildCaptureSummaryRecord.location(),
             error.to_string(),
         )
     })
@@ -290,9 +296,9 @@ impl CapturePipeline {
             frame_store,
             artifact_store,
             event_ids: IdentifierIssuer::new().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "open_capture_pipeline",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    ContractLocation::OpenCapturePipeline.location(),
                     error.to_string(),
                 )
             })?,
@@ -397,16 +403,16 @@ impl CapturePipeline {
             return Err(failure.error.clone());
         }
         if self.contexts.contains_key(&frame_index) {
-            return Err(ArtifactStoreError::fatal(
-                "duplicate_frame_index",
-                "record_capture_frame",
+            return Err(ArtifactStoreError::new(
+                StoreCode::DuplicateFrameIndex.code(),
+                StoreLocation::RecordCaptureFrame.location(),
                 format!("frame index {frame_index} already exists"),
             ));
         }
         if self.paused && input.pinned_reason.is_none() {
-            return Err(ArtifactStoreError::fatal(
-                "capture_pipeline_paused",
-                "record_capture_frame",
+            return Err(ArtifactStoreError::new(
+                StoreCode::CapturePipelinePaused.code(),
+                StoreLocation::RecordCaptureFrame.location(),
                 "ordinary capture is paused at Tier3; poll pressure before recording another frame",
             ));
         }
@@ -415,9 +421,9 @@ impl CapturePipeline {
         }
         self.contexts.insert(frame_index, context.clone());
         self.counts.captured = self.counts.captured.checked_add(1).ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "capture_summary_count_overflow",
-                "record_capture_frame",
+            ArtifactStoreError::new(
+                SharedCode::CaptureSummaryCountOverflow.code(),
+                StoreLocation::RecordCaptureFrame.location(),
                 "captured frame count exceeds u64",
             )
         })?;
@@ -449,9 +455,9 @@ impl CapturePipeline {
             persisted.push(reference.clone());
             if self.persisted.insert(index, reference).is_none() {
                 self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
-                    ArtifactStoreError::fatal(
-                        "capture_summary_count_overflow",
-                        "persist_capture_frame",
+                    ArtifactStoreError::new(
+                        SharedCode::CaptureSummaryCountOverflow.code(),
+                        StoreLocation::PersistCaptureFrame.location(),
                         "persisted count exceeds u64",
                     )
                 })?;
@@ -579,9 +585,9 @@ impl CapturePipeline {
             reference.clone(),
         )?;
         self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "capture_summary_count_overflow",
-                "persist_capture_frame",
+            ArtifactStoreError::new(
+                SharedCode::CaptureSummaryCountOverflow.code(),
+                StoreLocation::PersistCaptureFrame.location(),
                 "persisted frame count exceeds u64",
             )
         })?;
@@ -592,16 +598,16 @@ impl CapturePipeline {
 
     pub fn record_pressure_skip(&mut self, skipped_intervals: u64) -> ArtifactStoreResult<()> {
         if !self.paused {
-            return Err(ArtifactStoreError::fatal(
-                "capture_pipeline_not_paused",
-                "record_pressure_skip",
+            return Err(ArtifactStoreError::new(
+                StoreCode::CapturePipelineNotPaused.code(),
+                StoreLocation::RecordPressureSkip.location(),
                 "pressure skips are valid only while Tier3 is paused",
             ));
         }
         if skipped_intervals == 0 {
-            return Err(ArtifactStoreError::fatal(
-                "invalid_pressure_skip",
-                "record_pressure_skip",
+            return Err(ArtifactStoreError::new(
+                StoreCode::InvalidPressureSkip.code(),
+                StoreLocation::RecordPressureSkip.location(),
                 "skipped interval count must be positive",
             ));
         }
@@ -610,9 +616,9 @@ impl CapturePipeline {
             .captured
             .checked_add(skipped_intervals)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "capture_summary_count_overflow",
-                    "record_pressure_skip",
+                ArtifactStoreError::new(
+                    SharedCode::CaptureSummaryCountOverflow.code(),
+                    StoreLocation::RecordPressureSkip.location(),
                     "captured frame count exceeds u64",
                 )
             })?;
@@ -621,9 +627,9 @@ impl CapturePipeline {
             .dropped
             .checked_add(skipped_intervals)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "capture_summary_count_overflow",
-                    "record_pressure_skip",
+                ArtifactStoreError::new(
+                    SharedCode::CaptureSummaryCountOverflow.code(),
+                    StoreLocation::RecordPressureSkip.location(),
                     "dropped frame count exceeds u64",
                 )
             })?;
@@ -649,15 +655,15 @@ impl CapturePipeline {
         self.emit_frame_store_events(context, sink)?;
         if let Some(failure) = &self.pressure_refusal {
             let error = &failure.error;
-            if error.code() == "capacity_admission_refused" {
+            if error.code() == SharedCode::CapacityAdmissionRefused.as_str() {
                 let mut recovered = self
                     .contexts
                     .get(&failure.frame_index)
                     .cloned()
                     .ok_or_else(|| {
-                        ArtifactStoreError::fatal(
-                            "missing_frame_context",
-                            "recover_frame_capacity",
+                        ArtifactStoreError::new(
+                            StoreCode::MissingFrameContext.code(),
+                            StoreLocation::RecoverFrameCapacity.location(),
                             "original refused frame context is missing",
                         )
                     })?;
@@ -673,7 +679,7 @@ impl CapturePipeline {
                     Err(error) if !error.is_fatal() => return Ok(false),
                     Err(error) => return Err(error),
                 }
-            } else if error.code() == "frame_workspace_unavailable"
+            } else if error.code() == SharedCode::FrameWorkspaceUnavailable.as_str()
                 && self
                     .frame_store
                     .publication_workspace_available(failure.frame_index)
@@ -707,9 +713,9 @@ impl CapturePipeline {
             }
             if self.persisted.insert(index, reference).is_none() {
                 self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
-                    ArtifactStoreError::fatal(
-                        "capture_summary_count_overflow",
-                        "persist_capture_frame",
+                    ArtifactStoreError::new(
+                        SharedCode::CaptureSummaryCountOverflow.code(),
+                        StoreLocation::PersistCaptureFrame.location(),
                         "persisted count exceeds u64",
                     )
                 })?;
@@ -744,9 +750,9 @@ impl CapturePipeline {
     ) -> ArtifactStoreResult<()> {
         self.frame_store.record_recognition(frame_index, state)?;
         let context = self.contexts.get(&frame_index).cloned().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "missing_frame_context",
-                "record_capture_recognition",
+            ArtifactStoreError::new(
+                StoreCode::MissingFrameContext.code(),
+                ContractLocation::RecordCaptureRecognition.location(),
                 "original frame context is missing",
             )
         })?;
@@ -777,9 +783,9 @@ impl CapturePipeline {
             .persistence_candidate_indexes(true)
             .is_empty()
         {
-            return Err(ArtifactStoreError::fatal(
-                "frame_spill_material_pending",
-                "cleanup_frame_spills",
+            return Err(ArtifactStoreError::new(
+                StoreCode::FrameSpillMaterialPending.code(),
+                StoreLocation::CleanupFrameSpills.location(),
                 "original frame publication is incomplete",
             ));
         }
@@ -822,9 +828,9 @@ impl CapturePipeline {
         self.frame_store
             .frame_thumbnail(frame_index)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "frame_material_unavailable",
-                    "read_frame_thumbnail",
+                ArtifactStoreError::new(
+                    StoreCode::FrameMaterialUnavailable.code(),
+                    StoreLocation::ReadFrameThumbnail.location(),
                     "the frame is not retained",
                 )
             })
@@ -877,9 +883,9 @@ impl CapturePipeline {
         publisher: &mut Option<&mut FrameArtifactPublisher<'_>>,
     ) -> ArtifactStoreResult<StoredArtifact> {
         let context = contexts.get(&candidate.frame_index).ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "missing_frame_context",
-                "persist_capture_frame",
+            ArtifactStoreError::new(
+                StoreCode::MissingFrameContext.code(),
+                StoreLocation::PersistCaptureFrame.location(),
                 format!("frame index {} has no typed context", candidate.frame_index),
             )
         })?;
@@ -901,9 +907,9 @@ impl CapturePipeline {
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<()> {
         let context = self.contexts.get(&frame_index).cloned().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "missing_frame_context",
-                "record_pinned_persistence_failure",
+            ArtifactStoreError::new(
+                StoreCode::MissingFrameContext.code(),
+                StoreLocation::RecordPinnedPersistenceFailure.location(),
                 format!("pinned frame index {frame_index} has no typed context"),
             )
         })?;
@@ -952,18 +958,18 @@ impl CapturePipeline {
                             .deduplicated
                             .checked_add(duplicate_count)
                             .ok_or_else(|| {
-                                ArtifactStoreError::fatal(
-                                    "capture_summary_count_overflow",
-                                    "emit_capture_dedup_window",
+                                ArtifactStoreError::new(
+                                    SharedCode::CaptureSummaryCountOverflow.code(),
+                                    StoreLocation::EmitCaptureDedupWindow.location(),
                                     "deduplicated frame count exceeds u64",
                                 )
                             })?;
                     }
                     let representative = self.contexts.get(&representative_frame_index).ok_or_else(
                         || {
-                            ArtifactStoreError::fatal(
-                                "missing_frame_context",
-                                "emit_capture_dedup_window",
+                            ArtifactStoreError::new(
+                                StoreCode::MissingFrameContext.code(),
+                                StoreLocation::EmitCaptureDedupWindow.location(),
                                 format!(
                                     "representative frame index {representative_frame_index} has no typed context"
                                 ),
@@ -974,9 +980,9 @@ impl CapturePipeline {
                         Some(frame_index) => {
                             let frame_context =
                                 self.contexts.get(&frame_index).ok_or_else(|| {
-                                    ArtifactStoreError::fatal(
-                                        "missing_frame_context",
-                                        "emit_capture_similarity",
+                                    ArtifactStoreError::new(
+                                        StoreCode::MissingFrameContext.code(),
+                                        StoreLocation::EmitCaptureSimilarity.location(),
                                         "preserved original frame has no typed identity",
                                     )
                                 })?;
@@ -1016,9 +1022,9 @@ impl CapturePipeline {
     ) -> ArtifactStoreResult<()> {
         let draft = EventDraft::new(
             self.event_ids.mint_event_id().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "append_capture_pipeline_event",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    StoreLocation::AppendCapturePipelineEvent.location(),
                     error.to_string(),
                 )
             })?,

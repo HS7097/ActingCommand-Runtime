@@ -4,6 +4,7 @@ use super::{
     ForensicError, ForensicOutput, ForensicReport, ForensicResult, instance_bindings,
     map_ledger_error, query_view_page,
 };
+use crate::codes::{ForensicsCode, ForensicsLocation};
 use actingcommand_contract::{
     EventQuery, InstanceId, ProjectionProfile, RuntimeEventQueryCursor,
     RuntimeEventQueryPageRequest,
@@ -37,8 +38,13 @@ impl ForensicViewRequest {
         state_root: impl AsRef<Path>,
         options: ForensicViewOptions,
     ) -> ForensicResult<Self> {
-        let invalid =
-            |detail| ForensicError::new("invalid_view_options", "validate_view_request", detail);
+        let invalid = |detail| {
+            ForensicError::new(
+                ForensicsCode::InvalidViewOptions.code(),
+                ForensicsLocation::ValidateViewRequest.location(),
+                detail,
+            )
+        };
         if options
             .query
             .as_ref()
@@ -97,22 +103,22 @@ impl ForensicViewRequest {
     ) -> ForensicResult<Self> {
         if state_root.as_ref().as_os_str().is_empty() {
             return Err(ForensicError::new(
-                "invalid_state_root",
-                "validate_view_request",
+                ForensicsCode::InvalidStateRoot.code(),
+                ForensicsLocation::ValidateViewRequest.location(),
                 "state root is empty",
             ));
         }
         query.validate().map_err(|error| {
             ForensicError::new(
                 error.code(),
-                "validate_view_request",
+                ForensicsLocation::ValidateViewRequest.location(),
                 "invalid query bounds",
             )
         })?;
         page.validate().map_err(|error| {
             ForensicError::new(
                 error.code(),
-                "validate_view_request",
+                ForensicsLocation::ValidateViewRequest.location(),
                 "invalid page or snapshot",
             )
         })?;
@@ -174,8 +180,8 @@ fn resolve_instance_port(
         .filter(|instance_ids| !instance_ids.is_empty())
         .ok_or_else(|| {
             ForensicError::new(
-                "instance_port_unknown",
-                "resolve_instance_port",
+                ForensicsCode::InstancePortUnknown.code(),
+                ForensicsLocation::ResolveInstancePort.location(),
                 format!("no instance was bound to ADB port {port} through position {position}"),
             )
         })?;
@@ -186,8 +192,8 @@ fn resolve_instance_port(
     };
     if given.is_some_and(|given| given != resolved.iter().copied().collect::<BTreeSet<_>>()) {
         return Err(ForensicError::new(
-            "instance_port_conflict",
-            "resolve_instance_port",
+            ForensicsCode::InstancePortConflict.code(),
+            ForensicsLocation::ResolveInstancePort.location(),
             format!("the query instance condition is not the set bound to ADB port {port}"),
         ));
     }

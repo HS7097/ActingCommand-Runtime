@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{GlobalLedgerError, GlobalLedgerResult, projection::EventIndexes};
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::{FactValidationError, LedgerEventRead, StoredEventRecord};
 use crate::{ArtifactAvailability, PersistedEvent};
 use actingcommand_artifact_store::ArtifactDeleteGuard;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactEvictionDisposition, ArtifactEvictionIntentRecord, ArtifactEvictionProof, ArtifactId,
     ArtifactKind, ArtifactPinReason, ArtifactRetentionFact, ArtifactRetentionIdentity,
@@ -23,7 +26,7 @@ pub use material::LedgerOpenTiming;
 pub(super) use material::{PendingMaterial, elapsed_ms};
 pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LocalOffsetMs,
+    FrameRetentionView, KeptFrameFolder,
 };
 
 /// Derived only from the authenticated prefix, inside the original Ledger owner.
@@ -56,6 +59,8 @@ pub(super) struct RetentionIndex {
     unlinked_warning: bool,
     /// Workflow #375 R5c: the facts of the read-only frame retention view.
     frame_facts: view::FrameFacts,
+    /// Workflow #375 R5d: the frame classes at the latest head they were asked for.
+    frame_cache: std::sync::Mutex<Option<view::FrameCache>>,
     through_sequence: u64,
 }
 
@@ -277,7 +282,7 @@ impl RetentionIndex {
             return Ok(None);
         };
         if object.reference != *reference {
-            return Err(invalid("artifact_identity_conflict"));
+            return Err(invalid(LedgerCode::ArtifactIdentityConflict.code()));
         }
         if object.proof.is_some()
             || object.permanently_protected
@@ -546,7 +551,7 @@ impl RetentionIndex {
             return Ok(None);
         };
         if object.reference != *reference {
-            return Err(invalid("artifact_identity_conflict"));
+            return Err(invalid(LedgerCode::ArtifactIdentityConflict.code()));
         }
         Ok(object.proof.clone().map(|mut proof| {
             proof.through_sequence = self.through_sequence;
@@ -565,7 +570,7 @@ impl RetentionIndex {
         admission: bool,
     ) -> GlobalLedgerResult<()> {
         if event.sequence() != self.through_sequence.saturating_add(1) {
-            return Err(invalid("artifact_retention_snapshot_gap"));
+            return Err(invalid(LedgerCode::ArtifactRetentionSnapshotGap.code()));
         }
         self.validate_prior_epoch(event, events, guarded_intent)?;
         // An outcome records the result of an already sealed identity, never a new use.
@@ -573,10 +578,10 @@ impl RetentionIndex {
         for reference in material_references(event) {
             reference
                 .validate()
-                .map_err(|_| invalid("invalid_artifact_reference"))?;
+                .map_err(|_| invalid(SharedCode::InvalidArtifactReference.code()))?;
             if let Some(object) = self.objects.get(&reference.artifact_id) {
                 if object.reference != reference {
-                    return Err(invalid("artifact_identity_conflict"));
+                    return Err(invalid(LedgerCode::ArtifactIdentityConflict.code()));
                 }
                 if object.proof.is_some() {
                     return Err(sealed());
@@ -627,25 +632,27 @@ impl RetentionIndex {
             || event.origin().module() != actingcommand_contract::OriginModule::ArtifactStore
             || event.origin().actor() != actingcommand_contract::EventActor::Runtime
         {
-            return Err(invalid("artifact_retention_origin_invalid"));
+            return Err(invalid(LedgerCode::ArtifactRetentionOriginInvalid.code()));
         }
         fact.validate()
-            .map_err(|_| invalid("invalid_artifact_retention_fact"))?;
+            .map_err(|_| invalid(LedgerCode::InvalidArtifactRetentionFact.code()))?;
         let identity = fact.identity();
         if !same_links(event, identity) {
-            return Err(invalid("artifact_retention_links_conflict"));
+            return Err(invalid(LedgerCode::ArtifactRetentionLinksConflict.code()));
         }
         let object = self
             .objects
             .get(&identity.artifact.artifact_id)
-            .ok_or_else(|| invalid("artifact_retention_source_missing"))?;
+            .ok_or_else(|| invalid(LedgerCode::ArtifactRetentionSourceMissing.code()))?;
         if object.reference != identity.artifact
             || object
                 .identity
                 .as_ref()
                 .is_some_and(|original| original != identity)
         {
-            return Err(invalid("artifact_retention_identity_conflict"));
+            return Err(invalid(
+                LedgerCode::ArtifactRetentionIdentityConflict.code(),
+            ));
         }
         match fact {
             ArtifactRetentionFact::PinRecorded(pin) => {
@@ -662,14 +669,14 @@ impl RetentionIndex {
                         && pin.reason != ArtifactPinReason::WarningOrHigher
                         && pin.reason != ArtifactPinReason::Lab
                 {
-                    return Err(invalid("artifact_pin_trigger_conflict"));
+                    return Err(invalid(LedgerCode::ArtifactPinTriggerConflict.code()));
                 }
                 if pin.reason == ArtifactPinReason::WarningOrHigher
                     && trigger.severity() < EventSeverity::Warning
                     || pin.reason == ArtifactPinReason::Lab
                         && !indexes.lab_related(trigger, self.through_sequence)
                 {
-                    return Err(invalid("artifact_pin_reason_conflict"));
+                    return Err(invalid(LedgerCode::ArtifactPinReasonConflict.code()));
                 }
             }
             ArtifactRetentionFact::PinReleased(release) => {
@@ -677,10 +684,10 @@ impl RetentionIndex {
                     return Err(sealed());
                 }
                 let Some((pin, reason)) = object.pins.get(&release.pin.event_id) else {
-                    return Err(invalid("artifact_pin_release_source_missing"));
+                    return Err(invalid(LedgerCode::ArtifactPinReleaseSourceMissing.code()));
                 };
                 if *pin != release.pin {
-                    return Err(invalid("artifact_pin_not_releasable"));
+                    return Err(invalid(LedgerCode::ArtifactPinNotReleasable.code()));
                 }
                 let release_source = source(events, &release.release)?;
                 match reason {
@@ -690,7 +697,7 @@ impl RetentionIndex {
                                 || !successful_close(release_source, identity)
                                 || !self.close_owner_matches(release_source, identity))
                         {
-                            return Err(invalid("artifact_pin_release_not_closed"));
+                            return Err(invalid(LedgerCode::ArtifactPinReleaseNotClosed.code()));
                         }
                     }
                     ArtifactPinReason::Lab => {
@@ -699,15 +706,17 @@ impl RetentionIndex {
                             pin: release.pin,
                         };
                         if !lab_release_request_matches(release_source, &target) {
-                            return Err(invalid("artifact_lab_pin_release_request_conflict"));
+                            return Err(invalid(
+                                LedgerCode::ArtifactLabPinReleaseRequestConflict.code(),
+                            ));
                         }
                     }
-                    _ => return Err(invalid("artifact_pin_not_releasable")),
+                    _ => return Err(invalid(LedgerCode::ArtifactPinNotReleasable.code())),
                 }
             }
             ArtifactRetentionFact::EvictionIntent(intent) => {
                 if !guarded_intent {
-                    return Err(invalid("artifact_eviction_guard_required"));
+                    return Err(invalid(LedgerCode::ArtifactEvictionGuardRequired.code()));
                 }
                 self.validate_intent(
                     object,
@@ -720,14 +729,14 @@ impl RetentionIndex {
             }
             ArtifactRetentionFact::EvictionOutcome(outcome) => {
                 if !guarded_intent {
-                    return Err(invalid("artifact_eviction_guard_required"));
+                    return Err(invalid(LedgerCode::ArtifactEvictionGuardRequired.code()));
                 }
                 let proof = object
                     .proof
                     .as_ref()
-                    .ok_or_else(|| invalid("artifact_eviction_intent_missing"))?;
+                    .ok_or_else(|| invalid(LedgerCode::ArtifactEvictionIntentMissing.code()))?;
                 if proof.intent != outcome.intent || proof.outcome.is_some() {
-                    return Err(invalid("artifact_eviction_outcome_conflict"));
+                    return Err(invalid(LedgerCode::ArtifactEvictionOutcomeConflict.code()));
                 }
             }
         }
@@ -757,7 +766,7 @@ impl RetentionIndex {
                     || self.unlinked_warning
                     || !object.pins.is_empty())
         {
-            return Err(invalid("artifact_eviction_not_eligible"));
+            return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
         }
         let verified = source(events, &intent.verified)?;
         let terminal_ref = match (&intent.success, &intent.failed_run) {
@@ -770,7 +779,9 @@ impl RetentionIndex {
                             .as_ref()
                             != Some(failed.as_ref())
                 {
-                    return Err(invalid("artifact_eviction_failed_run_basis_conflict"));
+                    return Err(invalid(
+                        LedgerCode::ArtifactEvictionFailedRunBasisConflict.code(),
+                    ));
                 }
                 if let FailedRunRetentionBasis::SuccessorSuccesses { terminals } = &failed.basis {
                     for terminal in terminals {
@@ -779,7 +790,7 @@ impl RetentionIndex {
                 }
                 &failed.terminal
             }
-            _ => return Err(invalid("artifact_eviction_terminal_missing")),
+            _ => return Err(invalid(LedgerCode::ArtifactEvictionTerminalMissing.code())),
         };
         let success = source(events, terminal_ref)?;
         let close = source(events, &intent.close)?;
@@ -806,7 +817,7 @@ impl RetentionIndex {
             || !successful_close(close, &intent.identity)
             || !self.close_owner_matches(close, &intent.identity)
         {
-            return Err(invalid("artifact_eviction_close_conflict"));
+            return Err(invalid(LedgerCode::ArtifactEvictionCloseConflict.code()));
         }
         match intent.identity.run_id {
             Some(_) => {
@@ -817,16 +828,18 @@ impl RetentionIndex {
                 if !matches!(success.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
                     if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome, .. } if *outcome == expected))
                 {
-                    return Err(invalid("artifact_eviction_task_not_successful"));
+                    return Err(invalid(
+                        LedgerCode::ArtifactEvictionTaskNotSuccessful.code(),
+                    ));
                 }
-                let summary =
-                    summary.ok_or_else(|| invalid("artifact_eviction_summary_missing"))?;
+                let summary = summary
+                    .ok_or_else(|| invalid(LedgerCode::ArtifactEvictionSummaryMissing.code()))?;
                 if !same_scope(summary, &intent.identity)
                     || summary.sequence() >= close.sequence()
                     || !matches!(summary.payload(), EventPayload::Capture(CapturePayload::SummaryCommitted(payload))
                         if payload.summary().frames().iter().any(|frame| frame.artifact() == &object.reference))
                 {
-                    return Err(invalid("artifact_eviction_summary_conflict"));
+                    return Err(invalid(LedgerCode::ArtifactEvictionSummaryConflict.code()));
                 }
             }
             None if success.event_type() == EventType::InputCommitted
@@ -834,7 +847,7 @@ impl RetentionIndex {
             }
             None if intent.identity.lease_id.is_none()
                 && success.event_type() == EventType::CaptureCompleted => {}
-            None => return Err(invalid("artifact_eviction_success_missing")),
+            None => return Err(invalid(LedgerCode::ArtifactEvictionSuccessMissing.code())),
         }
         let scheduled = intent
             .identity
@@ -853,11 +866,17 @@ impl RetentionIndex {
                             .map_or(TaskOutcome::Success, |failed| failed.outcome),
                     )
                 {
-                    return Err(invalid("artifact_eviction_settlement_conflict"));
+                    return Err(invalid(
+                        LedgerCode::ArtifactEvictionSettlementConflict.code(),
+                    ));
                 }
             }
             (None, false) => {}
-            _ => return Err(invalid("artifact_eviction_settlement_missing")),
+            _ => {
+                return Err(invalid(
+                    LedgerCode::ArtifactEvictionSettlementMissing.code(),
+                ));
+            }
         }
         Ok(())
     }
@@ -1316,7 +1335,7 @@ fn source<'a, E: LedgerEventRead>(
         .filter(|event| {
             event.sequence() == reference.sequence && event.event_id() == &reference.event_id
         })
-        .ok_or_else(|| invalid("artifact_retention_proof_source_missing"))
+        .ok_or_else(|| invalid(LedgerCode::ArtifactRetentionProofSourceMissing.code()))
 }
 
 fn terminal<E: LedgerEventRead>(event: &E) -> TerminalEvent {
@@ -1360,7 +1379,7 @@ fn retention_now() -> GlobalLedgerResult<u64> {
         .ok()
         .and_then(|time| u64::try_from(time.as_millis()).ok())
         .filter(|time| *time > 0)
-        .ok_or_else(|| invalid("artifact_retention_clock_failed"))
+        .ok_or_else(|| invalid(LedgerCode::ArtifactRetentionClockFailed.code()))
 }
 
 fn same_scope<E: LedgerEventRead>(event: &E, identity: &ArtifactRetentionIdentity) -> bool {
@@ -1471,8 +1490,8 @@ fn recorded_owner<E: LedgerEventRead>(event: &E) -> Option<OwnerEpoch> {
     None
 }
 
-fn invalid(code: &'static str) -> GlobalLedgerError {
-    GlobalLedgerError::fatal(code, "artifact_retention")
+fn invalid(code: Code) -> GlobalLedgerError {
+    GlobalLedgerError::fatal(code, LedgerLocation::ArtifactRetention.location())
 }
 
 impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
@@ -1484,38 +1503,39 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         actingcommand_contract::LabPinReleaseResult,
         Vec<PersistedEvent>,
     )> {
-        let denied = |code| GlobalLedgerError::request(code, "release_lab_pin");
+        let denied =
+            |code| GlobalLedgerError::request(code, ContractLocation::ReleaseLabPin.location());
         let request_event = source(&self.events, &request)
-            .map_err(|_| denied("lab_pin_release_request_missing"))?;
+            .map_err(|_| denied(LedgerCode::LabPinReleaseRequestMissing.code()))?;
         if !lab_release_request_matches(request_event, &target) {
-            return Err(denied("lab_pin_release_request_conflict"));
+            return Err(denied(LedgerCode::LabPinReleaseRequestConflict.code()));
         }
         let object = self
             .retention
             .objects
             .get(&target.artifact_id)
-            .ok_or_else(|| denied("lab_pin_release_artifact_unknown"))?;
+            .ok_or_else(|| denied(LedgerCode::LabPinReleaseArtifactUnknown.code()))?;
         if object.proof.is_some() {
-            return Err(denied("lab_pin_release_artifact_sealed"));
+            return Err(denied(LedgerCode::LabPinReleaseArtifactSealed.code()));
         }
         if let Some(released) = object.released_lab_pins.get(&target.pin.event_id) {
             if released.pin != target.pin {
-                return Err(denied("lab_pin_release_pin_conflict"));
+                return Err(denied(LedgerCode::LabPinReleasePinConflict.code()));
             }
             let mut result = released.clone();
             result.already_released = true;
             return Ok((result, Vec::new()));
         }
         let Some((pin, reason)) = object.pins.get(&target.pin.event_id) else {
-            return Err(denied("lab_pin_release_pin_unknown"));
+            return Err(denied(LedgerCode::LabPinReleasePinUnknown.code()));
         };
         if *pin != target.pin || *reason != ArtifactPinReason::Lab {
-            return Err(denied("lab_pin_release_pin_not_lab"));
+            return Err(denied(LedgerCode::LabPinReleasePinNotLab.code()));
         }
         let identity = object
             .identity
             .clone()
-            .ok_or_else(|| denied("lab_pin_release_identity_missing"))?;
+            .ok_or_else(|| denied(LedgerCode::LabPinReleaseIdentityMissing.code()))?;
         let fact =
             ArtifactRetentionFact::PinReleased(actingcommand_contract::ArtifactPinReleaseRecord {
                 identity: identity.clone(),
@@ -1552,7 +1572,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
         if guard.root() != self.backend.material_root() {
-            return Err(invalid("artifact_eviction_root_conflict"));
+            return Err(invalid(LedgerCode::ArtifactEvictionRootConflict.code()));
         }
         let reference = guard.reference().clone();
         if let Some(proof) = self.retention.proof(&reference)? {
@@ -1561,8 +1581,8 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             }
             if !self.recovering_retention {
                 return Err(GlobalLedgerError::request(
-                    "artifact_eviction_intent_pending",
-                    "admit_artifact_eviction",
+                    LedgerCode::ArtifactEvictionIntentPending.code(),
+                    LedgerLocation::AdmitArtifactEviction.location(),
                 ));
             }
             // Recovery re-checks the material under this exclusive, hash-verified guard: absent
@@ -1571,7 +1591,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             let Some(ArtifactRetentionFact::EvictionIntent(intent)) =
                 original.payload().artifact_retention()
             else {
-                return Err(invalid("artifact_eviction_intent_invalid"));
+                return Err(invalid(LedgerCode::ArtifactEvictionIntentInvalid.code()));
             };
             return Ok((
                 ArtifactEvictionAdmission::Committed(Box::new(ArtifactEvictionPermit {
@@ -1632,7 +1652,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             return Ok((ArtifactEvictionAdmission::Deferred, appended));
         };
         if !guard.material_present() {
-            return Err(invalid("artifact_store_verification_failed"));
+            return Err(invalid(LedgerCode::ArtifactStoreVerificationFailed.code()));
         }
         let event = self.append_retention_fact(
             ArtifactRetentionFact::EvictionIntent(intent.clone()),
@@ -1663,7 +1683,9 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
             || disposition == ArtifactEvictionDisposition::RecoveryAbsent
                 && (!permit.recovery || permit.guard.material_present())
         {
-            return Err(invalid("artifact_eviction_outcome_guard_conflict"));
+            return Err(invalid(
+                LedgerCode::ArtifactEvictionOutcomeGuardConflict.code(),
+            ));
         }
         let fact = ArtifactRetentionFact::EvictionOutcome(
             actingcommand_contract::ArtifactEvictionOutcomeRecord {
@@ -1728,7 +1750,8 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         )?)
         // The FATAL line prints only code and operation; they carry the refused rule.
         .map_err(|error| {
-            GlobalLedgerError::fatal(error.code(), error.field()).with_detail(error.to_string())
+            GlobalLedgerError::relayed_fatal(error.code().as_str(), error.field())
+                .with_detail(error.to_string())
         })?;
         let draft = links
             .apply_to(draft)
@@ -1767,13 +1790,16 @@ impl super::GlobalLedger {
         request: TerminalEvent,
     ) -> GlobalLedgerResult<actingcommand_contract::LabPinReleaseResult> {
         target.validate().map_err(|_| {
-            GlobalLedgerError::request("invalid_lab_pin_release_target", "release_lab_pin")
+            GlobalLedgerError::request(
+                SharedCode::InvalidLabPinReleaseTarget.code(),
+                ContractLocation::ReleaseLabPin.location(),
+            )
         })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| invalid("writer_unavailable"))?;
+            .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         super::send_command(
             sender,
             super::WriterCommand::ReleaseLabPin {
@@ -1781,9 +1807,9 @@ impl super::GlobalLedger {
                 request,
                 response,
             },
-            "release_lab_pin",
+            ContractLocation::ReleaseLabPin.location(),
         )?;
-        super::receive_response(receiver, "release_lab_pin")?
+        super::receive_response(receiver, ContractLocation::ReleaseLabPin.location())?
     }
 
     pub fn retention_candidates(
@@ -1793,15 +1819,15 @@ impl super::GlobalLedger {
     ) -> GlobalLedgerResult<ArtifactRetentionCandidates> {
         policy.validate().map_err(|_| {
             GlobalLedgerError::request(
-                "invalid_failed_run_retention_policy",
-                "retention_candidates",
+                SharedCode::InvalidFailedRunRetentionPolicy.code(),
+                LedgerLocation::RetentionCandidates.location(),
             )
         })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| invalid("writer_unavailable"))?;
+            .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         super::send_command(
             sender,
             super::WriterCommand::RetentionCandidates {
@@ -1809,9 +1835,9 @@ impl super::GlobalLedger {
                 policy,
                 response,
             },
-            "retention_candidates",
+            LedgerLocation::RetentionCandidates.location(),
         )?;
-        super::receive_response(receiver, "retention_candidates")?
+        super::receive_response(receiver, LedgerLocation::RetentionCandidates.location())?
     }
 
     pub fn admit_artifact_eviction(
@@ -1821,15 +1847,15 @@ impl super::GlobalLedger {
     ) -> GlobalLedgerResult<ArtifactEvictionAdmission> {
         policy.validate().map_err(|_| {
             GlobalLedgerError::request(
-                "invalid_failed_run_retention_policy",
-                "admit_artifact_eviction",
+                SharedCode::InvalidFailedRunRetentionPolicy.code(),
+                LedgerLocation::AdmitArtifactEviction.location(),
             )
         })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| invalid("writer_unavailable"))?;
+            .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         super::send_command(
             sender,
             super::WriterCommand::AdmitArtifactEviction {
@@ -1837,9 +1863,9 @@ impl super::GlobalLedger {
                 policy,
                 response,
             },
-            "admit_artifact_eviction",
+            LedgerLocation::AdmitArtifactEviction.location(),
         )?;
-        super::receive_response(receiver, "admit_artifact_eviction")?
+        super::receive_response(receiver, LedgerLocation::AdmitArtifactEviction.location())?
     }
 
     pub fn finish_artifact_eviction(
@@ -1850,7 +1876,7 @@ impl super::GlobalLedger {
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| invalid("writer_unavailable"))?;
+            .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         let (disposition, io) = permit.perform();
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         super::send_command(
@@ -1861,14 +1887,17 @@ impl super::GlobalLedger {
                 io,
                 response,
             },
-            "finish_artifact_eviction",
+            LedgerLocation::FinishArtifactEviction.location(),
         )?;
-        super::receive_response(receiver, "finish_artifact_eviction")?
+        super::receive_response(receiver, LedgerLocation::FinishArtifactEviction.location())?
     }
 }
 
 fn sealed() -> GlobalLedgerError {
-    GlobalLedgerError::request("artifact_material_admission_closed", "append_event")
+    GlobalLedgerError::request(
+        LedgerCode::ArtifactMaterialAdmissionClosed.code(),
+        LedgerLocation::AppendEvent.location(),
+    )
 }
 
 pub(super) fn annotate_metadata_checked(
@@ -1982,9 +2011,10 @@ impl RetentionIndex {
         &self,
         reference: &ProjectedArtifactReference,
     ) -> Result<Option<ArtifactAvailability>, FactValidationError> {
+        // `RetentionIndex::proof` fails only with `artifact_identity_conflict`.
         let proof = self
             .proof(reference)
-            .map_err(|error| FactValidationError::new(error.code()))?;
+            .map_err(|_| FactValidationError::new(LedgerCode::ArtifactIdentityConflict.code()))?;
         Ok(proof.map(|proof| match proof.disposition {
             Some(
                 ArtifactEvictionDisposition::Deleted | ArtifactEvictionDisposition::RecoveryAbsent,
@@ -2012,15 +2042,20 @@ impl RetentionIndex {
                     return Ok(Some(availability));
                 }
                 let verify = verifier.as_mut().ok_or(FactValidationError::new(
-                    "artifact_store_verification_unavailable",
+                    LedgerCode::ArtifactStoreVerificationUnavailable.code(),
                 ))?;
                 verify(reference)
                     .map(|verified| Some(ArtifactAvailability::Available(verified)))
                     .ok_or(FactValidationError::new(
-                        "artifact_store_verification_failed",
+                        LedgerCode::ArtifactStoreVerificationFailed.code(),
                     ))
             })
-            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+            .map_err(|error| {
+                GlobalLedgerError::fatal(
+                    error.code(),
+                    LedgerLocation::ValidatePersistedEvent.location(),
+                )
+            })?;
         self.annotate_event(&mut event);
         Ok(event)
     }
@@ -2036,7 +2071,12 @@ impl RetentionIndex {
             .into_event_with_artifact_availability(&mut |reference| {
                 self.proven_availability(reference)
             })
-            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+            .map_err(|error| {
+                GlobalLedgerError::fatal(
+                    error.code(),
+                    LedgerLocation::ValidatePersistedEvent.location(),
+                )
+            })?;
         self.annotate_event(&mut event);
         Ok(event)
     }
@@ -2064,7 +2104,12 @@ impl RetentionIndex {
                     .and_then(|verify| verify(reference))
                     .map(ArtifactAvailability::Available))
             })
-            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+            .map_err(|error| {
+                GlobalLedgerError::fatal(
+                    error.code(),
+                    LedgerLocation::ValidatePersistedEvent.location(),
+                )
+            })?;
         self.annotate_event(&mut event);
         Ok(event)
     }

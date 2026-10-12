@@ -2,11 +2,13 @@
 
 //! Pure forward planning and evidence-bounded maintenance assessment.
 
+use crate::codes::PolicyCode;
 use crate::{
     CompiledCatalog, DetectionSuggestion, EffectDirection, EvaluationFacts, EvaluationResources,
     EvaluationTime, HostResourceSnapshot, ObservationSource, PolicyEvaluationError, PoolProjection,
     PoolSpec, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot, TaskTerminalState, evaluate,
 };
+use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,21 +23,21 @@ pub type ForwardResult<T> = Result<T, ForwardError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardError {
-    code: &'static str,
+    code: Code,
     message: String,
 }
 
 impl ForwardError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "forward_projection_invalid",
+            code: PolicyCode::ForwardProjectionInvalid.code(),
             message: message.into(),
         }
     }
 
     fn overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "forward_projection_overflow",
+            code: PolicyCode::ForwardProjectionOverflow.code(),
             message: message.into(),
         }
     }
@@ -47,7 +49,7 @@ impl ForwardError {
         }
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
@@ -288,10 +290,10 @@ pub fn project_forward(
             (
                 String::new(),
                 String::new(),
-                "step_budget_exhausted".to_owned(),
+                PolicyCode::StepBudgetExhausted.as_str().to_owned(),
             ),
             ForwardEvidenceGap {
-                code: "step_budget_exhausted".to_owned(),
+                code: PolicyCode::StepBudgetExhausted.as_str().to_owned(),
                 task_id: None,
                 fact_key: None,
             },
@@ -521,7 +523,7 @@ fn uncertain_effect_gap(
             })
         {
             return Ok(Some(ForwardEvidenceGap {
-                code: "effect_evidence_insufficient".to_owned(),
+                code: PolicyCode::EffectEvidenceInsufficient.as_str().to_owned(),
                 task_id: Some(task.id.clone()),
                 fact_key: None,
             }));
@@ -1380,7 +1382,7 @@ mod tests {
         evidence.confidences[0].ledger_sequence = evidence.durations[0].ledger_sequence;
         let error = assess_predictive_maintenance(&evidence, MaintenanceTrendPolicy::default())
             .expect_err("one ledger event cannot identify two evidence samples");
-        assert_eq!(error.code(), "forward_projection_invalid");
+        assert_eq!(error.code().as_str(), "forward_projection_invalid");
     }
 
     #[test]
@@ -1389,7 +1391,7 @@ mod tests {
         evidence.as_of_ledger_position = 12;
         let error = assess_predictive_maintenance(&evidence, MaintenanceTrendPolicy::default())
             .expect_err("late ledger evidence must not cross the query bound");
-        assert_eq!(error.code(), "forward_projection_invalid");
+        assert_eq!(error.code().as_str(), "forward_projection_invalid");
     }
 
     #[test]

@@ -206,7 +206,9 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
         actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
             .expect("shared database");
     database
-        .connection("prepare legacy catalog pointer in existing specification")
+        .connection(
+            actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+        )
         .expect("connection")
         .execute_batch(
             "BEGIN IMMEDIATE;
@@ -282,7 +284,7 @@ fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
     let database =
         actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
             .expect("existing fixture database");
-    database.connection("prepare older verified catalog pointer").expect("connection")
+    database.connection(actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location()).expect("connection")
         .execute_batch("BEGIN IMMEDIATE;
             DELETE FROM state_documents WHERE state_key='policy.catalog.active';
             DELETE FROM state_document_history WHERE state_key='policy.catalog.active' AND revision>1;

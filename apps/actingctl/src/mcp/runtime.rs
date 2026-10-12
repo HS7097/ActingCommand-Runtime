@@ -7,6 +7,9 @@
 
 use super::lock;
 use super::tools::ToolError;
+use crate::codes::ActingctlCode;
+use actingcommand_contract::RuntimeErrorCode;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Value, json};
@@ -53,7 +56,7 @@ impl Location {
     pub(super) fn check(&self) -> Result<(), ToolError> {
         match &self.error {
             Some(error) => Err(ToolError::usage(
-                "install_selection_unavailable",
+                SharedCode::InstallSelectionUnavailable,
                 error.clone(),
             )),
             None => Ok(()),
@@ -89,13 +92,15 @@ impl RuntimeAccess {
     pub(super) fn new(root: Option<PathBuf>, state_root: Option<PathBuf>) -> Self {
         let located = (|| {
             let process = actingcommand_contract::process_installation()
-                .map_err(|error| error.code().to_owned())?;
+                .map_err(|error| error.code().as_str().to_owned())?;
             let installation = match process {
                 Some(selected) => {
                     if let Some(root) = &root {
                         let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
                         if root != selected.root() {
-                            return Err("install_process_root_mismatch".to_owned());
+                            return Err(ActingctlCode::InstallProcessRootMismatch
+                                .as_str()
+                                .to_owned());
                         }
                     }
                     Some(selected.clone())
@@ -104,7 +109,7 @@ impl RuntimeAccess {
                     .as_deref()
                     .map(actingcommand_contract::InstalledProcess::read)
                     .transpose()
-                    .map_err(|error| error.code().to_owned())?
+                    .map_err(|error| error.code().as_str().to_owned())?
                     .flatten(),
             };
             let program_root = installation
@@ -134,7 +139,9 @@ impl RuntimeAccess {
                     let configured =
                         fs::canonicalize(configured).map_err(|error| error.to_string())?;
                     if requested != configured {
-                        return Err("install_process_state_root_mismatch".to_owned());
+                        return Err(ActingctlCode::InstallProcessStateRootMismatch
+                            .as_str()
+                            .to_owned());
                     }
                 }
             }
@@ -197,7 +204,7 @@ impl RuntimeAccess {
             }
         }
         let state_root = self.locate().state_root.map_err(|reason| {
-            ToolError::usage("install_state_root_unresolved", reason).blocked_by(
+            ToolError::usage(ActingctlCode::InstallStateRootUnresolved, reason).blocked_by(
                 "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
             )
         })?;
@@ -248,7 +255,7 @@ pub(super) fn connect_at(
     source: EventSource,
 ) -> Result<RuntimeClient, ToolError> {
     let state_root = state_root.as_ref().map_err(|reason| {
-        ToolError::usage("install_state_root_unresolved", reason.clone()).blocked_by(
+        ToolError::usage(ActingctlCode::InstallStateRootUnresolved, reason.clone()).blocked_by(
             "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
         )
     })?;
@@ -264,7 +271,7 @@ pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
         error.code(),
         error.to_string(),
     )
-    .with_detail("operation", json!(error.operation()));
+    .with_detail("operation", json!(error.operation().as_str()));
     if let Some(projection) = error.projection() {
         mapped = mapped.with_detail("runtime_code", json!(projection.code));
     }
@@ -287,14 +294,14 @@ pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
 fn unavailable(error: &RuntimeClientError, state_root: &Path) -> ToolError {
     ToolError::new(
         error.disposition().as_str(),
-        "runtime_unavailable",
+        RuntimeErrorCode::RuntimeUnavailable,
         format!(
             "actingd does not answer for state root {}: {error}",
             state_root.display()
         ),
     )
-    .with_detail("client_code", json!(error.code()))
-    .with_detail("operation", json!(error.operation()))
+    .with_detail("client_code", json!(error.code().as_str()))
+    .with_detail("operation", json!(error.operation().as_str()))
     .blocked_by("actingd running on this state root; starting it belongs to the person")
 }
 

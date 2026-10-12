@@ -2,7 +2,10 @@
 
 use super::facts::FactPublicationPurpose;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::ipc::{FrameRead, FrameStart, read_started_frame, wait_frame_start, write_frame};
+use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_scheduler::codes::SchedulerCode;
 use std::net::TcpStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -94,6 +97,14 @@ impl HostShared {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
                 }
+                #[cfg(test)]
+                if let Some(detail) = failure.error.native_detail() {
+                    lock(
+                        &self.failure_details_for_test,
+                        crate::codes::test_spellings::TestLocation::RecordFailureDetailForTest,
+                    )?
+                    .insert(request.request_id(), detail.to_owned());
+                }
                 let projection = failure
                     .error
                     .projection()
@@ -158,7 +169,7 @@ impl HostShared {
                 request,
                 material.ok_or_else(|| {
                     RequestFailure::poison_without_terminal(protocol_error(
-                        "material_read_context_missing",
+                        HostLocation::MaterialReadContextMissing,
                     ))
                 })?,
             ),
@@ -217,8 +228,8 @@ impl HostShared {
                 if reply_bytes > self.maximum_frame_bytes {
                     return Err(RequestFailure::request(
                         RuntimeHostError::request(
-                            "runtime_fact_snapshot_too_large_for_frame",
-                            "read_runtime_fact_snapshot",
+                            HostCode::RuntimeFactSnapshotTooLargeForFrame,
+                            HostLocation::ReadRuntimeFactSnapshot,
                             RuntimeErrorCode::InvalidRequest,
                         )
                         .with_native_detail(format!(
@@ -377,24 +388,24 @@ impl HostShared {
             // Workflow #191 ps1: an instance pause applies to physical instances only.
             RuntimeOperation::PauseScheduling {
                 scope,
-                reason_code,
+                pause_reason,
                 drain_timeout_ms,
             } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.pause_scheduling(validated, scope, reason_code, *drain_timeout_ms)
+                self.pause_scheduling(validated, scope, pause_reason, *drain_timeout_ms)
             }
             RuntimeOperation::ResumeScheduling { scope, expected } => {
                 if let Some(instance_alias) = scope.instance_alias() {
                     self.require_physical_instance_alias(instance_alias)?;
                 }
-                self.resume_scheduling(validated, scope, expected.as_ref())
+                self.resume_scheduling(request, validated, scope, expected.as_ref(), connection_id)
             }
             // Workflow #317 sc3 (d): a manual reconnect and self-check of a physical instance.
             RuntimeOperation::SelfCheckInstance { instance_alias } => {
                 self.require_physical_instance_alias(instance_alias)?;
-                self.self_check_instance(validated, instance_alias)
+                self.self_check_instance(request, validated, instance_alias, connection_id)
             }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
@@ -536,8 +547,34 @@ impl HostShared {
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
+            // Workflow #389 U-1: the contract has these shapes and later slices add the
+            // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
+            // UpgradeStateStatus U-4). Until then each is refused and records nothing.
+            RuntimeOperation::BindChannel { .. } => Err(not_implemented(HostLocation::BindChannel)),
+            RuntimeOperation::LoadPack { .. } => Err(not_implemented(HostLocation::LoadPack)),
+            RuntimeOperation::UnloadPack { .. } => Err(not_implemented(HostLocation::UnloadPack)),
+            RuntimeOperation::UpgradeState { .. } => {
+                Err(not_implemented(HostLocation::UpgradeState))
+            }
+            RuntimeOperation::UpgradeStateStatus { .. } => {
+                Err(not_implemented(HostLocation::UpgradeStateStatus))
+            }
         }
     }
+}
+
+/// A request kind whose behaviour a later slice adds: Denied with the shared code
+/// `not_implemented` (Workflow #389 U-1).
+fn not_implemented(operation: HostLocation) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            actingcommand_contract::codes::SharedCode::NotImplemented,
+            operation,
+            RuntimeErrorCode::InvalidRequest,
+        ),
+        RuntimeReceiptState::Denied,
+        None,
+    )
 }
 
 pub(super) struct RequestFailure {
@@ -657,8 +694,8 @@ mod request_failure_tests {
             state: RuntimeReceiptState::Failed,
             terminal: None,
             error: Box::new(RuntimeHostError::request(
-                "capture_backend_operation_failed",
-                "run_contained_task_capture",
+                actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+                crate::codes::HostLocation::RunContainedTaskCapture,
                 RuntimeErrorCode::CaptureFailed,
             )),
             poison_runtime: false,
@@ -669,8 +706,8 @@ mod request_failure_tests {
         };
 
         let escalated = original.replace_with_poison(RuntimeHostError::fatal(
-            "lease_cleanup_failed",
-            "release_failed_policy_run",
+            crate::codes::test_spellings::TestCode::LeaseCleanupFailed,
+            crate::codes::HostLocation::ReleaseFailedPolicyRun,
             RuntimeErrorCode::RuntimeFatal,
         ));
 
@@ -700,7 +737,7 @@ impl ActionFailure {
             poison_runtime: error.is_fatal(),
             release_after: false,
             destructive_started: false,
-            transfer_after: error.code() == "lease_transfer_not_safe",
+            transfer_after: error.code() == SchedulerCode::LeaseTransferNotSafe.as_str(),
             task_failure: None,
             error,
         }
@@ -873,8 +910,8 @@ pub(super) fn connection_boundary(
         Err(_) => {
             context.stage = Some(ConnectionFailureStage::ConnectionPanic);
             Some(RuntimeHostError::fatal(
-                "runtime_connection_panicked",
-                "serve_runtime_connection",
+                HostCode::RuntimeConnectionPanicked,
+                HostLocation::ServeRuntimeConnection,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         }
@@ -937,13 +974,13 @@ fn connection_loop(
     // non-blocking poll (ipc::wait_frame_start), so no receive timeout expires on an idle socket.
     stream
         .set_read_timeout(Some(io_timeout))
-        .map_err(|_| protocol_error("set_read_timeout"))?;
+        .map_err(|_| protocol_error(HostLocation::SetReadTimeout))?;
     stream
         .set_write_timeout(Some(io_timeout))
-        .map_err(|_| protocol_error("set_write_timeout"))?;
+        .map_err(|_| protocol_error(HostLocation::SetWriteTimeout))?;
     stream
         .set_nodelay(true)
-        .map_err(|_| protocol_error("set_tcp_nodelay"))?;
+        .map_err(|_| protocol_error(HostLocation::SetTcpNodelay))?;
     let mut cache = RequestCache::default();
     while !shared.fatal.is_shutdown_requested() {
         context.stage = Some(ConnectionFailureStage::RequestRead);
@@ -992,7 +1029,7 @@ fn connection_loop(
                     crate::test_observation::HostTestObservationPoint::ConnectionExit,
                     crate::test_observation::HostTestObservationOutcome::Error,
                 );
-                return Err(protocol_error("runtime_request_decode_failed"));
+                return Err(protocol_error(HostLocation::RuntimeRequestDecodeFailed));
             }
         };
         context.request_decoded = true;
@@ -1053,7 +1090,7 @@ fn connection_loop(
                 receipt
             }
             Err(error) => {
-                if error.operation() == "build_runtime_receipt" {
+                if error.operation() == HostLocation::BuildRuntimeReceipt.as_str() {
                     context.stage = Some(ConnectionFailureStage::ReceiptBuild);
                 }
                 #[cfg(feature = "test-observation")]
@@ -1139,7 +1176,7 @@ impl RequestCache {
             return Ok(None);
         };
         if original != request {
-            return Err(protocol_error("runtime_request_id_reused"));
+            return Err(protocol_error(HostLocation::RuntimeRequestIdReused));
         }
         Ok(Some(receipt.clone()))
     }
@@ -1194,8 +1231,8 @@ impl HostShared {
         if (original.actor(), original.source()) != expected_origin {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "policy_task_request_origin_mismatch",
-                    "append_scheduled_request_lifecycle",
+                    HostCode::PolicyTaskRequestOriginMismatch,
+                    HostLocation::AppendScheduledRequestLifecycle,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -1269,8 +1306,8 @@ impl HostShared {
             | EventSource::System => {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "c4_client_source_unsupported",
-                        "append_request_lifecycle",
+                        HostCode::C4ClientSourceUnsupported,
+                        HostLocation::AppendRequestLifecycle,
                         RuntimeErrorCode::InvalidRequest,
                     ),
                     RuntimeReceiptState::Denied,
@@ -1315,8 +1352,8 @@ impl HostShared {
         }
         Err(RequestFailure::request(
             RuntimeHostError::request(
-                "c4_client_source_unsupported",
-                "append_request_lifecycle",
+                HostCode::C4ClientSourceUnsupported,
+                HostLocation::AppendRequestLifecycle,
                 RuntimeErrorCode::InvalidRequest,
             ),
             RuntimeReceiptState::Denied,
@@ -1352,43 +1389,45 @@ pub(super) fn diagnostic_for_projection(projection: &RuntimeErrorProjection) -> 
     }
 }
 
-pub(super) fn policy_id_error(operation: &'static str) -> RuntimeHostError {
+pub(super) fn policy_id_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "policy_identifier_issue_failed",
+        HostCode::PolicyIdentifierIssueFailed,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
 }
 
-pub(super) fn policy_contract_error(operation: &'static str) -> RuntimeHostError {
+pub(super) fn policy_contract_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "policy_runtime_contract_invalid",
+        HostCode::PolicyRuntimeContractInvalid,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
 }
 
 pub(super) fn policy_admission_request(
-    code: &'static str,
-    operation: &'static str,
+    code: impl Into<Code>,
+    operation: impl Into<Location>,
 ) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
 pub(super) fn policy_admission_fatal(
-    code: &'static str,
-    operation: &'static str,
+    code: impl Into<Code>,
+    operation: impl Into<Location>,
 ) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
 pub(super) fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> RuntimeHostError {
     match error {
-        CriticalExecutionError::IntentAppend(_) => ledger_error("append_critical_intent"),
-        CriticalExecutionError::OutcomeUndurable { .. } => ledger_error("append_critical_outcome"),
+        CriticalExecutionError::IntentAppend(_) => ledger_error(HostLocation::AppendCriticalIntent),
+        CriticalExecutionError::OutcomeUndurable { .. } => {
+            ledger_error(HostLocation::AppendCriticalOutcome)
+        }
         CriticalExecutionError::Action { .. } => RuntimeHostError::fatal(
-            "critical_action_mapping_invalid",
-            "map_critical_result",
+            HostCode::CriticalActionMappingInvalid,
+            HostLocation::MapCriticalResult,
             RuntimeErrorCode::RuntimeFatal,
         ),
     }
@@ -1396,13 +1435,16 @@ pub(super) fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> 
 
 pub(super) fn critical_plan_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "critical_event_plan_invalid",
-        "build_critical_event",
+        HostCode::CriticalEventPlanInvalid,
+        HostLocation::BuildCriticalEvent,
         RuntimeErrorCode::RuntimeFatal,
     )
 }
 
-pub(super) fn client_fact_conflict(code: &'static str, operation: &'static str) -> RequestFailure {
+pub(super) fn client_fact_conflict(
+    code: impl Into<Code>,
+    operation: impl Into<Location>,
+) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest),
         RuntimeReceiptState::Denied,
@@ -1410,17 +1452,33 @@ pub(super) fn client_fact_conflict(code: &'static str, operation: &'static str) 
     )
 }
 
+/// The host's receipt-build failure keeps the spelling `runtime_receipt_invalid`, which the
+/// runtime client registered for a receipt it cannot read: one spelling, two meanings (M378:90).
+/// A2-P renames the host side; until then it travels as a relayed spelling.
 pub(super) fn receipt_error() -> RuntimeHostError {
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         "runtime_receipt_invalid",
-        "build_runtime_receipt",
+        HostLocation::BuildRuntimeReceipt.as_str(),
         RuntimeErrorCode::RuntimeFatal,
     )
 }
 
-pub(super) fn protocol_error(operation: &'static str) -> RuntimeHostError {
+/// A protocol refusal whose operation is spelled like a shared code (the material read's
+/// `material_read_deadline_overflow` and `material_read_length_overflow`: one spelling for a
+/// code and a location, M378:90). A2-P renames one side; then `protocol_error` takes it.
+pub(super) fn protocol_error_at_code_spelling(
+    code_spelled_operation: &'static str,
+) -> RuntimeHostError {
+    RuntimeHostError::relayed_request(
+        HostCode::RuntimeProtocolInvalid.as_str(),
+        code_spelled_operation,
+        RuntimeErrorCode::ProtocolInvalid,
+    )
+}
+
+pub(super) fn protocol_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(
-        "runtime_protocol_invalid",
+        HostCode::RuntimeProtocolInvalid,
         operation,
         RuntimeErrorCode::ProtocolInvalid,
     )

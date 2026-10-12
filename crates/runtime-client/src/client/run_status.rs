@@ -4,13 +4,14 @@
 //! scheduled contained run read from its ledger events. It is read-only and never persisted.
 
 use super::*;
+use crate::codes::ClientCode;
 use actingcommand_contract::{
     ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, PackageRef, TaskRunIdentity,
 };
 
 const RUN_STATUS_SCHEMA: &str = "actingcommand.run-status.v1";
-const RUN_STATUS_OPERATION: &str = "contained_run_status";
-const RECENT_RUNS_OPERATION: &str = "recent_runs";
+const RUN_STATUS_OPERATION: Location = ClientLocation::ContainedRunStatus.location();
+const RECENT_RUNS_OPERATION: Location = ClientLocation::RecentRuns.location();
 const MAX_RECENT_RUNS: usize = 10;
 const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
 
@@ -158,7 +159,7 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<ContainedRunStatus> {
         self.read_contained_run_status(key, mode, None, None)?
             .map(|read| read.status)
-            .ok_or_else(|| status_error("run_status_read_incomplete"))
+            .ok_or_else(|| status_error(ClientCode::RunStatusReadIncomplete))
     }
 
     /// The most recent `limit` (1-10) contained runs first recorded on `instance` since
@@ -172,14 +173,17 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<RecentContainedRuns> {
         if limit == 0 || limit > MAX_RECENT_RUNS {
             return Err(RuntimeClientError::fatal(
-                "recent_runs_limit_invalid",
+                ClientCode::RecentRunsLimitInvalid,
                 RECENT_RUNS_OPERATION,
             ));
         }
         let deadline = Instant::now()
             .checked_add(RECENT_RUNS_BUDGET)
             .ok_or_else(|| {
-                RuntimeClientError::fatal("recent_runs_budget_invalid", RECENT_RUNS_OPERATION)
+                RuntimeClientError::fatal(
+                    ClientCode::RecentRunsBudgetInvalid,
+                    RECENT_RUNS_OPERATION,
+                )
             })?;
         let listing = self.read_status_pages(
             EventQuery {
@@ -201,12 +205,12 @@ impl RuntimeClient {
             };
             if let Some(previous) = requests.insert(identity.request_id, identity) {
                 if previous != identity {
-                    return Err(status_error("run_status_identity_mismatch"));
+                    return Err(status_error(ClientCode::RunStatusIdentityMismatch));
                 }
                 continue;
             }
             if !runs_seen.insert(identity.run_id) {
-                return Err(status_error("run_status_identity_ambiguous"));
+                return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
             }
             recent.push(identity.request_id);
         }
@@ -291,7 +295,7 @@ impl RuntimeClient {
                         }));
                     }
                     [request_id] => (*request_id, Some(read.snapshot)),
-                    _ => return Err(status_error("run_status_identity_ambiguous")),
+                    _ => return Err(status_error(ClientCode::RunStatusIdentityAmbiguous)),
                 }
             }
         };
@@ -324,16 +328,16 @@ impl RuntimeClient {
             if let Some(found) = request_origin(event)
                 && origin.replace(found).is_some()
             {
-                return Err(status_error("run_status_origin_inconsistent"));
+                return Err(status_error(ClientCode::RunStatusOriginInconsistent));
             }
             let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
                 continue;
             };
             let identity = run_fact_identity(event)?
-                .ok_or_else(|| status_error("run_status_identity_missing"))?;
+                .ok_or_else(|| status_error(ClientCode::RunStatusIdentityMissing))?;
             match first_fact {
                 Some((_, previous)) if previous != identity => {
-                    return Err(status_error("run_status_identity_mismatch"));
+                    return Err(status_error(ClientCode::RunStatusIdentityMismatch));
                 }
                 None => {
                     first_fact = Some((event.sequence, identity));
@@ -349,7 +353,7 @@ impl RuntimeClient {
                         event.links.lease_id().copied(),
                     );
                     if admitted.replace(found).is_some() {
-                        return Err(status_error("run_status_package_fact_count_invalid"));
+                        return Err(status_error(ClientCode::RunStatusPackageFactCountInvalid));
                     }
                 }
                 TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } => {
@@ -401,7 +405,7 @@ impl RuntimeClient {
                         event_id: event.event_id,
                     };
                     if terminal.replace(found).is_some() {
-                        return Err(status_error("run_status_terminal_state_inconsistent"));
+                        return Err(status_error(ClientCode::RunStatusTerminalStateInconsistent));
                     }
                 }
                 _ => {}
@@ -414,13 +418,13 @@ impl RuntimeClient {
                     .iter()
                     .any(|event| !identity.matches_links(&event.links)))
         {
-            return Err(status_error("run_status_identity_mismatch"));
+            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
         }
         let run_id = single_link(&events, EventLinks::run_id)?;
         if let RunKey::RunId(expected) = key
             && run_id != Some(expected)
         {
-            return Err(status_error("run_status_identity_mismatch"));
+            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
         }
         let task_id = single_link(&events, EventLinks::task_id)?;
         let instance_id = single_link(&events, EventLinks::instance_id)?;
@@ -532,7 +536,7 @@ impl RuntimeClient {
                 Ok(Some(ContainedTaskLeaseTerminal::Expired))
             }
             [_] => Ok(Some(ContainedTaskLeaseTerminal::Released)),
-            _ => Err(status_error("run_status_lease_terminal_inconsistent")),
+            _ => Err(status_error(ClientCode::RunStatusLeaseTerminalInconsistent)),
         }
     }
 
@@ -545,10 +549,10 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
         let request = RuntimeEventQueryPageRequest::new(limit, None)
             .and_then(|request| request.at_snapshot(snapshot))
-            .map_err(|_| status_error("run_status_page_request_invalid"))?;
+            .map_err(|_| status_error(ClientCode::RunStatusPageRequestInvalid))?;
         let page = self.query_event_page(query, ProjectionProfile::Forensic, request)?;
         if page.snapshot_ledger_position() != snapshot {
-            return Err(status_error("run_status_snapshot_changed"));
+            return Err(status_error(ClientCode::RunStatusSnapshotChanged));
         }
         Ok(page.events().to_vec())
     }
@@ -561,7 +565,7 @@ impl RuntimeClient {
         query: EventQuery,
         snapshot: Option<u64>,
         deadline: Option<Instant>,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeClientResult<StatusPages> {
         let invalid = |code| RuntimeClientError::fatal(code, operation);
         let mut events = Vec::new();
@@ -573,34 +577,34 @@ impl RuntimeClient {
         for _ in 0..MAX_RUN_SUMMARY_PAGES {
             let mut request =
                 RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
-                    .map_err(|_| invalid("run_status_page_request_invalid"))?;
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
             if cursor.is_none()
                 && let Some(snapshot) = snapshot
             {
                 request = request
                     .at_snapshot(snapshot)
-                    .map_err(|_| invalid("run_status_page_request_invalid"))?;
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
             }
             let page =
                 self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
             let page_position = page.snapshot_ledger_position();
             if position.is_some_and(|expected| expected != page_position) {
-                return Err(invalid("run_status_snapshot_changed"));
+                return Err(invalid(ClientCode::RunStatusSnapshotChanged));
             }
             position = Some(page_position);
             for event in page.events() {
                 if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
-                    return Err(invalid("run_status_pagination_invalid"));
+                    return Err(invalid(ClientCode::RunStatusPaginationInvalid));
                 }
                 if events.len() == MAX_RUN_SUMMARY_EVENTS {
-                    return Err(invalid("run_status_event_limit_exceeded"));
+                    return Err(invalid(ClientCode::RunStatusEventLimitExceeded));
                 }
                 let event_bytes = serde_json::to_vec(event)
-                    .map_err(|_| invalid("run_status_event_encode_failed"))?;
+                    .map_err(|_| invalid(ClientCode::RunStatusEventEncodeFailed))?;
                 resident_bytes = resident_bytes
                     .checked_add(event_bytes.len())
                     .filter(|total| *total <= MAX_RUN_SUMMARY_RESIDENT_BYTES)
-                    .ok_or_else(|| invalid("run_status_resident_limit_exceeded"))?;
+                    .ok_or_else(|| invalid(ClientCode::RunStatusResidentLimitExceeded))?;
                 last_sequence = event.sequence;
                 events.push(event.clone());
             }
@@ -612,16 +616,16 @@ impl RuntimeClient {
                 });
             }
             if events.len() == MAX_RUN_SUMMARY_EVENTS {
-                return Err(invalid("run_status_event_limit_exceeded"));
+                return Err(invalid(ClientCode::RunStatusEventLimitExceeded));
             }
             let next = page
                 .next_cursor()
                 .cloned()
-                .ok_or_else(|| invalid("run_status_pagination_invalid"))?;
+                .ok_or_else(|| invalid(ClientCode::RunStatusPaginationInvalid))?;
             let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
             if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
             {
-                return Err(invalid("run_status_pagination_invalid"));
+                return Err(invalid(ClientCode::RunStatusPaginationInvalid));
             }
             cursor = Some(next);
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -632,7 +636,7 @@ impl RuntimeClient {
                 });
             }
         }
-        Err(invalid("run_status_page_limit_exceeded"))
+        Err(invalid(ClientCode::RunStatusPageLimitExceeded))
     }
 }
 
@@ -662,7 +666,7 @@ impl ContainedRunStatus {
     }
 }
 
-const fn status_error(code: &'static str) -> RuntimeClientError {
+fn status_error(code: impl Into<Code>) -> RuntimeClientError {
     RuntimeClientError::fatal(code, RUN_STATUS_OPERATION)
 }
 
@@ -686,7 +690,7 @@ fn run_fact_identity(event: &ProjectedEvent) -> RuntimeClientResult<Option<TaskR
     }
     TaskRunIdentity::from_semantic_event(payload, &event.links)
         .map(Some)
-        .ok_or_else(|| status_error("run_status_identity_missing"))
+        .ok_or_else(|| status_error(ClientCode::RunStatusIdentityMissing))
 }
 
 /// The one value of a link over the run's events; two different values fail.
@@ -698,7 +702,7 @@ fn single_link<T: Copy + PartialEq>(
     for value in events.iter().filter_map(|event| link(&event.links)) {
         match found {
             Some(existing) if existing != *value => {
-                return Err(status_error("run_status_identity_mismatch"));
+                return Err(status_error(ClientCode::RunStatusIdentityMismatch));
             }
             _ => found = Some(*value),
         }

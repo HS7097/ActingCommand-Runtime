@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::SanitizationCode;
 use crate::{LifecycleNativeDetail, SanitizationError};
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,8 @@ impl BackendInputParameterCheck {
     }
 
     fn validate(&self, backend: &str) -> Result<(), SanitizationError> {
-        let invalid = || SanitizationError::new("invalid_backend_input_check", "input_check");
+        let invalid =
+            || SanitizationError::new(SanitizationCode::InvalidBackendInputCheck, "input_check");
         if !matches!(
             self.status,
             BackendObservationStatus::Passed | BackendObservationStatus::Failed
@@ -303,7 +305,12 @@ impl BackendOpenReport {
     }
 
     pub(crate) fn validate(&self) -> Result<(), SanitizationError> {
-        let invalid = || SanitizationError::new("invalid_backend_open_observation", "backend_open");
+        let invalid = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidBackendOpenObservation,
+                "backend_open",
+            )
+        };
         let token = |value: &str| {
             !value.is_empty()
                 && value.len() <= 64

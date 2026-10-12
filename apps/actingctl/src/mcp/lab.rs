@@ -30,7 +30,11 @@ use super::jobs::JobEnd;
 use super::observer;
 use super::operator::{self, CLI};
 use super::runtime;
-use super::tools::{self, Arguments, ToolContext, ToolError, ToolOutcome, invalid_argument};
+use super::tools::{
+    self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, invalid_argument,
+};
+use crate::codes::ActingctlCode;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{ArtifactMaterialAccumulator, ClientActionValue, PackageRef};
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -596,7 +600,7 @@ impl Program {
         location.check()?;
         let (Some(root), Some(install_root)) = (location.root, location.install_root) else {
             return Err(ToolError::usage(
-                "lab_tool_unavailable",
+                ActingctlCode::LabToolUnavailable,
                 "actingctl does not run from an install root and mcp-serve got no --root, so tools\\actinglab.exe cannot be found",
             )
             .blocked_by("mcp-serve --root <install root>"));
@@ -604,7 +608,7 @@ impl Program {
         let actinglab = install_root.join("tools").join("actinglab.exe");
         if !actinglab.is_file() {
             return Err(ToolError::usage(
-                "lab_tool_unavailable",
+                ActingctlCode::LabToolUnavailable,
                 format!("{} is not a file", actinglab.display()),
             )
             .blocked_by("an install with its tools directory"));
@@ -648,12 +652,12 @@ pub(super) fn child_failure(failure: &ChildFailure, what: &str) -> ToolError {
     match failure {
         ChildFailure::Spawn(error) | ChildFailure::Io(error) => ToolError::new(
             "runtime",
-            "lab_process_failed",
+            ActingctlCode::LabProcessFailed,
             format!("actinglab {what}: {error}"),
         ),
         ChildFailure::StillRunning => ToolError::new(
             "runtime",
-            "lab_process_timeout",
+            ActingctlCode::LabProcessTimeout,
             format!("actinglab {what} was still running at the end of the call budget"),
         ),
     }
@@ -697,7 +701,7 @@ pub(super) fn interpret(captured: &Captured, what: &str) -> Answer {
     let failed = |reason: String| {
         ToolError::new(
             "runtime",
-            "lab_process_failed",
+            ActingctlCode::LabProcessFailed,
             format!("actinglab {what} {reason}"),
         )
         .with_detail("lab_exit_code", json!(exit_code))
@@ -719,14 +723,18 @@ pub(super) fn interpret(captured: &Captured, what: &str) -> Answer {
             });
             match reported {
                 Some((code, message)) => {
+                    let relayed = ToolCode::Relayed { relayed_code: code };
                     let (class, code) = match exit {
-                        3 => ("safety", code),
-                        4 => ("device", code),
-                        5 => ("runtime", code),
-                        6 => ("usage", "not_implemented".to_owned()),
-                        _ => ("usage", code),
+                        3 => ("safety", relayed),
+                        4 => ("device", relayed),
+                        5 => ("runtime", relayed),
+                        6 => (
+                            "usage",
+                            ToolCode::Emitted(SharedCode::NotImplemented.code()),
+                        ),
+                        _ => ("usage", relayed),
                     };
-                    Err(ToolError::new(class, code, message)
+                    Err(ToolError::coded(class, code, message)
                         .with_detail("lab_exit_code", json!(exit))
                         .with_detail("lab_error", json!(lab_error)))
                 }
@@ -753,7 +761,7 @@ fn export_hashed(bytes: &[u8]) -> Result<Value, ToolError> {
     material.update(bytes).map_err(|error| {
         ToolError::new(
             "runtime",
-            "material_export_failed",
+            ActingctlCode::MaterialExportFailed,
             format!("cannot hash the answer: {error}"),
         )
     })?;
@@ -765,7 +773,7 @@ fn export_json(value: &Value) -> Result<Value, ToolError> {
     let bytes = serde_json::to_vec(value).map_err(|error| {
         ToolError::new(
             "runtime",
-            "material_export_failed",
+            ActingctlCode::MaterialExportFailed,
             format!("cannot encode the answer: {error}"),
         )
     })?;
@@ -792,7 +800,7 @@ fn exported_note(effect: Effect, what: &str, export: Option<&Value>) -> Value {
             format!("the answer is larger than the output budget and {place}.")
         }
     };
-    ToolError::new("runtime", "answer_exported", message)
+    ToolError::new("runtime", ActingctlCode::AnswerExported, message)
         .with_detail("export", json!(export))
         .into_warning()
 }
@@ -966,7 +974,7 @@ fn record_action(
         warnings.push(
             ToolError::new(
                 "runtime",
-                "client_action_without_req_id",
+                ActingctlCode::ClientActionWithoutReqId,
                 "actinglab's answer carried no req_id, so this call's client.action carries no value",
             )
             .into_warning(),
@@ -980,7 +988,7 @@ fn record_action(
         Err(error) => warnings.push(
             ToolError::new(
                 "runtime",
-                "client_action_not_recorded",
+                ActingctlCode::ClientActionNotRecorded,
                 "actinglab ran and answered; recording this call's client.action in the Runtime failed, and the Lab command was not run again",
             )
             .with_detail("cause", error.into_value())
@@ -1103,7 +1111,7 @@ pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Valu
                 .ok_or_else(|| {
                     ToolError::new(
                         "runtime",
-                        "lab_process_failed",
+                        ActingctlCode::LabProcessFailed,
                         "actinglab package digest answered without a package reference",
                     )
                 })?;
@@ -1305,7 +1313,7 @@ pub(super) fn binding_draft(
             warnings.push(
                 ToolError::new(
                     "runtime",
-                    "binding_requires_unavailable",
+                    ActingctlCode::BindingRequiresUnavailable,
                     "actinglab gives binding_requires only in the answer of the record stop that generated the package; this answer has none, so manual_steps holds only the closing step",
                 )
                 .into_warning(),
@@ -1320,7 +1328,7 @@ pub(super) fn binding_draft(
                 warnings.push(
                     ToolError::new(
                         "runtime",
-                        "preflight_failed",
+                        ActingctlCode::PreflightFailed,
                         "actinglab package preflight did not pass the recorded package; admission shows its error",
                     )
                     .into_warning(),
@@ -1334,7 +1342,7 @@ pub(super) fn binding_draft(
                 warnings.push(
                     ToolError::new(
                         "runtime",
-                        "check_config_unavailable",
+                        ActingctlCode::CheckConfigUnavailable,
                         "actingd check-config gave no report; check_config shows why",
                     )
                     .into_warning(),
@@ -1377,12 +1385,12 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
     let captured = child::run_to_end(command).map_err(|failure| match failure {
         ChildFailure::Spawn(error) | ChildFailure::Io(error) => ToolError::new(
             "runtime",
-            "check_config_failed",
+            ActingctlCode::CheckConfigFailed,
             format!("actingd check-config: {error}"),
         ),
         ChildFailure::StillRunning => ToolError::new(
             "runtime",
-            "check_config_failed",
+            ActingctlCode::CheckConfigFailed,
             "actingd check-config was still running",
         ),
     })?;
@@ -1391,7 +1399,7 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
         serde_json::from_slice::<Value>(captured.stdout.trim_ascii()).map_err(|error| {
             ToolError::new(
                 "runtime",
-                "check_config_failed",
+                ActingctlCode::CheckConfigFailed,
                 format!("actingd check-config printed no JSON report: {error}"),
             )
             .with_detail("exit_code", json!(captured.status.code()))
@@ -1581,4 +1589,10 @@ pub(super) fn record_stop_input() -> Value {
 
 pub(super) fn record_status_input() -> Value {
     input_schema(&RECORD_STATUS)
+}
+
+// Test-only: Workflow #382 MCP-T1 (test plan A-5a), the Lab overflow rule gate.
+#[cfg(test)]
+mod tests {
+    mod gate_mcpt1;
 }

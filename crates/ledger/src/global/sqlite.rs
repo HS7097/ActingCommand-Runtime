@@ -13,10 +13,13 @@ use super::{
     LedgerProjectViewCount, LedgerProjectViewObservation, LedgerProjectViewReadBudget,
     MAX_QUERY_PAGE_EVENTS,
 };
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::{
     PersistedEvent,
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     EventId, EventQuery, EventType, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState,
     LedgerReadScope, LedgerReadSource, ProjectedArtifactReference, ProjectionProfile,
@@ -73,9 +76,12 @@ fn verify_transaction_row(
     transaction: &RuntimeTransaction<'_, '_>,
     event: &PersistedEvent,
 ) -> GlobalLedgerResult<String> {
-    const OPERATION: &str = "verify_transaction_event";
+    const OPERATION: Location = LedgerLocation::VerifyTransactionEvent.location();
     if !transaction.belongs_to(database) {
-        return Err(failure("ledger_transaction_owner_mismatch", OPERATION));
+        return Err(failure(
+            LedgerCode::LedgerTransactionOwnerMismatch.code(),
+            OPERATION,
+        ));
     }
     let connection = transaction.sql();
     let meta = read_meta(connection)?;
@@ -86,7 +92,10 @@ fn verify_transaction_row(
         0
     };
     if format_version(connection)? != expected_format {
-        return Err(failure("ledger_format_marker_mismatch", OPERATION));
+        return Err(failure(
+            LedgerCode::LedgerFormatMarkerMismatch.code(),
+            OPERATION,
+        ));
     }
     let (
         Some(SqlValue::Integer(next)),
@@ -94,17 +103,17 @@ fn verify_transaction_row(
         Some(SqlValue::Text(head_hash)),
     ) = (meta.get(2), meta.get(3), meta.get(4))
     else {
-        return Err(failure("ledger_meta_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
     };
     let head = decode(*head);
     if head == 0
         || decode(*next) != increment_sequence(head)?
         || meta != meta_row_with_marker(database, decode(*next), head, Some(head_hash), &marker)
     {
-        return Err(failure("ledger_meta_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
     }
     if event.sequence() == 0 || event.sequence() > head {
-        return Err(failure("ledger_record_missing", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMissing.code(), OPERATION));
     }
     let sequence = encode(event.sequence());
     let mut bytes = 0;
@@ -116,7 +125,7 @@ fn verify_transaction_row(
         true,
     )?;
     let [row] = rows.as_slice() else {
-        return Err(failure("ledger_record_missing", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMissing.code(), OPERATION));
     };
     let previous = if event.sequence() == 1 {
         None
@@ -132,18 +141,18 @@ fn verify_transaction_row(
         match rows.as_slice() {
             [row] => match row.as_slice() {
                 [SqlValue::Text(hash)] => Some(hash.clone()),
-                _ => return Err(failure("ledger_record_mismatch", OPERATION)),
+                _ => return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION)),
             },
-            _ => return Err(failure("ledger_record_missing", OPERATION)),
+            _ => return Err(failure(LedgerCode::LedgerRecordMissing.code(), OPERATION)),
         }
     };
     let Some(SqlValue::Blob(stored)) = row.get(10) else {
-        return Err(failure("ledger_record_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
     };
     let expected = StoredEventRecord::from_event(event);
     let projected = project_stored_bytes(database, &expected, stored.clone(), previous.as_deref())?;
     if *row != projected.event || (event.sequence() == head && projected.hash != *head_hash) {
-        return Err(failure("ledger_record_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
     }
     let links = read_rows(
         connection,
@@ -163,21 +172,28 @@ fn verify_transaction_row(
         false,
     )?;
     if links != vec![projected.links] || artifacts != projected.artifacts {
-        return Err(failure("ledger_index_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerIndexMismatch.code(), OPERATION));
     }
     // Canonical bytes are a sufficient condition only; a non-canonical stored row (an
     // older shape of the same value) is compared as its strictly decoded record.
     let canonical = serde_json::to_vec(&expected).map_err(|error| {
-        GlobalLedgerError::json("event_serialization_failed", OPERATION, &error)
+        GlobalLedgerError::json(
+            LedgerCode::EventSerializationFailed.code(),
+            OPERATION,
+            &error,
+        )
     })?;
     if canonical != *stored {
         let value = serde_json::from_slice::<UniqueJsonValue>(stored)
-            .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?
+            .map_err(|error| {
+                GlobalLedgerError::json(LedgerCode::CorruptLedgerRecord.code(), OPERATION, &error)
+            })?
             .0;
-        let decoded: StoredEventRecord = serde_json::from_value(value)
-            .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?;
+        let decoded: StoredEventRecord = serde_json::from_value(value).map_err(|error| {
+            GlobalLedgerError::json(LedgerCode::CorruptLedgerRecord.code(), OPERATION, &error)
+        })?;
         if decoded != expected {
-            return Err(failure("ledger_record_mismatch", OPERATION));
+            return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
         }
     }
     Ok(projected.hash)
@@ -208,14 +224,21 @@ impl SqliteMarker {
     fn migrated(
         record: &actingcommand_contract::LedgerMigrationRecord,
     ) -> GlobalLedgerResult<Self> {
-        record
-            .validate()
-            .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+        record.validate().map_err(|error| {
+            failure(
+                error.code(),
+                LedgerLocation::ValidateCutoverMarker.location(),
+            )
+        })?;
         Ok(Self {
             state: "ready",
             migration: Some(Box::new(record.clone())),
             material: Some(serde_json::to_string(record).map_err(|error| {
-                GlobalLedgerError::json("invalid_cutover_marker", "encode_cutover_marker", &error)
+                GlobalLedgerError::json(
+                    LedgerCode::InvalidCutoverMarker.code(),
+                    LedgerLocation::EncodeCutoverMarker.location(),
+                    &error,
+                )
             })?),
         })
     }
@@ -229,19 +252,26 @@ impl SqliteMarker {
             }
             (Some(SqlValue::Text(state)), Some(SqlValue::Text(material))) if state == "ready" => {
                 let unique: UniqueJsonValue = serde_json::from_str(material).map_err(|error| {
-                    GlobalLedgerError::json("invalid_cutover_marker", "read_cutover_marker", &error)
+                    GlobalLedgerError::json(
+                        LedgerCode::InvalidCutoverMarker.code(),
+                        LedgerLocation::ReadCutoverMarker.location(),
+                        &error,
+                    )
                 })?;
                 let record: actingcommand_contract::LedgerMigrationRecord =
                     serde_json::from_value(unique.0).map_err(|error| {
                         GlobalLedgerError::json(
-                            "invalid_cutover_marker",
-                            "decode_cutover_marker",
+                            LedgerCode::InvalidCutoverMarker.code(),
+                            LedgerLocation::DecodeCutoverMarker.location(),
                             &error,
                         )
                     })?;
-                record
-                    .validate()
-                    .map_err(|error| failure(error.code(), "validate_cutover_marker"))?;
+                record.validate().map_err(|error| {
+                    failure(
+                        error.code(),
+                        LedgerLocation::ValidateCutoverMarker.location(),
+                    )
+                })?;
                 // The stored text is authoritative: the keyed meta tag covers these exact
                 // bytes, and the decoded record is never re-encoded for comparison.
                 Self {
@@ -250,7 +280,12 @@ impl SqliteMarker {
                     material: Some(material.clone()),
                 }
             }
-            _ => return Err(failure("invalid_cutover_marker", "read_cutover_marker")),
+            _ => {
+                return Err(failure(
+                    LedgerCode::InvalidCutoverMarker.code(),
+                    LedgerLocation::ReadCutoverMarker.location(),
+                ));
+            }
         };
         if row.get(6)
             != Some(&optional_text(
@@ -261,8 +296,8 @@ impl SqliteMarker {
             ))
         {
             return Err(failure(
-                "migration_identity_mismatch",
-                "read_cutover_marker",
+                LedgerCode::MigrationIdentityMismatch.code(),
+                LedgerLocation::ReadCutoverMarker.location(),
             ));
         }
         Ok(marker)
@@ -299,14 +334,24 @@ impl SqliteMarker {
         prefix: Option<&super::migration::PrefixIdentity>,
     ) -> GlobalLedgerResult<()> {
         if let Some(record) = &self.migration {
-            let prefix_length = usize::try_from(record.source_event_count)
-                .map_err(|_| failure("migration_prefix_invalid", "verify_cutover_prefix"))?;
-            events
-                .get(..prefix_length)
-                .ok_or_else(|| failure("migration_prefix_missing", "verify_cutover_prefix"))?;
-            let completion = events
-                .get(prefix_length)
-                .ok_or_else(|| failure("migration_completion_missing", "verify_cutover_prefix"))?;
+            let prefix_length = usize::try_from(record.source_event_count).map_err(|_| {
+                failure(
+                    LedgerCode::MigrationPrefixInvalid.code(),
+                    LedgerLocation::VerifyCutoverPrefix.location(),
+                )
+            })?;
+            events.get(..prefix_length).ok_or_else(|| {
+                failure(
+                    LedgerCode::MigrationPrefixMissing.code(),
+                    LedgerLocation::VerifyCutoverPrefix.location(),
+                )
+            })?;
+            let completion = events.get(prefix_length).ok_or_else(|| {
+                failure(
+                    LedgerCode::MigrationCompletionMissing.code(),
+                    LedgerLocation::VerifyCutoverPrefix.location(),
+                )
+            })?;
             let payload_record = match completion.payload() {
                 actingcommand_contract::EventPayload::Ledger(
                     actingcommand_contract::LedgerPayload::Recovered(payload),
@@ -315,7 +360,10 @@ impl SqliteMarker {
             };
             let Some(prefix) = prefix.filter(|prefix| prefix.count == record.source_event_count)
             else {
-                return Err(failure("migration_prefix_missing", "verify_cutover_prefix"));
+                return Err(failure(
+                    LedgerCode::MigrationPrefixMissing.code(),
+                    LedgerLocation::VerifyCutoverPrefix.location(),
+                ));
             };
             if completion.sequence() != record.cutover_sequence
                 || payload_record != Some(record.as_ref())
@@ -323,8 +371,8 @@ impl SqliteMarker {
                 || prefix.head_sha256 != record.source_head_sha256
             {
                 return Err(failure(
-                    "migration_prefix_mismatch",
-                    "verify_cutover_prefix",
+                    LedgerCode::MigrationPrefixMismatch.code(),
+                    LedgerLocation::VerifyCutoverPrefix.location(),
                 ));
             }
         }
@@ -348,20 +396,20 @@ impl SqliteMarker {
 }
 
 fn table_count(connection: &Connection) -> GlobalLedgerResult<i64> {
-    connection.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0)).map_err(|error| sql_error(error, "inspect_ledger_schema"))
+    connection.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0)).map_err(|error| sql_error(error, LedgerLocation::InspectLedgerSchema.location()))
 }
 
 fn format_version(connection: &Connection) -> GlobalLedgerResult<i64> {
     connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|error| sql_error(error, "read_database_format"))
+        .map_err(|error| sql_error(error, LedgerLocation::ReadDatabaseFormat.location()))
 }
 
 fn require_empty_format(connection: &Connection) -> GlobalLedgerResult<()> {
     if table_count(connection)? != 0 || format_version(connection)? != 0 {
         return Err(failure(
-            "ledger_initialization_conflict",
-            "verify_empty_ledger_format",
+            LedgerCode::LedgerInitializationConflict.code(),
+            LedgerLocation::VerifyEmptyLedgerFormat.location(),
         ));
     }
     Ok(())
@@ -370,17 +418,17 @@ fn require_empty_format(connection: &Connection) -> GlobalLedgerResult<()> {
 fn mark_formal_format(connection: &Connection) -> GlobalLedgerResult<()> {
     connection
         .pragma_update(None, "user_version", FORMAL_FORMAT_VERSION)
-        .map_err(|error| sql_error(error, "mark_database_format"))
+        .map_err(|error| sql_error(error, LedgerLocation::MarkDatabaseFormat.location()))
 }
 
 pub(super) fn has_schema(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
-    let connection = database.connection("inspect_runtime_ledger")?;
+    let connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     match (format_version(&connection)?, table_count(&connection)?) {
         (0, 0) => Ok(false),
         (0 | FORMAL_FORMAT_VERSION, 4) => Ok(true),
         _ => Err(failure(
-            "ledger_schema_incomplete",
-            "inspect_runtime_ledger",
+            LedgerCode::LedgerSchemaIncomplete.code(),
+            LedgerLocation::InspectRuntimeLedger.location(),
         )),
     }
 }
@@ -397,8 +445,8 @@ fn authenticated_extent(
         (0 | FORMAL_FORMAT_VERSION, 4) => {}
         _ => {
             return Err(failure(
-                "ledger_schema_incomplete",
-                "inspect_runtime_ledger",
+                LedgerCode::LedgerSchemaIncomplete.code(),
+                LedgerLocation::InspectRuntimeLedger.location(),
             ));
         }
     }
@@ -411,25 +459,36 @@ fn authenticated_extent(
     };
     if format != expected_format {
         return Err(failure(
-            "ledger_format_marker_mismatch",
-            "verify_database_format",
+            LedgerCode::LedgerFormatMarkerMismatch.code(),
+            LedgerLocation::VerifyDatabaseFormat.location(),
         ));
     }
     let (Some(SqlValue::Integer(next)), Some(SqlValue::Integer(head)), Some(hash)) =
         (meta.get(2), meta.get(3), meta.get(4))
     else {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
     };
     let head = decode(*head);
     let hash = match hash {
         SqlValue::Null if head == 0 => None,
         SqlValue::Text(hash) if head != 0 => Some(hash.as_str()),
-        _ => return Err(failure("ledger_meta_mismatch", "verify_sqlite_head")),
+        _ => {
+            return Err(failure(
+                LedgerCode::LedgerMetaMismatch.code(),
+                LedgerLocation::VerifySqliteHead.location(),
+            ));
+        }
     };
     if decode(*next) != increment_sequence(head)?
         || meta != meta_row_with_marker(database, decode(*next), head, hash, &marker)
     {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
     }
     Ok(Some((marker, head)))
 }
@@ -437,14 +496,14 @@ fn authenticated_extent(
 /// Classifies the formal medium from its keyed meta row without reading history.
 /// True does not mean the history is verified; the writer open is that verification.
 pub(super) fn formal_ready(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
-    let mut connection = database.connection("inspect_runtime_ledger")?;
+    let mut connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, "begin_ledger_classification"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginLedgerClassification.location()))?;
     let extent = authenticated_extent(database, &transaction)?;
     transaction
         .commit()
-        .map_err(|error| sql_error(error, "close_ledger_classification"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::CloseLedgerClassification.location()))?;
     Ok(extent.is_some_and(|(marker, _)| marker.state == "ready"))
 }
 
@@ -464,20 +523,20 @@ pub(super) fn storage_status(
 }
 
 pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
-    let mut connection = database.connection("initialize_runtime_ledger")?;
+    let mut connection = database.connection(LedgerLocation::InitializeRuntimeLedger.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| sql_error(error, "begin_runtime_ledger"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginRuntimeLedger.location()))?;
     let result = (|| {
         if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
             return Err(failure(
-                "ledger_initialization_conflict",
-                "initialize_runtime_ledger",
+                LedgerCode::LedgerInitializationConflict.code(),
+                LedgerLocation::InitializeRuntimeLedger.location(),
             ));
         }
         transaction
             .execute_batch(include_str!("sqlite/schema.sql"))
-            .map_err(|error| sql_error(error, "create_runtime_ledger"))?;
+            .map_err(|error| sql_error(error, LedgerLocation::CreateRuntimeLedger.location()))?;
         views::deploy(&transaction)?;
         mark_formal_format(&transaction)?;
         insert_row(
@@ -490,11 +549,11 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
     match result {
         Ok(()) => transaction
             .commit()
-            .map_err(|error| sql_error(error, "commit_runtime_ledger")),
+            .map_err(|error| sql_error(error, LedgerLocation::CommitRuntimeLedger.location())),
         Err(error) => Err(error.with_close_result(
-            transaction
-                .rollback()
-                .map_err(|error| sql_error(error, "rollback_runtime_ledger")),
+            transaction.rollback().map_err(|error| {
+                sql_error(error, LedgerLocation::RollbackRuntimeLedger.location())
+            }),
         )),
     }
 }
@@ -516,14 +575,18 @@ pub(super) fn open_formal(
     timing.events = raw.events.len() as u64;
     let marker = SqliteMarker::parse(&raw.meta)?;
     if marker.state != "ready" {
-        return Err(failure("ledger_migration_required", "open_runtime_ledger"));
+        return Err(failure(
+            SharedCode::LedgerMigrationRequired.code(),
+            LedgerLocation::OpenRuntimeLedger.location(),
+        ));
     }
     let (events, prefix) = verify_snapshot_prefix_unread(&database, raw, timing)?;
     let head_hash = prefix.head_hash.clone();
     let head = events.last().map_or(0, PersistedEvent::sequence);
     upgrade_views(&database, head, head_hash.as_deref())?;
     let meta_has_marker = {
-        let connection = database.connection("inspect_ledger_marker_schema")?;
+        let connection =
+            database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
         ledger_meta_has_marker(&connection)?
     };
     let next = increment_sequence(head)?;
@@ -564,38 +627,46 @@ pub(super) fn import_source(
         super::LedgerStorageStatus::Missing => {}
         _ => {
             return Err(failure(
-                "ledger_migration_conflict",
-                "import_segment_ledger",
+                LedgerCode::LedgerMigrationConflict.code(),
+                ContractLocation::ImportSegmentLedger.location(),
             ));
         }
     }
-    let completion = PersistedEvent::from_sanitized(record.cutover_sequence, completion)
-        .map_err(|error| failure(error.code(), "validate_migration_completion"))?;
+    let completion =
+        PersistedEvent::from_sanitized(record.cutover_sequence, completion).map_err(|error| {
+            failure(
+                error.code(),
+                LedgerLocation::ValidateMigrationCompletion.location(),
+            )
+        })?;
     let marker = SqliteMarker::migrated(record)?;
     let mut expected = source.events.clone();
     expected.push(completion);
     marker.verify_events(&expected)?;
-    let mut connection = database.connection("import_segment_ledger")?;
+    let mut connection = database.connection(ContractLocation::ImportSegmentLedger.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| sql_error(error, "begin_segment_import"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginSegmentImport.location()))?;
     let prepared = (|| {
         if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
             return Err(failure(
-                "ledger_migration_conflict",
-                "import_segment_ledger",
+                LedgerCode::LedgerMigrationConflict.code(),
+                ContractLocation::ImportSegmentLedger.location(),
             ));
         }
         transaction
             .execute_batch(include_str!("sqlite/schema.sql"))
-            .map_err(|error| sql_error(error, "create_import_schema"))?;
+            .map_err(|error| sql_error(error, LedgerLocation::CreateImportSchema.location()))?;
         views::deploy(&transaction)?;
         mark_formal_format(&transaction)?;
         let mut head_hash = None;
         for (index, event) in expected.iter().enumerate() {
             check_read_budget(budget, 0, index + 1)?;
             if event.sequence() != (index as u64) + 1 {
-                return Err(failure("sequence_discontinuity", "import_segment_ledger"));
+                return Err(failure(
+                    LedgerCode::SequenceDiscontinuity.code(),
+                    ContractLocation::ImportSegmentLedger.location(),
+                ));
             }
             let projected = project_record(database, event, head_hash.as_deref())?;
             insert_row(
@@ -627,8 +698,8 @@ pub(super) fn import_source(
             verify_snapshot_unread(database, raw, &mut LedgerOpenTiming::default())?;
         if actual != expected {
             return Err(failure(
-                "migration_canonical_mismatch",
-                "verify_import_transaction",
+                LedgerCode::MigrationCanonicalMismatch.code(),
+                LedgerLocation::VerifyImportTransaction.location(),
             ));
         }
         let expected_index = EventIndexes::from_events(&expected);
@@ -637,8 +708,8 @@ pub(super) fn import_source(
             != expected_index.query(&expected, &EventQuery::default())
         {
             return Err(failure(
-                "migration_projection_mismatch",
-                "verify_import_transaction",
+                LedgerCode::MigrationProjectionMismatch.code(),
+                LedgerLocation::VerifyImportTransaction.location(),
             ));
         }
         Ok(marker.status(&actual, hash))
@@ -646,23 +717,23 @@ pub(super) fn import_source(
     let status = match prepared {
         Ok(status) => status,
         Err(error) => {
-            return Err(error.with_close_result(
-                transaction
-                    .rollback()
-                    .map_err(|error| sql_error(error, "rollback_segment_import")),
-            ));
+            return Err(
+                error.with_close_result(transaction.rollback().map_err(|error| {
+                    sql_error(error, LedgerLocation::RollbackSegmentImport.location())
+                })),
+            );
         }
     };
     if dry_run {
         transaction
             .rollback()
-            .map_err(|error| sql_error(error, "rollback_import_dry_run"))?;
+            .map_err(|error| sql_error(error, LedgerLocation::RollbackImportDryRun.location()))?;
         return Ok(status);
     }
     match transaction.commit() {
         Ok(()) => Ok(status),
         Err(error) => {
-            let mut original = sql_error(error, "commit_segment_import");
+            let mut original = sql_error(error, LedgerLocation::CommitSegmentImport.location());
             drop(connection);
             let observed = storage_status(database, budget);
             original.detail = Some(format!(
@@ -720,13 +791,14 @@ impl SqliteLedgerStore {
     {
         validate_root(&config.root, &database)?;
         let format = {
-            let connection = database.connection("inspect_candidate_format")?;
+            let connection =
+                database.connection(LedgerLocation::InspectCandidateFormat.location())?;
             format_version(&connection)?
         };
         if format == FORMAL_FORMAT_VERSION {
             return Err(failure(
-                "candidate_production_conflict",
-                "open_sqlite_candidate",
+                LedgerCode::CandidateProductionConflict.code(),
+                LedgerLocation::OpenSqliteCandidate.location(),
             ));
         }
         // Same physical database, same existing OS writer lock, including separate Arcs.
@@ -737,8 +809,8 @@ impl SqliteLedgerStore {
             let raw = read_snapshot(&database, None)?;
             if SqliteMarker::parse(&raw.meta)?.state != "candidate" {
                 return Err(failure(
-                    "candidate_production_conflict",
-                    "open_sqlite_candidate",
+                    LedgerCode::CandidateProductionConflict.code(),
+                    LedgerLocation::OpenSqliteCandidate.location(),
                 ));
             }
             let (events, prefix) = verify_snapshot_prefix(&database, raw, &mut verifier)?;
@@ -748,7 +820,8 @@ impl SqliteLedgerStore {
                 prefix.head_hash.as_deref(),
             )?;
             let meta_has_marker = {
-                let connection = database.connection("inspect_ledger_marker_schema")?;
+                let connection =
+                    database.connection(LedgerLocation::InspectLedgerMarkerSchema.location())?;
                 ledger_meta_has_marker(&connection)?
             };
             Ok((events, prefix, meta_has_marker))
@@ -790,11 +863,16 @@ impl SqliteStorage {
     ) -> GlobalLedgerResult<Option<u64>> {
         let next = increment_sequence(event.sequence())?;
         if event.sequence() != increment_sequence(self.head)? {
-            return Err(failure("sequence_discontinuity", "append_sqlite_event"));
+            return Err(failure(
+                LedgerCode::SequenceDiscontinuity.code(),
+                LedgerLocation::AppendSqliteEvent.location(),
+            ));
         }
         let projected = project_record(&self.database, event, self.head_hash.as_deref())?;
         let started = Instant::now();
-        let mut connection = self.database.connection("append_sqlite_event")?;
+        let mut connection = self
+            .database
+            .connection(LedgerLocation::AppendSqliteEvent.location())?;
         // An observational event commits under NORMAL for this one transaction; FULL is
         // restored and read back on every exit before the guard is released.
         if sync == CommitSync::Normal
@@ -858,10 +936,14 @@ impl SqliteStorage {
             drop(connection);
             if let Some(work) = work {
                 let observed: GlobalLedgerResult<&str> = (|| {
-                    let mut connection = self.database.try_connection("read_joint_commit")?;
+                    let mut connection = self
+                        .database
+                        .try_connection(LedgerLocation::ReadJointCommit.location())?;
                     let snapshot = connection
                         .transaction_with_behavior(TransactionBehavior::Deferred)
-                        .map_err(|error| sql_error(error, "read_joint_commit"))?;
+                        .map_err(|error| {
+                            sql_error(error, LedgerLocation::ReadJointCommit.location())
+                        })?;
                     let budget = Some((
                         2 * 1024 * 1024,
                         MAX_QUERY_PAGE_EVENTS,
@@ -900,7 +982,8 @@ impl SqliteStorage {
                     let state = work
                         .observe(&self.database.borrow_transaction(&snapshot))
                         .map_err(|error| {
-                            let mut failed = GlobalLedgerError::fatal(error.code, error.operation);
+                            let mut failed =
+                                GlobalLedgerError::relayed_fatal(error.code, error.operation);
                             failed.detail = Some(error.detail);
                             failed
                         })?;
@@ -922,9 +1005,9 @@ impl SqliteStorage {
                     } else {
                         "unknown"
                     };
-                    snapshot
-                        .rollback()
-                        .map_err(|error| sql_error(error, "close_joint_readback"))?;
+                    snapshot.rollback().map_err(|error| {
+                        sql_error(error, LedgerLocation::CloseJointReadback.location())
+                    })?;
                     Ok(observed)
                 })();
                 original.detail = Some(format!(
@@ -959,7 +1042,10 @@ impl SqliteStorage {
         {
             Ok(transaction) => transaction,
             Err(error) => {
-                return JointCommit::RolledBack(sql_error(error, "begin_sqlite_append"));
+                return JointCommit::RolledBack(sql_error(
+                    error,
+                    LedgerLocation::BeginSqliteAppend.location(),
+                ));
             }
         };
         let prepared: GlobalLedgerResult<()> = (|| {
@@ -973,7 +1059,10 @@ impl SqliteStorage {
                     &self.marker,
                 )
             {
-                return Err(failure("ledger_meta_mismatch", "append_sqlite_event"));
+                return Err(failure(
+                    LedgerCode::LedgerMetaMismatch.code(),
+                    LedgerLocation::AppendSqliteEvent.location(),
+                ));
             }
             insert_row(
                 &transaction,
@@ -988,9 +1077,12 @@ impl SqliteStorage {
             let changed = transaction.execute(
             "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10,migration_record=?11 WHERE singleton=?1",
             params_from_iter(meta.iter()),
-        ).map_err(|error| sql_error(error, "update_sqlite_head"))?;
+        ).map_err(|error| sql_error(error, LedgerLocation::UpdateSqliteHead.location()))?;
             if changed != 1 {
-                return Err(failure("ledger_meta_mismatch", "update_sqlite_head"));
+                return Err(failure(
+                    LedgerCode::LedgerMetaMismatch.code(),
+                    LedgerLocation::UpdateSqliteHead.location(),
+                ));
             }
             if let Some(work) = work {
                 work.apply(&self.database.borrow_transaction(&transaction), event)
@@ -1000,7 +1092,7 @@ impl SqliteStorage {
         })();
         if let Err(mut original) = prepared {
             if let Err(rollback) = transaction.rollback() {
-                let rollback = sql_error(rollback, "rollback_joint_event");
+                let rollback = sql_error(rollback, LedgerLocation::RollbackJointEvent.location());
                 original.detail = Some(format!(
                     "original={}; detail={:?}; rollback={}; detail={:?}",
                     original, original.detail, rollback, rollback.detail
@@ -1010,9 +1102,16 @@ impl SqliteStorage {
             }
             return JointCommit::RolledBack(original);
         }
+        // Workflow #381 A (LED-I3): a test gate may hold the writer here, inside the write
+        // transaction, as a slow commit would.
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::writer_stall::before_durable_commit(self.database.root());
         match transaction.commit() {
             Ok(()) => JointCommit::Committed,
-            Err(error) => JointCommit::CommitFailed(sql_error(error, "commit_sqlite_event")),
+            Err(error) => JointCommit::CommitFailed(sql_error(
+                error,
+                LedgerLocation::CommitSqliteEvent.location(),
+            )),
         }
     }
 }
@@ -1156,8 +1255,8 @@ pub(super) fn open_metadata(
     let verify = verify_started.elapsed();
     if marker.state != "ready" {
         return Err(failure(
-            "ledger_candidate_not_production",
-            "open_runtime_evidence",
+            LedgerCode::LedgerCandidateNotProduction.code(),
+            LedgerLocation::OpenRuntimeEvidence.location(),
         ));
     }
     let annotate_started = Instant::now();
@@ -1272,8 +1371,8 @@ impl SqliteViewSnapshot {
             || through_sequence < self.through_sequence
         {
             return Err(failure(
-                "ledger_snapshot_boundary_mismatch",
-                "resolve_ledger_artifact",
+                LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
+                LedgerLocation::ResolveLedgerArtifact.location(),
             ));
         }
         let VerifiedSnapshotRecords {
@@ -1296,14 +1395,18 @@ impl SqliteViewSnapshot {
     ) -> GlobalLedgerResult<(u64, VerifiedPrefix)> {
         check_read_budget(budget, 0, 0)?;
         let (boundary, raw) = {
-            let mut connection = self.database.connection("read_sqlite_snapshot")?;
+            let mut connection = self
+                .database
+                .connection(LedgerLocation::ReadSqliteSnapshot.location())?;
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
-                .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+                .map_err(|error| {
+                    sql_error(error, LedgerLocation::BeginSqliteSnapshot.location())
+                })?;
             let read = prefix.read_tail(&transaction, budget)?;
-            transaction
-                .commit()
-                .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+            transaction.commit().map_err(|error| {
+                sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
+            })?;
             read
         };
         let bytes = raw.bytes;
@@ -1372,7 +1475,9 @@ impl SqliteViewSnapshot {
         if let Some(value) = observation {
             value.connection.begin(Instant::now());
         }
-        let acquired = self.database.connection("query_ledger_view");
+        let acquired = self
+            .database
+            .connection(LedgerLocation::QueryLedgerView.location());
         if let Some(value) = observation {
             value.connection.finish(Instant::now(), acquired.is_ok());
         }
@@ -1387,7 +1492,9 @@ impl SqliteViewSnapshot {
             }
             let begun = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
-                .map_err(|error| sql_error(error, "begin_ledger_view_snapshot"));
+                .map_err(|error| {
+                    sql_error(error, LedgerLocation::BeginLedgerViewSnapshot.location())
+                });
             if let Some(value) = observation {
                 value
                     .begin_transaction
@@ -1500,9 +1607,9 @@ impl SqliteViewSnapshot {
                     if let Some(value) = observation {
                         value.commit.begin(Instant::now());
                     }
-                    let closed = transaction
-                        .commit()
-                        .map_err(|error| sql_error(error, "close_ledger_view_snapshot"));
+                    let closed = transaction.commit().map_err(|error| {
+                        sql_error(error, LedgerLocation::CloseLedgerViewSnapshot.location())
+                    });
                     if let Some(value) = observation {
                         value.commit.finish(Instant::now(), closed.is_ok());
                     }
@@ -1513,9 +1620,9 @@ impl SqliteViewSnapshot {
                     if let Some(value) = observation {
                         value.rollback.begin(Instant::now());
                     }
-                    let closed = transaction
-                        .rollback()
-                        .map_err(|error| sql_error(error, "rollback_ledger_view_snapshot"));
+                    let closed = transaction.rollback().map_err(|error| {
+                        sql_error(error, LedgerLocation::RollbackLedgerViewSnapshot.location())
+                    });
                     if let Some(value) = observation {
                         value.rollback.finish(Instant::now(), closed.is_ok());
                     }
@@ -1695,8 +1802,8 @@ impl SqliteViewSnapshot {
                 value.verify_snapshot.finish(Instant::now(), false);
             }
             return Err(failure(
-                "ledger_snapshot_boundary_mismatch",
-                "query_ledger_view",
+                LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
+                LedgerLocation::QueryLedgerView.location(),
             ));
         }
         Ok((bytes, verified))
@@ -1870,7 +1977,12 @@ impl VerifiedPrefix {
         through_sequence: u64,
         head_hash: Option<&str>,
     ) -> GlobalLedgerResult<(Self, usize)> {
-        let mismatch = || failure("ledger_snapshot_boundary_mismatch", "verify_ledger_prefix");
+        let mismatch = || {
+            failure(
+                LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
+                LedgerLocation::VerifyLedgerPrefix.location(),
+            )
+        };
         let expected_format = if self.marker.state == "ready" {
             FORMAL_FORMAT_VERSION
         } else {
@@ -1938,10 +2050,10 @@ fn upgrade_views(
     head: u64,
     hash: Option<&str>,
 ) -> GlobalLedgerResult<()> {
-    let mut connection = database.connection("upgrade_ledger_views")?;
+    let mut connection = database.connection(LedgerLocation::UpgradeLedgerViews.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| sql_error(error, "begin_ledger_view_upgrade"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginLedgerViewUpgrade.location()))?;
     let result = (|| {
         if !views::installed(&transaction)? {
             let raw = read_snapshot_connection(&transaction, None)?;
@@ -1954,8 +2066,8 @@ fn upgrade_views(
                 || actual_hash.as_deref() != hash
             {
                 return Err(failure(
-                    "ledger_snapshot_boundary_mismatch",
-                    "upgrade_ledger_views",
+                    LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
+                    LedgerLocation::UpgradeLedgerViews.location(),
                 ));
             }
             views::deploy(&transaction)?;
@@ -1965,12 +2077,12 @@ fn upgrade_views(
     match result {
         Ok(()) => transaction
             .commit()
-            .map_err(|error| sql_error(error, "commit_ledger_view_upgrade")),
-        Err(error) => Err(error.with_close_result(
-            transaction
-                .rollback()
-                .map_err(|error| sql_error(error, "rollback_ledger_view_upgrade")),
-        )),
+            .map_err(|error| sql_error(error, LedgerLocation::CommitLedgerViewUpgrade.location())),
+        Err(error) => Err(
+            error.with_close_result(transaction.rollback().map_err(|error| {
+                sql_error(error, LedgerLocation::RollbackLedgerViewUpgrade.location())
+            })),
+        ),
     }
 }
 
@@ -2011,8 +2123,8 @@ impl SqliteLedgerReadOnly {
         let (events, _) = verify_snapshot(database, raw, &mut Some(&mut verifier))?;
         if marker.state != "ready" {
             return Err(failure(
-                "ledger_candidate_not_production",
-                "open_runtime_evidence",
+                LedgerCode::LedgerCandidateNotProduction.code(),
+                LedgerLocation::OpenRuntimeEvidence.location(),
             ));
         }
         Ok(Self {
@@ -2032,8 +2144,8 @@ impl SqliteLedgerReadOnly {
         let (events, _) = verify_snapshot_unread(database, raw, &mut LedgerOpenTiming::default())?;
         if marker.state != "ready" {
             return Err(failure(
-                "ledger_candidate_not_production",
-                "open_runtime_evidence",
+                LedgerCode::LedgerCandidateNotProduction.code(),
+                LedgerLocation::OpenRuntimeEvidence.location(),
             ));
         }
         Ok(Self {
@@ -2079,8 +2191,8 @@ impl SqliteLedgerReadOnly {
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         if !(1..=MAX_QUERY_PAGE_EVENTS).contains(&limit) || after > through {
             return Err(GlobalLedgerError::request(
-                "invalid_query_page",
-                "query_read_only_event_page",
+                LedgerCode::InvalidQueryPage.code(),
+                LedgerLocation::QueryReadOnlyEventPage.location(),
             ));
         }
         Ok(self
@@ -2093,42 +2205,51 @@ impl SqliteLedgerReadOnly {
 }
 
 fn validate_root(root: &std::path::Path, database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
-    let root = root
-        .canonicalize()
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "resolve_candidate_root", &error))?;
+    let root = root.canonicalize().map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ResolveCandidateRoot.location(),
+            &error,
+        )
+    })?;
     if root.join("segments").exists() {
         return Err(failure(
-            "candidate_segment_root_present",
-            "open_sqlite_ledger",
+            LedgerCode::CandidateSegmentRootPresent.code(),
+            LedgerLocation::OpenSqliteLedger.location(),
         ));
     }
-    let database_root = database
-        .root()
-        .canonicalize()
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "resolve_database_root", &error))?;
+    let database_root = database.root().canonicalize().map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ResolveDatabaseRoot.location(),
+            &error,
+        )
+    })?;
     if root != database_root {
         return Err(failure(
-            "ledger_database_root_mismatch",
-            "open_sqlite_ledger",
+            LedgerCode::LedgerDatabaseRootMismatch.code(),
+            LedgerLocation::OpenSqliteLedger.location(),
         ));
     }
     Ok(())
 }
 
 fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult<()> {
-    let mut connection = database.connection("initialize_sqlite_ledger")?;
+    let mut connection = database.connection(LedgerLocation::InitializeSqliteLedger.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| sql_error(error, "begin_ledger_schema"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginLedgerSchema.location()))?;
     let result = (|| {
         let tables: i64 = transaction.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0))
-        .map_err(|error| sql_error(error, "inspect_ledger_schema"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::InspectLedgerSchema.location()))?;
         match tables {
             0 if first_use => {
                 require_empty_format(&transaction)?;
                 transaction
                     .execute_batch(include_str!("sqlite/schema.sql"))
-                    .map_err(|error| sql_error(error, "initialize_ledger_schema"))?;
+                    .map_err(|error| {
+                        sql_error(error, LedgerLocation::InitializeLedgerSchema.location())
+                    })?;
                 views::deploy(&transaction)?;
                 insert_row(
                     &transaction,
@@ -2140,8 +2261,8 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
             4 => {}
             _ => {
                 return Err(failure(
-                    "ledger_schema_incomplete",
-                    "initialize_sqlite_ledger",
+                    LedgerCode::LedgerSchemaIncomplete.code(),
+                    LedgerLocation::InitializeSqliteLedger.location(),
                 ));
             }
         }
@@ -2150,11 +2271,11 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
     match result {
         Ok(()) => transaction
             .commit()
-            .map_err(|error| sql_error(error, "commit_ledger_schema")),
+            .map_err(|error| sql_error(error, LedgerLocation::CommitLedgerSchema.location())),
         Err(error) => Err(error.with_close_result(
             transaction
                 .rollback()
-                .map_err(|error| sql_error(error, "rollback_ledger_schema")),
+                .map_err(|error| sql_error(error, LedgerLocation::RollbackLedgerSchema.location())),
         )),
     }
 }
@@ -2186,14 +2307,14 @@ fn read_snapshot(
     budget: ReadBudget,
 ) -> GlobalLedgerResult<RawSnapshot> {
     check_read_budget(budget, 0, 0)?;
-    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
     let raw = read_snapshot_connection(&transaction, budget)?;
     transaction
         .commit()
-        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
     Ok(raw)
 }
 
@@ -2205,20 +2326,29 @@ fn read_formal_snapshot(
     deadline: Instant,
 ) -> GlobalLedgerResult<RawSnapshot> {
     check_read_budget(Some((u64::MAX, usize::MAX, deadline)), 0, 0)?;
-    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
     let head = match authenticated_extent(database, &transaction)? {
         Some((marker, head)) if marker.state == "ready" => head,
-        _ => return Err(failure("ledger_migration_required", "open_runtime_ledger")),
+        _ => {
+            return Err(failure(
+                SharedCode::LedgerMigrationRequired.code(),
+                LedgerLocation::OpenRuntimeLedger.location(),
+            ));
+        }
     };
-    let head = usize::try_from(head)
-        .map_err(|_| failure("ledger_snapshot_overflow", "bound_sqlite_snapshot"))?;
+    let head = usize::try_from(head).map_err(|_| {
+        failure(
+            LedgerCode::LedgerSnapshotOverflow.code(),
+            LedgerLocation::BoundSqliteSnapshot.location(),
+        )
+    })?;
     let raw = read_snapshot_connection(&transaction, Some((u64::MAX, head, deadline)))?;
     transaction
         .commit()
-        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
     Ok(raw)
 }
 
@@ -2232,26 +2362,30 @@ fn read_prefix_snapshot(
     through: u64,
 ) -> GlobalLedgerResult<RawSnapshot> {
     check_read_budget(budget, 0, 0)?;
-    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
     views::installed(&transaction)?;
     // The caller found the four ledger tables; their absence now is a fatal inconsistency.
     let Some((marker, head)) = authenticated_extent(database, &transaction)? else {
-        return Err(failure("ledger_meta_missing", "read_sqlite_prefix"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMissing.code(),
+            LedgerLocation::ReadSqlitePrefix.location(),
+        ));
     };
     if marker.state != "ready" {
         return Err(failure(
-            "ledger_candidate_not_production",
-            "open_runtime_evidence",
+            LedgerCode::LedgerCandidateNotProduction.code(),
+            LedgerLocation::OpenRuntimeEvidence.location(),
         ));
     }
     if through > head {
-        return Err(
-            GlobalLedgerError::request("ledger_prefix_beyond_head", "read_sqlite_prefix")
-                .with_detail(format!("through_sequence {through} exceeds head {head}")),
-        );
+        return Err(GlobalLedgerError::request(
+            LedgerCode::LedgerPrefixBeyondHead.code(),
+            LedgerLocation::ReadSqlitePrefix.location(),
+        )
+        .with_detail(format!("through_sequence {through} exceeds head {head}")));
     }
     let through = marker
         .migration
@@ -2299,7 +2433,7 @@ fn read_prefix_snapshot(
     };
     transaction
         .commit()
-        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
     Ok(raw)
 }
 
@@ -2322,14 +2456,14 @@ pub(super) fn read_selected(
     budget: ReadBudget,
 ) -> GlobalLedgerResult<SelectedRead> {
     check_read_budget(budget, 0, 0)?;
-    let mut connection = database.connection("read_sqlite_snapshot")?;
+    let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, "begin_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
     let read = read_selected_rows(database, &transaction, event_types, budget)?;
     transaction
         .commit()
-        .map_err(|error| sql_error(error, "close_sqlite_snapshot"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
     Ok(read)
 }
 
@@ -2342,12 +2476,15 @@ fn read_selected_rows(
     // A different view schema refuses; absent views leave the selection to a table scan.
     views::installed(connection)?;
     let Some((marker, head)) = authenticated_extent(database, connection)? else {
-        return Err(failure("ledger_meta_missing", "read_sqlite_meta"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMissing.code(),
+            LedgerLocation::ReadSqliteMeta.location(),
+        ));
     };
     if marker.state != "ready" {
         return Err(failure(
-            "ledger_candidate_not_production",
-            "open_runtime_evidence",
+            LedgerCode::LedgerCandidateNotProduction.code(),
+            LedgerLocation::OpenRuntimeEvidence.location(),
         ));
     }
     // The meta row was authenticated above, in this read transaction.
@@ -2355,7 +2492,12 @@ fn read_selected_rows(
     let head_hash = match meta.get(4) {
         Some(SqlValue::Text(hash)) if head != 0 => Some(hash.clone()),
         Some(SqlValue::Null) if head == 0 => None,
-        _ => return Err(failure("ledger_meta_mismatch", "verify_sqlite_head")),
+        _ => {
+            return Err(failure(
+                LedgerCode::LedgerMetaMismatch.code(),
+                LedgerLocation::VerifySqliteHead.location(),
+            ));
+        }
     };
     let mut bytes = 0;
     verify_sequence_extent(connection, head, budget, &mut bytes)?;
@@ -2390,8 +2532,12 @@ fn read_selected_rows(
             &mut bytes,
             true,
         )?;
-        let [head_row] = <[SqlRow; 1]>::try_from(head_rows)
-            .map_err(|_| failure("sequence_discontinuity", "recover_sequence"))?;
+        let [head_row] = <[SqlRow; 1]>::try_from(head_rows).map_err(|_| {
+            failure(
+                LedgerCode::SequenceDiscontinuity.code(),
+                LedgerLocation::RecoverSequence.location(),
+            )
+        })?;
         rows.push(head_row);
     }
     let mut ids = BTreeSet::new();
@@ -2403,33 +2549,58 @@ fn read_selected_rows(
     for row in rows {
         check_read_budget(budget, bytes, metadata.len() + 1)?;
         let Some(SqlValue::Blob(record)) = row.get(10) else {
-            return Err(failure("corrupt_ledger_record", "read_canonical_record"));
+            return Err(failure(
+                LedgerCode::CorruptLedgerRecord.code(),
+                LedgerLocation::ReadCanonicalRecord.location(),
+            ));
         };
         let value = serde_json::from_slice::<UniqueJsonValue>(record)
             .map_err(|error| {
-                GlobalLedgerError::json("corrupt_ledger_record", "parse_sqlite_record", &error)
+                GlobalLedgerError::json(
+                    LedgerCode::CorruptLedgerRecord.code(),
+                    LedgerLocation::ParseSqliteRecord.location(),
+                    &error,
+                )
             })?
             .0;
         if value.get("schema_version").and_then(Value::as_str) != Some(GLOBAL_EVENT_SCHEMA_VERSION)
         {
-            return Err(failure("unsupported_event_schema", "recover_event_schema"));
+            return Err(failure(
+                LedgerCode::UnsupportedEventSchema.code(),
+                LedgerLocation::RecoverEventSchema.location(),
+            ));
         }
         let stored: StoredEventRecord = serde_json::from_value(value).map_err(|error| {
-            GlobalLedgerError::json("corrupt_ledger_record", "decode_sqlite_record", &error)
+            GlobalLedgerError::json(
+                LedgerCode::CorruptLedgerRecord.code(),
+                LedgerLocation::DecodeSqliteRecord.location(),
+                &error,
+            )
         })?;
-        let event = stored
-            .clone()
-            .into_metadata()
-            .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
+        let event = stored.clone().into_metadata().map_err(|error| {
+            failure(
+                error.code(),
+                LedgerLocation::ValidatePersistedEvent.location(),
+            )
+        })?;
         let Some(SqlValue::Integer(stored_sequence)) = row.first() else {
-            return Err(failure("invalid_event_integer", "recover_sqlite_sequence"));
+            return Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::RecoverSqliteSequence.location(),
+            ));
         };
         let sequence = event.sequence();
         if decode(*stored_sequence) != sequence {
-            return Err(failure("ledger_record_mismatch", "recover_sqlite_sequence"));
+            return Err(failure(
+                LedgerCode::LedgerRecordMismatch.code(),
+                LedgerLocation::RecoverSqliteSequence.location(),
+            ));
         }
         if !ids.insert(*event.event_id()) {
-            return Err(failure("duplicate_event_id", "recover_event_ids"));
+            return Err(failure(
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::RecoverEventIds.location(),
+            ));
         }
         // The predecessor's stored hash, as `verify_transaction_row` reads it; the previous
         // row read, when it is the predecessor, was authenticated with that same hash.
@@ -2444,12 +2615,20 @@ fn read_selected_rows(
                     &mut bytes,
                 )?),
             },
-            None => return Err(failure("sequence_discontinuity", "recover_sequence")),
+            None => {
+                return Err(failure(
+                    LedgerCode::SequenceDiscontinuity.code(),
+                    LedgerLocation::RecoverSequence.location(),
+                ));
+            }
         };
         let projected =
             project_stored_bytes(database, &stored, record.clone(), previous.as_deref())?;
         if row != projected.event {
-            return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
+            return Err(failure(
+                LedgerCode::LedgerRecordMismatch.code(),
+                LedgerLocation::VerifySqliteRecord.location(),
+            ));
         }
         check_read_budget(budget, bytes, metadata.len() + 1)?;
         expected_links.push(projected.links);
@@ -2498,11 +2677,17 @@ fn read_selected_rows(
         )?);
     }
     if links != expected_links || artifacts != expected_artifacts {
-        return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
+        return Err(failure(
+            LedgerCode::LedgerIndexMismatch.code(),
+            LedgerLocation::VerifySqliteRelations.location(),
+        ));
     }
     // The last row read is the head: its authenticated hash is the meta row's head hash.
     if last.map(|(_, hash)| hash) != head_hash {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
     }
     check_read_budget(budget, bytes, metadata.len())?;
     metadata.truncate(selected_count);
@@ -2535,16 +2720,32 @@ fn verify_sequence_extent(
                 SqlValue::Integer(first),
                 SqlValue::Integer(last),
             ] => (*count, Some(decode(*first)), Some(decode(*last))),
-            _ => return Err(failure("sequence_discontinuity", "recover_sequence")),
+            _ => {
+                return Err(failure(
+                    LedgerCode::SequenceDiscontinuity.code(),
+                    LedgerLocation::RecoverSequence.location(),
+                ));
+            }
         },
-        _ => return Err(failure("sequence_discontinuity", "recover_sequence")),
+        _ => {
+            return Err(failure(
+                LedgerCode::SequenceDiscontinuity.code(),
+                LedgerLocation::RecoverSequence.location(),
+            ));
+        }
     };
     // Rows past the meta head, as the full read reports them.
     if last.is_some_and(|last| last > head) || (head == 0 && count != 0) {
-        return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
     }
     if u64::try_from(count) != Ok(head) || (head != 0 && (first, last) != (Some(1), Some(head))) {
-        return Err(failure("sequence_discontinuity", "recover_sequence"));
+        return Err(failure(
+            LedgerCode::SequenceDiscontinuity.code(),
+            LedgerLocation::RecoverSequence.location(),
+        ));
     }
     Ok(())
 }
@@ -2567,9 +2768,15 @@ fn stored_record_hash(
     match rows.as_slice() {
         [row] => match row.as_slice() {
             [SqlValue::Text(hash)] => Ok(hash.clone()),
-            _ => Err(failure("ledger_record_mismatch", "verify_sqlite_record")),
+            _ => Err(failure(
+                LedgerCode::LedgerRecordMismatch.code(),
+                LedgerLocation::VerifySqliteRecord.location(),
+            )),
         },
-        _ => Err(failure("sequence_discontinuity", "recover_sequence")),
+        _ => Err(failure(
+            LedgerCode::SequenceDiscontinuity.code(),
+            LedgerLocation::RecoverSequence.location(),
+        )),
     }
 }
 
@@ -2634,15 +2841,15 @@ fn read_rows_bound(
 ) -> GlobalLedgerResult<Vec<SqlRow>> {
     let mut statement = connection
         .prepare(sql)
-        .map_err(|error| sql_error(error, "prepare_sqlite_read"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::PrepareSqliteRead.location()))?;
     let columns = statement.column_count();
     let mut rows = statement
         .query(params_from_iter(parameters.iter()))
-        .map_err(|error| sql_error(error, "query_sqlite_rows"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::QuerySqliteRows.location()))?;
     let mut result = Vec::new();
     while let Some(row) = rows
         .next()
-        .map_err(|error| sql_error(error, "read_sqlite_row"))?
+        .map_err(|error| sql_error(error, LedgerLocation::ReadSqliteRow.location()))?
     {
         check_read_budget(
             budget,
@@ -2653,20 +2860,25 @@ fn read_rows_bound(
         for index in 0..columns {
             let value = row
                 .get_ref(index)
-                .map_err(|error| sql_error(error, "decode_sqlite_column"))?;
+                .map_err(|error| sql_error(error, LedgerLocation::DecodeSqliteColumn.location()))?;
             let length = match value {
                 ValueRef::Null => 0,
                 ValueRef::Integer(_) | ValueRef::Real(_) => 8,
                 ValueRef::Text(value) | ValueRef::Blob(value) => value.len() as u64,
             };
-            *bytes = bytes
-                .checked_add(length)
-                .ok_or_else(|| failure("ledger_snapshot_overflow", "count_sqlite_bytes"))?;
+            *bytes = bytes.checked_add(length).ok_or_else(|| {
+                failure(
+                    LedgerCode::LedgerSnapshotOverflow.code(),
+                    LedgerLocation::CountSqliteBytes.location(),
+                )
+            })?;
             check_read_budget(budget, *bytes, 0)?;
-            values.push(
-                SqlValue::try_from(value)
-                    .map_err(|_| failure("invalid_sqlite_value", "decode_sqlite_column"))?,
-            );
+            values.push(SqlValue::try_from(value).map_err(|_| {
+                failure(
+                    LedgerCode::InvalidSqliteValue.code(),
+                    LedgerLocation::DecodeSqliteColumn.location(),
+                )
+            })?);
         }
         result.push(values);
     }
@@ -2696,7 +2908,7 @@ fn ledger_meta_has_marker(connection: &Connection) -> GlobalLedgerResult<bool> {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(columns.iter().any(|column| column == "migration_record"))
         })
-        .map_err(|error| sql_error(error, "inspect_ledger_marker_schema"))
+        .map_err(|error| sql_error(error, LedgerLocation::InspectLedgerMarkerSchema.location()))
 }
 
 /// Reads the single meta row with the given column set; a missing marker reads as Null.
@@ -2719,7 +2931,10 @@ fn read_meta_columns(
         false,
     )?;
     if rows.len() != 1 {
-        return Err(failure("ledger_meta_missing", "read_sqlite_meta"));
+        return Err(failure(
+            LedgerCode::LedgerMetaMissing.code(),
+            LedgerLocation::ReadSqliteMeta.location(),
+        ));
     }
     let mut row = rows.remove(0);
     if !has_marker {
@@ -2852,8 +3067,8 @@ fn verify_snapshot_records(
     };
     if raw.format_version != expected_format {
         return Err(failure(
-            "ledger_format_marker_mismatch",
-            "verify_database_format",
+            LedgerCode::LedgerFormatMarkerMismatch.code(),
+            LedgerLocation::VerifyDatabaseFormat.location(),
         ));
     }
     // The migrated prefix identity over the stored bytes, before the rows are consumed. It
@@ -2890,13 +3105,19 @@ fn verify_snapshot_records(
         &mut ids,
     )?;
     if raw.links != expected_links || raw.artifacts != expected_artifacts {
-        return Err(failure("ledger_index_mismatch", "verify_sqlite_relations"));
+        return Err(failure(
+            LedgerCode::LedgerIndexMismatch.code(),
+            LedgerLocation::VerifySqliteRelations.location(),
+        ));
     }
     let last = events.last().map_or(0, StoredEventRecord::sequence);
     match raw.bound {
         // Workflow #363: a prefix read authenticates every row through its bound.
         Some(bound) if last != bound.through => {
-            return Err(failure("ledger_prefix_incomplete", "verify_sqlite_prefix"));
+            return Err(failure(
+                LedgerCode::LedgerPrefixIncomplete.code(),
+                LedgerLocation::VerifySqlitePrefix.location(),
+            ));
         }
         // The keyed head row, authenticated in this read transaction before any history row,
         // records a head after the prefix; the later rows were not read.
@@ -2906,7 +3127,10 @@ fn verify_snapshot_records(
         _ => {
             if raw.meta != meta_row_with_marker(database, next, last, head_hash.as_deref(), &marker)
             {
-                return Err(failure("ledger_meta_mismatch", "verify_sqlite_head"));
+                return Err(failure(
+                    LedgerCode::LedgerMetaMismatch.code(),
+                    LedgerLocation::VerifySqliteHead.location(),
+                ));
             }
         }
     }
@@ -2947,40 +3171,71 @@ fn verify_event_rows(
     for row in rows {
         check_read_budget(budget, read_bytes, events.len() + 1)?;
         let Some(SqlValue::Blob(bytes)) = row.get(10) else {
-            return Err(failure("corrupt_ledger_record", "read_canonical_record"));
+            return Err(failure(
+                LedgerCode::CorruptLedgerRecord.code(),
+                LedgerLocation::ReadCanonicalRecord.location(),
+            ));
         };
         let value = serde_json::from_slice::<UniqueJsonValue>(bytes)
             .map_err(|error| {
-                GlobalLedgerError::json("corrupt_ledger_record", "parse_sqlite_record", &error)
+                GlobalLedgerError::json(
+                    LedgerCode::CorruptLedgerRecord.code(),
+                    LedgerLocation::ParseSqliteRecord.location(),
+                    &error,
+                )
             })?
             .0;
         if value.get("schema_version").and_then(Value::as_str) != Some(GLOBAL_EVENT_SCHEMA_VERSION)
         {
-            return Err(failure("unsupported_event_schema", "recover_event_schema"));
+            return Err(failure(
+                LedgerCode::UnsupportedEventSchema.code(),
+                LedgerLocation::RecoverEventSchema.location(),
+            ));
         }
         let stored: StoredEventRecord = serde_json::from_value(value).map_err(|error| {
-            GlobalLedgerError::json("corrupt_ledger_record", "decode_sqlite_record", &error)
+            GlobalLedgerError::json(
+                LedgerCode::CorruptLedgerRecord.code(),
+                LedgerLocation::DecodeSqliteRecord.location(),
+                &error,
+            )
         })?;
-        let event = stored
-            .clone()
-            .into_metadata()
-            .map_err(|error| failure(error.code(), "validate_persisted_event"))?;
+        let event = stored.clone().into_metadata().map_err(|error| {
+            failure(
+                error.code(),
+                LedgerLocation::ValidatePersistedEvent.location(),
+            )
+        })?;
         let Some(SqlValue::Integer(stored_sequence)) = row.first() else {
-            return Err(failure("invalid_event_integer", "recover_sqlite_sequence"));
+            return Err(failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::RecoverSqliteSequence.location(),
+            ));
         };
         if decode(*stored_sequence) != event.sequence() {
-            return Err(failure("ledger_record_mismatch", "recover_sqlite_sequence"));
+            return Err(failure(
+                LedgerCode::LedgerRecordMismatch.code(),
+                LedgerLocation::RecoverSqliteSequence.location(),
+            ));
         }
         if event.sequence() != *next {
-            return Err(failure("sequence_discontinuity", "recover_sequence"));
+            return Err(failure(
+                LedgerCode::SequenceDiscontinuity.code(),
+                LedgerLocation::RecoverSequence.location(),
+            ));
         }
         if !ids.insert(*event.event_id()) {
-            return Err(failure("duplicate_event_id", "recover_event_ids"));
+            return Err(failure(
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::RecoverEventIds.location(),
+            ));
         }
         let projected =
             project_stored_bytes(database, &stored, bytes.clone(), head_hash.as_deref())?;
         if row != projected.event {
-            return Err(failure("ledger_record_mismatch", "verify_sqlite_record"));
+            return Err(failure(
+                LedgerCode::LedgerRecordMismatch.code(),
+                LedgerLocation::VerifySqliteRecord.location(),
+            ));
         }
         check_read_budget(budget, read_bytes, events.len() + 1)?;
         expected_links.push(projected.links);
@@ -3020,7 +3275,11 @@ fn project_stored_record(
     previous: Option<&str>,
 ) -> GlobalLedgerResult<ProjectedRecord> {
     let bytes = serde_json::to_vec(stored).map_err(|error| {
-        GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
+        GlobalLedgerError::json(
+            LedgerCode::EventSerializationFailed.code(),
+            LedgerLocation::SerializeEvent.location(),
+            &error,
+        )
     })?;
     project_stored_bytes(database, stored, bytes, previous)
 }
@@ -3036,8 +3295,8 @@ fn project_stored_bytes(
 ) -> GlobalLedgerResult<ProjectedRecord> {
     let value = serde_json::to_value(stored.index_fields()).map_err(|error| {
         GlobalLedgerError::json(
-            "event_serialization_failed",
-            "project_sqlite_record",
+            LedgerCode::EventSerializationFailed.code(),
+            LedgerLocation::ProjectSqliteRecord.location(),
             &error,
         )
     })?;
@@ -3080,7 +3339,10 @@ fn project_stored_bytes(
     }
     let mut artifacts = Vec::new();
     let Some(references) = value["artifacts"].as_array() else {
-        return Err(failure("invalid_artifact_record", "project_sqlite_record"));
+        return Err(failure(
+            LedgerCode::InvalidArtifactRecord.code(),
+            LedgerLocation::ProjectSqliteRecord.location(),
+        ));
     };
     for (ordinal, artifact) in references.iter().enumerate() {
         artifacts.push(vec![
@@ -3176,9 +3438,12 @@ fn insert_row(
             &format!("INSERT INTO {table} ({columns}) VALUES ({placeholders})"),
             params_from_iter(row.iter()),
         )
-        .map_err(|error| sql_error(error, "insert_sqlite_record"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::InsertSqliteRecord.location()))?;
     if changed != 1 {
-        return Err(failure("ledger_insert_incomplete", "insert_sqlite_record"));
+        return Err(failure(
+            LedgerCode::LedgerInsertIncomplete.code(),
+            LedgerLocation::InsertSqliteRecord.location(),
+        ));
     }
     Ok(())
 }
@@ -3198,13 +3463,21 @@ fn text(value: &Value, key: &str) -> GlobalLedgerResult<SqlValue> {
         .get(key)
         .and_then(Value::as_str)
         .map(|value| SqlValue::Text(value.into()))
-        .ok_or_else(|| failure("invalid_event_column", "project_sqlite_record"))
+        .ok_or_else(|| {
+            failure(
+                LedgerCode::InvalidEventColumn.code(),
+                LedgerLocation::ProjectSqliteRecord.location(),
+            )
+        })
 }
 fn nullable_text(value: &Value, key: &str) -> GlobalLedgerResult<SqlValue> {
     match value.get(key) {
         None | Some(Value::Null) => Ok(SqlValue::Null),
         Some(Value::String(value)) => Ok(SqlValue::Text(value.clone())),
-        _ => Err(failure("invalid_event_link", "project_sqlite_record")),
+        _ => Err(failure(
+            LedgerCode::InvalidEventLink.code(),
+            LedgerLocation::ProjectSqliteRecord.location(),
+        )),
     }
 }
 fn integer(value: &Value, key: &str) -> GlobalLedgerResult<SqlValue> {
@@ -3212,12 +3485,17 @@ fn integer(value: &Value, key: &str) -> GlobalLedgerResult<SqlValue> {
         .get(key)
         .and_then(Value::as_u64)
         .map(|value| SqlValue::Integer(encode(value)))
-        .ok_or_else(|| failure("invalid_event_integer", "project_sqlite_record"))
+        .ok_or_else(|| {
+            failure(
+                LedgerCode::InvalidEventInteger.code(),
+                LedgerLocation::ProjectSqliteRecord.location(),
+            )
+        })
 }
-fn failure(code: &'static str, operation: &'static str) -> GlobalLedgerError {
+fn failure(code: Code, operation: Location) -> GlobalLedgerError {
     GlobalLedgerError::fatal(code, operation)
 }
-fn sql_error(error: rusqlite::Error, operation: &'static str) -> GlobalLedgerError {
+fn sql_error(error: rusqlite::Error, operation: Location) -> GlobalLedgerError {
     let detail = match error {
         rusqlite::Error::SqliteFailure(code, _) => {
             Some(format!("SQLite extended code {}", code.extended_code))
@@ -3225,8 +3503,8 @@ fn sql_error(error: rusqlite::Error, operation: &'static str) -> GlobalLedgerErr
         _ => None,
     };
     GlobalLedgerError {
-        code: "ledger_sqlite_failed",
-        operation,
+        code: LedgerCode::LedgerSqliteFailed.as_str(),
+        operation: operation.as_str(),
         detail,
         terminal: true,
         rolled_back_work: None,

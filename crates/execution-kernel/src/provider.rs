@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ExecutionKernelCode;
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId, MonitorObservation,
 };
@@ -10,7 +12,8 @@ use actingcommand_device::{
     InputBackend,
 };
 pub use actingcommand_device::{
-    EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, EmulatorControlResult,
+    InstanceState,
 };
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
@@ -1373,7 +1376,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "observe_foreground_application",
+                    ContractLocation::ObserveForegroundApplication.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1394,11 +1397,30 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "control_instance",
+                    ContractLocation::ControlInstance.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
             0,
         ))
+    }
+
+    /// Read-only: one bounded `info` read of the emulator instance itself (Workflow #381 B,
+    /// review M3), taken after a failed control action so the host applies the instance's
+    /// current state. Opens no device session. Providers without an instance-control surface
+    /// keep this typed refusal.
+    fn read_instance_state(&self, _instance_alias: &str) -> DeviceResult<InstanceState> {
+        Err(
+            DeviceError::fatal("emulator state read unsupported by this provider")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "emulator_control.unsupported",
+                )
+                .with_diagnostic_context(
+                    "execution_backend_provider",
+                    ContractLocation::ReadInstanceState.as_str(),
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        )
     }
 
     /// Completes or reverts the discovery binding of an instance after emulator control:
@@ -1419,7 +1441,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "rebind_discovered_endpoint",
+                    ContractLocation::RebindDiscoveredEndpoint.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1432,7 +1454,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         &self,
     ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
         Err(Box::new(InstanceDiscoveryFailure {
-            code: "instance_discovery_unavailable",
+            code: SharedCode::InstanceDiscoveryUnavailable.as_str(),
             error: DeviceError::fatal("instance discovery unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
@@ -1440,7 +1462,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "discover_instances",
+                    ContractLocation::DiscoverInstances.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         }))
@@ -1457,7 +1479,7 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         _frame: &Frame,
     ) -> ExecutionKernelResult<MonitorObservation> {
         Err(ExecutionKernelError::fatal(
-            "monitor_observation_unavailable",
+            ExecutionKernelCode::MonitorObservationUnavailable.code(),
         ))
     }
 }

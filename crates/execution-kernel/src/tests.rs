@@ -11,6 +11,15 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+// Workflow #381 B (EXEC-I2): the scripted emulator controller shared with runtime-host
+// (HOST-I1) and actingctl's gate binary.
+#[allow(dead_code)]
+#[path = "../../../tests/support/emulator_controller.rs"]
+mod emulator_controller;
+
+// Workflow #381 B, test plan E-2 G2.
+mod gate_381b;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {
@@ -75,7 +84,7 @@ fn kernel_close_preserves_each_failed_instance() {
         .input("node.b", InputAction::Reset, step_witness())
         .expect("second input");
     let mut error = kernel.close().expect_err("two close failures");
-    assert_eq!(error.code(), "input_backend_close_failed");
+    assert_eq!(error.code().as_str(), "input_backend_close_failed");
     assert!(error.is_fatal());
     assert_eq!(error.secondary_code(), None);
     let outcomes = error.take_closed_sessions();
@@ -103,6 +112,9 @@ fn kernel_close_preserves_each_failed_instance() {
 struct FakeProvider {
     state: Arc<Mutex<FakeState>>,
     instances: BTreeMap<String, ResolvedExecutionInstance>,
+    /// Workflow #381 B (EXEC-I2): the one discovery-bound instance whose emulator the scripted
+    /// controller drives (control, state read, rebind, discovery), if any.
+    emulator: Option<(String, Arc<emulator_controller::FakeEmulatorController>)>,
 }
 
 // Defect regressions D02/D08/D09/D14: PR298 review 5120590779, Workflow #257 C1B9 v16.
@@ -143,7 +155,7 @@ fn c1b9_d02_readonly_close_authority() {
         failure,
         actingcommand_device::DeviceCloseAuthority::LocalOnly,
     );
-    assert_eq!(error.code(), "capture_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "capture_backend_operation_failed");
     assert_eq!(state.lock().expect("state").capture_closes, 1);
     assert!(
         kernel
@@ -177,7 +189,7 @@ fn c1b9_d02_readonly_close_authority() {
             )
             .expect_err("input failure returned to close owner");
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             if open_failure {
                 "input_backend_open_failed"
             } else {
@@ -190,7 +202,10 @@ fn c1b9_d02_readonly_close_authority() {
         let observation = retained
             .capture_retained("node.a")
             .expect_err("observer cannot consume close handoff");
-        assert_eq!(observation.code(), "execution_session_close_pending");
+        assert_eq!(
+            observation.code().as_str(),
+            "execution_session_close_pending"
+        );
         assert!(!observation.is_fatal());
         assert_eq!(state.lock().expect("state").capture_closes, 0);
         assert!(
@@ -230,7 +245,10 @@ fn c1b9_d08_panic_owner() {
     let error = kernel
         .capture("node.a")
         .expect_err("panic must remain a typed failure");
-    assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
+    assert_eq!(
+        error.secondary_code().map(|code| code.as_str()),
+        Some("execution_session_panicked")
+    );
     assert_eq!(
         error.resource_quiescence(),
         Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
@@ -310,8 +328,9 @@ fn c1b9_d14_occurrence_folding() {
         1,
     );
     let cloned = device.clone();
-    let first = ExecutionKernelError::device("probe_failed", &device);
-    let second = ExecutionKernelError::device("shutdown_failed", &cloned);
+    let first =
+        ExecutionKernelError::device(ExecutionKernelCode::ApplicationAdbBaselineFailed, &device);
+    let second = ExecutionKernelError::device(ExecutionKernelCode::NemuSessionCloseFailed, &cloned);
     assert!(Arc::ptr_eq(
         &first.lifecycle_causes()[0].recorded_event,
         &second.lifecycle_causes()[0].recorded_event
@@ -331,7 +350,7 @@ fn c1b9_d14_occurrence_folding() {
     assert_eq!(
         ExecutionKernelError::merge(
             combined,
-            ExecutionKernelError::device("shutdown_failed", &distinct)
+            ExecutionKernelError::device(ExecutionKernelCode::NemuSessionCloseFailed, &distinct)
         )
         .lifecycle_causes()
         .len(),
@@ -351,9 +370,16 @@ fn c1b9_d14_occurrence_folding() {
     let union = left.clone().merge_resource_cleanup(right.clone());
     assert_eq!(union.resource_count(), 9);
     let closed = ExecutionResourceCloseOutcome::confirmed(2);
-    let left = ExecutionKernelError::device("operation_failed", &left).with_close_outcome(&closed);
-    let right =
-        ExecutionKernelError::device("operation_failed", &right).with_close_outcome(&closed);
+    let left = ExecutionKernelError::device(
+        actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
+        &left,
+    )
+    .with_close_outcome(&closed);
+    let right = ExecutionKernelError::device(
+        actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
+        &right,
+    )
+    .with_close_outcome(&closed);
     let combined = ExecutionKernelError::merge(left, right);
     assert_eq!(combined.resource_count(), 11);
     assert_eq!(
@@ -400,8 +426,35 @@ impl FakeProvider {
                     )
                 })
                 .collect(),
+            emulator: None,
         }
     }
+
+    /// Workflow #381 B (EXEC-I2): `instance_alias` becomes discovery-bound, its emulator driven
+    /// by `controller`.
+    fn with_emulator(
+        mut self,
+        instance_alias: &str,
+        controller: Arc<emulator_controller::FakeEmulatorController>,
+    ) -> Self {
+        self.emulator = Some((instance_alias.to_owned(), controller));
+        self
+    }
+
+    fn emulator_of(
+        &self,
+        instance_alias: &str,
+    ) -> Option<&emulator_controller::FakeEmulatorController> {
+        self.emulator
+            .as_ref()
+            .filter(|(alias, _)| alias == instance_alias)
+            .map(|(_, controller)| controller.as_ref())
+    }
+}
+
+/// Workflow #381 B (EXEC-I2): the discovery binding of the fake emulator instance.
+fn fake_emulator_binding() -> DiscoveredInstanceBinding {
+    DiscoveredInstanceBinding::new(0, "fixture", "1.0.0", "C:/fixture/MuMuManager.exe")
 }
 
 impl ExecutionBackendProvider for FakeProvider {
@@ -410,7 +463,81 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        self.instances.get(instance_alias).cloned()
+        let resolved = self.instances.get(instance_alias).cloned()?;
+        let Some(controller) = self.emulator_of(instance_alias) else {
+            return Some(resolved);
+        };
+        Some(match controller.bound_port() {
+            Some(port) => resolved.with_adb_endpoint(
+                ResolvedAdbEndpoint::new("127.0.0.1", port, false)
+                    .with_discovered_binding(fake_emulator_binding()),
+            ),
+            None => resolved.with_pending_endpoint(PendingAdbEndpoint::new(
+                "127.0.0.1",
+                fake_emulator_binding(),
+            )),
+        })
+    }
+
+    fn control_instance(
+        &self,
+        instance_alias: &str,
+        action: actingcommand_contract::EmulatorInstanceAction,
+    ) -> EmulatorControlResult<EmulatorControlOutcome> {
+        match self.emulator_of(instance_alias) {
+            Some(controller) => controller.control(0, action),
+            None => Err(EmulatorControlFailure::without_output(
+                DeviceError::fatal("emulator control unsupported by this provider")
+                    .with_diagnostic(
+                        actingcommand_device::DeviceErrorCategory::Protocol,
+                        "emulator_control.unsupported",
+                    ),
+                0,
+            )),
+        }
+    }
+
+    fn read_instance_state(&self, instance_alias: &str) -> DeviceResult<InstanceState> {
+        match self.emulator_of(instance_alias) {
+            Some(controller) => controller.read_state(),
+            None => Err(DeviceError::fatal("emulator state read unsupported")),
+        }
+    }
+
+    fn rebind_discovered_endpoint(
+        &self,
+        instance_alias: &str,
+        adb_port: Option<u16>,
+    ) -> DeviceResult<()> {
+        let controller = self
+            .emulator_of(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("endpoint rebinding unsupported"))?;
+        controller.rebind(adb_port);
+        Ok(())
+    }
+
+    fn discover_instances(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        let Some((_, controller)) = &self.emulator else {
+            return Err(Box::new(InstanceDiscoveryFailure {
+                code: "instance_discovery_unavailable",
+                error: DeviceError::fatal("instance discovery unsupported"),
+            }));
+        };
+        controller.note(emulator_controller::EmulatorCall::Discover);
+        let adb_port = controller.bound_port();
+        Ok(ProviderInstanceDiscovery {
+            provider_version: "1.0.0".to_owned(),
+            instances: vec![ProviderDiscoveredInstance {
+                instance_index: 0,
+                instance_name: "fixture".to_owned(),
+                adb_host: adb_port.map(|_| "127.0.0.1".to_owned()),
+                adb_port,
+                running: adb_port.is_some(),
+                android_version: None,
+            }],
+        })
     }
 
     fn open_input(
@@ -758,11 +885,16 @@ fn instance_sessions_are_partitioned_and_identity_mismatch_is_fatal() {
         kernel
             .capture("node.a.shadow")
             .expect_err("identity mismatch")
-            .code(),
+            .code()
+            .as_str(),
         "execution_instance_identity_mismatch"
     );
     assert_eq!(
-        kernel.capture("missing").expect_err("unknown").code(),
+        kernel
+            .capture("missing")
+            .expect_err("unknown")
+            .code()
+            .as_str(),
         "execution_instance_unknown"
     );
     kernel.close().expect("close");
@@ -778,7 +910,7 @@ fn input_failure_returns_original_error_then_later_input_uses_fresh_session() {
     let error = kernel
         .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input failure");
-    assert_eq!(error.code(), "input_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "input_backend_operation_failed");
     assert!(!error.is_fatal());
     assert!(!format!("{error:?} {error}").contains("private input failure detail"));
     {
@@ -825,7 +957,7 @@ fn segmented_swipe_capability_failure_preserves_device_detail() {
         )
         .expect_err("segmented swipe capability rejection");
 
-    assert_eq!(error.code(), "input_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "input_backend_operation_failed");
     let detail = error.diagnostic_detail().expect("capability detail");
     assert_eq!(detail.category(), "protocol");
     assert_eq!(detail.stage(), "input.segmented_swipe.capability");
@@ -852,7 +984,7 @@ fn failed_input_open_is_retired_before_separate_capture() {
     let error = kernel
         .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input open failure");
-    assert_eq!(error.code(), "input_backend_open_failed");
+    assert_eq!(error.code().as_str(), "input_backend_open_failed");
     assert!(error.is_fatal());
     assert!(!format!("{error:?} {error}").contains("private input open detail"));
     {
@@ -887,7 +1019,7 @@ fn capture_failure_returns_original_error_then_later_capture_uses_fresh_session(
         .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     let error = kernel.capture("node.a").expect_err("capture failure");
-    assert_eq!(error.code(), "capture_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "capture_backend_operation_failed");
     assert!(!error.is_fatal());
     {
         let mut snapshot = state.lock().expect("state");
@@ -940,7 +1072,10 @@ fn application_failure_returns_original_error_then_later_input_uses_fresh_sessio
             step_witness(),
         )
         .expect_err("application failure");
-    assert_eq!(error.code(), "application_backend_operation_failed");
+    assert_eq!(
+        error.code().as_str(),
+        "application_backend_operation_failed"
+    );
     assert!(error.is_fatal());
     {
         let mut snapshot = state.lock().expect("state");
@@ -974,7 +1109,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
     let error = input_kernel
         .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input open");
-    assert_eq!(error.code(), "input_backend_open_failed");
+    assert_eq!(error.code().as_str(), "input_backend_open_failed");
     assert!(error.is_fatal());
     assert!(!format!("{error:?} {error}").contains("private input open detail"));
     input_kernel.close().expect("close failed-open kernel");
@@ -991,7 +1126,8 @@ fn backend_open_and_close_failures_surface_without_private_details() {
         capture_kernel
             .capture("node.a")
             .expect_err("capture open")
-            .code(),
+            .code()
+            .as_str(),
         "capture_backend_open_failed"
     );
     capture_kernel.close().expect("close failed-open kernel");
@@ -1008,7 +1144,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
         .input("node.a", InputAction::Reset, step_witness())
         .expect("open input");
     let error = close_kernel.close().expect_err("close failure");
-    assert_eq!(error.code(), "input_backend_close_failed");
+    assert_eq!(error.code().as_str(), "input_backend_close_failed");
     assert!(!format!("{error:?} {error}").contains("private close failure detail"));
 }
 
@@ -1020,7 +1156,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     use actingcommand_device::{DeviceErrorCategory, DeviceErrorSensitivity, DeviceErrorSeverity};
 
     let primary = ExecutionKernelError::device(
-        "input_backend_operation_failed",
+        actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
         &DeviceError::transient("primary bounded context")
             .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
             .with_diagnostic_context("adb_shell_input", "reset", DeviceErrorSensitivity::Internal),
@@ -1031,7 +1167,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     );
     let native_text = "雪".repeat(1_024);
     let bounded = ExecutionKernelError::device(
-        "input_backend_operation_failed",
+        actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
         &DeviceError::transient(&native_text)
             .with_diagnostic(DeviceErrorCategory::Native, "device_registry.input.operation")
             .with_diagnostic_context("maatouch", "swipe", DeviceErrorSensitivity::Secret)
@@ -1056,7 +1192,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     let merged_native = ExecutionKernelError::merge(bounded.clone(), primary.clone());
     assert_eq!(merged_native.native_detail(), bounded.native_detail());
     let cleanup = ExecutionKernelError::device(
-        "input_backend_close_failed",
+        ExecutionKernelCode::InputBackendCloseFailed,
         &DeviceError::fatal("exit_status=1 stderr=cleanup_failed")
             .with_diagnostic(DeviceErrorCategory::CommandFlush, "maatouch.stdin.flush")
             .with_diagnostic_context("maatouch", "close", DeviceErrorSensitivity::Secret),
@@ -1067,7 +1203,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     assert_eq!(merged.device_severity(), Some(DeviceErrorSeverity::Fatal));
     assert_eq!(merged.diagnostic_detail(), primary.diagnostic_detail());
     let cause = merged.cleanup_cause().expect("real cleanup cause");
-    assert_eq!(cause.code(), cleanup.code());
+    assert_eq!(cause.code(), cleanup.code().as_str());
     assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
     assert_eq!(cause.detail(), cleanup.diagnostic_detail());
     let detail = cause.detail().expect("cleanup producer detail");
@@ -1080,11 +1216,11 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     assert_eq!(repeated, merged);
     let retired = ExecutionKernelError::merge(
         repeated,
-        ExecutionKernelError::fatal("execution_kernel_state_poisoned"),
+        ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionKernelStatePoisoned),
     );
     assert_eq!(retired.code(), primary.code());
     assert_eq!(
-        retired.secondary_code(),
+        retired.secondary_code().map(|code| code.as_str()),
         Some("execution_kernel_state_poisoned")
     );
     assert_eq!(retired.cleanup_cause(), merged.cleanup_cause());
@@ -1119,7 +1255,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
                 .expect_err("input then close failure")
         };
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             if capture {
                 "capture_backend_operation_failed"
             } else {
@@ -1171,8 +1307,11 @@ fn backend_panic_is_caught_then_later_input_uses_fresh_session() {
     let error = kernel
         .input("node.a", InputAction::Reset, step_witness())
         .expect_err("panic must surface");
-    assert_eq!(error.code(), "execution_session_response_lost");
-    assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
+    assert_eq!(error.code().as_str(), "execution_session_response_lost");
+    assert_eq!(
+        error.secondary_code().map(|code| code.as_str()),
+        Some("execution_session_panicked")
+    );
     assert!(error.is_fatal());
     assert!(!format!("{error:?} {error}").contains("private input panic detail"));
     {
@@ -1203,7 +1342,7 @@ fn stale_failed_session_cannot_evict_same_instance_replacement() {
     let error = kernel
         .input("node.a", InputAction::Reset, step_witness())
         .expect_err("input failure");
-    assert_eq!(error.code(), "input_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "input_backend_operation_failed");
     state.lock().expect("state").fail_input = false;
 
     let replacement = kernel
@@ -1237,7 +1376,7 @@ fn kernel_retirement_failure_keeps_the_operation_error_primary_and_visible() {
     let primary = failed
         .input(InputAction::Reset, step_witness())
         .expect_err("direct session failure");
-    assert_eq!(primary.code(), "input_backend_operation_failed");
+    assert_eq!(primary.code().as_str(), "input_backend_operation_failed");
     assert_eq!(primary.secondary_code(), None);
     let snapshot = state.lock().expect("state");
     assert_eq!(snapshot.input_opens, 1);
@@ -1250,16 +1389,16 @@ fn kernel_retirement_failure_keeps_the_operation_error_primary_and_visible() {
     let error = kernel
         .finish_failed_session_for_test(&failed, primary)
         .expect_err("retirement lock failure");
-    assert_eq!(error.code(), "input_backend_operation_failed");
+    assert_eq!(error.code().as_str(), "input_backend_operation_failed");
     assert_eq!(
-        error.secondary_code(),
+        error.secondary_code().map(|code| code.as_str()),
         Some("execution_kernel_state_poisoned")
     );
 
     kernel.clear_state_poison_for_test();
     // D09: PR298 review 5120590779 / C1B9 v16; the consumed terminal remains visible.
     let repeated = kernel.close().expect_err("cached terminal session failure");
-    assert_eq!(repeated.code(), "input_backend_operation_failed");
+    assert_eq!(repeated.code().as_str(), "input_backend_operation_failed");
 }
 
 #[test]

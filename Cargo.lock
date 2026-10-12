@@ -132,26 +132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-device-test"
-version = "0.1.0"
-dependencies = [
- "actingcommand-artifact-store",
- "actingcommand-contract",
- "actingcommand-device",
- "actingcommand-execution-kernel",
- "actingcommand-host-metrics",
- "actingcommand-ledger",
- "actingcommand-ledger-forensics",
- "actingcommand-page-detector",
- "actingcommand-recognition",
- "actingcommand-recognition-pack",
- "actingcommand-runtime-database",
- "actingcommand-scheduler",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "actingcommand-execution-kernel"
 version = "0.1.0"
 dependencies = [
@@ -173,6 +153,7 @@ dependencies = [
 name = "actingcommand-host-metrics"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "windows-sys",
 ]
 
@@ -217,6 +198,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]
@@ -300,6 +282,7 @@ dependencies = [
 name = "actingcommand-recognition"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "image",
  "imageproc",
 ]
@@ -354,10 +337,12 @@ dependencies = [
 name = "actingcommand-runtime-database"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

@@ -665,7 +665,7 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
         "--origin-module".to_owned(),
         "runtime".to_owned(),
         "--diagnostic-code".to_owned(),
-        "command.rejected".to_owned(),
+        "command_rejected".to_owned(),
         "--severity".to_owned(),
         "error".to_owned(),
         "--correlation-id".to_owned(),
@@ -679,7 +679,7 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
     assert_eq!(first["data"]["filter"]["origin_module"], "runtime");
     assert_eq!(
         first["data"]["filter"]["diagnostic_code"],
-        "command.rejected"
+        "command_rejected"
     );
     assert_eq!(first["data"]["filter"]["severity"], "error");
     assert_eq!(first["data"]["filter"]["correlation_id"], correlation_text);
@@ -703,7 +703,7 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
             "--origin-module".to_owned(),
             "runtime".to_owned(),
             "--diagnostic-code".to_owned(),
-            "command.rejected".to_owned(),
+            "command_rejected".to_owned(),
             "--severity".to_owned(),
             "error".to_owned(),
             "--correlation-id".to_owned(),

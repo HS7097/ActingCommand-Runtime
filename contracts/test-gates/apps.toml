@@ -1,0 +1,262 @@
+# Gate map, apps fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
+# Keys are the ids of rd-1009/tests/inventory-apps.md. One `[[gate]]` row per key with exactly
+# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
+# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
+# appended to; a row leaves only when its feature retires.
+
+# Invalid configuration fails before any side effect
+[[gate]]
+key = "1"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::unknown_config_field_is_rejected",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::missing_application_identity_is_rejected_before_runtime_start",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::automatic_touch_fallback_is_rejected_at_the_process_boundary",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::automatic_capture_fallback_is_rejected_at_the_process_boundary",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::fixture_backend_rejects_device_fields",
+    "actingcommand-actingd::process::invalid_startup_returns_nonzero",
+    "actingcommand-actingd::process::policy_configuration_is_refused_before_any_catalog_record",
+    "actingcommand-actingd::process::actingd_rejects_explicit_fixture_simulation_on_a_physical_registry",
+    "actingcommand-actingd::process::actingd_requires_package_path_for_each_explicit_scheduled_mode",
+    "actingcommand-actingd::process::actingd_rejects_unknown_scheduled_execution_mode",
+    "actingcommand-actingd::process::policy_startup_rejects_approval_ids_that_do_not_match_the_catalog",
+]
+incident = []
+
+# Registry modes are explicit per instance
+[[gate]]
+key = "2"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::mixed_registry_keeps_device_and_fixture_modes_explicit_per_instance",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::fixture_backend_is_device_free_and_has_a_bounded_input_budget",
+    "actingcommand-actingd::process::actingd_rejects_explicit_fixture_simulation_on_a_physical_registry",
+]
+incident = []
+
+# Policy monitor: waits through an install drain, retries a transient receipt-header timeout of
+# its own request with a warning up to its bound, otherwise fails loud
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::policy_monitor_waits_through_an_install_drain_and_otherwise_fails_loud",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_397::gate_receipt_header_timeouts_under_the_bound_are_warnings_and_the_monitor_goes_on",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_397::gate_past_the_bound_or_after_an_owner_change_the_monitor_still_ends",
+]
+incident = ["#397"]
+
+# Resident driver wakes
+[[gate]]
+key = "5"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::resident_driver_coalesces_relevant_event_bursts_without_terminal_feedback",
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::resident_driver_shutdown_wakes_and_reclaims_the_waiter",
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::resident_driver_ignores_spurious_notification_until_a_real_wake",
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::resident_schedule_has_bounded_idle_reconciliation_and_clock_jump_wakes",
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::lease_ends_wake_the_resident_driver_and_capture_and_fact_records_do_not",
+]
+incident = []
+
+# Closeout records every failure once before close
+[[gate]]
+key = "7"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::policy_closeout_records_unrecorded_results_before_close",
+]
+incident = []
+
+# The daemon outlives its clients
+[[gate]]
+key = "9"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::actingd_outlives_disposable_clients_and_accepts_reconnection",
+]
+incident = []
+
+# check-config is read-only and previews startup
+[[gate]]
+key = "10"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::check_config_previews_the_catalog_plan_read_only",
+    "actingcommand-runtime-host::lib::tests::gate_375_r3::gate_check_config_preview_runs_no_whole_file_quick_check",
+]
+incident = ["#375 R375-3 v1.2"]
+
+# Request shaping
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::tests::task_run_request_uses_maximum_bounded_response_deadline",
+    "actingcommand-actingctl::bin:actingctl::tests::task_run_request_preserves_the_typed_recovery_identity",
+]
+incident = []
+
+# The Runtime survives a killed client; a replay cannot duplicate a terminal
+[[gate]]
+key = "16"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::c4_process::actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape",
+    "actingcommand-actingctl::c4_process::actingctl_status_monitor_and_stream_are_runtime_backed",
+    "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
+    "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal",
+    "actingcommand-actingctl::c4_process::runtime_finishes_and_rebuilds_contained_task_after_client_is_killed",
+]
+incident = []
+
+# The install-transition client budget fits a slow held preparation
+[[gate]]
+key = "17"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::gate_381a::gate_the_run_client_carries_one_deadline_from_the_runs_start",
+    "actingcommand-actingctl::bin:actingctl::gate_381a::gate_each_install_transition_run_has_one_deadline_and_query_declares_no_identity",
+    "actingcommand-actingctl::gate::install_transition::gate_install_transition_query_answers_while_the_ledger_writer_is_stalled_in_preparing",
+]
+incident = ["#381 A"]
+
+# The watchdog decision table
+[[gate]]
+key = "20"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::observed_rows_follow_the_table_order",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::start_rows_follow_the_table_order",
+]
+incident = []
+
+# The watchdog start budget
+[[gate]]
+key = "21"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::start_rows_follow_the_table_order",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::repeated_restarts_count_a_day_since_the_last_formal_start",
+]
+incident = []
+
+# The grace window and start attribution
+[[gate]]
+key = "22"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::grace_opens_after_a_gap_or_a_boot_between_task_ticks",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::formal_starts_are_told_from_the_watchdogs_own",
+]
+incident = []
+
+# Watchdog observation
+[[gate]]
+key = "23"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::journals_of_every_shape_give_their_last_record",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::fatal_lines_skip_a_lost_start_race_and_survive_a_multi_line_detail",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::processes_count_under_the_root_or_without_a_path",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::verbatim_paths_become_plain",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual",
+]
+incident = ["#389 U-1"]
+
+# Watchdog state, log and task
+[[gate]]
+key = "24"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_reads_tolerantly_and_sets_other_schemas_aside",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::log_keys_change_once_per_log_file_and_epoch",
+    "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::lines_carry_utc_time_level_code_and_quoted_fields",
+    "actingcommand-actingctl::bin:actingctl::watchdog::log::tests::a_repeated_misconfiguration_looks_past_lines_from_stderr",
+    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::definition_is_utf16_xml_with_every_setting_escaped",
+    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::the_task_query_answers_in_json",
+    "actingcommand-actingctl::bin:actingctl::watchdog::task::tests::names_csv_and_console_output_are_read_as_windows_prints_them",
+    "actingcommand-actingctl::watchdog_process::watchdog_install_registers_the_task_and_uninstall_removes_it",
+]
+incident = []
+
+# A stop caused by a failed install is restartable
+[[gate]]
+key = "26"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_fatal_line_formats_class_by_the_registered_top_code_only",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_381a::gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start",
+]
+incident = ["#381 A"]
+
+# Era classification and JSON-RPC errors
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_initialize_answers_the_requested_legacy_version_and_2025_11_25_for_any_other",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_modern_request_is_served_without_initialize_and_every_modern_result_is_marked",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_or_unknown_meta_version_is_32022_and_a_request_of_no_era_is_32602",
+    "actingcommand-actingctl::gate::mcp_shell::gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rpc_codes",
+    "actingcommand-actingctl::gate::mcp_shell::gate_tool_definitions_and_call_results_take_the_shape_of_the_negotiated_version",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_batch_is_answered_as_one_array_under_2025_03_26_and_refused_after_later_versions",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_legacy_ping_is_answered_before_initialize_and_a_modern_ping_is_32601",
+]
+incident = ["#382 MCP-T1"]
+
+# The result envelope and output budget; an overflow goes to the export, never to silent truncation
+[[gate]]
+key = "30"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_result_over_the_budget_is_output_budget_exceeded_and_one_inside_is_unchanged",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back_unchanged",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_page_over_the_budget_is_truncated_and_its_cursor_resumes_after_its_last_row",
+]
+incident = ["#382 MCP-T1"]
+
+# Jobs: at most 8, handle lookup, and a wait that stops on cancel
+[[gate]]
+key = "31"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_eight_jobs_run_a_ninth_is_refused_unrun_and_a_start_succeeds_once_one_ended",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_find_returns_a_started_job_by_its_handle_and_none_for_one_never_started",
+    "actingcommand-actingctl::gate::mcp_shell::gate_get_run_answers_handle_unknown_for_job_handles_this_process_never_held",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_cancelled_wait_returns_false_and_leaves_the_job_running",
+]
+incident = ["#382 MCP-T1"]
+
+# Cursors round-trip; after a reconnect an old cursor answers cursor_invalid
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_events_pages_follow_next_cursor_without_gap_or_repeat_up_to_the_first_snapshot",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_sent_with_other_filters_answers_cursor_invalid",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_from_before_a_runtime_restart_answers_cursor_invalid",
+    "actingcommand-actingctl::gate::mcp_shell::gate_an_events_cursor_of_another_server_process_answers_cursor_invalid",
+]
+incident = ["#382 MCP-T1"]
+
+# At stdin EOF the server answers in-flight requests within 2 s and exits 0
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_shell::gate_at_stdin_eof_the_requests_already_read_are_answered_and_the_server_exits_0",
+    "actingcommand-actingctl::gate::mcp_shell::gate_a_call_still_running_at_stdin_eof_does_not_hold_the_exit",
+]
+incident = ["#382 MCP-T1"]
+
+# vision-provider-check never runs a model
+[[gate]]
+key = "40"
+coverage = "Y"
+tests = [
+    "actingcommand-vision-provider-check::bin:actingcommand-vision-provider-check::tests::rejects_execution_arguments",
+]
+incident = []

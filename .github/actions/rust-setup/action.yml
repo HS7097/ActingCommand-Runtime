@@ -1,0 +1,33 @@
+name: rust-setup
+description: >-
+  Shared setup of every Rust CI job (test plan v2.2 §1.2): the stable toolchain, the stable
+  Windows temp directory and the shared third-party dependency cache of one compile family.
+inputs:
+  family:
+    description: >-
+      The compile family whose dependency cache the job shares: lint, light, exec-core, mid or
+      heavy. The cache key is ci-v2-<family>.
+    required: true
+  save:
+    description: >-
+      'true' only for the one job that saves this family's cache. It saves on pushes to main
+      only; every other run only restores.
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # 026ec0885 "Use stable Windows final paths in CI": tests that compare final paths need TEMP
+    # and TMP on the runner's temp directory.
+    - name: Stable temp directory
+      shell: pwsh
+      run: |
+        "TEMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "TMP=$env:RUNNER_TEMP" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+    - uses: dtolnay/rust-toolchain@stable
+    # Third-party dependencies only: the action removes the workspace crates before it saves.
+    - name: Rust cache
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        shared-key: ci-v2-${{ inputs.family }}
+        save-if: ${{ github.ref == 'refs/heads/main' && inputs.save == 'true' }}

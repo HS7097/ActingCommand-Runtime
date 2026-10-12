@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 mod retention;
+use crate::codes::{RuntimeContractCode, SanitizationCode, SharedCode};
 pub use retention::*;
 mod ledger_migration;
 mod signature;
@@ -128,7 +129,7 @@ impl Sha256Fingerprint {
             Ok(())
         } else {
             Err(SanitizationError::new(
-                "invalid_fingerprint",
+                SanitizationCode::InvalidFingerprint,
                 "account_identity",
             ))
         }
@@ -193,7 +194,12 @@ impl AuditInput {
         let account_fingerprint = if let Some(original) = self.account {
             let fingerprint = fingerprinter
                 .fingerprint(SecretField::AccountIdentity, &original)
-                .map_err(|_| SanitizationError::new("fingerprinter_failed", "account_identity"))?;
+                .map_err(|_| {
+                    SanitizationError::new(
+                        SanitizationCode::FingerprinterFailed,
+                        "account_identity",
+                    )
+                })?;
             fingerprint.validate_for(&original)?;
             Some(fingerprint)
         } else {
@@ -274,7 +280,10 @@ impl SanitizedAudit {
                 .as_deref()
                 .is_some_and(|value| value != "[redacted]")
         {
-            return Err(SanitizationError::new("invalid_sanitized_payload", "audit"));
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidSanitizedPayload,
+                "audit",
+            ));
         }
         Ok(())
     }
@@ -285,9 +294,12 @@ fn sanitize_machine_path(original: String) -> Result<String, SanitizationError> 
         .rsplit(['/', '\\'])
         .next()
         .filter(|value| valid_machine_path_basename(value))
-        .ok_or_else(|| SanitizationError::new("invalid_machine_path", "machine_path"))?;
-    let encoded_basename = serde_json::to_string(basename)
-        .map_err(|_| SanitizationError::new("invalid_machine_path", "machine_path"))?;
+        .ok_or_else(|| {
+            SanitizationError::new(SanitizationCode::InvalidMachinePath, "machine_path")
+        })?;
+    let encoded_basename = serde_json::to_string(basename).map_err(|_| {
+        SanitizationError::new(SanitizationCode::InvalidMachinePath, "machine_path")
+    })?;
     Ok(format!(
         "basename:{encoded_basename}|sha256:{:x}",
         Sha256::digest(original.as_bytes())
@@ -411,7 +423,7 @@ impl InputExecutionPlanRecord {
             || !matches!(self.events.last(), Some(InputExecutionPlanEvent::Up))
         {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "execution_plan",
             ));
         }
@@ -429,14 +441,14 @@ impl InputExecutionPlanRecord {
             .collect::<Vec<_>>();
         if holds.len() != 1 {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "events",
             ));
         }
         let hold_index = holds[0];
         if hold_index <= 1 || hold_index + 2 >= self.events.len() {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "events",
             ));
         }
@@ -451,23 +463,23 @@ impl InputExecutionPlanRecord {
                 } = event
                 else {
                     return Err(SanitizationError::new(
-                        "invalid_input_execution_plan",
+                        SanitizationCode::InvalidInputExecutionPlan,
                         "events",
                     ));
                 };
                 if *x < 0 || *y < 0 || *delay_before_ms == 0 {
                     return Err(SanitizationError::new(
-                        "invalid_input_execution_plan",
+                        SanitizationCode::InvalidInputExecutionPlan,
                         "events",
                     ));
                 }
                 duration_ms = duration_ms.checked_add(*delay_before_ms).ok_or_else(|| {
-                    SanitizationError::new("invalid_input_execution_plan", "events")
+                    SanitizationError::new(SanitizationCode::InvalidInputExecutionPlan, "events")
                 })?;
             }
             if duration_ms != expected_duration_ms {
                 return Err(SanitizationError::new(
-                    "invalid_input_execution_plan",
+                    SanitizationCode::InvalidInputExecutionPlan,
                     "events",
                 ));
             }
@@ -487,7 +499,7 @@ impl InputExecutionPlanRecord {
         };
         if x < 0 || y < 0 {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "events",
             ));
         }
@@ -509,7 +521,7 @@ impl InputExecutionPlanRecord {
             || corner_y.checked_sub(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX) != Some(end_y)
         {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "events",
             ));
         }
@@ -557,18 +569,20 @@ impl InputIntentPayload {
 
     fn validate(&self) -> Result<(), SanitizationError> {
         if let Some(provenance) = &self.provenance {
-            provenance
-                .input_action
-                .validate()
-                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            provenance.input_action.validate().map_err(|_| {
+                SanitizationError::new(SanitizationCode::InvalidInputProvenance, "input_action")
+            })?;
             if self.action != provenance.input_action.event_action() {
-                return Err(SanitizationError::new("invalid_input_provenance", "action"));
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidInputProvenance,
+                    "action",
+                ));
             }
         }
         if let Some(execution_plan) = &self.execution_plan {
             if self.action != EventAction::InputSwipe {
                 return Err(SanitizationError::new(
-                    "invalid_input_execution_plan",
+                    SanitizationCode::InvalidInputExecutionPlan,
                     "action",
                 ));
             }
@@ -744,13 +758,13 @@ fn validate_diagnostic_detail(
         || message.chars().any(char::is_control)
     {
         return Err(SanitizationError::new(
-            "invalid_diagnostic_detail_message",
+            SanitizationCode::InvalidDiagnosticDetailMessage,
             "message",
         ));
     }
     if diagnostic_message_has_unsafe_shape(message) {
         return Err(SanitizationError::new(
-            "unsafe_diagnostic_detail_message",
+            SanitizationCode::UnsafeDiagnosticDetailMessage,
             "message",
         ));
     }
@@ -762,7 +776,7 @@ fn validate_diagnostic_detail(
         || (carries_native_output && declared_sensitivity < Sensitivity::Sensitive)
     {
         return Err(SanitizationError::new(
-            "invalid_diagnostic_detail_sensitivity",
+            SanitizationCode::InvalidDiagnosticDetailSensitivity,
             "declared_sensitivity",
         ));
     }
@@ -863,7 +877,7 @@ fn validate_diagnostic_detail_token(
         })
     {
         Err(SanitizationError::new(
-            "invalid_diagnostic_detail_token",
+            SanitizationCode::InvalidDiagnosticDetailToken,
             field,
         ))
     } else {
@@ -953,7 +967,7 @@ fn validate_resource_dispositions(
         || (groups.len() == 2 && groups[0].scope == groups[1].scope)
     {
         return Err(SanitizationError::new(
-            "invalid_resource_disposition_scopes",
+            SanitizationCode::InvalidResourceDispositionScopes,
             "resource_dispositions",
         ));
     }
@@ -961,7 +975,10 @@ fn validate_resource_dispositions(
     let mut quiescence = ResourceQuiescence::Confirmed;
     for group in groups {
         count = count.checked_add(group.resource_count).ok_or_else(|| {
-            SanitizationError::new("resource_count_overflow", "resource_dispositions")
+            SanitizationError::new(
+                SanitizationCode::ResourceCountOverflow,
+                "resource_dispositions",
+            )
         })?;
         if group.quiescence == ResourceQuiescence::Unconfirmed {
             quiescence = ResourceQuiescence::Unconfirmed;
@@ -1047,7 +1064,7 @@ impl LifecycleNativeDetail {
             .any(|marker| lower.contains(marker))
         {
             return Err(SanitizationError::new(
-                "invalid_lifecycle_native_detail",
+                SanitizationCode::InvalidLifecycleNativeDetail,
                 "native_detail",
             ));
         }
@@ -1266,7 +1283,7 @@ impl LifecycleCauseRecord {
             facts.validate()?;
             if self.phase != LifecycleFailurePhase::ResourceClose || self.resource.is_none() {
                 return Err(SanitizationError::new(
-                    "invalid_vendor_stdio_cause",
+                    SanitizationCode::InvalidVendorStdioCause,
                     "vendor_stdio",
                 ));
             }
@@ -1287,7 +1304,7 @@ impl LifecycleCauseRecord {
             || self.resource.is_some() != self.dropped_count.is_some()
         {
             return Err(SanitizationError::new(
-                "incomplete_resource_close_context",
+                SanitizationCode::IncompleteResourceCloseContext,
                 "lifecycle_cause",
             ));
         }
@@ -1614,7 +1631,7 @@ fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError
         })
     {
         Err(SanitizationError::new(
-            "invalid_diagnostic_detail_stage",
+            SanitizationCode::InvalidDiagnosticDetailStage,
             "stage",
         ))
     } else {
@@ -1745,7 +1762,7 @@ impl ArtifactFailureRecord {
         }
         if self.secondary.len() > MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES {
             return Err(SanitizationError::new(
-                "invalid_artifact_failure_causes",
+                SanitizationCode::InvalidArtifactFailureCauses,
                 "secondary",
             ));
         }
@@ -2282,7 +2299,7 @@ impl CapturePersistedEvidence {
             || self.artifact.validate().is_err()
         {
             return Err(SanitizationError::new(
-                "invalid_capture_summary_artifact",
+                SanitizationCode::InvalidCaptureSummaryArtifact,
                 "frames",
             ));
         }
@@ -2330,7 +2347,7 @@ impl CapturePinnedEvidence {
     fn validate_shape(&self) -> Result<(), SanitizationError> {
         if self.artifact.is_some() && self.frame_index.is_none() {
             return Err(SanitizationError::new(
-                "invalid_capture_summary_pin",
+                SanitizationCode::InvalidCaptureSummaryPin,
                 "pinned",
             ));
         }
@@ -2422,13 +2439,13 @@ impl CaptureSummaryRecord {
             || self.pinned.len() > MAX_CAPTURE_SUMMARY_PINS
         {
             return Err(SanitizationError::new(
-                "capture_summary_bound_exceeded",
+                SharedCode::CaptureSummaryBoundExceeded,
                 "summary",
             ));
         }
         if u64::try_from(self.frames.len()).ok() != Some(self.persisted) {
             return Err(SanitizationError::new(
-                "capture_summary_count_mismatch",
+                SanitizationCode::CaptureSummaryCountMismatch,
                 "persisted",
             ));
         }
@@ -2436,10 +2453,12 @@ impl CaptureSummaryRecord {
             .deduplicated
             .checked_add(self.dropped)
             .and_then(|count| count.checked_add(self.persisted))
-            .ok_or_else(|| SanitizationError::new("capture_summary_count_overflow", "summary"))?;
+            .ok_or_else(|| {
+                SanitizationError::new(SharedCode::CaptureSummaryCountOverflow, "summary")
+            })?;
         if accounted > self.captured {
             return Err(SanitizationError::new(
-                "capture_summary_count_mismatch",
+                SanitizationCode::CaptureSummaryCountMismatch,
                 "captured",
             ));
         }
@@ -2468,7 +2487,7 @@ impl CaptureSummaryRecord {
                 )
             {
                 return Err(SanitizationError::new(
-                    "capture_summary_frame_conflict",
+                    SharedCode::CaptureSummaryFrameConflict,
                     "frames",
                 ));
             }
@@ -2482,14 +2501,14 @@ impl CaptureSummaryRecord {
             let key = (pin.frame_index, pin.reason);
             if previous_pin.is_some_and(|previous| previous >= key) {
                 return Err(SanitizationError::new(
-                    "capture_summary_pin_conflict",
+                    SharedCode::CaptureSummaryPinConflict,
                     "pinned",
                 ));
             }
             if let Some(frame_index) = pin.frame_index {
                 if frame_index > MAX_CAPTURE_SUMMARY_COUNT {
                     return Err(SanitizationError::new(
-                        "capture_summary_pin_conflict",
+                        SharedCode::CaptureSummaryPinConflict,
                         "pinned",
                     ));
                 }
@@ -2501,7 +2520,7 @@ impl CaptureSummaryRecord {
                         .map(|index| &self.frames[index].artifact);
                     if persisted != Some(artifact) {
                         return Err(SanitizationError::new(
-                            "capture_summary_pin_artifact_mismatch",
+                            SanitizationCode::CaptureSummaryPinArtifactMismatch,
                             "pinned",
                         ));
                     }
@@ -2523,7 +2542,7 @@ impl CaptureSummaryRecord {
         };
         if self.evidence_completeness != expected {
             return Err(SanitizationError::new(
-                "capture_summary_completeness_mismatch",
+                SanitizationCode::CaptureSummaryCompletenessMismatch,
                 "evidence_completeness",
             ));
         }
@@ -2635,6 +2654,32 @@ pub struct PolicyBudgetReceipt {
     pub activity_runtime_limit_ms: u64,
 }
 
+impl PolicyBudgetReceipt {
+    /// Whether a run of `runtime_ms` exceeds this admission's runtime budget: the reserved task
+    /// (or activity) runtime less the dispatch's expected duration, plus the run's runtime,
+    /// above the task (or activity) limit. `None` when the receipt reserves less than the
+    /// expected duration or a total overflows. The policy's classification, the host's recovery
+    /// check and the ledger's settlement check use this one rule (Workflow #369 E3); the
+    /// ledger, which does not record the expected duration, passes 0 and so checks the bound
+    /// every rewrite meets.
+    pub fn runtime_exceeded(&self, expected_duration_ms: u64, runtime_ms: u64) -> Option<bool> {
+        let task = self
+            .task_runtime_reserved_ms
+            .checked_sub(expected_duration_ms)?
+            .checked_add(runtime_ms)?;
+        let activity = self
+            .activity_runtime_reserved_ms
+            .checked_sub(expected_duration_ms)?
+            .checked_add(runtime_ms)?;
+        Some(task > self.task_runtime_limit_ms || activity > self.activity_runtime_limit_ms)
+    }
+}
+
+/// The failure code the policy records, in place of a run's own outcome, for a run that
+/// exceeded its runtime budget (class Severe; `reported_success` when the run succeeded).
+pub const POLICY_RUNTIME_BUDGET_EXCEEDED: crate::outcome::Code =
+    crate::codes::SanitizationCode::PolicyRuntimeBudgetExceeded.code();
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyAdmissionRecord {
@@ -2661,6 +2706,16 @@ pub struct PolicyFailureRecord {
     pub sensitive: bool,
     #[serde(default = "legacy_performance_context")]
     pub perf_context: Box<PerformanceContext>,
+}
+
+impl PolicyFailureRecord {
+    /// Whether this failure is the policy's runtime-budget rewrite of a run that succeeded
+    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`], class Severe.
+    pub fn is_runtime_budget_rewrite(&self, reported_success: bool) -> bool {
+        self.error_code == POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
+            && self.original_class == PolicyFailureClass::Severe
+            && self.reported_success == reported_success
+    }
 }
 
 fn legacy_performance_context() -> Box<PerformanceContext> {
@@ -3306,7 +3361,7 @@ impl TaskGeometryObservation {
         };
         if !phase_valid {
             return Err(SanitizationError::new(
-                "invalid_task_geometry_phase",
+                SanitizationCode::InvalidTaskGeometryPhase,
                 "geometry",
             ));
         }
@@ -3331,7 +3386,7 @@ impl TaskGeometryObservation {
         };
         if !conclusion_valid {
             return Err(SanitizationError::new(
-                "invalid_task_geometry_conclusion",
+                SanitizationCode::InvalidTaskGeometryConclusion,
                 "geometry",
             ));
         }
@@ -3564,7 +3619,7 @@ impl InputSamplingRegion {
             || self.y.checked_add(self.height).is_none()
         {
             Err(SanitizationError::new(
-                "invalid_input_sampling_region",
+                SanitizationCode::InvalidInputSamplingRegion,
                 "source_regions",
             ))
         } else {
@@ -3620,7 +3675,7 @@ impl InputSamplingEvidence {
     fn validate_regions(&self) -> Result<(), SanitizationError> {
         if !matches!(self.source_regions.len(), 1 | 2) {
             return Err(SanitizationError::new(
-                "invalid_input_sampling_region",
+                SanitizationCode::InvalidInputSamplingRegion,
                 "source_regions",
             ));
         }
@@ -3661,7 +3716,7 @@ impl InputSamplingEvidence {
             Ok(())
         } else {
             Err(SanitizationError::new(
-                "invalid_input_sampling_action",
+                SanitizationCode::InvalidInputSamplingAction,
                 "sampling",
             ))
         }
@@ -3720,7 +3775,7 @@ impl SchedulingOutcomeDeclaration {
         }
         if self.mappings.is_empty() || self.mappings.len() > 64 {
             return Err(SanitizationError::new(
-                "invalid_scheduling_outcome_declaration",
+                SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                 "mappings",
             ));
         }
@@ -3730,7 +3785,7 @@ impl SchedulingOutcomeDeclaration {
             validate_policy_token(&mapping.outcome_key, "outcome_key")?;
             if !keys.insert(mapping.outcome_key.as_str()) {
                 return Err(SanitizationError::new(
-                    "invalid_scheduling_outcome_declaration",
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                     "outcome_key",
                 ));
             }
@@ -3738,13 +3793,13 @@ impl SchedulingOutcomeDeclaration {
                 && self.designated_operation.is_none()
             {
                 return Err(SanitizationError::new(
-                    "invalid_scheduling_outcome_declaration",
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                     "designated_operation",
                 ));
             }
             if mapping.terminal_pages.is_empty() || mapping.terminal_pages.len() > 64 {
                 return Err(SanitizationError::new(
-                    "invalid_scheduling_outcome_declaration",
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                     "terminal_pages",
                 ));
             }
@@ -3753,13 +3808,13 @@ impl SchedulingOutcomeDeclaration {
                 validate_task_semantic_label(page, "terminal_page")?;
                 if !pages.insert(page.as_str()) {
                     return Err(SanitizationError::new(
-                        "invalid_scheduling_outcome_declaration",
+                        SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                         "terminal_pages",
                     ));
                 }
                 if !conditions.insert((mapping.effect, page.as_str())) {
                     return Err(SanitizationError::new(
-                        "invalid_scheduling_outcome_declaration",
+                        SanitizationCode::InvalidSchedulingOutcomeDeclaration,
                         "mapping_overlap",
                     ));
                 }
@@ -3916,14 +3971,15 @@ impl SchedulingOutcomeIdentity {
     fn validate(&self) -> Result<(), SanitizationError> {
         if self.terminal_sequence == 0 {
             return Err(SanitizationError::new(
-                "invalid_authoritative_scheduling_outcome",
+                SanitizationCode::InvalidAuthoritativeSchedulingOutcome,
                 "position",
             ));
         }
         validate_policy_token(&self.decision_id, "decision_id")?;
         validate_task_semantic_label(&self.catalog_task_id, "catalog_task_id")?;
-        crate::validate_instance_alias(&self.instance_alias)
-            .map_err(|_| SanitizationError::new("invalid_task_semantic_label", "instance_alias"))
+        crate::validate_instance_alias(&self.instance_alias).map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidTaskSemanticLabel, "instance_alias")
+        })
     }
 }
 
@@ -3945,7 +4001,7 @@ impl AuthoritativeSchedulingOutcome {
         disposition.validate()?;
         if terminal_timestamp_unix_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_authoritative_scheduling_outcome",
+                SanitizationCode::InvalidAuthoritativeSchedulingOutcome,
                 "terminal_timestamp_unix_ms",
             ));
         }
@@ -3983,7 +4039,7 @@ impl SchedulingOutcomeProjection {
     ) -> Result<Self, SanitizationError> {
         if ledger_position == 0 || outcome.identity().terminal_sequence() > ledger_position {
             return Err(SanitizationError::new(
-                "invalid_scheduling_outcome_projection",
+                SanitizationCode::InvalidSchedulingOutcomeProjection,
                 "ledger_position",
             ));
         }
@@ -4038,7 +4094,7 @@ impl TaskSemanticPayload {
     fn validate(&self) -> Result<(), SanitizationError> {
         if self.action != EventAction::RuntimeTaskRun {
             return Err(SanitizationError::new(
-                "invalid_task_semantic_action",
+                SanitizationCode::InvalidTaskSemanticAction,
                 "action",
             ));
         }
@@ -4053,7 +4109,7 @@ impl TaskSemanticPayload {
             )
         {
             return Err(SanitizationError::new(
-                "invalid_task_lease_deadline",
+                SanitizationCode::InvalidTaskLeaseDeadline,
                 "lease_expires_at_monotonic_ms",
             ));
         }
@@ -4063,7 +4119,7 @@ impl TaskSemanticPayload {
             }
             (TaskSemanticFact::EffectIntent { .. }, None) | (_, None) => Ok(()),
             (_, Some(_)) => Err(SanitizationError::new(
-                "invalid_input_sampling_fact",
+                SanitizationCode::InvalidInputSamplingFact,
                 "sampling",
             )),
         }
@@ -4139,7 +4195,7 @@ impl TaskSemanticFact {
                 validate_task_package_sha256(package_sha256)?;
                 if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) {
                     return Err(SanitizationError::new(
-                        "invalid_task_response_deadline",
+                        SanitizationCode::InvalidTaskResponseDeadline,
                         "response_deadline_monotonic_ms",
                     ));
                 }
@@ -4171,7 +4227,7 @@ impl TaskSemanticFact {
                     validate_task_semantic_label(page, "matched_page")?;
                     if !candidate_pages.contains(page) {
                         return Err(SanitizationError::new(
-                            "invalid_task_recognition_result",
+                            SanitizationCode::InvalidTaskRecognitionResult,
                             "matched_page",
                         ));
                     }
@@ -4194,7 +4250,7 @@ impl TaskSemanticFact {
                 validate_task_semantic_label(final_page, "final_page")?;
                 if *executed_steps > 1_000 {
                     return Err(SanitizationError::new(
-                        "invalid_task_entry_recovery",
+                        SanitizationCode::InvalidTaskEntryRecovery,
                         "executed_steps",
                     ));
                 }
@@ -4216,7 +4272,7 @@ impl TaskSemanticFact {
                 }
                 _ => {
                     return Err(SanitizationError::new(
-                        "invalid_task_entry_disposition",
+                        SanitizationCode::InvalidTaskEntryDisposition,
                         "failure_code",
                     ));
                 }
@@ -4230,7 +4286,10 @@ impl TaskSemanticFact {
                 if let Some(phase) = phase {
                     validate_task_semantic_label(&phase.id, "phase_id")?;
                     if phase.index as usize >= crate::MAX_TASK_PHASES || phase.completed {
-                        return Err(SanitizationError::new("invalid_task_phase", "phase"));
+                        return Err(SanitizationError::new(
+                            SanitizationCode::InvalidTaskPhase,
+                            "phase",
+                        ));
                     }
                 }
                 validate_task_step(*step_index)?;
@@ -4254,9 +4313,9 @@ impl TaskSemanticFact {
             } => {
                 validate_task_step(*step_index)?;
                 validate_task_semantic_label(operation_label, "operation_label")?;
-                action
-                    .validate()
-                    .map_err(|_| SanitizationError::new("invalid_task_effect", "input_action"))?;
+                action.validate().map_err(|_| {
+                    SanitizationError::new(SanitizationCode::InvalidTaskEffect, "input_action")
+                })?;
             }
             Self::EffectCompleted {
                 step_index,
@@ -4274,7 +4333,10 @@ impl TaskSemanticFact {
                 if let Some(phase) = phase {
                     validate_task_semantic_label(&phase.id, "phase_id")?;
                     if phase.index as usize >= crate::MAX_TASK_PHASES {
-                        return Err(SanitizationError::new("invalid_task_phase", "phase"));
+                        return Err(SanitizationError::new(
+                            SanitizationCode::InvalidTaskPhase,
+                            "phase",
+                        ));
                     }
                 }
                 validate_task_step(*step_index)?;
@@ -4297,7 +4359,7 @@ impl TaskSemanticFact {
                     || (*outcome == TaskOutcome::Success && executed_steps.is_none())
                 {
                     return Err(SanitizationError::new(
-                        "invalid_task_terminal",
+                        SanitizationCode::InvalidTaskTerminal,
                         "executed_steps",
                     ));
                 }
@@ -4309,7 +4371,7 @@ impl TaskSemanticFact {
                         if let Some(disposition) = scheduling_disposition {
                             if final_page.is_none() {
                                 return Err(SanitizationError::new(
-                                    "invalid_task_terminal",
+                                    SanitizationCode::InvalidTaskTerminal,
                                     "scheduling_disposition",
                                 ));
                             }
@@ -4319,7 +4381,7 @@ impl TaskSemanticFact {
                     (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(code)) => {
                         if scheduling_disposition.is_some() {
                             return Err(SanitizationError::new(
-                                "invalid_task_terminal",
+                                SanitizationCode::InvalidTaskTerminal,
                                 "scheduling_disposition",
                             ));
                         }
@@ -4327,7 +4389,7 @@ impl TaskSemanticFact {
                     }
                     _ => {
                         return Err(SanitizationError::new(
-                            "invalid_task_terminal",
+                            SanitizationCode::InvalidTaskTerminal,
                             "failure_code",
                         ));
                     }
@@ -4393,22 +4455,28 @@ impl PayloadDetail for TaskSemanticPayload {
 
 fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
-        Err(SanitizationError::new("invalid_task_semantic_label", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidTaskSemanticLabel,
+            field,
+        ))
     } else {
         Ok(())
     }
 }
 
 fn validate_task_package_sha256(value: &crate::PackageRef) -> Result<(), SanitizationError> {
-    value
-        .validate()
-        .map_err(|_| SanitizationError::new("invalid_task_package_fingerprint", "package_sha256"))
+    value.validate().map_err(|_| {
+        SanitizationError::new(
+            SanitizationCode::InvalidTaskPackageFingerprint,
+            "package_sha256",
+        )
+    })
 }
 
 fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {
     if width == 0 || height == 0 {
         Err(SanitizationError::new(
-            "invalid_task_frame_dimensions",
+            SanitizationCode::InvalidTaskFrameDimensions,
             "frame_dimensions",
         ))
     } else {
@@ -4423,7 +4491,7 @@ fn validate_task_recognition_targets(
 ) -> Result<(), SanitizationError> {
     if targets.len() > TASK_RECOGNITION_TARGET_LIMIT {
         return Err(SanitizationError::new(
-            "invalid_task_recognition_targets",
+            SanitizationCode::InvalidTaskRecognitionTargets,
             "targets",
         ));
     }
@@ -4435,7 +4503,7 @@ fn validate_task_recognition_targets(
                 .any(|prior| prior.target_id == target.target_id)
         {
             return Err(SanitizationError::new(
-                "invalid_task_recognition_targets",
+                SanitizationCode::InvalidTaskRecognitionTargets,
                 "target_id",
             ));
         }
@@ -4452,7 +4520,7 @@ fn validate_task_recognition_targets(
                     .is_none_or(|bottom| bottom > frame_height))
         {
             return Err(SanitizationError::new(
-                "invalid_task_recognition_targets",
+                SanitizationCode::InvalidTaskRecognitionTargets,
                 "region",
             ));
         }
@@ -4463,7 +4531,7 @@ fn validate_task_recognition_targets(
 fn validate_task_candidate_pages(pages: &[String]) -> Result<(), SanitizationError> {
     if pages.is_empty() || pages.len() > 1_024 {
         return Err(SanitizationError::new(
-            "invalid_task_candidate_pages",
+            SanitizationCode::InvalidTaskCandidatePages,
             "candidate_pages",
         ));
     }
@@ -4471,7 +4539,7 @@ fn validate_task_candidate_pages(pages: &[String]) -> Result<(), SanitizationErr
         validate_task_semantic_label(page, "candidate_pages")?;
         if pages[..index].contains(page) {
             return Err(SanitizationError::new(
-                "invalid_task_candidate_pages",
+                SanitizationCode::InvalidTaskCandidatePages,
                 "candidate_pages",
             ));
         }
@@ -4482,7 +4550,7 @@ fn validate_task_candidate_pages(pages: &[String]) -> Result<(), SanitizationErr
 fn validate_task_step(step_index: u32) -> Result<(), SanitizationError> {
     if step_index > 1_000 {
         Err(SanitizationError::new(
-            "invalid_task_step_index",
+            SanitizationCode::InvalidTaskStepIndex,
             "step_index",
         ))
     } else {
@@ -5904,7 +5972,7 @@ impl PerformancePressureDraft {
             || self.data.pressure.last_observed_at_unix_ms > self.data.observed_at_unix_ms
         {
             return Err(SanitizationError::new(
-                "invalid_performance_pressure_time",
+                SanitizationCode::InvalidPerformancePressureTime,
                 "performance_pressure",
             ));
         }
@@ -6198,13 +6266,13 @@ pub(crate) fn validate_resource_authoring_fields(
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
         return Err(SanitizationError::new(
-            "invalid_resource_authoring_fingerprint",
+            SanitizationCode::InvalidResourceAuthoringFingerprint,
             "target_fingerprint",
         ));
     }
     if changed_paths.is_empty() || changed_paths.len() > 4_096 {
         return Err(SanitizationError::new(
-            "invalid_resource_authoring_paths",
+            SanitizationCode::InvalidResourceAuthoringPaths,
             "changed_paths",
         ));
     }
@@ -6218,7 +6286,7 @@ pub(crate) fn validate_resource_authoring_fields(
                 .all(|component| !component.is_empty() && component != "." && component != "..");
         if !valid {
             return Err(SanitizationError::new(
-                "invalid_resource_authoring_path",
+                SanitizationCode::InvalidResourceAuthoringPath,
                 "changed_paths",
             ));
         }
@@ -6229,13 +6297,13 @@ pub(crate) fn validate_resource_authoring_fields(
         }
         (ResourceAuthoringPhase::PromoteFailed, None) => {
             return Err(SanitizationError::new(
-                "missing_resource_authoring_failure_code",
+                SanitizationCode::MissingResourceAuthoringFailureCode,
                 "failure_code",
             ));
         }
         (_, Some(_)) => {
             return Err(SanitizationError::new(
-                "unexpected_resource_authoring_failure_code",
+                SanitizationCode::UnexpectedResourceAuthoringFailureCode,
                 "failure_code",
             ));
         }
@@ -6256,7 +6324,7 @@ fn validate_resource_authoring_token(
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
         return Err(SanitizationError::new(
-            "invalid_resource_authoring_token",
+            SanitizationCode::InvalidResourceAuthoringToken,
             field,
         ));
     }
@@ -6267,24 +6335,24 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     validate_policy_token(&data.decision_id, "decision_id")?;
     validate_policy_token(&data.task_id, "task_id")?;
     crate::validate_instance_alias(&data.instance_id)
-        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
+        .map_err(|_| SanitizationError::new(SanitizationCode::InvalidPolicyToken, "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
-    data.package_digest
-        .validate()
-        .map_err(|_| SanitizationError::new("invalid_policy_digest", "package_digest"))?;
+    data.package_digest.validate().map_err(|_| {
+        SanitizationError::new(SanitizationCode::InvalidPolicyDigest, "package_digest")
+    })?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
     validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
     if data.catalog_version == 0 || data.input_ledger_position == 0 || data.urgency_milli > 1_000 {
         return Err(SanitizationError::new(
-            "invalid_policy_dispatch_position",
+            SanitizationCode::InvalidPolicyDispatchPosition,
             "catalog_version_or_input_position",
         ));
     }
     if data.reasons.is_empty() || data.reasons.len() > 128 {
         return Err(SanitizationError::new(
-            "invalid_policy_reason_chain",
+            SanitizationCode::InvalidPolicyReasonChain,
             "reasons",
         ));
     }
@@ -6294,7 +6362,7 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     }
     if data.approval_fact_ids.len() > 64 {
         return Err(SanitizationError::new(
-            "invalid_policy_approval_facts",
+            SanitizationCode::InvalidPolicyApprovalFacts,
             "approval_fact_ids",
         ));
     }
@@ -6313,7 +6381,7 @@ fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), Saniti
             != value.activity.interval_ms
     {
         return Err(SanitizationError::new(
-            "invalid_policy_activity_sample",
+            SanitizationCode::InvalidPolicyActivitySample,
             "activity",
         ));
     }
@@ -6332,7 +6400,7 @@ fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), Saniti
         || budget.activity_runtime_reserved_ms > budget.activity_runtime_limit_ms
     {
         return Err(SanitizationError::new(
-            "invalid_policy_budget_receipt",
+            SanitizationCode::InvalidPolicyBudgetReceipt,
             "budget",
         ));
     }
@@ -6345,10 +6413,10 @@ fn validate_policy_execution_data(
     validate_policy_token(&data.decision_id, "decision_id")?;
     validate_policy_token(&data.task_id, "task_id")?;
     crate::validate_instance_alias(&data.instance_id)
-        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
+        .map_err(|_| SanitizationError::new(SanitizationCode::InvalidPolicyToken, "instance_id"))?;
     if data.observed_at_unix_ms == 0 {
         return Err(SanitizationError::new(
-            "invalid_policy_execution_time",
+            SanitizationCode::InvalidPolicyExecutionTime,
             "observed_at_unix_ms",
         ));
     }
@@ -6378,7 +6446,7 @@ fn validate_policy_execution_data(
             || failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition != PolicyFailureDisposition::PausedTask
             || failure.reported_success
-                && (failure.error_code != "policy_runtime_budget_exceeded"
+                && (failure.error_code != POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
                     || failure.original_class != PolicyFailureClass::Severe
                     || failure.effective_class != PolicyFailureClass::Severe)
             || failure.sensitive
@@ -6386,7 +6454,7 @@ fn validate_policy_execution_data(
                     || failure.disposition != PolicyFailureDisposition::PausedTask)
         {
             return Err(SanitizationError::new(
-                "invalid_policy_failure_record",
+                SanitizationCode::InvalidPolicyFailureRecord,
                 "outcome",
             ));
         }
@@ -6399,14 +6467,14 @@ fn validate_policy_planning_signal_data(
 ) -> Result<(), SanitizationError> {
     validate_policy_token(&data.signal_id, "signal_id")?;
     crate::validate_instance_alias(&data.instance_id)
-        .map_err(|_| SanitizationError::new("invalid_policy_token", "instance_id"))?;
+        .map_err(|_| SanitizationError::new(SanitizationCode::InvalidPolicyToken, "instance_id"))?;
     if let Some(task_id) = &data.task_id {
         validate_policy_token(task_id, "task_id")?;
     }
     validate_policy_token(&data.fact_code, "fact_code")?;
     if data.observed_at_unix_ms == 0 {
         return Err(SanitizationError::new(
-            "invalid_policy_planning_signal_time",
+            SanitizationCode::InvalidPolicyPlanningSignalTime,
             "observed_at_unix_ms",
         ));
     }
@@ -6417,7 +6485,7 @@ fn validate_policy_planning_signal_data(
     );
     if detection_kind != data.detection_budget.is_some() {
         return Err(SanitizationError::new(
-            "invalid_policy_detection_budget_presence",
+            SanitizationCode::InvalidPolicyDetectionBudgetPresence,
             "detection_budget",
         ));
     }
@@ -6442,7 +6510,7 @@ fn validate_policy_planning_signal_data(
             || data.kind == PolicyPlanningSignalKind::DetectionQuotaExhausted && !exhausted
         {
             return Err(SanitizationError::new(
-                "invalid_policy_detection_budget",
+                SanitizationCode::InvalidPolicyDetectionBudget,
                 "detection_budget",
             ));
         }
@@ -6455,14 +6523,17 @@ fn validate_runtime_instance_binding(
 ) -> Result<(), SanitizationError> {
     if payload.action != EventAction::RuntimeAction {
         return Err(SanitizationError::new(
-            "invalid_runtime_instance_binding_action",
+            SanitizationCode::InvalidRuntimeInstanceBindingAction,
             "runtime_payload",
         ));
     }
     crate::validate_instance_alias(&payload.instance_alias)
-        .map_err(|_| SanitizationError::new("invalid_instance_alias", "instance_alias"))?;
+        .map_err(|_| SanitizationError::new(SharedCode::InvalidInstanceAlias, "instance_alias"))?;
     if payload.adb_port == Some(0) {
-        return Err(SanitizationError::new("invalid_adb_port", "adb_port"));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidAdbPort,
+            "adb_port",
+        ));
     }
     if payload.adb_port.is_some()
         && !payload
@@ -6470,7 +6541,10 @@ fn validate_runtime_instance_binding(
             .as_ref()
             .is_some_and(|host| !host.trim().is_empty())
     {
-        return Err(SanitizationError::new("invalid_adb_host", "adb_host"));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidAdbHost,
+            "adb_host",
+        ));
     }
     let bounded = |value: &Option<String>, max_bytes: usize| {
         value.as_ref().is_none_or(|text| {
@@ -6496,7 +6570,7 @@ fn validate_runtime_instance_binding(
         || !bounded(&payload.provider_version, MAX_PROVIDER_VERSION_BYTES)
     {
         return Err(SanitizationError::new(
-            "invalid_instance_binding_discovery",
+            SanitizationCode::InvalidInstanceBindingDiscovery,
             "binding_source",
         ));
     }
@@ -6508,7 +6582,7 @@ fn validate_runtime_fact_recorded(
 ) -> Result<(), SanitizationError> {
     if payload.action != EventAction::FactPublish {
         return Err(SanitizationError::new(
-            "invalid_runtime_fact_recorded_action",
+            SanitizationCode::InvalidRuntimeFactRecordedAction,
             "runtime_payload",
         ));
     }
@@ -6520,7 +6594,7 @@ fn validate_runtime_fact_invalidated(
 ) -> Result<(), SanitizationError> {
     if payload.action != EventAction::FactInvalidate {
         return Err(SanitizationError::new(
-            "invalid_runtime_fact_invalidated_action",
+            SanitizationCode::InvalidRuntimeFactInvalidatedAction,
             "runtime_payload",
         ));
     }
@@ -6532,7 +6606,7 @@ fn validate_runtime_fact_snapshot(
 ) -> Result<(), SanitizationError> {
     if payload.action != EventAction::FactSnapshot {
         return Err(SanitizationError::new(
-            "invalid_runtime_fact_snapshot_action",
+            SanitizationCode::InvalidRuntimeFactSnapshotAction,
             "runtime_payload",
         ));
     }
@@ -6549,7 +6623,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 || value.pressure.last_observed_at_unix_ms > value.observed_at_unix_ms
             {
                 return Err(SanitizationError::new(
-                    "invalid_performance_pressure_time",
+                    SanitizationCode::InvalidPerformancePressureTime,
                     "performance_pressure",
                 ));
             }
@@ -6627,7 +6701,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
             })
         }
         _ => Err(SanitizationError::new(
-            "invalid_performance_payload",
+            SanitizationCode::InvalidPerformancePayload,
             "performance_payload",
         )),
     }
@@ -6646,7 +6720,7 @@ fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError>
                     != value.scope_instances.len()
             {
                 return Err(SanitizationError::new(
-                    "invalid_fact_scope_binding",
+                    SanitizationCode::InvalidFactScopeBinding,
                     "scope_instances",
                 ));
             }
@@ -6658,7 +6732,7 @@ fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError>
             validate_fact_invalidation(&value.invalidation)
         }
         _ => Err(SanitizationError::new(
-            "invalid_fact_payload",
+            SanitizationCode::InvalidFactPayload,
             "fact_payload",
         )),
     }
@@ -6679,7 +6753,7 @@ fn validate_client_action_payload(payload: &ClientPayload) -> Result<(), Sanitiz
             return value.record.validate();
         }
         return Err(SanitizationError::new(
-            "invalid_client_action_payload",
+            SanitizationCode::InvalidClientActionPayload,
             "client_action_payload",
         ));
     }
@@ -6692,7 +6766,7 @@ fn validate_approval_payload(payload: &ApprovalPayload) -> Result<(), Sanitizati
             value.decision.validate()
         }
         _ => Err(SanitizationError::new(
-            "invalid_approval_payload",
+            SanitizationCode::InvalidApprovalPayload,
             "approval_payload",
         )),
     }
@@ -6764,7 +6838,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         }
         _ => {
             return Err(SanitizationError::new(
-                "invalid_policy_payload",
+                SanitizationCode::InvalidPolicyPayload,
                 "policy_payload",
             ));
         }
@@ -6804,7 +6878,7 @@ fn validate_catalog_transition_data(
     validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
     if data.catalog_version == 0 {
         return Err(SanitizationError::new(
-            "invalid_catalog_version",
+            SanitizationCode::InvalidCatalogVersion,
             "catalog_version",
         ));
     }
@@ -6812,7 +6886,7 @@ fn validate_catalog_transition_data(
         validate_catalog_hash(previous, "previous_catalog_hash")?;
         if previous == &data.catalog_hash {
             return Err(SanitizationError::new(
-                "invalid_catalog_transition",
+                SanitizationCode::InvalidCatalogTransition,
                 "previous_catalog_hash",
             ));
         }
@@ -6862,7 +6936,7 @@ fn validate_catalog_payload(payload: &CatalogPayload) -> Result<(), Sanitization
         }
         _ => {
             return Err(SanitizationError::new(
-                "invalid_catalog_transition_lifecycle",
+                SanitizationCode::InvalidCatalogTransitionLifecycle,
                 "catalog_payload",
             ));
         }
@@ -6883,7 +6957,7 @@ fn validate_release_payload(payload: &ReleasePayload) -> Result<(), Sanitization
                 || value.effect_disposition != EffectDisposition::Performed
             {
                 return Err(SanitizationError::new(
-                    "invalid_release_stage_lifecycle",
+                    SanitizationCode::InvalidReleaseStageLifecycle,
                     "release_payload",
                 ));
             }
@@ -6923,7 +6997,7 @@ fn validate_release_payload(payload: &ReleasePayload) -> Result<(), Sanitization
             value.transition.validate()
         }
         _ => Err(SanitizationError::new(
-            "invalid_release_transition_lifecycle",
+            SanitizationCode::InvalidReleaseTransitionLifecycle,
             "release_payload",
         )),
     }
@@ -6981,7 +7055,7 @@ fn validate_agent_payload(payload: &AgentPayload) -> Result<(), SanitizationErro
             value.session.validate()
         }
         _ => Err(SanitizationError::new(
-            "invalid_agent_session_lifecycle",
+            SanitizationCode::InvalidAgentSessionLifecycle,
             "agent_payload",
         )),
     }
@@ -6993,7 +7067,10 @@ fn validate_policy_token(value: &str, field: &'static str) -> Result<(), Sanitiz
         || value.chars().any(char::is_control)
         || value.chars().any(char::is_whitespace)
     {
-        Err(SanitizationError::new("invalid_policy_token", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidPolicyToken,
+            field,
+        ))
     } else {
         Ok(())
     }
@@ -7001,7 +7078,10 @@ fn validate_policy_token(value: &str, field: &'static str) -> Result<(), Sanitiz
 
 fn validate_policy_text(value: &str, field: &'static str) -> Result<(), SanitizationError> {
     if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
-        Err(SanitizationError::new("invalid_policy_text", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidPolicyText,
+            field,
+        ))
     } else {
         Ok(())
     }
@@ -7017,7 +7097,10 @@ fn validate_policy_digest(value: &str, field: &'static str) -> Result<(), Saniti
     if valid {
         Ok(())
     } else {
-        Err(SanitizationError::new("invalid_policy_digest", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidPolicyDigest,
+            field,
+        ))
     }
 }
 
@@ -7031,7 +7114,10 @@ fn validate_catalog_hash(value: &str, field: &'static str) -> Result<(), Sanitiz
     if valid {
         Ok(())
     } else {
-        Err(SanitizationError::new("invalid_catalog_hash", field))
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidCatalogHash,
+            field,
+        ))
     }
 }
 
@@ -7076,7 +7162,7 @@ impl InputIntentDraft {
     ) -> Result<InputIntentPayload, SanitizationError> {
         if self.execution_plan.is_some() && self.action != EventAction::InputSwipe {
             return Err(SanitizationError::new(
-                "invalid_input_execution_plan",
+                SanitizationCode::InvalidInputExecutionPlan,
                 "action",
             ));
         }
@@ -7085,10 +7171,9 @@ impl InputIntentDraft {
         }
         let mut provenance = self.provenance;
         if let Some(provenance) = &mut provenance {
-            provenance
-                .input_action
-                .validate()
-                .map_err(|_| SanitizationError::new("invalid_input_provenance", "input_action"))?;
+            provenance.input_action.validate().map_err(|_| {
+                SanitizationError::new(SanitizationCode::InvalidInputProvenance, "input_action")
+            })?;
             redact_sensitive_input(&mut provenance.input_action);
         }
         let payload = InputIntentPayload {
@@ -7245,15 +7330,15 @@ impl MonitorOutcomeDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<MonitorOutcomePayload, SanitizationError> {
-        self.observation
-            .validate()
-            .map_err(|_| SanitizationError::new("invalid_monitor_outcome", "observation"))?;
-        self.decision
-            .validate()
-            .map_err(|_| SanitizationError::new("invalid_monitor_outcome", "decision"))?;
+        self.observation.validate().map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidMonitorOutcome, "observation")
+        })?;
+        self.decision.validate().map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidMonitorOutcome, "decision")
+        })?;
         if self.observation.diagnosis() != self.decision.diagnosis() {
             return Err(SanitizationError::new(
-                "invalid_monitor_outcome",
+                SanitizationCode::InvalidMonitorOutcome,
                 "diagnosis",
             ));
         }
@@ -7275,7 +7360,7 @@ impl MonitorRecoveryCoordinationDraft {
     ) -> Result<MonitorRecoveryCoordinationPayload, SanitizationError> {
         if self.admitted != (self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable) {
             return Err(SanitizationError::new(
-                "invalid_monitor_recovery_coordination",
+                SanitizationCode::InvalidMonitorRecoveryCoordination,
                 "reason",
             ));
         }
@@ -7296,7 +7381,7 @@ impl SchedulerQueueDraft {
     ) -> Result<SchedulerQueuePayload, SanitizationError> {
         if self.position == 0 || self.deadline_monotonic_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_scheduler_queue",
+                SanitizationCode::InvalidSchedulerQueue,
                 "queue_position_or_deadline",
             ));
         }
@@ -7335,7 +7420,7 @@ impl LeaseTransferDraft {
     ) -> Result<LeaseTransferPayload, SanitizationError> {
         if self.from_lease_id == self.to_lease_id {
             return Err(SanitizationError::new(
-                "invalid_lease_transfer",
+                SanitizationCode::InvalidLeaseTransfer,
                 "lease_identity",
             ));
         }
@@ -7380,7 +7465,7 @@ impl ObservationResultDraft {
     ) -> Result<ObservationResultPayload, SanitizationError> {
         if self.frame_width == 0 || self.frame_height == 0 {
             return Err(SanitizationError::new(
-                "invalid_sanitized_payload",
+                SanitizationCode::InvalidSanitizedPayload,
                 "frame_dimensions",
             ));
         }
@@ -7403,7 +7488,7 @@ impl CapturePressureDraft {
     ) -> Result<CapturePressurePayload, SanitizationError> {
         if self.memory_budget_bytes == 0 {
             return Err(SanitizationError::new(
-                "invalid_capture_pressure",
+                SanitizationCode::InvalidCapturePressure,
                 "memory_budget_bytes",
             ));
         }
@@ -7427,7 +7512,7 @@ impl CaptureDedupWindowDraft {
             || (self.preserving_material && self.preserved_frame_id.is_none())
         {
             return Err(SanitizationError::new(
-                "invalid_capture_dedup_window",
+                SanitizationCode::InvalidCaptureDedupWindow,
                 "duplicate_count",
             ));
         }
@@ -7448,7 +7533,7 @@ impl CapturePolicyDraft {
     ) -> Result<CapturePolicyPayload, SanitizationError> {
         if self.cadence_ms == 0 {
             return Err(SanitizationError::new(
-                "invalid_capture_policy",
+                SharedCode::InvalidCapturePolicy,
                 "cadence_ms",
             ));
         }
@@ -7483,7 +7568,7 @@ impl ArtifactExportDraft {
     ) -> Result<ArtifactExportPayload, SanitizationError> {
         if self.artifact_count == 0 {
             return Err(SanitizationError::new(
-                "invalid_artifact_export",
+                SanitizationCode::InvalidArtifactExport,
                 "artifact_count",
             ));
         }
@@ -7720,8 +7805,8 @@ impl RuntimePayloadDraft {
                 "resource_declaration",
                 "resource.declaration.prepare",
                 "pack_containment",
-                "run_contained_task",
-                "resource_declaration_invalid",
+                crate::codes::ContractLocation::RunContainedTask.as_str(),
+                SharedCode::ResourceDeclarationInvalid.as_str(),
                 Sensitivity::Internal,
             ),
             AuditInput::new(),
@@ -7936,7 +8021,7 @@ impl MonitorPayloadDraft {
             MonitorDraftKind::Failed(detail) => detail.runtime_state = Some(Box::new(state)),
             _ => {
                 return Err(SanitizationError::new(
-                    "invalid_monitor_state_event",
+                    SanitizationCode::InvalidMonitorStateEvent,
                     "runtime_state",
                 ));
             }
@@ -10549,7 +10634,7 @@ impl EventPayload {
                 || detail.effect_disposition() != Some(EffectDisposition::NotPerformed)
             {
                 return Err(SanitizationError::new(
-                    "invalid_resource_declaration_owner",
+                    SanitizationCode::InvalidResourceDeclarationOwner,
                     "resource_declaration",
                 ));
             }
@@ -10563,7 +10648,7 @@ impl EventPayload {
                 EventType::ArtifactStoreFailed | EventType::ArtifactVerificationFailed
             ) {
                 return Err(SanitizationError::new(
-                    "invalid_artifact_failure_owner",
+                    SanitizationCode::InvalidArtifactFailureOwner,
                     "artifact_failure",
                 ));
             }
@@ -10571,7 +10656,7 @@ impl EventPayload {
                 != (self.event_type() == EventType::ArtifactVerificationFailed)
             {
                 return Err(SanitizationError::new(
-                    "invalid_artifact_failure_stage",
+                    SanitizationCode::InvalidArtifactFailureStage,
                     "artifact_failure",
                 ));
             }
@@ -10598,7 +10683,7 @@ impl EventPayload {
             };
             if self.action() != expected_action || !correct_event {
                 return Err(SanitizationError::new(
-                    "invalid_runtime_state_owner",
+                    SanitizationCode::InvalidRuntimeStateOwner,
                     "runtime_state",
                 ));
             }
@@ -10613,7 +10698,7 @@ impl EventPayload {
             && !matches!(self, Self::Input(InputPayload::Committed(_)))
         {
             return Err(SanitizationError::new(
-                "invalid_touch_response_scope",
+                SanitizationCode::InvalidTouchResponseScope,
                 "touch_response_us",
             ));
         }
@@ -10621,7 +10706,7 @@ impl EventPayload {
             && !matches!(self, Self::Capture(CapturePayload::Completed(_)))
         {
             return Err(SanitizationError::new(
-                "invalid_capture_acquire_scope",
+                SanitizationCode::InvalidCaptureAcquireScope,
                 "capture_acquire_us",
             ));
         }
@@ -10632,7 +10717,7 @@ impl EventPayload {
             )
         {
             return Err(SanitizationError::new(
-                "invalid_device_diagnostic_config_owner",
+                SanitizationCode::InvalidDeviceDiagnosticConfigOwner,
                 "runtime_payload",
             ));
         }
@@ -10646,7 +10731,7 @@ impl EventPayload {
                 && validate_resource_dispositions(groups)? != (*resource_count, *quiescence)
             {
                 return Err(SanitizationError::new(
-                    "resource_disposition_summary_mismatch",
+                    SanitizationCode::ResourceDispositionSummaryMismatch,
                     "runtime_payload",
                 ));
             }
@@ -10654,7 +10739,7 @@ impl EventPayload {
                 != value.backend_open.is_some()
             {
                 return Err(SanitizationError::new(
-                    "invalid_backend_open_phase",
+                    SanitizationCode::InvalidBackendOpenPhase,
                     "runtime_payload",
                 ));
             }
@@ -10679,7 +10764,7 @@ impl EventPayload {
                     )
             {
                 return Err(SanitizationError::new(
-                    "invalid_prior_epoch_close_phase",
+                    SanitizationCode::InvalidPriorEpochClosePhase,
                     "runtime_payload",
                 ));
             }
@@ -10690,7 +10775,7 @@ impl EventPayload {
                 != value.vendor_stdio.is_some()
             {
                 return Err(SanitizationError::new(
-                    "invalid_vendor_stdio_phase",
+                    SanitizationCode::InvalidVendorStdioPhase,
                     "runtime_payload",
                 ));
             }
@@ -10701,7 +10786,7 @@ impl EventPayload {
                 != value.adb_recovery.is_some()
             {
                 return Err(SanitizationError::new(
-                    "invalid_adb_recovery_phase",
+                    SanitizationCode::InvalidAdbRecoveryPhase,
                     "runtime_payload",
                 ));
             }
@@ -10715,7 +10800,7 @@ impl EventPayload {
                 && (parts_found == 0 || parts_found >= parts)
             {
                 return Err(SanitizationError::new(
-                    "invalid_fact_snapshot_set_skipped",
+                    SanitizationCode::InvalidFactSnapshotSetSkipped,
                     "runtime_payload",
                 ));
             }
@@ -10725,7 +10810,7 @@ impl EventPayload {
                         && target.owner_epoch != value.owner_epoch))
             {
                 return Err(SanitizationError::new(
-                    "invalid_shutdown_target",
+                    RuntimeContractCode::InvalidShutdownTarget,
                     "runtime_payload",
                 ));
             }
@@ -10736,14 +10821,14 @@ impl EventPayload {
             );
             if diagnostic != value.device_diagnostics.is_some() {
                 return Err(SanitizationError::new(
-                    "invalid_device_diagnostic_phase",
+                    SanitizationCode::InvalidDeviceDiagnosticPhase,
                     "runtime_payload",
                 ));
             }
             if let Some(budget) = &value.device_diagnostics {
                 if budget.owner_epoch != value.owner_epoch {
                     return Err(SanitizationError::new(
-                        "device_diagnostic_owner_mismatch",
+                        SanitizationCode::DeviceDiagnosticOwnerMismatch,
                         "runtime_payload",
                     ));
                 }
@@ -10753,7 +10838,7 @@ impl EventPayload {
         if let Some(lifecycle) = detail.lifecycle_failure() {
             if self.event_type() != EventType::RuntimeFailed {
                 return Err(SanitizationError::new(
-                    "invalid_lifecycle_failure_owner",
+                    SanitizationCode::InvalidLifecycleFailureOwner,
                     "lifecycle_failure",
                 ));
             }
@@ -10772,7 +10857,7 @@ impl EventPayload {
                 EventType::InputFailed | EventType::CaptureFailed
             ) {
                 return Err(SanitizationError::new(
-                    "invalid_cleanup_cause_owner",
+                    SanitizationCode::InvalidCleanupCauseOwner,
                     "cleanup_cause",
                 ));
             }
@@ -10782,7 +10867,7 @@ impl EventPayload {
             && value.action != EventAction::RuntimeAction
         {
             return Err(SanitizationError::new(
-                "invalid_runtime_lifecycle_action",
+                SanitizationCode::InvalidRuntimeLifecycleAction,
                 "runtime_payload",
             ));
         }
@@ -10829,7 +10914,7 @@ impl EventPayload {
         if let Self::State(StatePayload::Migrated(value)) = self {
             if value.action != EventAction::StateMigrate {
                 return Err(SanitizationError::new(
-                    "invalid_state_migration_lifecycle",
+                    SanitizationCode::InvalidStateMigrationLifecycle,
                     "state_payload",
                 ));
             }
@@ -10844,7 +10929,7 @@ impl EventPayload {
         if let Self::Ledger(LedgerPayload::Recovered(recovery)) = self {
             if (recovery.reason == RecoveryReason::StorageCutover) != recovery.migration.is_some() {
                 return Err(SanitizationError::new(
-                    "invalid_ledger_migration",
+                    SanitizationCode::InvalidLedgerMigration,
                     "ledger_migration",
                 ));
             }
@@ -10852,7 +10937,7 @@ impl EventPayload {
                 record.validate()?;
                 if recovery.segment_index.is_some() || recovery.affected_bytes != 0 {
                     return Err(SanitizationError::new(
-                        "invalid_ledger_migration",
+                        SanitizationCode::InvalidLedgerMigration,
                         "ledger_migration",
                     ));
                 }
@@ -10864,7 +10949,7 @@ impl EventPayload {
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
                 return Err(SanitizationError::new(
-                    "invalid_task_semantic_payload",
+                    SanitizationCode::InvalidTaskSemanticPayload,
                     "task_semantic_fact",
                 ));
             }
@@ -10872,7 +10957,7 @@ impl EventPayload {
                 if recovery.segment_index == Some(0) =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_sanitized_payload",
+                    SanitizationCode::InvalidSanitizedPayload,
                     "segment_index",
                 ));
             }
@@ -10881,7 +10966,7 @@ impl EventPayload {
                 if result.frame_width == 0 || result.frame_height == 0 =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_sanitized_payload",
+                    SanitizationCode::InvalidSanitizedPayload,
                     "frame_dimensions",
                 ));
             }
@@ -10891,7 +10976,7 @@ impl EventPayload {
                     || value.observation.diagnosis() != value.decision.diagnosis() =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_monitor_outcome",
+                    SanitizationCode::InvalidMonitorOutcome,
                     "diagnosis",
                 ));
             }
@@ -10901,7 +10986,7 @@ impl EventPayload {
                     || value.reason != MonitorRecoveryCoordinationReason::SchedulerAvailable =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_monitor_recovery_coordination",
+                    SanitizationCode::InvalidMonitorRecoveryCoordination,
                     "reason",
                 ));
             }
@@ -10911,7 +10996,7 @@ impl EventPayload {
                     || value.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_monitor_recovery_coordination",
+                    SanitizationCode::InvalidMonitorRecoveryCoordination,
                     "reason",
                 ));
             }
@@ -10919,7 +11004,7 @@ impl EventPayload {
                 if value.memory_budget_bytes == 0 =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_capture_pressure",
+                    SanitizationCode::InvalidCapturePressure,
                     "memory_budget_bytes",
                 ));
             }
@@ -10929,13 +11014,13 @@ impl EventPayload {
                     || value.preserved_frame_id.is_some() && value.duplicate_count != 1 =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_capture_dedup_window",
+                    SanitizationCode::InvalidCaptureDedupWindow,
                     "duplicate_count",
                 ));
             }
             Self::Capture(CapturePayload::PolicyChanged(value)) if value.cadence_ms == 0 => {
                 return Err(SanitizationError::new(
-                    "invalid_capture_policy",
+                    SharedCode::InvalidCapturePolicy,
                     "cadence_ms",
                 ));
             }
@@ -10943,13 +11028,16 @@ impl EventPayload {
                 if value.action != EventAction::CaptureSummaryCommit
                     || value.summary.validate().is_err() =>
             {
-                return Err(SanitizationError::new("invalid_capture_summary", "summary"));
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidCaptureSummary,
+                    "summary",
+                ));
             }
             Self::Artifact(ArtifactPayload::ExportCompleted(value))
                 if value.artifact_count == 0 =>
             {
                 return Err(SanitizationError::new(
-                    "invalid_artifact_export",
+                    SanitizationCode::InvalidArtifactExport,
                     "artifact_count",
                 ));
             }
@@ -11970,7 +12058,7 @@ fn validate_fingerprint(candidate: &str, original: &str) -> Result<(), Sanitizat
         Ok(())
     } else {
         Err(SanitizationError::new(
-            "invalid_fingerprint",
+            SanitizationCode::InvalidFingerprint,
             "account_identity",
         ))
     }

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use crate::error::spelled;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 
 /// Workflow #375 R5c: an observe frame is compared only with the previous observe frame of
 /// its instance and origin, and only when that one was captured less than 50 s earlier, so
@@ -64,8 +67,8 @@ fn runtime_capture_backend(
 ) -> RuntimeHostResult<RuntimeCaptureBackend> {
     match backend {
         CaptureBackendName::FixtureSimulation => Err(RuntimeHostError::fatal(
-            "fixture_capture_outside_simulation_scope",
-            "map_runtime_capture_backend",
+            HostCode::FixtureCaptureOutsideSimulationScope,
+            HostLocation::MapRuntimeCaptureBackend,
             RuntimeErrorCode::RuntimeFatal,
         )),
         CaptureBackendName::AdbScreencap => Ok(RuntimeCaptureBackend::AdbScreencap),
@@ -119,8 +122,8 @@ impl HostShared {
         spec.validate().map_err(|_| {
             RequestFailure::request(
                 RuntimeHostError::request(
-                    "capture_sequence_spec_invalid",
-                    "capture_sequence",
+                    HostCode::CaptureSequenceSpecInvalid,
+                    ContractLocation::CaptureSequence,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -155,15 +158,15 @@ impl HostShared {
         }
         let sequence = CaptureSequence::new(spec, observations).map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "capture_sequence_result_invalid",
-                "capture_sequence",
+                HostCode::CaptureSequenceResultInvalid,
+                ContractLocation::CaptureSequence,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let terminal_event = last_terminal.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "capture_sequence_terminal_missing",
-                "capture_sequence",
+                HostCode::CaptureSequenceTerminalMissing,
+                ContractLocation::CaptureSequence,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -184,7 +187,7 @@ impl HostShared {
         let capability = self.issue_readonly_capability(instance_id)?;
         let debug_run =
             if request.actor() == EventActor::Lab && request.source() == EventSource::Lab {
-                lock(&self.debug_runs, "read_runtime_debug_run")?
+                lock(&self.debug_runs, HostLocation::ReadRuntimeDebugRun)?
                     .get(&request.correlation_id())
                     .map(|context| (context.task_id, context.run_id))
             } else {
@@ -220,8 +223,8 @@ impl HostShared {
             return self.capture_material_failure(error, links);
         }
         let runtime = RuntimeHostError::request(
-            "capture_frame_invalid",
-            "observe_readonly",
+            SharedCode::CaptureFrameInvalid,
+            ContractLocation::ObserveReadonly,
             RuntimeErrorCode::CaptureFailed,
         )
         .with_native_failure_detail(error.native_detail());
@@ -292,7 +295,9 @@ impl HostShared {
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
         let frame_id = links.frame_id().ok_or_else(|| {
-            online_observation::observation_integrity_failure("observation_frame_identity_missing")
+            online_observation::observation_integrity_failure(
+                HostCode::ObservationFrameIdentityMissing,
+            )
         })?;
         let frame_store = actingcommand_artifact_store::FrameStore::new(
             frame_retention::spill_root(self.artifacts.root(), frame_id)
@@ -344,9 +349,12 @@ impl HostShared {
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,
-                    if matches!(
+                    if spelled(
                         runtime_error.code(),
-                        "capture_frame_invalid" | "frame_workspace_unavailable"
+                        &[
+                            SharedCode::CaptureFrameInvalid.code(),
+                            SharedCode::FrameWorkspaceUnavailable.code(),
+                        ],
                     ) {
                         EffectDisposition::Indeterminate
                     } else {
@@ -400,7 +408,9 @@ impl HostShared {
             )),
         };
         let frame_id = links.frame_id().ok_or_else(|| {
-            online_observation::observation_integrity_failure("observation_frame_identity_missing")
+            online_observation::observation_integrity_failure(
+                HostCode::ObservationFrameIdentityMissing,
+            )
         })?;
         let mut pipeline = CapturePipeline::open_with_frame_store(
             Arc::clone(&self.artifacts),
@@ -487,8 +497,8 @@ impl HostShared {
         )
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "readonly_observation_invalid",
-                "observe_readonly",
+                HostCode::ReadonlyObservationInvalid,
+                ContractLocation::ObserveReadonly,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -514,7 +524,9 @@ impl HostShared {
             ),
         )?;
         let verified = terminal(&sink.verified.ok_or_else(|| {
-            online_observation::observation_integrity_failure("observation_verified_event_missing")
+            online_observation::observation_integrity_failure(
+                HostCode::ObservationVerifiedEventMissing,
+            )
         })?);
         self.execution()?
             .commit_input_frame(
@@ -527,7 +539,7 @@ impl HostShared {
             )
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "commit_capture_input_frame",
+                    HostLocation::CommitCaptureInputFrame,
                     &error,
                 ))
             })?;
@@ -560,7 +572,7 @@ impl HostShared {
             frame_retention::capture_pin_reason(request)
                 == actingcommand_contract::ArtifactPinReason::Lab,
         );
-        let mut marks = lock(&self.observe_marks, "lock_observe_marks")?;
+        let mut marks = lock(&self.observe_marks, HostLocation::LockObserveMarks)?;
         if let Some(marker) = marks.marker(key, &current) {
             self.append_event(
                 EventSeverity::Info,
@@ -588,8 +600,8 @@ impl HostShared {
             .issue_readonly_capture_capability(self.owner_epoch, instance_id)
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "readonly_capability_issue_failed",
-                    "issue_readonly_capability",
+                    HostCode::ReadonlyCapabilityIssueFailed,
+                    HostLocation::IssueReadonlyCapability,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })

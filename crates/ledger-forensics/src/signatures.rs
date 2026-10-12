@@ -33,8 +33,8 @@ pub fn replay_signatures_read_only(
         || request.page.validate().is_err()
     {
         return Err(ForensicError::new(
-            "invalid_signature_replay",
-            "validate_signature_replay",
+            ForensicsCode::InvalidSignatureReplay.code(),
+            ForensicsLocation::ValidateSignatureReplay.location(),
             "both state roots, positive frozen bounds and a bounded page are required",
         ));
     }

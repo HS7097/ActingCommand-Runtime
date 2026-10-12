@@ -7,6 +7,8 @@
 //! Runtime requests and receipts are reduced to equality ordinals before an
 //! installed sink receives an event.
 
+use crate::codes::HostCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CorrelationId, HolderId, InstanceId, LeaseId, LeaseToken, RuntimeOperation, RuntimeReceipt,
     RuntimeRequest, RuntimeResult,
@@ -229,13 +231,13 @@ pub(crate) fn enter_observation_owner(
     }
 }
 
-fn mint_observation_owner() -> Result<HostTestObservationOwner, &'static str> {
+fn mint_observation_owner() -> Result<HostTestObservationOwner, Code> {
     NEXT_OBSERVATION_OWNER
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
         })
         .map(HostTestObservationOwner)
-        .map_err(|_| "host_test_observation_owner_overflow")
+        .map_err(|_| HostCode::HostTestObservationOwnerOverflow.code())
 }
 
 struct ActiveObservation {
@@ -253,15 +255,15 @@ pub struct HostTestObservationGuard {
     owner: HostTestObservationOwner,
 }
 
-pub fn install(sink: ObservationSink) -> Result<HostTestObservationGuard, &'static str> {
+pub fn install(sink: ObservationSink) -> Result<HostTestObservationGuard, Code> {
     let serial = INSTALL_LOCK
         .lock()
-        .map_err(|_| "host_test_observation_install_lock_poisoned")?;
+        .map_err(|_| HostCode::HostTestObservationInstallLockPoisoned.code())?;
     let mut active = active_observation()
         .lock()
-        .map_err(|_| "host_test_observation_sink_lock_poisoned")?;
+        .map_err(|_| HostCode::HostTestObservationSinkLockPoisoned.code())?;
     if active.is_some() {
-        return Err("host_test_observation_sink_already_installed");
+        return Err(HostCode::HostTestObservationSinkAlreadyInstalled.code());
     }
     let owner = mint_observation_owner()?;
     let owner_scope = enter_observation_owner(Some(owner));

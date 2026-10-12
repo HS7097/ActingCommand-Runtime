@@ -1,0 +1,389 @@
+# Gate map, ledger fragment (test plan v2.2 §2.1; contracts/README.md, "test-gates/").
+# Keys are the ids of rd-1009/tests/inventory-ledger.md. One `[[gate]]` row per key with exactly
+# `key`, `coverage` ("Y", or "P" = tested only on the cfg(test) Segment backend), `tests`
+# (`<package>::<target>::<libtest path>`) and `incident` (a list, `[]` when none). Rows are only
+# appended to; a row leaves only when its feature retires.
+
+# Single writer
+[[gate]]
+key = "1"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::second_writer_is_rejected_while_first_is_alive",
+    "actingcommand-ledger::lib::global::tests::stale_active_owner_is_recovered_explicitly",
+    "actingcommand-ledger::lib::global::tests::contradictory_writer_metadata_is_fatal",
+    "actingcommand-ledger::lib::global::storage::tests::clean_close_appends_inactive_metadata_without_erasing_active_record",
+]
+incident = []
+
+# Only the ledger assigns sequence numbers, contiguous across reopen
+[[gate]]
+key = "2"
+coverage = "P"
+tests = [
+    "actingcommand-ledger::lib::global::v2_tests::storage_assigns_the_only_sequence",
+    "actingcommand-ledger::lib::global::tests::store_contract::segment_store_event_trace_preserves_the_shared_typed_corpus",
+    "actingcommand-ledger::lib::global::tests::append_assigns_contiguous_sequences_across_reopen",
+]
+incident = []
+
+# Durability class per payload
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::gate_l1::gate_durability_classes_match_the_contract_table",
+    "actingcommand-ledger::gate::durability::gate_append_durable_refuses_an_observational_draft",
+    "actingcommand-ledger::gate::durability::gate_observational_append_restores_full_sync",
+    "actingcommand-runtime-database::lib::gate_l1::gate_failed_sync_restore_refuses_every_later_user",
+]
+incident = ["#382 L-1"]
+
+# Critical intent, then action, then outcome (C1)
+[[gate]]
+key = "5"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::critical::tests::intent_append_failure_prevents_action_and_builders",
+    "actingcommand-ledger::lib::critical::tests::success_builder_observes_action_value_and_effect",
+    "actingcommand-ledger::lib::critical::tests::failure_builder_observes_action_error_and_effect",
+    "actingcommand-ledger::lib::critical::tests::outcome_sanitization_failure_is_fatal_without_receipt",
+    "actingcommand-ledger::lib::critical::tests::outcome_build_failure_is_fatal_without_receipt",
+    "actingcommand-ledger::lib::critical::tests::wrong_post_action_role_is_fatal_without_receipt",
+    "actingcommand-ledger::lib::critical::tests::outcome_effect_mismatch_is_fatal_without_receipt",
+    "actingcommand-ledger::lib::critical::tests::selected_outcome_rejects_correlation_action_and_event_id_mismatches",
+    "actingcommand-ledger::lib::critical::tests::outcome_append_failure_preserves_effect_without_receipt",
+    "actingcommand-ledger::lib::critical::tests::command_validation_uses_post_action_roles",
+    "actingcommand-ledger::lib::critical::tests::lease_transition_role_map_is_complete",
+    "actingcommand-ledger::lib::critical::tests::task_terminal_role_map_is_complete",
+    "actingcommand-ledger::lib::critical::tests::same_action_id_is_not_deduplicated_by_c1",
+    "actingcommand-ledger::lib::critical::tests::panic_propagates_after_durable_intent_without_installing_hook",
+    "actingcommand-ledger::lib::critical::tests::critical_debug_does_not_disclose_value_error_payload_path_or_endpoint",
+    "actingcommand-ledger::lib::critical::tests::plan_and_selected_outcome_validate_required_links",
+    "actingcommand-ledger::lib::global::tests::process::crash_after_intent_never_forges_an_outcome",
+    "actingcommand-ledger::lib::global::tests::process::critical_append_failure_blocks_side_effect",
+]
+incident = []
+
+# Subscriptions
+[[gate]]
+key = "7"
+coverage = "P"
+tests = [
+    "actingcommand-ledger::lib::global::tests::subscription::paged_replay_then_live_is_gap_free_and_ordered",
+    "actingcommand-ledger::lib::global::tests::subscription_reports_timeout_and_clean_close_separately",
+    "actingcommand-ledger::lib::global::tests::subscription_reports_terminal_writer_failure",
+    "actingcommand-ledger::lib::global::tests::subscription_replays_after_cursor_then_receives_live_events",
+    "actingcommand-ledger::lib::global::tests::subscription_suppresses_events_before_a_future_cursor",
+    "actingcommand-ledger::lib::global::tests::slow_subscription_receives_bounded_lag_failure",
+    "actingcommand-ledger::lib::global::tests::dropped_future_cursor_subscription_is_pruned_before_cursor_is_crossed",
+    "actingcommand-ledger::lib::global::tests::dropped_subscription_does_not_block_remaining_live_subscribers",
+    "actingcommand-ledger::lib::global::tests::dropped_subscription_response_does_not_register_a_live_sender",
+    "actingcommand-ledger::lib::global::tests::subscription::future_cursor_remains_gap_free",
+    "actingcommand-ledger::lib::global::tests::subscription::invalid_replay_page_size_is_rejected",
+    "actingcommand-ledger::lib::global::tests::subscription::local_terminal_state_detaches_writer_registration",
+    "actingcommand-ledger::lib::global::tests::subscription::replay_pages_are_bounded_and_writer_remains_responsive",
+    "actingcommand-ledger::lib::global::tests::subscription::resume_cursor_recovers_every_missing_event",
+    "actingcommand-ledger::lib::global::tests::subscription::subscription_lag_is_absorbing_and_discards_buffered_events",
+    "actingcommand-ledger::lib::global::tests::subscription::subscription_registration_does_not_clone_unbounded_history",
+    "actingcommand-ledger::lib::global::tests::subscription::terminal_writer_failure_preempts_replay_and_is_stable",
+]
+incident = []
+
+# Query contracts on SQLite
+[[gate]]
+key = "8"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::sqlite_contract::sqlite_runs_the_existing_seven_store_contracts",
+]
+incident = []
+
+# Projections; no secret class reaches any projection
+[[gate]]
+key = "9"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::ui_projection_hides_forensic_fields_while_lab_retains_them",
+    "actingcommand-ledger::lib::global::tests::process::all_secret_classes_are_absent_from_files_indexes_errors_and_every_projection",
+    "actingcommand-ledger::lib::global::v2_tests::concise_projection_omits_payload",
+    "actingcommand-ledger::lib::global::v2_tests::lab_projection_contains_full_sanitized_typed_payload",
+    "actingcommand-ledger::lib::global::v2_tests::projected_event_rejects_unknown_projection_nesting_without_disclosure",
+    "actingcommand-ledger::lib::global::v2_tests::ui_projection_contains_only_public_typed_payload",
+]
+incident = []
+
+# Scheduled settlement and recovered policy completion
+[[gate]]
+key = "10"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::recovered_policy_completion_preserves_the_persisted_scheduled_chain",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_execution_rejects_ambiguous_task_failure_evidence",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_execution_requires_one_matching_release",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_completion_requires_a_complete_local_chain",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_completion_rejects_missing_execution_and_lease_facts",
+    "actingcommand-ledger::lib::global::tests::recovered_policy_completion_rejects_duplicate_execution_evidence",
+    "actingcommand-ledger::lib::global::tests::scheduled_settlement_continuation_is_one_shot_and_idempotent",
+]
+incident = []
+
+# Writer health
+[[gate]]
+key = "11"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::idle_writer_health_reports_exit_without_business_commands",
+    "actingcommand-ledger::lib::global::tests::shutdown_waits_for_a_full_ingress_queue_to_drain",
+]
+incident = []
+
+# Frame retention view
+[[gate]]
+key = "14"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::retention::view::tests::an_error_window_keeps_thirty_seconds_and_drops_its_interior_duplicates",
+    "actingcommand-ledger::lib::global::retention::view::tests::exemptions_readings_due_times_and_running_frames",
+    "actingcommand-ledger::lib::global::retention::view::tests::lab_output_is_kept_and_lab_dedup_spares_lab_operation_evidence",
+    "actingcommand-ledger::lib::global::retention::view::tests::a_run_settles_after_its_release_and_its_neighbours_wait_for_its_terminal",
+    "actingcommand-ledger::lib::global::retention::view::tests::a_run_cut_short_keeps_its_last_thirty_seconds_under_the_restart",
+    "actingcommand-ledger::lib::global::retention::view::tests::the_lowest_sequence_window_owns_the_frame_and_names_its_folder",
+    "actingcommand-ledger::lib::global::retention::view::tests::cached_classes_follow_the_clock_only",
+    "actingcommand-ledger::lib::global::retention::view::tests::the_leaf_code_comes_from_the_owner_event_then_a_preceding_failure_terminal",
+    "actingcommand-ledger::lib::global::tests::missing_material::a_dedup_window_makes_the_interior_frame_a_duplicate_in_the_frame_view",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_error_points_depend_only_on_outcome_severity_and_links",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_an_event_on_no_instance_keeps_nothing_and_changes_no_frame",
+    "actingcommand-ledger::lib::global::tests::gate_l2::gate_a_renamed_failure_code_changes_only_the_leaf",
+]
+incident = ["#382 L-2"]
+
+# Cutover and maintenance
+[[gate]]
+key = "15"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::sqlite_contract::sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds",
+    "actingcommand-ledger::lib::global::tests::missing_material::formal_openings_and_maintenance_read_no_frame",
+    "actingcommand-ledger::lib::global::tests::sqlite_prefix::migrated_prefix_reads_through_cutover",
+]
+incident = []
+
+# Read-only and forensic open
+[[gate]]
+key = "16"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::read_only_tests::b3_storage_snapshot_keeps_physical_tail_and_unverified_segments",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_is_byte_identical_and_does_not_contend_with_writer",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_reports_last_segment_dangling_tail_at_last_complete_newline",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_reports_complete_corruption_with_readable_prefix",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_stops_on_non_final_tail_before_later_segments",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_query_matches_event_indexes",
+]
+incident = []
+
+# Signature catalog
+[[gate]]
+key = "18"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::signature_catalog_rebuilds_versions_and_binds_paginated_multiple_matches",
+]
+incident = []
+
+# Lab log v0.1
+[[gate]]
+key = "19"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::tests::id_issuer_generates_parseable_unique_ids_across_threads",
+    "actingcommand-ledger::lib::tests::default_generation_changes_between_issuers",
+    "actingcommand-ledger::lib::tests::ledger_writes_flushes_and_skips_corrupt_tail",
+    "actingcommand-ledger::lib::tests::open_or_create_reuses_existing_ledger_without_duplicate_header",
+    "actingcommand-ledger::lib::tests::commit_then_record_yields_proof_only_after_successful_commit",
+    "actingcommand-ledger::lib::tests::ledger_record_golden_shapes_are_stable",
+    "actingcommand-ledger::lib::tests::light_events_require_three_part_names_and_keep_ids",
+    "actingcommand-ledger::lib::tests::evidence_store_skips_heavy_assets_outside_debug_mode",
+    "actingcommand-ledger::lib::tests::evidence_store_debug_mode_writes_and_lists_by_id",
+    "actingcommand-ledger::lib::tests::projection_removes_redundant_versions_and_preserves_core_scalars",
+    "actingcommand-ledger::lib::tests::projection_fields_request_protects_non_core_fields",
+    "actingcommand-ledger::lib::tests::projection_summarizes_decision_arrays_with_full_pointer",
+    "actingcommand-ledger::lib::tests::projection_summarizes_twenty_decision_targets_with_more_and_full_pointer",
+    "actingcommand-ledger::lib::tests::projection_keeps_decision_arrays_when_payload_exceeds_hard_limit",
+    "actingcommand-ledger::lib::tests::projection_error_adds_actionable_three_fields",
+    "actingcommand-ledger::lib::tests::suspicion_helpers_cover_required_escalation_reasons",
+    "actingcommand-ledger::lib::tests::error_projection_shape_is_stable",
+    "actingcommand-ledger::lib::tests::min_soft_limit_constant_is_lower_than_hard_limit",
+]
+incident = []
+
+# Two-phase prepare and commit
+[[gate]]
+key = "21"
+coverage = "Y"
+tests = [
+    "actingcommand-artifact-store::lib::store::tests::prepared_artifact_has_no_material_or_event_until_committed",
+    "actingcommand-artifact-store::lib::store::tests::prepared_artifact_rejects_different_bytes_before_publication",
+]
+incident = []
+
+# Frame store
+[[gate]]
+key = "23"
+coverage = "Y"
+tests = [
+    "actingcommand-artifact-store::lib::frame_store::tests::memory_budget_uses_available_total_and_os_reserve",
+    "actingcommand-artifact-store::lib::frame_store::tests::live_memory_source_refreshes_the_budget_for_each_frame",
+    "actingcommand-artifact-store::lib::frame_store::tests::threshold_one_is_rejected",
+    "actingcommand-artifact-store::lib::frame_store::tests::tier2_tier3_gap_too_small_is_rejected",
+    "actingcommand-artifact-store::lib::frame_store::tests::completed_no_match_frames_do_not_same_page_dedupe",
+    "actingcommand-artifact-store::lib::frame_store::tests::failed_frames_do_not_same_page_dedupe",
+    "actingcommand-artifact-store::lib::frame_store::tests::matched_same_page_frames_can_dedupe",
+    "actingcommand-artifact-store::lib::frame_store::tests::page_transition_is_retained_even_under_dedup",
+    "actingcommand-artifact-store::lib::frame_store::tests::tier2_persists_artifacts_without_pausing",
+    "actingcommand-artifact-store::lib::frame_store::tests::spilled_frame_keeps_thumbnail_for_later_dedup",
+    "actingcommand-artifact-store::lib::frame_store::tests::single_frame_can_spill",
+    "actingcommand-artifact-store::lib::frame_store::tests::persisted_frame_reads_its_original_verified_material",
+    "actingcommand-artifact-store::lib::frame_store::tests::last_frame_can_spill_when_eligible",
+    "actingcommand-artifact-store::lib::frame_store::tests::tier3_returns_pause_required_on_current_frame",
+    "actingcommand-artifact-store::lib::frame_store::tests::resident_bytes_include_payload_metadata_thumbnail_and_workspace",
+    "actingcommand-artifact-store::lib::frame_store::tests::spill_capacity_refusal_retains_the_original_without_panic",
+    "actingcommand-artifact-store::lib::frame_store::tests::spill_preserves_original_identity_failure_before_publication",
+    "actingcommand-artifact-store::lib::frame_store::tests::cleanup_releases_memory_and_preserves_existing_material",
+    "actingcommand-artifact-store::lib::frame_store::tests::hysteresis_releases_only_below_release_line",
+    "actingcommand-artifact-store::lib::frame_store::tests::tier3_alarm_still_preserves_partial_original_material",
+    "actingcommand-artifact-store::lib::frame_store::tests::clock_rollback_does_not_underflow_dwell_delta",
+    "actingcommand-artifact-store::lib::frame_store::tests::thumbnail_handles_pathological_dimensions_without_panic",
+    "actingcommand-artifact-store::lib::frame_store::tests::a_frame_tier1_already_marked_gets_no_second_marker",
+    "actingcommand-artifact-store::lib::pipeline::tests::marking_needs_more_than_the_threshold_and_one_verdict",
+    "actingcommand-artifact-store::lib::pipeline::tests::key_frames_and_pending_frames_are_never_marked",
+    "actingcommand-artifact-store::lib::pipeline::tests::persisted_near_duplicates_are_marked_at_recognition_and_keep_their_material",
+]
+incident = []
+
+# Capture pipeline
+[[gate]]
+key = "24"
+coverage = "Y"
+tests = [
+    "actingcommand-artifact-store::lib::pipeline::tests::default_policy_is_300_ms_and_ledger_visible",
+    "actingcommand-artifact-store::lib::pipeline::tests::explicit_pinned_frame_bypasses_same_page_dedup_and_persists_immediately",
+    "actingcommand-artifact-store::lib::pipeline::tests::summary_builder_is_deterministic_and_fail_closed_for_counts_and_pin_pairs",
+    "actingcommand-artifact-store::lib::pipeline::tests::ordinary_same_page_frame_is_deduplicated_but_not_pressure_dropped",
+    "actingcommand-artifact-store::lib::pipeline::tests::tier3_pause_is_ledger_visible_and_pressure_skip_is_partial",
+    "actingcommand-artifact-store::lib::pipeline::tests::pinned_frame_persists_immediately_while_tier3_is_paused",
+    "actingcommand-artifact-store::lib::pipeline::tests::pinned_persistence_failure_is_ledger_visible_and_evidence_failed",
+]
+incident = []
+
+# Evidence export
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-artifact-store::lib::exporter::tests::success_failure_and_cancelled_exports_have_verified_final_receipts",
+    "actingcommand-artifact-store::lib::exporter::tests::completed_projection_requires_terminal_receipt",
+    "actingcommand-artifact-store::lib::exporter::tests::completed_projection_rejects_finish_ok_with_missing_output_zip_file",
+    "actingcommand-artifact-store::lib::exporter::tests::completed_projection_rejects_finish_ok_with_output_zip_sha256_mismatch",
+    "actingcommand-artifact-store::lib::exporter::tests::same_millisecond_screenshots_receive_collision_suffixes",
+    "actingcommand-artifact-store::lib::exporter::tests::pressure_loss_is_partial_and_missing_pinned_evidence_is_failed",
+    "actingcommand-artifact-store::lib::exporter::tests::authoritative_capture_summary_failures_publish_no_archive_or_completion",
+    "actingcommand-artifact-store::lib::exporter::tests::corrupt_source_artifact_fails_without_publishing_output",
+    "actingcommand-artifact-store::lib::exporter::tests::output_collision_preserves_existing_file_and_records_failure",
+    "actingcommand-artifact-store::lib::exporter::tests::completed_event_failure_preserves_referenced_archive_object",
+    "actingcommand-artifact-store::lib::exporter::tests::output_directory_failure_is_fatal_and_records_export_failure",
+    "actingcommand-artifact-store::lib::exporter::tests::verifier_rehashes_every_declared_entry_not_only_the_outer_zip",
+]
+incident = []
+
+# Keyed document envelopes, CAS revisions, monotonic rollback
+[[gate]]
+key = "27"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-state::lib::store::tests::document_envelopes_detect_out_of_band_payload_changes",
+    "actingcommand-runtime-state::lib::store::tests::state_document_rollback_creates_a_new_monotonic_revision",
+]
+incident = []
+
+# Projection entries are latest-by-identity and tamper-evident; legacy migration is idempotent
+[[gate]]
+key = "28"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-state::lib::store::tests::projection_entries_are_latest_by_identity_and_tamper_evident",
+    "actingcommand-runtime-state::lib::store::tests::legacy_migration_is_idempotent_and_conflicts_fail_loudly",
+    "actingcommand-runtime-state::lib::store::tests::migration_rejects_target_schema_without_matching_record",
+    "actingcommand-runtime-state::lib::store::tests::migration_rejects_unexpected_current_schema",
+]
+incident = []
+
+# Release generations
+[[gate]]
+key = "29"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-state::lib::store::tests::active_release_resolves_only_verified_content_addressed_artifacts",
+    "actingcommand-runtime-state::lib::store::tests::committed_release_transition_replay_is_idempotent",
+    "actingcommand-runtime-state::lib::store::tests::concurrent_release_switches_commit_exactly_one_pointer_revision",
+    "actingcommand-runtime-state::lib::store::tests::release_activation_rejects_missing_staged_artifact",
+    "actingcommand-runtime-state::lib::store::tests::release_generations_switch_atomically_and_rollback_only_to_history",
+    "actingcommand-runtime-state::lib::store::tests::release_identity_changes_when_same_version_has_different_bytes",
+    "actingcommand-runtime-state::lib::store::tests::release_pointer_transaction_rolls_back_at_each_sqlite_write_boundary",
+    "actingcommand-runtime-state::lib::store::tests::release_staging_requires_complete_matching_artifacts",
+    "actingcommand-runtime-state::lib::store::tests::stale_transition_preview_cannot_replace_a_new_pointer",
+    "actingcommand-runtime-state::gate::release_receipt::gate_lost_release_commit_receipt_is_recovered_and_resubmission_is_idempotent",
+]
+incident = ["#382 L-1"]
+
+# Maintenance limits, disjoint backup paths, relative destinations
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-database::gate::maintenance::gate_maintenance_limits_accept_defaults_and_caps_and_refuse_zero_and_over_cap",
+    "actingcommand-runtime-database::gate::maintenance::gate_maintenance_backup_path_must_be_disjoint_from_the_source",
+    "actingcommand-runtime-database::gate::maintenance::gate_relative_maintenance_destination_resolves_against_the_working_directory",
+]
+incident = ["#382 L-1"]
+
+# Read-only forensic commands never write
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::forensic_snapshot_commands_are_read_only_and_deterministic",
+    "actingcommand-actinglab-architecture::workspace_guards::b5_forensic_read_chain_reaches_no_write_entry",
+]
+incident = []
+
+# events and views filters, replay, exports
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::forensics_cli::signatures_cli_requires_two_frozen_roots_and_exposes_incomplete_catalog",
+    "actingcommand-ledger::lib::global::tests::forensics_cli::b3_actingledger_projects_resource_samples_and_unknowns",
+    "actingcommand-ledger::lib::global::tests::forensics_cli::events_cli_parses_bounded_filters_and_reports_next_cursor",
+    "actingcommand-ledger::lib::global::tests::forensics_cli::replay_cli_requires_the_external_receipt_and_reports_verified_manifest",
+    "actingcommand-ledger::lib::global::tests::forensics_cli::performance_export_is_explicit_bounded_and_preserves_ordinary_export",
+    "actingcommand-ledger::lib::global::tests::forensics_cli::stability_cli_pages_errors_and_source_files_are_explicit",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writes",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::forensic_snapshot_commands_are_read_only_and_deterministic",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::filters_events_by_persisted_fields_with_stable_cursor",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::replays_a_sealed_archive_through_the_canonical_verifier",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::performance_pages_preserve_typed_facts_and_read_only_boundaries",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::stability_projection_preserves_facts_provenance_and_bounded_failures",
+]
+incident = []
+
+# The CLI is thin and fails loud
+[[gate]]
+key = "37"
+coverage = "Y"
+tests = [
+    "actingledger::read_commands::actingledger_read_commands_are_thin_and_fail_loud",
+]
+incident = []

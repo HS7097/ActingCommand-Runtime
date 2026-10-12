@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::HostMetricsLocation;
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Location;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -10,7 +13,7 @@ pub struct CapacityTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapacityUnavailable {
-    pub operation: &'static str,
+    pub operation: Location,
     pub raw_os_error: Option<i32>,
     pub detail: String,
 }
@@ -53,10 +56,10 @@ pub fn sample_capacity(targets: &[CapacityTarget]) -> Vec<CapacitySample> {
 }
 
 #[cfg(windows)]
-fn native_error(operation: &'static str) -> CapacityUnavailable {
+fn native_error(operation: impl Into<Location>) -> CapacityUnavailable {
     let error = std::io::Error::last_os_error();
     CapacityUnavailable {
-        operation,
+        operation: operation.into(),
         raw_os_error: error.raw_os_error(),
         detail: error.to_string(),
     }
@@ -80,14 +83,14 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
             Ok(_) => break,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 existing = existing.parent().ok_or_else(|| CapacityUnavailable {
-                    operation: "resolve_capacity_target",
+                    operation: HostMetricsLocation::ResolveCapacityTarget.location(),
                     raw_os_error: error.raw_os_error(),
                     detail: error.to_string(),
                 })?;
             }
             Err(error) => {
                 return Err(CapacityUnavailable {
-                    operation: "resolve_capacity_target",
+                    operation: HostMetricsLocation::ResolveCapacityTarget.location(),
                     raw_os_error: error.raw_os_error(),
                     detail: error.to_string(),
                 });
@@ -102,7 +105,7 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(existing)
         .map_err(|error| CapacityUnavailable {
-            operation: "canonicalize_capacity_target",
+            operation: HostMetricsLocation::CanonicalizeCapacityTarget.location(),
             raw_os_error: error.raw_os_error(),
             detail: error.to_string(),
         })?;
@@ -119,11 +122,11 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
         )
     } as usize;
     if length == 0 {
-        return Err(native_error("identify_capacity_volume"));
+        return Err(native_error(HostMetricsLocation::IdentifyCapacityVolume));
     }
     if length >= resolved.len() {
         return Err(CapacityUnavailable {
-            operation: "identify_capacity_volume",
+            operation: HostMetricsLocation::IdentifyCapacityVolume.location(),
             raw_os_error: None,
             detail: "final volume path exceeds capacity resolution bound".into(),
         });
@@ -133,12 +136,12 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
     let root = resolved[..length]
         .get(..49)
         .ok_or_else(|| CapacityUnavailable {
-            operation: "identify_capacity_volume",
+            operation: HostMetricsLocation::IdentifyCapacityVolume.location(),
             raw_os_error: None,
             detail: "missing final volume GUID root".into(),
         })?;
     let mut identity = String::from_utf16(root).map_err(|error| CapacityUnavailable {
-        operation: "identify_capacity_volume",
+        operation: HostMetricsLocation::IdentifyCapacityVolume.location(),
         raw_os_error: None,
         detail: error.to_string(),
     })?;
@@ -155,7 +158,7 @@ pub(crate) fn volume(path: &Path) -> Result<String, CapacityUnavailable> {
         });
     if !valid {
         return Err(CapacityUnavailable {
-            operation: "identify_capacity_volume",
+            operation: HostMetricsLocation::IdentifyCapacityVolume.location(),
             raw_os_error: None,
             detail: "invalid final volume GUID root".into(),
         });
@@ -179,7 +182,7 @@ fn available(volume: &str) -> Result<u64, CapacityUnavailable> {
         )
     } == 0
     {
-        Err(native_error("sample_capacity"))
+        Err(native_error(ContractLocation::SampleCapacity))
     } else {
         Ok(bytes)
     }
@@ -188,7 +191,7 @@ fn available(volume: &str) -> Result<u64, CapacityUnavailable> {
 #[cfg(not(windows))]
 pub(crate) fn volume(_: &Path) -> Result<String, CapacityUnavailable> {
     Err(CapacityUnavailable {
-        operation: "identify_capacity_volume",
+        operation: HostMetricsLocation::IdentifyCapacityVolume.location(),
         raw_os_error: None,
         detail: "capacity sampling is unsupported on this platform".into(),
     })
@@ -197,7 +200,7 @@ pub(crate) fn volume(_: &Path) -> Result<String, CapacityUnavailable> {
 #[cfg(not(windows))]
 fn available(_: &str) -> Result<u64, CapacityUnavailable> {
     Err(CapacityUnavailable {
-        operation: "sample_capacity",
+        operation: ContractLocation::SampleCapacity.location(),
         raw_os_error: None,
         detail: "capacity sampling is unsupported on this platform".into(),
     })

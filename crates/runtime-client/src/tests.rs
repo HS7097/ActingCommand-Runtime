@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+
+// Workflow #381 A: the session deadline of a run (#672 review M3).
+mod gate_381a;
+// Workflow #381 B: the emulator control receipt wait (test plan C-3).
+mod gate_381b;
+// Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
+mod gate_a2a;
+// #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).
+mod gate_c1;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
@@ -464,7 +473,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         let result = client.run_contained_task("node.a", contained_task_request());
         if legacy {
             let error = result.expect_err("legacy provider failure keeps its rejection");
-            assert_eq!(error.code(), "runtime_request_rejected");
+            assert_eq!(error.code().as_str(), "runtime_request_rejected");
             assert!(!error.is_fatal());
             assert_eq!(
                 error.projection().unwrap().code,
@@ -508,7 +517,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 "invalid fields evidence cannot select collection mode: {case}"
             );
             assert_eq!(
-                error.code(),
+                error.code().as_str(),
                 "runtime_official_ocr_projection_failed_after_terminal"
             );
             assert!(error.committed_receipt().is_some());
@@ -1875,7 +1884,10 @@ fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
         &mut stream,
         &"request",
         DEFAULT_RUNTIME_MAX_FRAME_BYTES,
-        Some(ReceiptReadDeadline::at(deadline, "runtime_receipt_timeout")),
+        Some(ReceiptReadDeadline::at(
+            deadline,
+            ClientCode::RuntimeReceiptTimeout,
+        )),
         None,
         None,
     )
@@ -1890,7 +1902,7 @@ fn receipt_eof_at_or_after_deadline_is_typed_timeout() {
         .checked_sub(Duration::from_secs(1))
         .expect("past deadline");
     let error = receipt_eof_error(deadline);
-    assert_eq!(error.code(), "runtime_receipt_timeout");
+    assert_eq!(error.code().as_str(), "runtime_receipt_timeout");
     let io = error
         .receipt_header_io()
         .expect("original header I/O cause");
@@ -1906,7 +1918,7 @@ fn receipt_eof_at_or_after_deadline_is_typed_timeout() {
 fn receipt_eof_before_deadline_remains_connection_failure() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let error = receipt_eof_error(deadline);
-    assert_eq!(error.code(), "runtime_receipt_header_failed");
+    assert_eq!(error.code().as_str(), "runtime_receipt_header_failed");
     let io = error
         .receipt_header_io()
         .expect("original pre-deadline EOF cause");
@@ -2290,7 +2302,7 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
             &mut None,
         )
         .expect_err("invalid OCR evidence must fail loud");
-        assert_eq!(error.code(), expected_code);
+        assert_eq!(error.code().as_str(), expected_code);
     }
 }
 
@@ -2355,7 +2367,7 @@ fn official_ocr_projection_rejects_conflicting_immutable_lifecycle_facts() {
             .expect_err("conflicting artifact lifecycle must fail loud");
 
     assert_eq!(
-        error.code(),
+        error.code().as_str(),
         "runtime_official_ocr_artifact_identity_conflict"
     );
 }
@@ -2464,7 +2476,7 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
         )
         .expect_err("missing task receipt must hit the bounded response deadline");
     assert_eq!(
-        error.code(),
+        error.code().as_str(),
         "runtime_contained_task_response_timeout",
         "{error:#?}"
     );
@@ -2502,7 +2514,11 @@ fn contained_task_pre_deadline_eof_remains_receipt_failure() {
                 .expect("bounded task deadline"),
         )
         .expect_err("pre-deadline EOF must remain a connection failure");
-    assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+    assert_eq!(
+        error.code().as_str(),
+        "runtime_receipt_header_failed",
+        "{error:#?}"
+    );
     server.join().expect("scripted runtime");
 }
 
@@ -2574,7 +2590,7 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
     let error = clients[0]
         .snapshot_with_versions(vec!["actingcommand.project-interface.v9".to_owned()])
         .expect_err("unknown contract version must fail loud");
-    assert_eq!(error.code(), "runtime_request_rejected");
+    assert_eq!(error.code().as_str(), "runtime_request_rejected");
     assert_eq!(
         error.projection().expect("typed rejection").code,
         RuntimeErrorCode::ProtocolInvalid
@@ -2587,7 +2603,7 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
 fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, Arc::clone(&state), 1_000);
+    let host = host(&root, Arc::clone(&state), 5_000);
     let client = client(&root);
 
     assert_eq!(
@@ -2722,7 +2738,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         input_close_delay: Duration::from_millis(200),
         ..FakeState::default()
     });
-    let host = self::host(&root, Arc::clone(&state), 1_000);
+    let host = self::host(&root, Arc::clone(&state), 5_000);
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
             .with_io_timeout(Duration::from_millis(100))
@@ -2783,7 +2799,8 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
                     catalog_hash: format!("sha256:{}", "a".repeat(64)),
                     catalog_version: 1,
                 },
-                "user_confirmed",
+                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                    .expect("approval reason"),
             )
             .expect("approval decision"),
         )
@@ -2978,7 +2995,7 @@ fn non_lab_client_cannot_open_authoring_session() {
         Ok(_) => panic!("CLI authoring session must fail"),
         Err(error) => error,
     };
-    assert_eq!(error.code(), "runtime_authoring_origin_invalid");
+    assert_eq!(error.code().as_str(), "runtime_authoring_origin_invalid");
     drop(client);
     host.close().expect("close host");
 }
@@ -3058,7 +3075,7 @@ fn lab_run_debug_event_requires_a_verified_package_context() {
         .record_event(RuntimeDebugEvent::requested(RuntimeDebugOperation::LabRun))
         .expect_err("Lab run must be admitted through debug-package containment");
 
-    assert_eq!(error.code(), "runtime_request_rejected");
+    assert_eq!(error.code().as_str(), "runtime_request_rejected");
     assert_eq!(
         error.projection().expect("Runtime rejection").code,
         RuntimeErrorCode::InvalidRequest
@@ -3085,7 +3102,7 @@ fn non_lab_client_cannot_open_debug_session() {
         .begin_debug_session()
         .expect_err("CLI debug session must fail");
 
-    assert_eq!(error.code(), "runtime_debug_origin_invalid");
+    assert_eq!(error.code().as_str(), "runtime_debug_origin_invalid");
     drop(client);
     host.close().expect("close host");
 }
@@ -3216,7 +3233,11 @@ fn observe_readonly_preserves_delayed_host_capture_failure_beyond_io_timeout() {
     releaser.join().expect("release delayed capture");
     let error = result.expect_err("Host capture failure must remain typed");
 
-    assert_eq!(error.code(), "runtime_request_rejected", "{error:#?}");
+    assert_eq!(
+        error.code().as_str(),
+        "runtime_request_rejected",
+        "{error:#?}"
+    );
     assert_eq!(
         error.projection().expect("typed Host failure").code,
         RuntimeErrorCode::CaptureFailed
@@ -3304,7 +3325,11 @@ fn observe_readonly_connection_close_before_receipt_remains_transport_failure() 
         .observe_readonly("node.a")
         .expect_err("missing Host receipt must remain a transport failure");
 
-    assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+    assert_eq!(
+        error.code().as_str(),
+        "runtime_receipt_header_failed",
+        "{error:#?}"
+    );
     server.join().expect("scripted runtime");
 }
 
@@ -3353,7 +3378,8 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             io_timeout,
             backend_open_timeout,
         ),
-        Ok(backend_open_timeout * 2 + io_timeout)
+        // Workflow #369 W-3 (S5, D2): the reset first waits up to 3 s for its turn.
+        Ok(backend_open_timeout * 2 + io_timeout + Duration::from_secs(3))
     );
     assert_eq!(
         receipt_response_timeout(&RuntimeOperation::Health, io_timeout, backend_open_timeout),
@@ -3457,7 +3483,8 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
             backend_open_timeout,
         )
         .expect_err("gesture sum overflow")
-        .code(),
+        .code()
+        .as_str(),
         "runtime_input_timeout_overflow"
     );
 }
@@ -3679,7 +3706,11 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
             None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
         };
         let error = input().expect_err("typed open failure");
-        assert_eq!(error.code(), "runtime_request_rejected", "{error:#?}");
+        assert_eq!(
+            error.code().as_str(),
+            "runtime_request_rejected",
+            "{error:#?}"
+        );
         assert_eq!(
             error.projection().expect("Host failure").code,
             RuntimeErrorCode::BackendOpenFailed
@@ -3805,7 +3836,7 @@ fn missing_runtime_info_is_a_visible_fatal_error() {
         EventSource::Cli,
     ))
     .expect_err("missing discovery must fail");
-    assert_eq!(error.code(), "runtime_info_unavailable");
+    assert_eq!(error.code().as_str(), "runtime_info_unavailable");
     assert!(error.is_fatal());
 }
 
@@ -3849,7 +3880,11 @@ fn broken_ipc_connection_latches_without_reconnect() {
             None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
         };
         let error = input().expect_err("the complete finite receipt budget must expire");
-        assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+        assert_eq!(
+            error.code().as_str(),
+            "runtime_receipt_header_failed",
+            "{error:#?}"
+        );
         let io = error.receipt_header_io().expect("input header I/O context");
         assert!(matches!(
             io.kind(),
@@ -3899,7 +3934,7 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
         RuntimeErrorCode::BackendOperationFailed,
     ] {
         let error = RuntimeClientError::rejected(
-            "test_runtime_error",
+            ClientLocation::RuntimeHealth,
             RuntimeErrorProjection::new(code, false),
         );
         assert!(error.is_fallback_eligible());
@@ -3925,11 +3960,11 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
         RuntimeErrorCode::LedgerFailure,
     ] {
         let error = RuntimeClientError::rejected(
-            "test_runtime_error",
+            ClientLocation::RuntimeHealth,
             RuntimeErrorProjection::new(code, false),
         );
         assert!(!error.is_fallback_eligible());
-        assert!(error.to_string().contains(&format!("{code:?}")));
+        assert!(error.to_string().contains(code.as_str()));
     }
 }
 
@@ -3956,10 +3991,13 @@ fn post_terminal_projection_failure_preserves_committed_receipt() {
     )
     .expect("receipt");
     let error = RuntimeClientError::after_commit(
-        "runtime_projection_failed_after_terminal",
-        "query_runtime_flow_projection",
+        ClientCode::RuntimeProjectionFailedAfterTerminal,
+        ClientLocation::QueryRuntimeFlowProjection,
         receipt.clone(),
-        RuntimeClientError::fatal("runtime_connection_failed", "query_runtime_events"),
+        RuntimeClientError::fatal(
+            ClientCode::RuntimeConnectFailed,
+            actingcommand_contract::codes::ContractLocation::QueryRuntimeEvents,
+        ),
     );
 
     assert_eq!(error.committed_receipt(), Some(&receipt));

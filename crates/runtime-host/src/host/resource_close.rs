@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::*;
-use actingcommand_contract::SchedulingResumeSelfCheck;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::RuntimeErrorCode;
+use actingcommand_contract::{CONNECTION_PREPARATION_CLAIM_WAIT_MS, SchedulingResumeSelfCheck};
 
 /// How a lease end treats the instance's device session (Workflow #191 H).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,7 +36,7 @@ impl HostShared {
             .session_needs_close(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_lease_end_session",
+                    HostLocation::InspectLeaseEndSession,
                     &error,
                 ))
             })?;
@@ -44,7 +47,7 @@ impl HostShared {
         {
             return self.close_instance_resources(token, connection_id, EventLinksDraft::default());
         }
-        let step_active = lock(&self.scheduler, "read_lease_end_step")?
+        let step_active = lock(&self.scheduler, HostLocation::ReadLeaseEndStep)?
             .active_lease(instance_id)
             .is_some_and(|active| active.token() == token && active.destructive_step_active());
         if step_active {
@@ -54,7 +57,7 @@ impl HostShared {
             }
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::scheduler(
-                    "end_lease_device_use",
+                    HostLocation::EndLeaseDeviceUse,
                     &SchedulerError::DestructiveStateMismatch,
                 ),
             ));
@@ -64,7 +67,7 @@ impl HostShared {
             .has_owned_resources(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_execution_session",
+                    HostLocation::InspectExecutionSession,
                     &error,
                 ))
             })?
@@ -76,7 +79,7 @@ impl HostShared {
             .forget_input_frames(instance_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "forget_lease_input_frames",
+                    HostLocation::ForgetLeaseInputFrames,
                     &error,
                 ))
             })
@@ -89,10 +92,13 @@ impl HostShared {
     /// input) each of them closes its session at every lease end as before. Every other
     /// instance keeps it, as does a registration without a device configuration (a fixture).
     pub(super) fn keeps_device_session(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
-        let registered = lock(&self.registered_instances, "read_device_session_gate")?
-            .values()
-            .map(|instance| (instance.instance_id, instance.instance_alias.clone()))
-            .collect::<Vec<_>>();
+        let registered = lock(
+            &self.registered_instances,
+            HostLocation::ReadDeviceSessionGate,
+        )?
+        .values()
+        .map(|instance| (instance.instance_id, instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
         let mut nemu_instances = 0usize;
         let mut uses_nemu = false;
         for (registered_id, instance_alias) in registered {
@@ -100,7 +106,7 @@ impl HostShared {
                 .execution()?
                 .resolve(&instance_alias)
                 .map_err(|error| {
-                    RuntimeHostError::execution("resolve_device_session_gate", &error)
+                    RuntimeHostError::execution(HostLocation::ResolveDeviceSessionGate, &error)
                 })?;
             let nemu = resolved.configuration().is_some_and(|configuration| {
                 [&configuration.capture_backend, &configuration.input_backend]
@@ -146,12 +152,19 @@ impl HostShared {
             Err(retain_failure) => return failure.replace_with_poison(retain_failure),
         }
         let cleanup = match run_links {
-            Some(run_links) => self.cleanup_scheduled_failure_with_run_links(
-                request,
-                &token,
-                connection_id,
-                run_links,
-            ),
+            // Workflow #369 H-1 (review M-1): only a policy run's control carries a ladder
+            // trigger; every other run-linked end passes `None`.
+            Some(run_links) => self
+                .ladder_trigger_for(request.request_id())
+                .and_then(|trigger| {
+                    self.cleanup_scheduled_failure_with_run_links(
+                        request,
+                        &token,
+                        connection_id,
+                        run_links,
+                        trigger,
+                    )
+                }),
             None => self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure),
         };
         match cleanup {
@@ -167,8 +180,8 @@ impl HostShared {
     ) -> Result<(), RequestFailure> {
         let Some(witness) = step.and_then(|step| Arc::try_unwrap(step).ok()) else {
             let mut error = RuntimeHostError::fatal(
-                "fenced_step_not_reclaimed",
-                "finish_destructive_input",
+                HostCode::FencedStepNotReclaimed,
+                HostLocation::FinishDestructiveInput,
                 RuntimeErrorCode::RuntimeFatal,
             );
             error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
@@ -176,30 +189,30 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?;
             return Err(RequestFailure::poison_without_terminal(error));
         };
-        lock(&self.scheduler, "finish_destructive_input")?
+        lock(&self.scheduler, HostLocation::FinishDestructiveInput)?
             .finish_destructive_step(witness, connection_id)
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "finish_destructive_input",
+                    HostLocation::FinishDestructiveInput,
                     &error,
                 ))
             })
     }
 
     pub(super) fn mark_resources_in_use(&self) -> RuntimeHostResult<MutexGuard<'_, OwnerGuard>> {
-        let mut owner = lock(&self.owner, "mark_owner_resources_in_use")?;
+        let mut owner = lock(&self.owner, HostLocation::MarkOwnerResourcesInUse)?;
         owner.set_resource_disposition(OwnerResourceDisposition::InUse)?;
         Ok(owner)
     }
 
     fn record_owner_resource_close(&self) -> RuntimeHostResult<OwnerResourceDisposition> {
         // The same owner lock spans InUse and session registration on every acquisition.
-        let mut owner = lock(&self.owner, "record_owner_resource_close")?;
+        let mut owner = lock(&self.owner, HostLocation::RecordOwnerResourceClose)?;
         if let Some(disposition) = owner.retained_resource_disposition()? {
             return Ok(disposition);
         }
         let has_sessions = self.execution()?.has_sessions().map_err(|error| {
-            RuntimeHostError::execution("inspect_remaining_execution_sessions", &error)
+            RuntimeHostError::execution(HostLocation::InspectRemainingExecutionSessions, &error)
         })?;
         let disposition = if has_sessions {
             OwnerResourceDisposition::InUse
@@ -225,7 +238,7 @@ impl HostShared {
             links,
             None,
         );
-        let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+        let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
             .and_then(|mut owner| owner.retain_unconfirmed());
         let fatal_result = self.fatal.mark(error.clone());
         lifecycle_result?;
@@ -243,7 +256,7 @@ impl HostShared {
         self.close_instance_resources_result(token, connection_id, links)?
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "close_execution_session",
+                    HostLocation::CloseExecutionSession,
                     &error,
                 ))
             })
@@ -287,7 +300,7 @@ impl HostShared {
             .unconfirmed_instance_close_error(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "read_execution_close_result",
+                    HostLocation::ReadExecutionCloseResult,
                     &error,
                 ))
             })?
@@ -299,7 +312,7 @@ impl HostShared {
             .has_owned_resources(token.instance_id())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "inspect_execution_session",
+                    HostLocation::InspectExecutionSession,
                     &error,
                 ))
             })?;
@@ -308,11 +321,11 @@ impl HostShared {
             return Ok(Ok(()));
         }
         let witness = Arc::new(
-            lock(&self.scheduler, "begin_destructive_resource_close")?
+            lock(&self.scheduler, HostLocation::BeginDestructiveResourceClose)?
                 .begin_resource_close(token, connection_id, self.monotonic_ms()?)
                 .map_err(|error| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        "begin_destructive_resource_close",
+                        HostLocation::BeginDestructiveResourceClose,
                         &error,
                     ))
                 })?,
@@ -356,8 +369,10 @@ impl HostShared {
                 Ok(Ok(()))
             }
             Err(execution_error) => {
-                let error =
-                    RuntimeHostError::execution("close_execution_session", &execution_error);
+                let error = RuntimeHostError::execution(
+                    HostLocation::CloseExecutionSession,
+                    &execution_error,
+                );
                 let lifecycle_result = self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&error),
@@ -365,7 +380,7 @@ impl HostShared {
                     None,
                 );
                 if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
-                    let retain_result = lock(&self.owner, "retain_unconfirmed_owner")
+                    let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
                         .and_then(|mut owner| owner.retain_unconfirmed());
                     let fatal_result = self.fatal.mark(error.clone());
                     lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
@@ -382,24 +397,30 @@ impl HostShared {
     }
 
     /// Grants a dedicated lease on `instance_id` to the Runtime-owned connection
-    /// `connection_value`: a resource-close-only lease (`prepare_resource_close`, a waiting lease
-    /// queue is `TransferNotSafe`), granted with `CapacityUse::Drain`. The caller holds the
-    /// instance admission guard. Returns the token, its connection and the grant's request id.
+    /// `connection_value`: a resource-close-only lease (`prepare_resource_close`: a waiting entry
+    /// the scheduling pause does not hold back is `TransferNotSafe`, Workflow #369 §5.1),
+    /// granted with `CapacityUse::Drain`. `kind` names its holder (Workflow #369 Q-2; review
+    /// L2). The caller holds the instance admission guard. Returns the token, its connection
+    /// and the grant's request id.
     pub(super) fn grant_dedicated_instance_lease(
         &self,
         instance_id: InstanceId,
         connection_value: u64,
+        kind: ClaimKind,
     ) -> RuntimeHostResult<(LeaseToken, ConnectionId, RequestId)> {
-        let resolved = lock(&self.registered_instances, "read_resource_close_instance")?
-            .get(&instance_id)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "resource_close_instance_missing",
-                    "acquire_resource_close_lease",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadResourceCloseInstance,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::ResourceCloseInstanceMissing,
+                HostLocation::AcquireResourceCloseLease,
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
         let request_id = self
             .events
             .issuer()
@@ -411,24 +432,22 @@ impl HostShared {
             .mint_holder_id()
             .map_err(|_| runtime_identifier_error())?;
         let connection_id = ConnectionId::new(connection_value).map_err(|error| {
-            RuntimeHostError::scheduler("build_resource_close_connection", &error)
+            RuntimeHostError::scheduler(HostLocation::BuildResourceCloseConnection, &error)
         })?;
-        // Workflow #369 Q-2: a dedicated lease is a close or a connection preparation.
-        let kind = if connection_value == RESOURCE_CLOSE_CONNECTION_VALUE {
-            ClaimKind::ResourceClose
-        } else {
-            ClaimKind::DaemonStartPreparation
-        };
-        let preparation = lock(&self.scheduler, "prepare_resource_close_lease")?
+        let gate = self.routine_gate(instance_id)?;
+        let preparation = lock(&self.scheduler, HostLocation::PrepareResourceCloseLease)?
             .prepare_dedicated_lease(
                 *request_id.transport(),
                 instance_id,
                 *holder_id.transport(),
                 connection_id,
                 kind,
+                gate,
                 self.monotonic_ms()?,
             )
-            .map_err(|error| RuntimeHostError::scheduler("prepare_resource_close_lease", &error))?;
+            .map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::PrepareResourceCloseLease, &error)
+            })?;
         let token = preparation.token().clone();
         let grant_request_id = *request_id.transport();
         let grant_links = self
@@ -458,18 +477,20 @@ impl HostShared {
         if !self
             .execution()?
             .has_owned_resources(instance_id)
-            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })?
         {
             return Ok(Ok(()));
         }
-        let active = lock(&self.scheduler, "read_resource_close_lease")?
+        let active = lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
             .active_tokens()
             .into_iter()
             .find(|token| token.instance_id() == instance_id);
         let (token, connection_id, acquired) = if let Some(token) = active {
             if !reuse_active_lease {
                 return Err(RuntimeHostError::scheduler(
-                    "acquire_resource_close_lease",
+                    HostLocation::AcquireResourceCloseLease,
                     &SchedulerError::Busy {
                         holder_id: token.holder_id(),
                         lease_id: token.lease_id(),
@@ -477,15 +498,18 @@ impl HostShared {
                     },
                 ));
             }
-            let connection_id = lock(&self.scheduler, "read_resource_close_connection")?
+            let connection_id = lock(&self.scheduler, HostLocation::ReadResourceCloseConnection)?
                 .connection_for_token(&token)
                 .map_err(|error| {
-                    RuntimeHostError::scheduler("read_resource_close_connection", &error)
+                    RuntimeHostError::scheduler(HostLocation::ReadResourceCloseConnection, &error)
                 })?;
             (token, connection_id, false)
         } else {
-            let (token, connection_id, _) =
-                self.grant_dedicated_instance_lease(instance_id, RESOURCE_CLOSE_CONNECTION_VALUE)?;
+            let (token, connection_id, _) = self.grant_dedicated_instance_lease(
+                instance_id,
+                RESOURCE_CLOSE_CONNECTION_VALUE,
+                ClaimKind::ResourceClose,
+            )?;
             (token, connection_id, true)
         };
         let result = self
@@ -516,7 +540,7 @@ impl HostShared {
             let instance_guard = self
                 .instance_guard(token.instance_id())
                 .map_err(|failure| *failure.error)?;
-            let _admission = lock(&instance_guard, "lock_instance_admission")?;
+            let _admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             self.finish_destructive_input(step, connection_id)
                 .map_err(|failure| *failure.error)?;
             self.close_instance_resources_result(token, connection_id, links.clone())
@@ -526,7 +550,8 @@ impl HostShared {
             Ok(Ok(())) => Ok(primary),
             Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
             Err(cleanup) => {
-                let primary = RuntimeHostError::execution("execute_input_backend", &primary);
+                let primary =
+                    RuntimeHostError::execution(HostLocation::ExecuteInputBackend, &primary);
                 self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&primary),
@@ -540,7 +565,7 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                lock(&self.owner, HostLocation::RetainUnconfirmedOwner)?.retain_unconfirmed()?;
                 self.fatal.mark(cleanup.clone())?;
                 Err(cleanup)
             }
@@ -553,7 +578,10 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
     ) -> RuntimeHostResult<ExecutionKernelError> {
-        if primary.code() == "execution_session_close_pending" {
+        if primary.code().as_str()
+            == actingcommand_execution_kernel::ExecutionKernelCode::ExecutionSessionClosePending
+                .as_str()
+        {
             return Ok(primary);
         }
         let Some(instance_id) = primary.instance_id() else {
@@ -569,7 +597,8 @@ impl HostShared {
             Ok(Ok(())) => Ok(primary),
             Ok(Err(cleanup)) => Ok(ExecutionKernelError::merge_cleanup(primary, cleanup)),
             Err(cleanup) => {
-                let primary = RuntimeHostError::execution("finish_capture_failure", &primary);
+                let primary =
+                    RuntimeHostError::execution(HostLocation::FinishCaptureFailure, &primary);
                 self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&primary),
@@ -583,7 +612,7 @@ impl HostShared {
                     links,
                     None,
                 )?;
-                lock(&self.owner, "retain_unconfirmed_owner")?.retain_unconfirmed()?;
+                lock(&self.owner, HostLocation::RetainUnconfirmedOwner)?.retain_unconfirmed()?;
                 self.fatal.mark(cleanup.clone())?;
                 Err(cleanup)
             }
@@ -596,7 +625,9 @@ impl HostShared {
     // `prepare_instance_connection` connects and self-checks one physical instance outside any
     // client lease: under the instance admission guard it takes a dedicated preparation lease (the
     // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
-    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`), closes a session a
+    // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`; Workflow #369 W-3: a
+    // resume's reconnect and a self-check run on their operator claim's key instead, and a
+    // stuck-recovery ladder on its own key), closes a session a
     // lease-free path retained (a read-only observe keeps its capture open, sc2; Workflow #191
     // h3) through the fenced close path, opens the instance's input and capture backends through
     // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
@@ -626,21 +657,26 @@ impl HostShared {
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
     /// the first.
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
-        let instances = lock(&self.registered_instances, "list_physical_instances")?
-            .values()
-            .filter(|instance| instance.device_self_checked())
-            .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
-            .collect::<Vec<_>>();
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ListPhysicalInstances,
+        )?
+        .values()
+        .filter(|instance| instance.device_self_checked())
+        .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+        .collect::<Vec<_>>();
         let mut cooling = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
-            if lock(&self.scheduling_pause, "read_install_startup_pause")?
-                .instance_state(&instance_alias)
-                .is_some_and(|pause| {
-                    pause.stage == actingcommand_contract::InstancePauseStage::Released
-                })
-            {
+            if lock(
+                &self.scheduling_pause,
+                HostLocation::ReadInstallStartupPause,
+            )?
+            .instance_state(&instance_alias)
+            .is_some_and(|pause| {
+                pause.stage == actingcommand_contract::InstancePauseStage::Released
+            }) {
                 continue;
             }
             if let Some(cooldown_until) =
@@ -659,7 +695,10 @@ impl HostShared {
             {
                 self.require_install_selfcheck(
                     instance_id,
-                    &scheduling_resume_selfcheck(&[], Some("lease_cooldown")),
+                    &scheduling_resume_selfcheck(
+                        &[],
+                        Some(RuntimeErrorCode::LeaseCooldown.as_str()),
+                    ),
                 )?;
             }
         }
@@ -680,13 +719,14 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let (check, cooldown_until, _, _) = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
             &admission,
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
+            PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
         )?;
         if cooldown_until.is_none() {
             self.require_install_selfcheck(instance_id, &check)?;
@@ -696,20 +736,32 @@ impl HostShared {
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
     /// physical instance; the receipt carries the self-check in the resume receipt's shape.
+    /// Workflow #369 W-3: a `SelfCheck` claim waits at most
+    /// `CONNECTION_PREPARATION_CLAIM_WAIT_MS` for its turn, without the admission guard, and
+    /// the preparation runs on its key (`prepare_on_operator_claim`). Not granted in time, the
+    /// request is refused `lease_queue_expired` and no preparation runs.
     pub(super) fn self_check_instance(
         &self,
+        original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-        let instance_guard = self.instance_guard(instance_id)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
-        let links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
-        let selfcheck = self
-            .prepare_instance_connection(instance_alias, instance_id, links, &admission)
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let token = self.await_preparation_claim(
+            original,
+            instance_alias,
+            connection_id,
+            ClaimKind::SelfCheck,
+        )?;
+        let selfcheck = self.prepare_on_operator_claim(
+            request,
+            original.request_id(),
+            instance_alias,
+            instance_id,
+            &token,
+            connection_id,
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -720,15 +772,87 @@ impl HostShared {
         })
     }
 
+    /// Workflow #369 Q-2, Q-2a, W-3: the claim of a self-check or of an instance resume's
+    /// reconnect (`kind`): an operator claim with a minted holder, the scheduler's default lease
+    /// TTL and drain capacity, which skips the bound-endpoint and performance-control checks. It
+    /// waits at most `CONNECTION_PREPARATION_CLAIM_WAIT_MS` for its turn.
+    pub(super) fn await_preparation_claim(
+        &self,
+        original: &RuntimeRequest,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+        kind: ClaimKind,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let holder_id = *self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
+            .transport();
+        let lease_ttl_ms = lock(&self.scheduler, HostLocation::ReadPreparationClaimTtl)?
+            .config()
+            .lease_ttl_ms;
+        self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            CONNECTION_PREPARATION_CLAIM_WAIT_MS,
+        )
+    }
+
+    /// Workflow #369 W-3: the preparation phase of one physical instance on an operator claim's
+    /// key: the admission guard is taken for the preparation's device steps only, the
+    /// preparation takes no dedicated lease, and the key is released afterwards (the release
+    /// hands it on, or pumps). An unconfirmed close or a failed record fails the request and
+    /// leaves the key held, as a dedicated preparation lease is left then.
+    pub(super) fn prepare_on_operator_claim(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> Result<SchedulingResumeSelfCheck, RequestFailure> {
+        let links = self
+            .events
+            .request_links(request, Some(instance_id), None, None);
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
+        let prepared = self.prepare_instance_connection_with_cooldown(
+            instance_alias,
+            instance_id,
+            links,
+            &admission,
+            actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
+            PreparationLease::Held {
+                token,
+                connection_id,
+            },
+        );
+        drop(admission);
+        let (selfcheck, _, _, _) = prepared.map_err(RequestFailure::poison_without_terminal)?;
+        self.release_lease(request, request_id, token, connection_id, None)?;
+        Ok(selfcheck)
+    }
+
     /// The preparation phase of one physical instance; the caller holds its admission guard.
-    /// The opens are recorded under `links` (which name the instance). Returns the self-check
-    /// projected from the opens it made, with the code of the failing step, if any.
+    /// The opens are recorded under `links` (which name the instance). `kind` names the
+    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control). Returns the
+    /// self-check projected from the opens it made, with the code of the failing step, if any.
     pub(super) fn prepare_instance_connection(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
+        kind: ClaimKind,
     ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
         self.prepare_instance_connection_with_cooldown(
             instance_alias,
@@ -736,18 +860,21 @@ impl HostShared {
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
+            PreparationLease::Dedicated(kind),
         )
         .map(|(selfcheck, _, _, _)| selfcheck)
     }
 
     /// The stuck-recovery ladder's preparation (stage `recovery_preparation`): the self-check,
     /// the `instance_preparation_finished` event, and whether a failure is one the existing
-    /// preparation rule calls recoverable (Workflow #369-1, review M3).
+    /// preparation rule calls recoverable (Workflow #369-1, review M3). Workflow #369 H-3: it
+    /// runs on the ladder's key, takes no dedicated lease and releases nothing.
     pub(super) fn prepare_recovery_connection(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
+        key: &super::host_claims::HostKey,
     ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<TerminalEvent>, bool)> {
         self.prepare_instance_connection_with_cooldown(
             &resolved.instance_alias,
@@ -755,6 +882,10 @@ impl HostShared {
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::RecoveryPreparation,
+            PreparationLease::Held {
+                token: &key.token,
+                connection_id: key.connection_id,
+            },
         )
         .map(|(check, _, event, recoverable)| (check, event, recoverable))
     }
@@ -770,16 +901,20 @@ impl HostShared {
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
         stage: actingcommand_contract::RecoveryTriggerStage,
+        lease: PreparationLease<'_>,
     ) -> RuntimeHostResult<(
         SchedulingResumeSelfCheck,
         Option<u64>,
         Option<TerminalEvent>,
         bool,
     )> {
-        lock(&self.recovery_ladders, "begin_preparation_attempt")?
-            .entry(instance_id)
-            .or_default()
-            .preparation = None;
+        lock(
+            &self.recovery_ladders,
+            HostLocation::BeginPreparationAttempt,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .preparation = None;
         let frame_owner = self
             .events
             .issuer()
@@ -793,25 +928,41 @@ impl HostShared {
             frame_retention::capture_frame_store_config(),
         )
         .map_err(RuntimeHostError::artifact)?;
-        let (token, connection_id, _) = match self
-            .grant_dedicated_instance_lease(instance_id, CONNECTION_PREPARATION_CONNECTION_VALUE)
-        {
+        let held = matches!(lease, PreparationLease::Held { .. });
+        let granted = match lease {
+            PreparationLease::Held {
+                token,
+                connection_id,
+            } => Ok((token.clone(), connection_id)),
+            PreparationLease::Dedicated(kind) => self
+                .grant_dedicated_instance_lease(
+                    instance_id,
+                    CONNECTION_PREPARATION_CONNECTION_VALUE,
+                    kind,
+                )
+                .map(|(token, connection_id, _)| (token, connection_id)),
+        };
+        let (token, connection_id) = match granted {
             Ok(granted) => granted,
             Err(error) if error.is_fatal() => return Err(error),
             Err(error) => {
                 let failure_code = error.code();
                 let cooldown_until = match error.projection().retry_after_ms {
-                    Some(retry_after_ms) if failure_code == "lease_cooldown" => Some(
-                        self.monotonic_ms()?
-                            .checked_add(retry_after_ms)
-                            .ok_or_else(|| {
-                                RuntimeHostError::fatal(
-                                    "connection_preparation_cooldown_overflow",
-                                    "prepare_instance_connection",
-                                    RuntimeErrorCode::RuntimeFatal,
-                                )
-                            })?,
-                    ),
+                    Some(retry_after_ms)
+                        if failure_code == RuntimeErrorCode::LeaseCooldown.as_str() =>
+                    {
+                        Some(
+                            self.monotonic_ms()?
+                                .checked_add(retry_after_ms)
+                                .ok_or_else(|| {
+                                    RuntimeHostError::fatal(
+                                        HostCode::ConnectionPreparationCooldownOverflow,
+                                        HostLocation::PrepareInstanceConnection,
+                                        RuntimeErrorCode::RuntimeFatal,
+                                    )
+                                })?,
+                        )
+                    }
                     _ => None,
                 };
                 self.record_connection_preparation_failure(instance_id, links, error)?;
@@ -832,8 +983,9 @@ impl HostShared {
         let retained_close = if self
             .execution()?
             .has_session(instance_id)
-            .map_err(|error| RuntimeHostError::execution("inspect_retained_session", &error))?
-        {
+            .map_err(|error| {
+                RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
+            })? {
             self.close_instance_resources_result(&token, connection_id, links.clone())
                 .map_err(|failure| *failure.error)?
         } else {
@@ -856,7 +1008,7 @@ impl HostShared {
         // failures. Only typed ordinary acquisition failures with confirmed temporary-resource
         // disposal qualify; invalid parameter/configuration observations never qualify.
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
-            actingcommand_contract::is_preparation_recovery_trigger(error.code())
+            actingcommand_contract::is_preparation_recovery_trigger(error.code().as_str())
                 && error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
                 && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
                     "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))
@@ -883,7 +1035,8 @@ impl HostShared {
                     OriginModule::DeviceProxy,
                 )?;
                 if error.resource_quiescence().is_some() {
-                    let failure = RuntimeHostError::execution("open_instance_backends", &error);
+                    let failure =
+                        RuntimeHostError::execution(HostLocation::OpenInstanceBackends, &error);
                     self.append_lifecycle_failure(
                         RuntimeLifecycleFailureStage::ConnectionPreparation,
                         RuntimeLifecycleFailure::Host(&failure),
@@ -893,7 +1046,7 @@ impl HostShared {
                 }
                 (
                     error.failure_context().backend_open_observations().to_vec(),
-                    Some(error.code()),
+                    Some(error.code().as_str()),
                 )
             }
         };
@@ -914,7 +1067,8 @@ impl HostShared {
             .as_ref()
             .err()
             .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
-        if confirmed {
+        // A held key (the ladder's) stays with its holder.
+        if confirmed && !held {
             self.cleanup_token_inner(
                 &token,
                 connection_id,
@@ -929,12 +1083,12 @@ impl HostShared {
             // marked the Runtime fatal, as on every close path.
             if close_error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
                 return Err(RuntimeHostError::execution(
-                    "close_prepared_instance_session",
+                    HostLocation::ClosePreparedInstanceSession,
                     &close_error,
                 )
                 .into_fatal());
             }
-            failure_code = failure_code.or(Some(close_error.code()));
+            failure_code = failure_code.or(Some(close_error.code().as_str()));
         }
         // An open failure is already a `failed` self-check; any other failing step (a failed
         // open without reports, a failed close) still leaves the instance unavailable.
@@ -973,4 +1127,15 @@ impl HostShared {
         )?;
         self.withhold_policy_instance_availability(instance_id)
     }
+}
+
+/// Workflow #369: whose lease a connection preparation runs under: a dedicated lease of the
+/// given kind that it takes and releases, or a key its caller holds (the ladder's), which it
+/// leaves held.
+pub(super) enum PreparationLease<'a> {
+    Dedicated(ClaimKind),
+    Held {
+        token: &'a LeaseToken,
+        connection_id: ConnectionId,
+    },
 }

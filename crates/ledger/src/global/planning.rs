@@ -38,12 +38,16 @@ impl GlobalLedger {
         upper_sequence: u64,
     ) -> GlobalLedgerResult<PlanningSignalRecoveryPage> {
         if after_sequence >= upper_sequence {
-            return Err(planning_page_error("planning_recovery_interval_invalid"));
+            return Err(planning_page_error(
+                LedgerCode::PlanningRecoveryIntervalInvalid.code(),
+            ));
         }
         let mut upper =
             self.query_page(EventQuery::default(), upper_sequence - 1, upper_sequence, 1)?;
         if upper.len() != 1 || upper[0].sequence() != upper_sequence {
-            return Err(planning_page_error("planning_recovery_upper_missing"));
+            return Err(planning_page_error(
+                LedgerCode::PlanningRecoveryUpperMissing.code(),
+            ));
         }
         let events = self.query_page(
             EventQuery::default(),
@@ -90,21 +94,25 @@ impl PlanningSignalRecoveryPage {
             || self.events.len() > PLANNING_RECOVERY_PAGE_EVENTS
             || self.events.len() as u64 != self.through_sequence - self.after_sequence
         {
-            return Err(planning_page_error("planning_recovery_interval_invalid"));
+            return Err(planning_page_error(
+                LedgerCode::PlanningRecoveryIntervalInvalid.code(),
+            ));
         }
         let mut expected = self.after_sequence;
         for event in &self.events {
-            expected = expected
-                .checked_add(1)
-                .ok_or_else(|| planning_page_error("planning_recovery_sequence_overflow"))?;
+            expected = expected.checked_add(1).ok_or_else(|| {
+                planning_page_error(LedgerCode::PlanningRecoverySequenceOverflow.code())
+            })?;
             if event.sequence() != expected {
-                return Err(planning_page_error("planning_recovery_interval_incomplete"));
+                return Err(planning_page_error(
+                    LedgerCode::PlanningRecoveryIntervalIncomplete.code(),
+                ));
             }
         }
         Ok(())
     }
 }
 
-fn planning_page_error(code: &'static str) -> GlobalLedgerError {
-    GlobalLedgerError::fatal(code, "recover_planning_signal_page")
+fn planning_page_error(code: Code) -> GlobalLedgerError {
+    GlobalLedgerError::fatal(code, LedgerLocation::RecoverPlanningSignalPage.location())
 }

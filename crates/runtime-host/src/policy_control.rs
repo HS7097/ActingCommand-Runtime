@@ -2,8 +2,12 @@
 
 //! Runtime-owned failure, activity-window, and loop-budget state.
 
+use crate::codes::{HostCode, HostLocation};
+use crate::error::spelled;
 use crate::failure_identity::{FailureIdentity, IdentityLayer, SuspensionLiftView};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     PackageRef, PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord,
     PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData,
@@ -20,7 +24,8 @@ const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
 /// The failure code of a scheduled run that the daemon's own end cut short, recorded by the
 /// startup reconciliation (`policy_outcome.rs`).
-pub(crate) const POLICY_SETTLEMENT_INTERRUPTED: &str = "policy_settlement_interrupted";
+pub(crate) const POLICY_SETTLEMENT_INTERRUPTED: &str =
+    SharedCode::PolicySettlementInterrupted.as_str();
 
 /// Workflow #361 M6, review P5: whether a paused failure is the first interrupted settlement
 /// of its pair in a row, which the restart that recorded it lifts. The count is rebuilt by
@@ -159,15 +164,18 @@ impl PolicyControlState {
                 if Self::suspension_lifted(failure, intent, lift) {
                     return Ok(());
                 }
-                return Err(request("policy_task_paused", "reserve_policy_budget"));
+                return Err(request(
+                    HostCode::PolicyTaskPaused,
+                    HostLocation::ReservePolicyBudget,
+                ));
             }
             if failure
                 .retry_at_unix_ms
                 .is_some_and(|retry_at| now_unix_ms < retry_at)
             {
                 return Err(request(
-                    "policy_retry_backoff_active",
-                    "reserve_policy_budget",
+                    HostCode::PolicyRetryBackoffActive,
+                    HostLocation::ReservePolicyBudget,
                 ));
             }
         }
@@ -189,16 +197,19 @@ impl PolicyControlState {
             .is_some_and(|eligible| now_unix_ms < *eligible)
         {
             return Err(request(
-                "policy_activity_interval_active",
-                "reserve_policy_budget",
+                HostCode::PolicyActivityIntervalActive,
+                HostLocation::ReservePolicyBudget,
             ));
         }
 
         let seed = activity_seed(&intent.decision_id, &profile.id, &window_id);
         let interval_ms = sampled_interval(profile, seed)?;
-        let next_eligible_unix_ms = now_unix_ms
-            .checked_add(interval_ms)
-            .ok_or_else(|| fatal("policy_activity_time_overflow", "reserve_policy_budget"))?;
+        let next_eligible_unix_ms = now_unix_ms.checked_add(interval_ms).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyActivityTimeOverflow,
+                HostLocation::ReservePolicyBudget,
+            )
+        })?;
 
         let task_daily_key = (
             intent.task_id.clone(),
@@ -354,15 +365,25 @@ impl PolicyControlState {
             self.preview_admission_at(catalog, intent, admission.activity.admitted_at_unix_ms)?;
         if &expected != admission {
             return Err(fatal(
-                "policy_budget_receipt_mismatch",
-                "commit_policy_budget",
+                HostCode::PolicyBudgetReceiptMismatch,
+                HostLocation::CommitPolicyBudget,
             ));
         }
         if !immediate_retry {
             let (_, profile) = task_and_profile(catalog, intent)?;
             let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
-                .map_err(|_| fatal("policy_activity_day_overflow", "commit_policy_budget"))?
-                .ok_or_else(|| fatal("policy_activity_window_closed", "commit_policy_budget"))?;
+                .map_err(|_| {
+                    fatal(
+                        HostCode::PolicyActivityDayOverflow,
+                        HostLocation::CommitPolicyBudget,
+                    )
+                })?
+                .ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyActivityWindowClosed,
+                        HostLocation::CommitPolicyBudget,
+                    )
+                })?;
             self.retry_rounds.insert(
                 (intent.task_id.clone(), intent.instance_id.clone()),
                 RetryRound {
@@ -434,13 +455,12 @@ impl PolicyControlState {
             runtime_ms,
         } = timing;
         let (task, _) = task_and_profile(catalog, intent)?;
-        let (task_runtime_used_ms, activity_runtime_used_ms) =
-            actual_runtime_totals(intent, admission, runtime_ms)?;
-        let runtime_exceeded = task_runtime_used_ms > admission.budget.task_runtime_limit_ms
-            || activity_runtime_used_ms > admission.budget.activity_runtime_limit_ms;
+        let runtime_exceeded = runtime_budget_exceeded(intent, admission, runtime_ms)?;
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
-                error_code: "policy_runtime_budget_exceeded".to_owned(),
+                error_code: actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED
+                    .as_str()
+                    .to_owned(),
                 class: PolicyFailureClass::Severe,
             }
         } else {
@@ -456,7 +476,10 @@ impl PolicyControlState {
                         if previous.error_code == error_code && previous.class == class =>
                     {
                         previous.count.checked_add(1).ok_or_else(|| {
-                            fatal("policy_failure_count_overflow", "classify_policy_outcome")
+                            fatal(
+                                HostCode::PolicyFailureCountOverflow,
+                                HostLocation::ClassifyPolicyOutcome,
+                            )
                         })?
                     }
                     _ => 1,
@@ -472,7 +495,10 @@ impl PolicyControlState {
                             previous.escalation_streak
                         } else {
                             previous.escalation_streak.checked_add(1).ok_or_else(|| {
-                                fatal("policy_failure_count_overflow", "classify_policy_outcome")
+                                fatal(
+                                    HostCode::PolicyFailureCountOverflow,
+                                    HostLocation::ClassifyPolicyOutcome,
+                                )
                             })?
                         }
                     }
@@ -494,7 +520,10 @@ impl PolicyControlState {
                         let backoff_ms = retry_backoff_ms(task, consecutive_same_error);
                         let retry_at =
                             observed_at_unix_ms.checked_add(backoff_ms).ok_or_else(|| {
-                                fatal("policy_retry_time_overflow", "classify_policy_outcome")
+                                fatal(
+                                    HostCode::PolicyRetryTimeOverflow,
+                                    HostLocation::ClassifyPolicyOutcome,
+                                )
                             })?;
                         (
                             PolicyFailureDisposition::RetryScheduled,
@@ -575,8 +604,8 @@ impl PolicyControlState {
         )?;
         if &expected != data {
             return Err(fatal(
-                "policy_execution_record_mismatch",
-                "commit_policy_outcome",
+                HostCode::PolicyExecutionRecordMismatch,
+                HostLocation::CommitPolicyOutcome,
             ));
         }
         let (task_runtime_used_ms, activity_runtime_used_ms) =
@@ -675,8 +704,12 @@ impl PolicyControlState {
             else {
                 continue;
             };
-            let window = activity_window_at(profile, now_unix_ms)
-                .map_err(|_| fatal("policy_activity_day_overflow", "resolve_retry_round"))?;
+            let window = activity_window_at(profile, now_unix_ms).map_err(|_| {
+                fatal(
+                    HostCode::PolicyActivityDayOverflow,
+                    HostLocation::ResolveRetryRound,
+                )
+            })?;
             if window.is_some_and(|window| {
                 window.local_day == origin.local_day && window.window_id == origin.window_id
             }) && self.retry_round_has_budget(pair, round, true)
@@ -750,8 +783,8 @@ impl PolicyControlState {
             })
         {
             return Err(request(
-                "policy_retry_round_ended",
-                "validate_policy_dispatch",
+                HostCode::PolicyRetryRoundEnded,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         Ok(())
@@ -782,14 +815,24 @@ fn task_and_profile<'a>(
         .tasks
         .iter()
         .find(|task| task.id == intent.task_id)
-        .ok_or_else(|| request("policy_task_missing", "resolve_policy_control"))?;
+        .ok_or_else(|| {
+            request(
+                HostCode::PolicyTaskMissing,
+                HostLocation::ResolvePolicyControl,
+            )
+        })?;
     let profile = catalog
         .catalog()
         .activity
         .profiles
         .iter()
         .find(|profile| profile.id == intent.prerequisites.activity_profile_id)
-        .ok_or_else(|| request("policy_activity_profile_missing", "resolve_policy_control"))?;
+        .ok_or_else(|| {
+            request(
+                HostCode::PolicyActivityProfileMissing,
+                HostLocation::ResolvePolicyControl,
+            )
+        })?;
     Ok((task, profile))
 }
 
@@ -798,9 +841,19 @@ pub(crate) fn active_activity_window(
     now_unix_ms: u64,
 ) -> RuntimeHostResult<(i64, String)> {
     activity_window_at(profile, now_unix_ms)
-        .map_err(|_| fatal("policy_activity_day_overflow", "resolve_activity_window"))?
+        .map_err(|_| {
+            fatal(
+                HostCode::PolicyActivityDayOverflow,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?
         .map(|window| (window.local_day, window.window_id))
-        .ok_or_else(|| request("policy_activity_window_closed", "reserve_policy_budget"))
+        .ok_or_else(|| {
+            request(
+                HostCode::PolicyActivityWindowClosed,
+                HostLocation::ReservePolicyBudget,
+            )
+        })
 }
 
 fn activity_seed(decision_id: &str, profile_id: &str, window_id: &str) -> u64 {
@@ -817,8 +870,8 @@ fn sampled_interval(profile: &ActivityProfile, seed: u64) -> RuntimeHostResult<u
         .and_then(|value| value.checked_add(1))
         .ok_or_else(|| {
             fatal(
-                "policy_activity_interval_invalid",
-                "sample_activity_interval",
+                HostCode::PolicyActivityIntervalInvalid,
+                HostLocation::SampleActivityInterval,
             )
         })?;
     Ok(profile.minimum_interval_ms + seed % width)
@@ -826,13 +879,15 @@ fn sampled_interval(profile: &ActivityProfile, seed: u64) -> RuntimeHostResult<u
 
 pub(crate) fn is_availability_denial(error: &RuntimeHostError) -> bool {
     !error.is_fatal()
-        && matches!(
+        && spelled(
             error.code(),
-            "policy_budget_exhausted"
-                | "policy_activity_interval_active"
-                | "policy_activity_window_closed"
-                | "policy_retry_backoff_active"
-                | "policy_task_paused"
+            &[
+                HostCode::PolicyBudgetExhausted.code(),
+                HostCode::PolicyActivityIntervalActive.code(),
+                HostCode::PolicyActivityWindowClosed.code(),
+                HostCode::PolicyRetryBackoffActive.code(),
+                HostCode::PolicyTaskPaused.code(),
+            ],
         )
 }
 
@@ -842,7 +897,10 @@ fn budget_exhausted(
     requested: u64,
     limit: u64,
 ) -> RuntimeHostError {
-    let mut error = request("policy_budget_exhausted", "reserve_policy_budget");
+    let mut error = request(
+        HostCode::PolicyBudgetExhausted,
+        HostLocation::ReservePolicyBudget,
+    );
     let mut rejection = error.policy_rejection();
     rejection.budget = Some(PolicyBudgetDenial {
         dimension,
@@ -859,9 +917,12 @@ fn next_count(
     limit: u32,
     dimension: PolicyBudgetDimension,
 ) -> RuntimeHostResult<u32> {
-    let next = current
-        .checked_add(1)
-        .ok_or_else(|| fatal("policy_budget_counter_overflow", "reserve_policy_budget"))?;
+    let next = current.checked_add(1).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyBudgetCounterOverflow,
+            HostLocation::ReservePolicyBudget,
+        )
+    })?;
     if next > limit {
         return Err(budget_exhausted(
             dimension,
@@ -879,13 +940,35 @@ fn next_runtime(
     limit: u64,
     dimension: PolicyBudgetDimension,
 ) -> RuntimeHostResult<u64> {
-    let next = current
-        .checked_add(reservation)
-        .ok_or_else(|| fatal("policy_budget_counter_overflow", "reserve_policy_budget"))?;
+    let next = current.checked_add(reservation).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyBudgetCounterOverflow,
+            HostLocation::ReservePolicyBudget,
+        )
+    })?;
     if next > limit {
         return Err(budget_exhausted(dimension, current, reservation, limit));
     }
     Ok(next)
+}
+
+/// Workflow #369 E3: whether a run of `runtime_ms` exceeded the admitted runtime budget, by
+/// the one rule the host's recovery check and the ledger also use
+/// (`PolicyBudgetReceipt::runtime_exceeded`).
+pub(crate) fn runtime_budget_exceeded(
+    intent: &DispatchIntent,
+    admission: &PolicyAdmissionRecord,
+    runtime_ms: u64,
+) -> RuntimeHostResult<bool> {
+    admission
+        .budget
+        .runtime_exceeded(intent.expected_duration_ms, runtime_ms)
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyBudgetReceiptInvalid,
+                HostLocation::ClassifyPolicyOutcome,
+            )
+        })
 }
 
 fn actual_runtime_totals(
@@ -897,18 +980,34 @@ fn actual_runtime_totals(
         .budget
         .task_runtime_reserved_ms
         .checked_sub(intent.expected_duration_ms)
-        .ok_or_else(|| fatal("policy_budget_receipt_invalid", "classify_policy_outcome"))?;
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyBudgetReceiptInvalid,
+                HostLocation::ClassifyPolicyOutcome,
+            )
+        })?;
     let activity_before = admission
         .budget
         .activity_runtime_reserved_ms
         .checked_sub(intent.expected_duration_ms)
-        .ok_or_else(|| fatal("policy_budget_receipt_invalid", "classify_policy_outcome"))?;
-    let task_total = task_before
-        .checked_add(runtime_ms)
-        .ok_or_else(|| fatal("policy_budget_counter_overflow", "classify_policy_outcome"))?;
-    let activity_total = activity_before
-        .checked_add(runtime_ms)
-        .ok_or_else(|| fatal("policy_budget_counter_overflow", "classify_policy_outcome"))?;
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyBudgetReceiptInvalid,
+                HostLocation::ClassifyPolicyOutcome,
+            )
+        })?;
+    let task_total = task_before.checked_add(runtime_ms).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyBudgetCounterOverflow,
+            HostLocation::ClassifyPolicyOutcome,
+        )
+    })?;
+    let activity_total = activity_before.checked_add(runtime_ms).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyBudgetCounterOverflow,
+            HostLocation::ClassifyPolicyOutcome,
+        )
+    })?;
     Ok((task_total, activity_total))
 }
 
@@ -922,11 +1021,11 @@ fn retry_backoff_ms(task: &TaskSpec, attempt: u16) -> u64 {
         .min(task.next_run_clamp_ms)
 }
 
-fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 

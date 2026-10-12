@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 mod check_config;
+mod codes;
 mod config;
 mod ledger_maintenance;
+mod monitor_retry;
 mod owner_unlock;
 mod suspended;
 
@@ -15,7 +17,18 @@ mod suspended;
 #[allow(dead_code)]
 #[path = "../../../tests/support/c4_runtime.rs"]
 mod c4_support;
+// Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
+#[cfg(test)]
+mod gate_381a;
+// Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
+#[cfg(test)]
+mod gate_397;
+// Test-only: Workflow #378 A2a, registered refusal codes and the env-override warning.
+#[cfg(test)]
+mod gate_a2a;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Category, Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
     MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
@@ -23,13 +36,19 @@ use actingcommand_contract::{
     RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{
+    ClientCode, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
+};
 use actingcommand_runtime_host::{
     PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, RuntimeHost, RuntimeHostError,
     RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
+use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
+use monitor_retry::{
+    MonitorRequestFailure, MonitorRetries, MonitorRetryStep, PolicyMonitorSettings, RuntimeIdentity,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::error::Error;
@@ -43,19 +62,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const POLICY_EVENT_WAIT_MS: u64 = 250;
-// v0.11.4 flaky-tests report B1: the client default. With `wait_ms = 0` the host answers at
-// once; the budget only matters while a ledger writer stall delays the reply.
-const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("FATAL actingd: {error}");
+            eprintln!("{}", fatal_line(&error));
             ExitCode::FAILURE
         }
     }
+}
+
+/// The developer line actingd prints as its last act when it fails; the watchdog reads it.
+fn fatal_line(error: &ActingdError) -> String {
+    format!("FATAL actingd: {error}")
 }
 
 fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
@@ -105,6 +126,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host,
         provider,
         policy,
+        policy_monitor,
         resource_packages,
         adb_requirement,
         ..
@@ -150,7 +172,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         Ok(Some(cycle)) => cycle,
         Ok(None) => return host.close().map_err(ActingdError::runtime),
         Err(mut error) => {
-            error.stage = Some("policy_initialization");
+            error.stage = Some(ActingdLocation::PolicyInitialization.location());
             let recorded = error.record_lifecycle_failure(
                 &host,
                 RuntimeLifecycleFailureStage::PolicyInitialization,
@@ -171,11 +193,11 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host.runtime_info().port()
     );
     match (policy, initial_policy_cycle) {
-        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
+        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle, policy_monitor),
         (None, None) => monitor(host),
         _ => {
-            let mut error = ActingdError::process("policy_bootstrap_state_invalid");
-            error.stage = Some("policy_bootstrap");
+            let mut error = ActingdError::process(ActingdCode::PolicyBootstrapStateInvalid);
+            error.stage = Some(ActingdLocation::PolicyBootstrap.location());
             let recorded = error
                 .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
             let closed = host.close();
@@ -240,7 +262,7 @@ fn initialize_policy(
         .apply_policy_catalog_transition(&plan)
         .map_err(ActingdError::runtime)?;
     if activated != *generation {
-        return Err(ActingdError::process("policy_catalog_plan_changed"));
+        return Err(ActingdError::process(ActingdCode::PolicyCatalogPlanChanged));
     }
     // Superseded approvals can no longer authorize a dispatch: they are revoked on the same
     // (User, Ui) connection first, freeing their places in the bounded active projection;
@@ -272,7 +294,7 @@ fn execute_policy_cycle(
     let mut recompute_wakes = Vec::new();
     if cycle.pending_dispatch_intents.len() > MAX_TASKS {
         return Err(ActingdError::process(
-            "policy_pending_dispatch_budget_exceeded",
+            ActingdCode::PolicyPendingDispatchBudgetExceeded,
         ));
     }
     let Some(evaluation) = cycle.evaluation.as_ref() else {
@@ -282,14 +304,16 @@ fn execute_policy_cycle(
                 recompute_wakes,
                 yielded_intents: 0,
                 failed_runs: false,
+                retry_after_ms: None,
             });
         }
         return Err(ActingdError::process(
-            "policy_pending_dispatch_without_evaluation",
+            ActingdCode::PolicyPendingDispatchWithoutEvaluation,
         ));
     };
     let mut yielded_intents = 0;
     let mut failed_runs = FailedRunInstances::default();
+    let mut retry_after_ms: Option<u64> = None;
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, started.elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
@@ -299,7 +323,7 @@ fn execute_policy_cycle(
                 "actingd policy_cycle_yielded attempted={index} remaining={yielded_intents} elapsed_ms={}",
                 started.elapsed().as_millis()
             )
-            .map_err(|_| ActingdError::process("policy_cycle_yield_report_failed"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyCycleYieldReportFailed))?;
             break;
         }
         if failed_runs.skips(&intent.instance_id) {
@@ -309,7 +333,7 @@ fn execute_policy_cycle(
             .reason_chains
             .iter()
             .find(|reason_chain| reason_chain.id == intent.reason_chain_id)
-            .ok_or_else(|| ActingdError::process("policy_reason_chain_missing"))?;
+            .ok_or_else(|| ActingdError::process(SharedCode::PolicyReasonChainMissing))?;
         let scheduled_task = policy.scheduled_tasks.get(&intent.procedure_ref);
         if let Some(task) = scheduled_task {
             validate_scheduled_execution_mode(
@@ -340,8 +364,16 @@ fn execute_policy_cycle(
         let admission = match admission {
             Ok(admission) => admission,
             // Host returns a nonfatal refusal only after its admission fact and
-            // any original error details have been committed.
-            Err(error) if !error.is_fatal() => continue,
+            // any original error details have been committed. Workflow #369 W-1 (review
+            // L1): a refusal that says when it may run again (a contended admission guard,
+            // `dispatch_instance_contended`) wakes the driver then.
+            Err(error) if !error.is_fatal() => {
+                if let Some(after_ms) = error.projection().retry_after_ms {
+                    retry_after_ms =
+                        Some(retry_after_ms.map_or(after_ms, |next| next.min(after_ms)));
+                }
+                continue;
+            }
             Err(error) => return Err(ActingdError::runtime(error)),
         };
         let PolicyDispatchAdmission::Granted { context } = admission else {
@@ -371,7 +403,7 @@ fn execute_policy_cycle(
             if let Some(projection) = projection {
                 if recompute_wakes.len() >= MAX_TASKS {
                     return Err(ActingdError::process(
-                        "policy_recompute_wake_budget_exceeded",
+                        ActingdCode::PolicyRecomputeWakeBudgetExceeded,
                     ));
                 }
                 recompute_wakes.push(PolicyRecomputeWake::new(
@@ -385,6 +417,7 @@ fn execute_policy_cycle(
         recompute_wakes,
         yielded_intents,
         failed_runs: failed_runs.any(),
+        retry_after_ms,
     })
 }
 
@@ -426,6 +459,9 @@ struct PolicyCycleExecution {
     /// once, so a failure scheduled for an immediate rerun waits only for its retry backoff,
     /// not for the wake the evaluation before the run computed.
     failed_runs: bool,
+    /// Workflow #369 W-1 (review L1): the earliest retry an admission refusal of this cycle
+    /// named; the driver wakes no later than that.
+    retry_after_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -442,7 +478,7 @@ impl PolicyRecomputeWake {
     ) -> Result<Self, ActingdError> {
         let terminal = receipt
             .terminal()
-            .ok_or_else(|| ActingdError::process("policy_recompute_terminal_missing"))?;
+            .ok_or_else(|| ActingdError::process(ActingdCode::PolicyRecomputeTerminalMissing))?;
         let identity = projection.outcome().identity();
         if projection.ledger_position() < terminal.sequence
             || identity.terminal_event_id() != terminal.event_id
@@ -460,7 +496,7 @@ impl PolicyRecomputeWake {
             || execution.instance_id != context.instance_alias()
         {
             return Err(ActingdError::process(
-                "policy_recompute_wake_identity_conflict",
+                ActingdCode::PolicyRecomputeWakeIdentityConflict,
             ));
         }
         Ok(Self { projection })
@@ -485,11 +521,11 @@ fn validate_scheduled_execution_mode(
     expected: ScheduledExecutionMode,
     actual: Option<ScheduledExecutionMode>,
 ) -> Result<(), ActingdError> {
-    let actual =
-        actual.ok_or_else(|| ActingdError::process("scheduled_execution_instance_unknown"))?;
+    let actual = actual
+        .ok_or_else(|| ActingdError::process(ActingdCode::ScheduledExecutionInstanceUnknown))?;
     if actual != expected {
         return Err(ActingdError::process(
-            "scheduled_execution_backend_mode_mismatch",
+            ActingdCode::ScheduledExecutionBackendModeMismatch,
         ));
     }
     Ok(())
@@ -527,25 +563,26 @@ fn monitor_policy(
     host: RuntimeHost,
     policy: PolicyBootstrap,
     initial_cycle: PolicyCycleExecution,
+    monitor: PolicyMonitorSettings,
 ) -> Result<(), ActingdError> {
     let host = Arc::new(host);
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
+    // Workflow #397: the monitor's connection reaches this Runtime only.
+    let runtime = RuntimeIdentity::of(host.runtime_info());
     let setup = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
-        let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
-                .with_io_timeout(POLICY_CLIENT_IO_TIMEOUT),
-        )
-        .map_err(ActingdError::client)?;
+        let client = connect_policy_monitor(&policy, monitor).map_err(ActingdError::client)?;
+        check_policy_monitor_runtime(&client, runtime)?;
         let initial_page = client
             .query_event_page(
                 EventQuery::default(),
                 ProjectionProfile::Concise,
-                RuntimeEventQueryPageRequest::new(1, None)
-                    .map_err(|_| ActingdError::process("policy_subscription_cursor_invalid"))?,
+                RuntimeEventQueryPageRequest::new(1, None).map_err(|_| {
+                    ActingdError::process(ActingdCode::PolicySubscriptionCursorInvalid)
+                })?,
             )
             .map_err(ActingdError::client)?;
         let cursor = SubscriptionCursor {
@@ -559,15 +596,15 @@ fn monitor_policy(
                 let control = Arc::clone(&control);
                 move || drive_policy(host, policy, control, initial_cycle)
             })
-            .map_err(|_| ActingdError::process("policy_driver_spawn_failed"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSpawnFailed))?;
         Ok(Some((client, cursor, driver)))
     })();
-    let (client, mut cursor, driver) = match setup {
+    let (mut client, mut cursor, driver) = match setup {
         Ok(Some(setup)) => setup,
         Ok(None) => return close_policy_host(host),
         Err(error) => {
             let mut error: ActingdError = error;
-            error.stage = Some("policy_monitor_setup");
+            error.stage = Some(ActingdLocation::PolicyMonitorSetup.location());
             let recorded =
                 error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
             let closed = close_policy_host(host);
@@ -582,6 +619,10 @@ fn monitor_policy(
 
     let mut waiting_for_install = false;
     let mut refusals = PolicySubscriptionRefusals::default();
+    // Workflow #397: the transient failures of the monitor's own requests in a row, and when the
+    // next attempt, on a fresh connection, is due.
+    let mut retries = MonitorRetries::new(monitor);
+    let mut reconnect_at: Option<Instant> = None;
     let monitor_result = loop {
         match host.fatal_error() {
             Ok(Some(error)) => break Err(ActingdError::runtime(error)),
@@ -594,7 +635,7 @@ fn monitor_policy(
             Err(error) => break Err(ActingdError::runtime(error)),
         }
         if driver.is_finished() {
-            break Err(ActingdError::process("policy_driver_stopped"));
+            break Err(ActingdError::process(ActingdCode::PolicyDriverStopped));
         }
         // Workflow #376 M1: an install drain closes root admission and would refuse the
         // subscription. Wait without subscribing and keep the cursor, so an abort or a drain
@@ -617,6 +658,35 @@ fn monitor_policy(
             }
             Err(error) => break Err(ActingdError::runtime(error)),
         }
+        // Workflow #397: a retry waits here in poll-sized steps, so the checks above keep their
+        // pace; once due, the request goes out again on a fresh connection, the latched one
+        // being dropped.
+        if let Some(due) = reconnect_at {
+            let now = Instant::now();
+            if now < due {
+                thread::sleep(
+                    due.saturating_duration_since(now)
+                        .min(Duration::from_millis(POLICY_EVENT_WAIT_MS)),
+                );
+                continue;
+            }
+            reconnect_at = None;
+            match connect_policy_monitor(&policy, monitor) {
+                Ok(fresh) => {
+                    if let Err(error) = check_policy_monitor_runtime(&fresh, runtime) {
+                        break Err(error);
+                    }
+                    client = fresh;
+                }
+                Err(error) => match retry_policy_monitor_request(&mut retries, runtime, error) {
+                    Ok(due) => {
+                        reconnect_at = Some(due);
+                        continue;
+                    }
+                    Err(error) => break Err(error),
+                },
+            }
+        }
         let request = match RuntimeSubscriptionRequest::new(
             EventQuery::default(),
             ProjectionProfile::Concise,
@@ -626,12 +696,15 @@ fn monitor_policy(
         ) {
             Ok(request) => request,
             Err(_) => {
-                break Err(ActingdError::process("policy_subscription_request_invalid"));
+                break Err(ActingdError::process(
+                    ActingdCode::PolicySubscriptionRequestInvalid,
+                ));
             }
         };
         let batch = match client.subscribe_events(request) {
             Ok(batch) => {
                 refusals.succeeded();
+                retries.succeeded();
                 batch
             }
             Err(error) => {
@@ -661,8 +734,17 @@ fn monitor_policy(
                         thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
                         continue;
                     }
+                    // Workflow #397: a transient I/O failure of this request is retried on a
+                    // fresh connection up to the configured bound; any other failure ends the
+                    // monitor as before.
                     PolicySubscriptionFailureAction::Fail => {
-                        break Err(ActingdError::client(error));
+                        match retry_policy_monitor_request(&mut retries, runtime, error) {
+                            Ok(due) => {
+                                reconnect_at = Some(due);
+                                continue;
+                            }
+                            Err(error) => break Err(error),
+                        }
                     }
                 }
             }
@@ -688,7 +770,7 @@ fn monitor_policy(
     let shutdown_result = control.shutdown();
     let driver_result = match driver.join() {
         Ok(result) => result,
-        Err(_) => Err(ActingdError::process("policy_driver_panicked")),
+        Err(_) => Err(ActingdError::process(ActingdCode::PolicyDriverPanicked)),
     };
     drop(client);
     drop(policy);
@@ -754,8 +836,8 @@ impl PolicySubscriptionRefusals {
 
 /// The host's typed refusal of a request it did not admit (`begin_request` gave no work): a
 /// non-fatal `RuntimeUnavailable` rejection. An install drain refuses a subscription this way.
-fn is_admission_refusal(code: &str, projection: Option<&RuntimeErrorProjection>) -> bool {
-    code == "runtime_request_rejected"
+fn is_admission_refusal(code: Code, projection: Option<&RuntimeErrorProjection>) -> bool {
+    code == ClientCode::RuntimeRequestRejected.code()
         && projection.is_some_and(|projection| {
             projection.code == RuntimeErrorCode::RuntimeUnavailable && !projection.fatal
         })
@@ -766,6 +848,74 @@ fn is_admission_refusal(code: &str, projection: Option<&RuntimeErrorProjection>)
 /// lines, a failed stdout write does not stop the daemon.
 fn report_policy_monitor(state: &str) {
     let _ = writeln!(std::io::stdout().lock(), "actingd policy_monitor {state}");
+}
+
+/// Workflow #397: the policy monitor's connection to its Runtime, with its configured I/O
+/// timeout (`policy.monitor.io_timeout_ms`).
+fn connect_policy_monitor(
+    policy: &PolicyBootstrap,
+    monitor: PolicyMonitorSettings,
+) -> Result<RuntimeClient, RuntimeClientError> {
+    RuntimeClient::connect(
+        RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
+            .with_io_timeout(monitor.io_timeout),
+    )
+}
+
+/// Workflow #397: the monitor's connection must reach the Runtime this daemon hosts; another
+/// owner epoch or process ends the monitor (`policy_monitor_runtime_identity_changed`).
+fn check_policy_monitor_runtime(
+    client: &RuntimeClient,
+    runtime: RuntimeIdentity,
+) -> Result<(), ActingdError> {
+    if RuntimeIdentity::of(client.runtime_info()) == runtime {
+        Ok(())
+    } else {
+        Err(ActingdError::process(
+            ActingdCode::PolicyMonitorRuntimeIdentityChanged,
+        ))
+    }
+}
+
+/// Workflow #397: the monitor's answer to a failed request of its own. A transient I/O failure
+/// under the bound reports its warning and returns when to send the request again, on a fresh
+/// connection; past the bound it reports the give-up and ends the monitor with the request's
+/// failure, as every other failure does at once.
+fn retry_policy_monitor_request(
+    retries: &mut MonitorRetries,
+    runtime: RuntimeIdentity,
+    error: RuntimeClientError,
+) -> Result<Instant, ActingdError> {
+    match retries.failed(&MonitorRequestFailure::of(&error), runtime) {
+        MonitorRetryStep::Retry { warning, backoff } => {
+            report_policy_monitor_outcome(&warning);
+            Ok(Instant::now() + backoff)
+        }
+        MonitorRetryStep::GiveUp { outcome } => {
+            report_policy_monitor_outcome(&outcome);
+            Err(ActingdError::client(error))
+        }
+        MonitorRetryStep::Fail => Err(ActingdError::client(error)),
+    }
+}
+
+/// Workflow #397: one daemon outcome of the policy monitor (#378 spec section 9): its developer
+/// line and its `OUTCOME actingd:` envelope on stderr, in one write. Like the monitor's stdout
+/// lines, a failed write does not stop the daemon.
+fn report_policy_monitor_outcome(outcome: &Outcome) {
+    let level = match outcome.category() {
+        Category::Success | Category::Info => "INFO",
+        Category::Warning => "WARN",
+        Category::Error => "ERROR",
+        Category::Fatal => "FATAL",
+    };
+    let lines = match serde_json::to_string(&outcome.envelope(Detail::Full)) {
+        Ok(envelope) => format!("{level} actingd: {outcome}\nOUTCOME actingd: {envelope}\n"),
+        Err(_) => format!(
+            "{level} actingd: {outcome}\nWARN actingd: the outcome envelope could not be encoded\n"
+        ),
+    };
+    let _ = std::io::stderr().lock().write_all(lines.as_bytes());
 }
 
 fn finish_policy_closeout(
@@ -799,7 +949,7 @@ fn close_policy_host(host: Arc<RuntimeHost>) -> Result<(), ActingdError> {
     match Arc::try_unwrap(host) {
         Ok(host) => host.close().map_err(ActingdError::runtime),
         Err(host) => {
-            let error = ActingdError::process("policy_driver_reference_leaked");
+            let error = ActingdError::process(ActingdCode::PolicyDriverReferenceLeaked);
             let recorded = error
                 .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::RetainedReference);
             drop(host);
@@ -817,13 +967,13 @@ fn combine_monitor_results(
     let mut failure: Option<ActingdError> = None;
     let mut secondary_index = 0;
     for (stage, result) in [
-        ("driver", driver),
-        ("monitor", monitor),
-        ("shutdown", shutdown),
-        ("close", close),
+        (ActingdLocation::PolicyCloseoutDriver, driver),
+        (ActingdLocation::PolicyCloseoutMonitor, monitor),
+        (ActingdLocation::PolicyCloseoutShutdown, shutdown),
+        (ActingdLocation::PolicyCloseoutHostClose, close),
     ] {
         if let Err(mut error) = result {
-            error.stage.get_or_insert(stage);
+            error.stage.get_or_insert(stage.location());
             match &mut failure {
                 None => failure = Some(error),
                 Some(primary) => {
@@ -931,7 +1081,7 @@ impl PolicyDriverControl {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         if !state.shutdown {
             state.pending_trigger = Some(
                 state
@@ -947,7 +1097,7 @@ impl PolicyDriverControl {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         if state.shutdown {
             return Ok(());
         }
@@ -957,7 +1107,7 @@ impl PolicyDriverControl {
                 Ok(())
             } else {
                 Err(ActingdError::process(
-                    "policy_recompute_wake_identity_conflict",
+                    ActingdCode::PolicyRecomputeWakeIdentityConflict,
                 ))
             };
         }
@@ -966,7 +1116,7 @@ impl PolicyDriverControl {
                 Ok(())
             } else {
                 Err(ActingdError::process(
-                    "policy_recompute_wake_identity_conflict",
+                    ActingdCode::PolicyRecomputeWakeIdentityConflict,
                 ))
             };
         }
@@ -974,14 +1124,14 @@ impl PolicyDriverControl {
             && existing != &wake
         {
             return Err(ActingdError::process(
-                "policy_recompute_wake_identity_conflict",
+                ActingdCode::PolicyRecomputeWakeIdentityConflict,
             ));
         }
         if !state.pending_recomputes.contains_key(&key)
             && state.pending_recomputes.len() + state.active_recomputes.len() >= MAX_TASKS
         {
             return Err(ActingdError::process(
-                "policy_recompute_wake_budget_exceeded",
+                ActingdCode::PolicyRecomputeWakeBudgetExceeded,
             ));
         }
         state.pending_recomputes.insert(key, wake);
@@ -1001,7 +1151,7 @@ impl PolicyDriverControl {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         for (key, wake) in &completed {
             if state
                 .completed_recomputes
@@ -1017,7 +1167,7 @@ impl PolicyDriverControl {
                     .is_some_and(|existing| existing != wake)
             {
                 return Err(ActingdError::process(
-                    "policy_recompute_wake_identity_conflict",
+                    ActingdCode::PolicyRecomputeWakeIdentityConflict,
                 ));
             }
         }
@@ -1036,7 +1186,7 @@ impl PolicyDriverControl {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         state.shutdown = true;
         self.changed.notify_all();
         Ok(())
@@ -1046,7 +1196,7 @@ impl PolicyDriverControl {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         if state.shutdown {
             return Ok(PolicyDriverWake::Shutdown);
         }
@@ -1066,7 +1216,7 @@ impl PolicyDriverControl {
                 }
                 !state.shutdown && state.pending_trigger.is_none()
             })
-            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+            .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
         if state.shutdown {
             Ok(PolicyDriverWake::Shutdown)
         } else if let Some((trigger, recomputes)) = take_policy_driver_work(&mut state)? {
@@ -1074,7 +1224,7 @@ impl PolicyDriverControl {
         } else if wait.timed_out() {
             Ok(PolicyDriverWake::TimedOut)
         } else {
-            Err(ActingdError::process("policy_driver_wake_missing"))
+            Err(ActingdError::process(ActingdCode::PolicyDriverWakeMissing))
         }
     }
 }
@@ -1086,7 +1236,9 @@ fn take_policy_driver_work(
         if state.pending_recomputes.is_empty() {
             return Ok(None);
         }
-        return Err(ActingdError::process("policy_recompute_trigger_missing"));
+        return Err(ActingdError::process(
+            ActingdCode::PolicyRecomputeTriggerMissing,
+        ));
     };
     let pending = state
         .pending_recomputes
@@ -1109,13 +1261,13 @@ fn recompute_wakes_by_key(
             .is_some_and(|existing: &PolicyRecomputeWake| existing != &wake)
         {
             return Err(ActingdError::process(
-                "policy_recompute_wake_identity_conflict",
+                ActingdCode::PolicyRecomputeWakeIdentityConflict,
             ));
         }
         keyed.insert(key, wake);
         if keyed.len() > MAX_TASKS {
             return Err(ActingdError::process(
-                "policy_recompute_wake_budget_exceeded",
+                ActingdCode::PolicyRecomputeWakeBudgetExceeded,
             ));
         }
     }
@@ -1130,7 +1282,7 @@ fn merge_recompute_wakes(
     for (key, wake) in &additions {
         if target.get(key).is_some_and(|existing| existing != wake) {
             return Err(ActingdError::process(
-                "policy_recompute_wake_identity_conflict",
+                ActingdCode::PolicyRecomputeWakeIdentityConflict,
             ));
         }
     }
@@ -1140,7 +1292,7 @@ fn merge_recompute_wakes(
         .count();
     if target.len() + new_keys > MAX_TASKS {
         return Err(ActingdError::process(
-            "policy_recompute_wake_budget_exceeded",
+            ActingdCode::PolicyRecomputeWakeBudgetExceeded,
         ));
     }
     target.extend(additions);
@@ -1312,6 +1464,14 @@ impl PolicyDriverSchedule {
         Ok(None)
     }
 
+    /// Workflow #369 W-1 (review L1): wakes the driver at `wake_unix_ms` at the latest.
+    fn wake_no_later_than(&mut self, wake_unix_ms: u64) {
+        self.next_wake_unix_ms = Some(
+            self.next_wake_unix_ms
+                .map_or(wake_unix_ms, |next| next.min(wake_unix_ms)),
+        );
+    }
+
     fn wait_duration(&self, now_unix_ms: u64) -> Duration {
         let next = [
             self.next_wake_unix_ms,
@@ -1456,6 +1616,9 @@ fn apply_policy_cycle_result(
             let policy_consumed = execution.cycle.directive.kind != PolicyRecomputeKind::Deferred;
             let apply = (|| {
                 schedule.apply_cycle(trigger, &execution.cycle, now_unix_ms)?;
+                if let Some(retry_after_ms) = execution.retry_after_ms {
+                    schedule.wake_no_later_than(checked_deadline(now_unix_ms, retry_after_ms)?);
+                }
                 if !policy_consumed {
                     schedule.merge_deferred_work(
                         trigger,
@@ -1477,7 +1640,9 @@ fn apply_policy_cycle_result(
                 Err(error) => Err(error),
             }
         }
-        Err(error) if !recomputes.is_empty() && error.code == "outcome_projection_not_ready" => {
+        Err(error)
+            if !recomputes.is_empty() && error.code.is(SharedCode::OutcomeProjectionNotReady) =>
+        {
             schedule.defer_projection(trigger, recomputes, now_unix_ms)
         }
         Err(error) => Err(error),
@@ -1491,14 +1656,15 @@ fn clock_observation_interval_ms(cadence: &PolicyCadence) -> u64 {
 fn checked_deadline(now_unix_ms: u64, delay_ms: u64) -> Result<u64, ActingdError> {
     now_unix_ms
         .checked_add(delay_ms)
-        .ok_or_else(|| ActingdError::process("policy_driver_time_overflow"))
+        .ok_or_else(|| ActingdError::process(ActingdCode::PolicyDriverTimeOverflow))
 }
 
 fn system_unix_ms() -> Result<u64, ActingdError> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| ActingdError::process("system_clock_invalid"))?;
-    u64::try_from(elapsed.as_millis()).map_err(|_| ActingdError::process("system_clock_invalid"))
+        .map_err(|_| ActingdError::process(SharedCode::SystemClockInvalid))?;
+    u64::try_from(elapsed.as_millis())
+        .map_err(|_| ActingdError::process(SharedCode::SystemClockInvalid))
 }
 
 fn parse_install_held_arguments(
@@ -1514,9 +1680,9 @@ fn parse_install_held_arguments(
         let value = arguments[3]
             .to_str()
             .filter(|value| value.len() <= 4096)
-            .ok_or_else(|| ActingdError::config("install_held_input_invalid"))?;
+            .ok_or_else(|| ActingdError::config(ActingdCode::InstallHeldInputInvalid))?;
         let held: actingcommand_contract::InstallHeldStartup = serde_json::from_str(value)
-            .map_err(|_| ActingdError::config("install_held_input_invalid"))?;
+            .map_err(|_| ActingdError::config(ActingdCode::InstallHeldInputInvalid))?;
         held.validate()
             .map_err(|error| ActingdError::config(error.code()))?;
         arguments.truncate(2);
@@ -1528,31 +1694,75 @@ fn parse_install_held_arguments(
 
 fn parse_arguments(arguments: Vec<std::ffi::OsString>) -> Result<PathBuf, ActingdError> {
     let [flag, path] = arguments.as_slice() else {
-        return Err(ActingdError::config("usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::UsageInvalid));
     };
     if flag != "--config" || path.is_empty() {
-        return Err(ActingdError::config("usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::UsageInvalid));
     }
     Ok(PathBuf::from(path))
 }
 
+/// The code an actingd error carries.
+#[derive(Debug, Clone, Copy)]
+enum ErrorCode {
+    /// A registered code: actingd's own, a shared contract code or a runtime client code.
+    Registered(Code),
+    /// The code of a runtime host refusal actingd reports without the host's error value; A2b
+    /// registers the host's codes.
+    Host { host_code: &'static str },
+}
+
+impl ErrorCode {
+    /// The code's spelling.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Registered(code) => code.as_str(),
+            Self::Host { host_code } => host_code,
+        }
+    }
+
+    /// Whether this is the given registered code.
+    fn is(self, code: impl Into<Code>) -> bool {
+        self.as_str() == code.into().as_str()
+    }
+}
+
+/// The token a stage prints as in actingd's FATAL line and in the check-config and unlock-owner
+/// v1 reports: the stage's own spelling, except where an older token is printed in its place
+/// (decision D12). A6a's outcome lines and check-config v2 replace these texts.
+fn v1_stage_token(stage: Location) -> &'static str {
+    [
+        (ActingdLocation::ConfigLoad, "load"),
+        (ActingdLocation::ConfigAssemble, "assemble"),
+        (ActingdLocation::ConfigVision, "vision"),
+        (ActingdLocation::ConfigValidate, "validate"),
+        (ActingdLocation::PolicyCloseoutDriver, "driver"),
+        (ActingdLocation::PolicyCloseoutMonitor, "monitor"),
+        (ActingdLocation::PolicyCloseoutShutdown, "shutdown"),
+        (ActingdLocation::PolicyCloseoutHostClose, "close"),
+    ]
+    .into_iter()
+    .find_map(|(location, token)| (location.location() == stage).then_some(token))
+    .unwrap_or(stage.as_str())
+}
+
 #[derive(Debug)]
 struct ActingdError {
-    code: &'static str,
-    stage: Option<&'static str>,
+    code: ErrorCode,
+    stage: Option<Location>,
     secondary: [Option<Box<ActingdError>>; 3],
     recording_failure: Option<Box<ActingdError>>,
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
     /// What a configuration code refers to, such as the refused resource package path.
-    detail: Option<String>,
+    detail: Option<Box<str>>,
     recorded: std::sync::atomic::AtomicBool,
 }
 
 impl ActingdError {
     fn with_detail(mut self, detail: String) -> Self {
-        self.detail = Some(detail);
+        self.detail = Some(detail.into_boxed_str());
         self
     }
 
@@ -1567,7 +1777,7 @@ impl ActingdError {
     }
 
     fn maintenance(error: actingcommand_runtime_host::LedgerMaintenanceFailure) -> Self {
-        let mut result = Self::process("ledger_maintenance_failed");
+        let mut result = Self::process(ActingdCode::LedgerMaintenanceFailed);
         result.maintenance = Some(Box::new(error));
         result
     }
@@ -1592,7 +1802,9 @@ impl ActingdError {
                 message: &client_message,
             }
         } else {
-            RuntimeLifecycleFailure::Process { code: self.code }
+            RuntimeLifecycleFailure::Process {
+                code: self.code.as_str(),
+            }
         };
         host.record_lifecycle_failure(stage, failure)
             .map_err(ActingdError::runtime)?;
@@ -1601,7 +1813,8 @@ impl ActingdError {
         Ok(())
     }
 
-    const fn config(code: &'static str) -> Self {
+    /// An error with this code and nothing wrapped.
+    const fn coded(code: ErrorCode) -> Self {
         Self {
             code,
             stage: None,
@@ -1615,53 +1828,33 @@ impl ActingdError {
         }
     }
 
-    const fn process(code: &'static str) -> Self {
-        Self {
-            code,
-            stage: None,
-            secondary: [None, None, None],
-            recording_failure: None,
-            runtime: None,
-            client: None,
-            maintenance: None,
-            detail: None,
-            recorded: std::sync::atomic::AtomicBool::new(false),
-        }
+    fn config(code: impl Into<Code>) -> Self {
+        Self::coded(ErrorCode::Registered(code.into()))
+    }
+
+    fn process(code: impl Into<Code>) -> Self {
+        Self::coded(ErrorCode::Registered(code.into()))
     }
 
     fn runtime(error: RuntimeHostError) -> Self {
-        Self {
-            code: error.code(),
-            stage: None,
-            secondary: [None, None, None],
-            recording_failure: None,
-            runtime: Some(Box::new(error)),
-            client: None,
-            maintenance: None,
-            detail: None,
-            recorded: std::sync::atomic::AtomicBool::new(false),
-        }
+        let mut result = Self::coded(ErrorCode::Host {
+            host_code: error.code(),
+        });
+        result.runtime = Some(Box::new(error));
+        result
     }
 
     fn client(error: RuntimeClientError) -> Self {
-        Self {
-            code: error.code(),
-            stage: None,
-            secondary: [None, None, None],
-            recording_failure: None,
-            runtime: None,
-            client: Some(Box::new(error)),
-            maintenance: None,
-            detail: None,
-            recorded: std::sync::atomic::AtomicBool::new(false),
-        }
+        let mut result = Self::coded(ErrorCode::Registered(error.code()));
+        result.client = Some(Box::new(error));
+        result
     }
 }
 
 impl fmt::Display for ActingdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(stage) = self.stage {
-            write!(formatter, "{stage}: ")?;
+            write!(formatter, "{}: ", v1_stage_token(stage))?;
         }
         if let Some(error) = &self.maintenance {
             error.fmt(formatter)?;
@@ -1670,7 +1863,7 @@ impl fmt::Display for ActingdError {
         } else if let Some(error) = &self.client {
             error.fmt(formatter)?;
         } else {
-            formatter.write_str(self.code)?;
+            formatter.write_str(self.code.as_str())?;
         }
         if let Some(detail) = &self.detail {
             write!(formatter, ": {detail}")?;
@@ -1733,7 +1926,7 @@ mod tests {
             .expect("host"),
         );
         let retained = Arc::clone(&host);
-        let monitor = ActingdError::process("policy_driver_stopped");
+        let monitor = ActingdError::process(ActingdCode::PolicyDriverStopped);
         monitor
             .record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
             .expect("monitor fact");
@@ -1743,12 +1936,16 @@ mod tests {
         let result = finish_policy_closeout(
             host,
             Err(monitor),
-            Err(ActingdError::process("policy_control_shutdown_failed")),
-            Err(ActingdError::process("policy_driver_panicked")),
+            // A shutdown failure under a code no product path emits: carried as an
+            // unregistered (host) spelling so the recorded code stays the test's own.
+            Err(ActingdError::coded(ErrorCode::Host {
+                host_code: "policy_control_shutdown_failed",
+            })),
+            Err(ActingdError::process(ActingdCode::PolicyDriverPanicked)),
             Ok(()),
         );
         assert_eq!(
-            result.expect_err("driver primary").code,
+            result.expect_err("driver primary").code.as_str(),
             "policy_driver_panicked"
         );
         let ledger =
@@ -1809,25 +2006,25 @@ mod tests {
         use super::PolicySubscriptionFailureAction::{End, Fail, RetryOnce, Wait};
         let refusal = RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeUnavailable, false);
         assert!(is_admission_refusal(
-            "runtime_request_rejected",
+            ClientCode::RuntimeRequestRejected.code(),
             Some(&refusal)
         ));
         for (code, projection) in [
             (
-                "runtime_request_rejected",
+                ClientCode::RuntimeRequestRejected.code(),
                 Some(RuntimeErrorProjection::new(
                     RuntimeErrorCode::RuntimeUnavailable,
                     true,
                 )),
             ),
             (
-                "runtime_request_rejected",
+                ClientCode::RuntimeRequestRejected.code(),
                 Some(RuntimeErrorProjection::new(
                     RuntimeErrorCode::InvalidRequest,
                     false,
                 )),
             ),
-            ("runtime_receipt_header_failed", None),
+            (ClientCode::RuntimeReceiptHeaderFailed.code(), None),
         ] {
             assert!(!is_admission_refusal(code, projection.as_ref()), "{code}");
         }
@@ -1962,7 +2159,7 @@ mod tests {
             let result = waiter.join().expect("join early waiter");
             let code = match result {
                 Ok(_) => "unexpected_policy_driver_wake",
-                Err(error) => error.code,
+                Err(error) => error.code.as_str(),
             };
             panic!("spurious notification completed the wait early: {}", code);
         }
@@ -2164,7 +2361,7 @@ mod tests {
             trigger,
             recomputes,
             defer_now,
-            Err(ActingdError::process("outcome_projection_not_ready")),
+            Err(ActingdError::process(SharedCode::OutcomeProjectionNotReady)),
         )
         .expect("first bounded not-ready defer");
         assert!(
@@ -2199,7 +2396,7 @@ mod tests {
             first_deferred_trigger,
             first_deferred_recomputes,
             defer_now + policy.cadence.debounce_ms,
-            Err(ActingdError::process("outcome_projection_not_ready")),
+            Err(ActingdError::process(SharedCode::OutcomeProjectionNotReady)),
         )
         .expect("second bounded not-ready defer");
         let (second_deferred_trigger, second_deferred_recomputes) = projection_schedule
@@ -2272,7 +2469,8 @@ mod tests {
             control
                 .notify_recompute(conflict)
                 .expect_err("same terminal identity cannot change outcome")
-                .code,
+                .code
+                .as_str(),
             "policy_recompute_wake_identity_conflict"
         );
         assert_eq!(input_count.load(Ordering::SeqCst), 1);
@@ -2813,6 +3011,7 @@ mod tests {
             evaluation: None,
             pending_dispatch_intents: Vec::new(),
             detection_planning_signals: Vec::new(),
+            clock_slot_signals: Vec::new(),
             measurement: None,
         }
     }

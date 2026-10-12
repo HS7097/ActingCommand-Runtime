@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ExecutionKernelCode;
 use crate::{
     ExecutionBackendProvider, ExecutionInputOutcome, ExecutionKernelError, ExecutionKernelResult,
     ExecutionResourceCloseOutcome, ExecutionSession, InputFrameContext, PreparedInputAction,
@@ -69,9 +70,9 @@ impl ExecutionKernel {
         &self,
         instance_alias: &str,
     ) -> ExecutionKernelResult<ResolvedExecutionInstance> {
-        self.provider
-            .resolve(instance_alias)
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_instance_unknown"))
+        self.provider.resolve(instance_alias).ok_or_else(|| {
+            ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionInstanceUnknown.code())
+        })
     }
 
     pub fn vision_provider(
@@ -294,7 +295,9 @@ impl ExecutionKernel {
             .sessions
             .get(&instance)
             .cloned()
-            .ok_or_else(|| ExecutionKernelError::fatal("input_frame_session_missing"))
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::InputFrameSessionMissing.code())
+            })
     }
 
     /// Reads only the capture object belonging to the original producing session.
@@ -327,12 +330,12 @@ impl ExecutionKernel {
         crate::session::geometry_remaining(deadline)?;
         let state = self.state.try_lock().map_err(|error| match error {
             TryLockError::WouldBlock => crate::session::geometry_unavailable(
-                "capture_geometry_kernel_busy",
+                ExecutionKernelCode::CaptureGeometryKernelBusy.code(),
                 "the existing kernel session registry is busy",
             ),
-            TryLockError::Poisoned(_) => {
-                ExecutionKernelError::fatal("execution_kernel_state_poisoned")
-            }
+            TryLockError::Poisoned(_) => ExecutionKernelError::fatal(
+                ExecutionKernelCode::ExecutionKernelStatePoisoned.code(),
+            ),
         })?;
         crate::session::geometry_remaining(deadline)?;
         if state.closed {
@@ -343,7 +346,7 @@ impl ExecutionKernel {
                 .cloned()
                 .unwrap_or_else(|| {
                     crate::session::geometry_unavailable(
-                        "capture_geometry_kernel_closed",
+                        ExecutionKernelCode::CaptureGeometryKernelClosed.code(),
                         "the kernel is closed",
                     )
                 }));
@@ -362,14 +365,14 @@ impl ExecutionKernel {
                 .cloned()
                 .unwrap_or_else(|| {
                     crate::session::geometry_unavailable(
-                        "capture_geometry_session_missing",
+                        ExecutionKernelCode::CaptureGeometrySessionMissing.code(),
                         "the original producing session is no longer registered",
                     )
                 })
         })?;
         if !Weak::ptr_eq(&reference.session, &Arc::downgrade(session)) {
             return Err(crate::session::geometry_unavailable(
-                "capture_geometry_session_changed",
+                ExecutionKernelCode::CaptureGeometrySessionChanged.code(),
                 "the registered session differs from the frame-producing session",
             ));
         }
@@ -418,7 +421,10 @@ impl ExecutionKernel {
         self.provider
             .probe_adb_baseline_until(instance_alias, deadline, stopped)
             .map_err(|error| {
-                ExecutionKernelError::device("application_adb_baseline_failed", &error)
+                ExecutionKernelError::device(
+                    ExecutionKernelCode::ApplicationAdbBaselineFailed.code(),
+                    &error,
+                )
             })
     }
 
@@ -445,6 +451,15 @@ impl ExecutionKernel {
         self.provider.control_instance(instance_alias, action)
     }
 
+    /// Workflow #381 B (review M3): one bounded read of the emulator instance's state, driven
+    /// on the provider directly like `control_instance`: no session is opened or touched.
+    pub fn read_emulator_instance_state(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<actingcommand_device::InstanceState> {
+        self.provider.read_instance_state(instance_alias)
+    }
+
     /// Re-runs the provider's instance discovery on demand, driven on the provider directly
     /// like `control_instance`: no session is opened or touched and nothing is bound.
     pub fn discover_instances(
@@ -465,13 +480,16 @@ impl ExecutionKernel {
         let resolved = self.resolve(instance_alias)?;
         if self.has_session(resolved.instance_id())? {
             return Err(ExecutionKernelError::fatal(
-                "execution_endpoint_rebind_session_open",
+                ExecutionKernelCode::ExecutionEndpointRebindSessionOpen.code(),
             ));
         }
         self.provider
             .rebind_discovered_endpoint(instance_alias, adb_port)
             .map_err(|error| {
-                ExecutionKernelError::device("execution_endpoint_rebind_failed", &error)
+                ExecutionKernelError::device(
+                    ExecutionKernelCode::ExecutionEndpointRebindFailed.code(),
+                    &error,
+                )
             })
     }
 
@@ -484,11 +502,13 @@ impl ExecutionKernel {
         let observation = self
             .provider
             .observe_monitor(instance_alias, expected_page, frame)?;
-        observation
-            .validate()
-            .map_err(|_| ExecutionKernelError::fatal("monitor_observation_invalid"))?;
+        observation.validate().map_err(|_| {
+            ExecutionKernelError::fatal(ExecutionKernelCode::MonitorObservationInvalid.code())
+        })?;
         if observation.expected_page() != expected_page {
-            return Err(ExecutionKernelError::fatal("monitor_observation_invalid"));
+            return Err(ExecutionKernelError::fatal(
+                ExecutionKernelCode::MonitorObservationInvalid.code(),
+            ));
         }
         Ok(observation)
     }
@@ -504,11 +524,13 @@ impl ExecutionKernel {
         let session = {
             let state = self.lock_state()?;
             if state.closed {
-                return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+                return Err(ExecutionKernelError::fatal(
+                    ExecutionKernelCode::ExecutionKernelClosed.code(),
+                ));
             }
             if state.closing.contains(&instance_id) {
                 return Err(ExecutionKernelError::fatal(
-                    "execution_session_close_in_progress",
+                    ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
                 ));
             }
             if let Some(Err(error)) = state.instance_closes.get(&instance_id)
@@ -612,11 +634,13 @@ impl ExecutionKernel {
         let session = {
             let mut state = self.lock_state()?;
             if state.closed {
-                return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+                return Err(ExecutionKernelError::fatal(
+                    ExecutionKernelCode::ExecutionKernelClosed.code(),
+                ));
             }
             if state.closing.contains(&instance_id) {
                 return Err(ExecutionKernelError::fatal(
-                    "execution_session_close_in_progress",
+                    ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
                 ));
             }
             if let Some(result) = state.instance_closes.get(&instance_id) {
@@ -723,7 +747,7 @@ impl ExecutionKernel {
             state.closed = true;
             for (instance, session) in std::mem::take(&mut state.sessions) {
                 let error = ExecutionKernelError::device(
-                    "execution_resource_close_incomplete",
+                    ExecutionKernelCode::ExecutionResourceCloseIncomplete.code(),
                     &actingcommand_device::DeviceError::fatal(
                         "execution session retained because resource-close authority or completion was not established",
                     ).with_resource_close_cause(
@@ -773,19 +797,21 @@ impl ExecutionKernel {
         let resolved = self.resolve(instance_alias)?;
         let mut state = self.lock_state()?;
         if state.closed {
-            return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+            return Err(ExecutionKernelError::fatal(
+                ExecutionKernelCode::ExecutionKernelClosed.code(),
+            ));
         }
         // Workflow #191 H: never wait for a close in progress (its caller may hold the journal
         // lock the close's input check needs); that instance admits no operation meanwhile.
         if state.closing.contains(&resolved.instance_id()) {
             return Err(ExecutionKernelError::fatal(
-                "execution_session_close_in_progress",
+                ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
             ));
         }
         if let Some(session) = state.sessions.get(&resolved.instance_id()) {
             if session.resolved() != &resolved {
                 return Err(ExecutionKernelError::fatal(
-                    "execution_instance_identity_mismatch",
+                    ExecutionKernelCode::ExecutionInstanceIdentityMismatch.code(),
                 ));
             }
             return Ok(Arc::clone(session));
@@ -797,10 +823,11 @@ impl ExecutionKernel {
             return Err(error.clone());
         }
         state.instance_closes.remove(&resolved.instance_id());
-        let generation = state
-            .session_generation
-            .checked_add(1)
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_generation_exhausted"))?;
+        let generation = state.session_generation.checked_add(1).ok_or_else(|| {
+            ExecutionKernelError::fatal(
+                ExecutionKernelCode::ExecutionSessionGenerationExhausted.code(),
+            )
+        })?;
         state.session_generation = generation;
         let session = Arc::new(ExecutionSession::start(
             Arc::clone(&self.provider),
@@ -889,9 +916,9 @@ impl ExecutionKernel {
     }
 
     fn lock_state(&self) -> ExecutionKernelResult<MutexGuard<'_, KernelState>> {
-        self.state
-            .lock()
-            .map_err(|_| ExecutionKernelError::fatal("execution_kernel_state_poisoned"))
+        self.state.lock().map_err(|_| {
+            ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionKernelStatePoisoned.code())
+        })
     }
 }
 
@@ -899,7 +926,7 @@ impl ExecutionKernel {
 /// kernel closes, shaped like a retained session's `execution_resource_close_incomplete`.
 fn close_in_progress_error(instance: InstanceId) -> ExecutionKernelError {
     ExecutionKernelError::device(
-        "execution_session_close_in_progress",
+        ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
         &actingcommand_device::DeviceError::fatal(
             "execution session close was still in progress when the kernel closed",
         )

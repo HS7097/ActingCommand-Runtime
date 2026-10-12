@@ -43,23 +43,26 @@ impl MaintenanceLimits {
             || !(1..=1024).contains(&self.pages_per_step)
         {
             return Err(failure(
-                "maintenance_limits_invalid",
-                "validate_maintenance_limits",
+                DatabaseCode::MaintenanceLimitsInvalid.code(),
+                DatabaseLocation::ValidateMaintenanceLimits.location(),
             ));
         }
         Instant::now()
             .checked_add(Duration::from_secs(self.timeout_seconds))
             .ok_or_else(|| {
                 failure(
-                    "maintenance_deadline_overflow",
-                    "validate_maintenance_limits",
+                    DatabaseCode::MaintenanceDeadlineOverflow.code(),
+                    DatabaseLocation::ValidateMaintenanceLimits.location(),
                 )
             })
     }
 
     pub fn check(self, bytes: u64, files: usize, deadline: Instant) -> RuntimeDatabaseResult<()> {
         if bytes > self.max_bytes || files > self.max_files || Instant::now() >= deadline {
-            return Err(failure("maintenance_budget_exceeded", "bound_maintenance"));
+            return Err(failure(
+                DatabaseCode::MaintenanceBudgetExceeded.code(),
+                DatabaseLocation::BoundMaintenance.location(),
+            ));
         }
         Ok(())
     }
@@ -102,7 +105,12 @@ impl DatabaseBackup {
             &self.files,
             &self.warnings,
         ))
-        .map_err(|_| failure("backup_manifest_invalid", "encode_backup_manifest"))
+        .map_err(|_| {
+            failure(
+                DatabaseCode::BackupManifestInvalid.code(),
+                DatabaseLocation::EncodeBackupManifest.location(),
+            )
+        })
     }
 }
 
@@ -125,46 +133,78 @@ impl RuntimeDatabase {
             limits.check(0, material.len(), deadline)?;
             if destination.exists() {
                 return Err(failure(
-                    "backup_destination_exists",
-                    "create_database_backup",
+                    DatabaseCode::BackupDestinationExists.code(),
+                    DatabaseLocation::CreateDatabaseBackup.location(),
                 ));
             }
-            fs::create_dir(destination).map_err(|error| io("create_backup_directory", &error))?;
+            fs::create_dir(destination)
+                .map_err(|error| io(DatabaseLocation::CreateBackupDirectory.location(), &error))?;
             let destination_file = destination.join(DATABASE_FILE);
-            let mut target = Connection::open(&destination_file)
-                .map_err(|error| RuntimeDatabaseError::sql("open_backup_destination", &error))?;
+            let mut target = Connection::open(&destination_file).map_err(|error| {
+                RuntimeDatabaseError::sql(
+                    DatabaseLocation::OpenBackupDestination.location(),
+                    &error,
+                )
+            })?;
             target
                 .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
                 .map_err(|error| {
-                    RuntimeDatabaseError::sql("configure_backup_destination", &error)
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::ConfigureBackupDestination.location(),
+                        &error,
+                    )
                 })?;
-            let connection = self.connection("backup_database")?;
+            let connection = self.connection(DatabaseLocation::BackupDatabase.location())?;
             let page_size: i64 = connection
                 .pragma_query_value(None, "page_size", |row| row.get(0))
-                .map_err(|error| RuntimeDatabaseError::sql("read_backup_page_size", &error))?;
+                .map_err(|error| {
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::ReadBackupPageSize.location(),
+                        &error,
+                    )
+                })?;
             let page_count: i64 = connection
                 .pragma_query_value(None, "page_count", |row| row.get(0))
-                .map_err(|error| RuntimeDatabaseError::sql("read_backup_page_count", &error))?;
-            let page_size = u64::try_from(page_size)
-                .map_err(|_| failure("backup_page_size_invalid", "read_backup_page_size"))?;
-            let page_count = u64::try_from(page_count)
-                .map_err(|_| failure("backup_page_count_invalid", "read_backup_page_count"))?;
+                .map_err(|error| {
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::ReadBackupPageCount.location(),
+                        &error,
+                    )
+                })?;
+            let page_size = u64::try_from(page_size).map_err(|_| {
+                failure(
+                    DatabaseCode::BackupPageSizeInvalid.code(),
+                    DatabaseLocation::ReadBackupPageSize.location(),
+                )
+            })?;
+            let page_count = u64::try_from(page_count).map_err(|_| {
+                failure(
+                    DatabaseCode::BackupPageCountInvalid.code(),
+                    DatabaseLocation::ReadBackupPageCount.location(),
+                )
+            })?;
             limits.check(
-                page_count
-                    .checked_mul(page_size)
-                    .ok_or_else(|| failure("maintenance_size_overflow", "bound_backup_pages"))?,
+                page_count.checked_mul(page_size).ok_or_else(|| {
+                    failure(
+                        DatabaseCode::MaintenanceSizeOverflow.code(),
+                        DatabaseLocation::BoundBackupPages.location(),
+                    )
+                })?,
                 material.len(),
                 deadline,
             )?;
-            let backup = Backup::new(&connection, &mut target)
-                .map_err(|error| RuntimeDatabaseError::sql("begin_database_backup", &error))?;
+            let backup = Backup::new(&connection, &mut target).map_err(|error| {
+                RuntimeDatabaseError::sql(DatabaseLocation::BeginDatabaseBackup.location(), &error)
+            })?;
             let mut busy = 0;
             loop {
                 limits.check(page_count * page_size, material.len(), deadline)?;
-                match backup
-                    .step(limits.pages_per_step)
-                    .map_err(|error| RuntimeDatabaseError::sql("step_database_backup", &error))?
-                {
+                match backup.step(limits.pages_per_step).map_err(|error| {
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::StepDatabaseBackup.location(),
+                        &error,
+                    )
+                })? {
                     StepResult::Done => break,
                     StepResult::More => {}
                     state @ (StepResult::Busy | StepResult::Locked) => {
@@ -172,11 +212,11 @@ impl RuntimeDatabase {
                         if warnings.is_empty() {
                             warnings.push(MaintenanceWarning {
                                 severity: "warning".into(),
-                                operation: "step_database_backup".into(),
+                                operation: DatabaseLocation::StepDatabaseBackup.as_str().into(),
                                 code: if matches!(state, StepResult::Busy) {
-                                    "sqlite_backup_busy"
+                                    DatabaseCode::SqliteBackupBusy.as_str()
                                 } else {
-                                    "sqlite_backup_locked"
+                                    DatabaseCode::SqliteBackupLocked.as_str()
                                 }
                                 .into(),
                                 sqlite_code: if matches!(state, StepResult::Busy) {
@@ -189,20 +229,25 @@ impl RuntimeDatabase {
                         }
                         if busy > 3 {
                             return Err(failure(
-                                "backup_busy_exhausted",
-                                "step_database_backup_after_warning",
+                                DatabaseCode::BackupBusyExhausted.code(),
+                                DatabaseLocation::StepDatabaseBackupAfterWarning.location(),
                             ));
                         }
                         let remaining = deadline.saturating_duration_since(Instant::now());
                         std::thread::sleep(Duration::from_millis(50 * busy).min(remaining));
                     }
-                    _ => return Err(failure("backup_result_unknown", "step_database_backup")),
+                    _ => {
+                        return Err(failure(
+                            DatabaseCode::BackupResultUnknown.code(),
+                            DatabaseLocation::StepDatabaseBackup.location(),
+                        ));
+                    }
                 }
             }
             drop(backup);
-            target
-                .close()
-                .map_err(|(_, error)| RuntimeDatabaseError::sql("close_backup_database", &error))?;
+            target.close().map_err(|(_, error)| {
+                RuntimeDatabaseError::sql(DatabaseLocation::CloseBackupDatabase.location(), &error)
+            })?;
             drop(connection);
             sync_file(&destination_file)?;
             let mut files = vec![inspect_file(destination, DATABASE_FILE, limits, deadline)?];
@@ -225,11 +270,17 @@ impl RuntimeDatabase {
                     || file.relative_path == INTEGRITY_KEY_FILE
                     || file.relative_path == MANIFEST_FILE
                 {
-                    return Err(failure("backup_material_reserved", "copy_backup_material"));
+                    return Err(failure(
+                        DatabaseCode::BackupMaterialReserved.code(),
+                        DatabaseLocation::CopyBackupMaterial.location(),
+                    ));
                 }
                 limits.check(bytes, files.len(), deadline)?;
                 if inspect_file(&self.root, &file.relative_path, limits, deadline)? != *file {
-                    return Err(failure("backup_source_changed", "copy_backup_material"));
+                    return Err(failure(
+                        DatabaseCode::BackupSourceChanged.code(),
+                        DatabaseLocation::CopyBackupMaterial.location(),
+                    ));
                 }
                 copy_material(
                     &self.root,
@@ -242,11 +293,17 @@ impl RuntimeDatabase {
                 if copied != *file
                     || inspect_file(&self.root, &file.relative_path, limits, deadline)? != *file
                 {
-                    return Err(failure("backup_source_changed", "verify_backup_material"));
+                    return Err(failure(
+                        DatabaseCode::BackupSourceChanged.code(),
+                        DatabaseLocation::VerifyBackupMaterial.location(),
+                    ));
                 }
-                bytes = bytes
-                    .checked_add(copied.byte_count)
-                    .ok_or_else(|| failure("maintenance_size_overflow", "count_backup_material"))?;
+                bytes = bytes.checked_add(copied.byte_count).ok_or_else(|| {
+                    failure(
+                        DatabaseCode::MaintenanceSizeOverflow.code(),
+                        DatabaseLocation::CountBackupMaterial.location(),
+                    )
+                })?;
                 files.push(copied);
             }
             for (relative, content) in locked_material {
@@ -256,25 +313,32 @@ impl RuntimeDatabase {
                     || files.iter().any(|file| &file.relative_path == relative)
                 {
                     return Err(failure(
-                        "backup_material_reserved",
-                        "copy_locked_backup_material",
+                        DatabaseCode::BackupMaterialReserved.code(),
+                        DatabaseLocation::CopyLockedBackupMaterial.location(),
                     ));
                 }
                 bytes = bytes.checked_add(content.len() as u64).ok_or_else(|| {
-                    failure("maintenance_size_overflow", "count_locked_backup_material")
+                    failure(
+                        DatabaseCode::MaintenanceSizeOverflow.code(),
+                        DatabaseLocation::CountLockedBackupMaterial.location(),
+                    )
                 })?;
                 limits.check(bytes, files.len() + 1, deadline)?;
                 let path = material_path(destination, relative)?;
                 if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|error| io("create_locked_backup_directory", &error))?;
+                    fs::create_dir_all(parent).map_err(|error| {
+                        io(
+                            DatabaseLocation::CreateLockedBackupDirectory.location(),
+                            &error,
+                        )
+                    })?;
                 }
                 write_new(&path, content)?;
                 let file = inspect_file(destination, relative, limits, deadline)?;
                 if file.sha256 != digest(content) || file.byte_count != content.len() as u64 {
                     return Err(failure(
-                        "backup_material_mismatch",
-                        "verify_locked_backup_material",
+                        DatabaseCode::BackupMaterialMismatch.code(),
+                        DatabaseLocation::VerifyLockedBackupMaterial.location(),
                     ));
                 }
                 files.push(file);
@@ -292,8 +356,8 @@ impl RuntimeDatabase {
             let material = manifest.material()?;
             if material.len() as u64 > MAX_MANIFEST_BYTES {
                 return Err(failure(
-                    "backup_manifest_too_large",
-                    "complete_database_backup",
+                    DatabaseCode::BackupManifestTooLarge.code(),
+                    DatabaseLocation::CompleteDatabaseBackup.location(),
                 ));
             }
             manifest.backup_id = digest(&material);
@@ -301,15 +365,20 @@ impl RuntimeDatabase {
                 "database-backup-v1",
                 &[&material, manifest.backup_id.as_bytes()],
             );
-            let encoded = serde_json::to_vec(&manifest)
-                .map_err(|_| failure("backup_manifest_invalid", "complete_database_backup"))?;
+            let encoded = serde_json::to_vec(&manifest).map_err(|_| {
+                failure(
+                    DatabaseCode::BackupManifestInvalid.code(),
+                    DatabaseLocation::CompleteDatabaseBackup.location(),
+                )
+            })?;
             write_new(&destination.join(MANIFEST_FILE), &encoded)?;
             sync_state_directory(destination)?;
-            sync_state_directory(
-                destination
-                    .parent()
-                    .ok_or_else(|| failure("backup_parent_missing", "complete_database_backup"))?,
-            )?;
+            sync_state_directory(destination.parent().ok_or_else(|| {
+                failure(
+                    DatabaseCode::BackupParentMissing.code(),
+                    DatabaseLocation::CompleteDatabaseBackup.location(),
+                )
+            })?)?;
             Ok(manifest)
         })();
         result.map_err(|error: RuntimeDatabaseError| error.with_warnings(warnings))
@@ -333,8 +402,8 @@ impl RuntimeDatabase {
                 )
         {
             return Err(failure(
-                "backup_manifest_mismatch",
-                "verify_database_backup",
+                DatabaseCode::BackupManifestMismatch.code(),
+                DatabaseLocation::VerifyDatabaseBackup.location(),
             ));
         }
         let mut bytes = 0_u64;
@@ -342,19 +411,22 @@ impl RuntimeDatabase {
         for file in &manifest.files {
             if previous.is_some_and(|path| path >= file.relative_path.as_str()) {
                 return Err(failure(
-                    "backup_manifest_order_invalid",
-                    "verify_database_backup",
+                    DatabaseCode::BackupManifestOrderInvalid.code(),
+                    DatabaseLocation::VerifyDatabaseBackup.location(),
                 ));
             }
             previous = Some(&file.relative_path);
-            bytes = bytes
-                .checked_add(file.byte_count)
-                .ok_or_else(|| failure("maintenance_size_overflow", "verify_database_backup"))?;
+            bytes = bytes.checked_add(file.byte_count).ok_or_else(|| {
+                failure(
+                    DatabaseCode::MaintenanceSizeOverflow.code(),
+                    DatabaseLocation::VerifyDatabaseBackup.location(),
+                )
+            })?;
             limits.check(bytes, manifest.files.len(), deadline)?;
             if inspect_file(backup_root, &file.relative_path, limits, deadline)? != *file {
                 return Err(failure(
-                    "backup_material_mismatch",
-                    "verify_database_backup",
+                    DatabaseCode::BackupMaterialMismatch.code(),
+                    DatabaseLocation::VerifyDatabaseBackup.location(),
                 ));
             }
         }
@@ -364,13 +436,19 @@ impl RuntimeDatabase {
                 .iter()
                 .any(|file| file.relative_path == required)
             {
-                return Err(failure("backup_material_missing", "verify_database_backup"));
+                return Err(failure(
+                    DatabaseCode::BackupMaterialMissing.code(),
+                    DatabaseLocation::VerifyDatabaseBackup.location(),
+                ));
             }
         }
         let key = fs::read(backup_root.join(INTEGRITY_KEY_FILE))
-            .map_err(|error| io("read_backup_key", &error))?;
+            .map_err(|error| io(DatabaseLocation::ReadBackupKey.location(), &error))?;
         if key.as_slice() != self.integrity_key.as_ref() {
-            return Err(failure("backup_key_mismatch", "verify_database_backup"));
+            return Err(failure(
+                DatabaseCode::BackupKeyMismatch.code(),
+                DatabaseLocation::VerifyDatabaseBackup.location(),
+            ));
         }
         Ok(manifest)
     }
@@ -386,12 +464,15 @@ impl RuntimeDatabase {
         require_disjoint(&self.root, target)?;
         require_disjoint(backup_root, target)?;
         require_regular_directory(target)?;
-        for entry in fs::read_dir(target).map_err(|error| io("inspect_restore_target", &error))? {
-            let entry = entry.map_err(|error| io("inspect_restore_target", &error))?;
+        for entry in fs::read_dir(target)
+            .map_err(|error| io(DatabaseLocation::InspectRestoreTarget.location(), &error))?
+        {
+            let entry = entry
+                .map_err(|error| io(DatabaseLocation::InspectRestoreTarget.location(), &error))?;
             if entry.file_name() != "owner.lock" {
                 return Err(failure(
-                    "restore_target_not_empty",
-                    "restore_database_backup",
+                    DatabaseCode::RestoreTargetNotEmpty.code(),
+                    DatabaseLocation::RestoreDatabaseBackup.location(),
                 ));
             }
         }
@@ -402,8 +483,8 @@ impl RuntimeDatabase {
         for file in &manifest.files {
             if inspect_file(target, &file.relative_path, limits, deadline)? != *file {
                 return Err(failure(
-                    "restored_material_mismatch",
-                    "restore_database_backup",
+                    DatabaseCode::RestoredMaterialMismatch.code(),
+                    DatabaseLocation::RestoreDatabaseBackup.location(),
                 ));
             }
         }
@@ -415,16 +496,22 @@ impl RuntimeDatabase {
 pub fn read_manifest(root: &Path) -> RuntimeDatabaseResult<DatabaseBackup> {
     let path = root.join(MANIFEST_FILE);
     require_regular_file(&path)?;
-    let metadata = fs::metadata(&path).map_err(|error| io("read_backup_manifest", &error))?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| io(DatabaseLocation::ReadBackupManifest.location(), &error))?;
     if metadata.len() == 0 || metadata.len() > MAX_MANIFEST_BYTES {
         return Err(failure(
-            "backup_manifest_size_invalid",
-            "read_backup_manifest",
+            DatabaseCode::BackupManifestSizeInvalid.code(),
+            DatabaseLocation::ReadBackupManifest.location(),
         ));
     }
-    let bytes = fs::read(path).map_err(|error| io("read_backup_manifest", &error))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| failure("backup_manifest_invalid", "read_backup_manifest"))
+    let bytes = fs::read(path)
+        .map_err(|error| io(DatabaseLocation::ReadBackupManifest.location(), &error))?;
+    serde_json::from_slice(&bytes).map_err(|_| {
+        failure(
+            DatabaseCode::BackupManifestInvalid.code(),
+            DatabaseLocation::ReadBackupManifest.location(),
+        )
+    })
 }
 
 pub fn inspect_file(
@@ -435,11 +522,16 @@ pub fn inspect_file(
 ) -> RuntimeDatabaseResult<MaintenanceFile> {
     let path = material_path(root, relative)?;
     require_regular_file(&path)?;
-    let mut file =
-        fs::File::open(&path).map_err(|error| io("open_maintenance_material", &error))?;
+    let mut file = fs::File::open(&path)
+        .map_err(|error| io(DatabaseLocation::OpenMaintenanceMaterial.location(), &error))?;
     let length = file
         .metadata()
-        .map_err(|error| io("inspect_maintenance_material", &error))?
+        .map_err(|error| {
+            io(
+                DatabaseLocation::InspectMaintenanceMaterial.location(),
+                &error,
+            )
+        })?
         .len();
     limits.check(length, 1, deadline)?;
     let mut hash = Sha256::new();
@@ -448,20 +540,23 @@ pub fn inspect_file(
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|error| io("read_maintenance_material", &error))?;
+            .map_err(|error| io(DatabaseLocation::ReadMaintenanceMaterial.location(), &error))?;
         if read == 0 {
             break;
         }
-        count = count
-            .checked_add(read as u64)
-            .ok_or_else(|| failure("maintenance_size_overflow", "hash_maintenance_material"))?;
+        count = count.checked_add(read as u64).ok_or_else(|| {
+            failure(
+                DatabaseCode::MaintenanceSizeOverflow.code(),
+                DatabaseLocation::HashMaintenanceMaterial.location(),
+            )
+        })?;
         limits.check(count, 1, deadline)?;
         hash.update(&buffer[..read]);
     }
     if count != length {
         return Err(failure(
-            "maintenance_material_changed",
-            "hash_maintenance_material",
+            DatabaseCode::MaintenanceMaterialChanged.code(),
+            DatabaseLocation::HashMaintenanceMaterial.location(),
         ));
     }
     Ok(MaintenanceFile {
@@ -490,22 +585,32 @@ pub fn list_material(
         require_regular_directory(&path)?;
         directories += 1;
         limits.check(bytes, files.len() + directories + pending.len(), deadline)?;
-        for entry in fs::read_dir(path).map_err(|error| io("list_maintenance_material", &error))? {
-            let entry = entry.map_err(|error| io("list_maintenance_material", &error))?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| failure("maintenance_path_invalid", "list_maintenance_material"))?;
+        for entry in fs::read_dir(path)
+            .map_err(|error| io(DatabaseLocation::ListMaintenanceMaterial.location(), &error))?
+        {
+            let entry = entry.map_err(|error| {
+                io(DatabaseLocation::ListMaintenanceMaterial.location(), &error)
+            })?;
+            let name = entry.file_name().into_string().map_err(|_| {
+                failure(
+                    DatabaseCode::MaintenancePathInvalid.code(),
+                    DatabaseLocation::ListMaintenanceMaterial.location(),
+                )
+            })?;
             let child = format!("{relative}/{name}");
             if excluded.contains(&child.as_str()) {
                 continue;
             }
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| io("inspect_maintenance_material", &error))?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                io(
+                    DatabaseLocation::InspectMaintenanceMaterial.location(),
+                    &error,
+                )
+            })?;
             if is_link_or_reparse(&metadata) {
                 return Err(failure(
-                    "maintenance_path_unsafe",
-                    "list_maintenance_material",
+                    DatabaseCode::MaintenancePathUnsafe.code(),
+                    DatabaseLocation::ListMaintenanceMaterial.location(),
                 ));
             }
             if metadata.is_dir() {
@@ -513,7 +618,10 @@ pub fn list_material(
             } else {
                 let file = inspect_file(root, &child, limits, deadline)?;
                 bytes = bytes.checked_add(file.byte_count).ok_or_else(|| {
-                    failure("maintenance_size_overflow", "list_maintenance_material")
+                    failure(
+                        DatabaseCode::MaintenanceSizeOverflow.code(),
+                        DatabaseLocation::ListMaintenanceMaterial.location(),
+                    )
                 })?;
                 files.push(file);
             }
@@ -528,41 +636,64 @@ pub fn list_material(
 pub fn resolve_maintenance_destination(target: &Path) -> RuntimeDatabaseResult<PathBuf> {
     if target.as_os_str().is_empty() {
         return Err(failure(
-            "maintenance_target_invalid",
-            "resolve_maintenance_target",
+            DatabaseCode::MaintenanceTargetInvalid.code(),
+            DatabaseLocation::ResolveMaintenanceTarget.location(),
         ));
     }
-    let absolute =
-        std::path::absolute(target).map_err(|error| io("resolve_maintenance_target", &error))?;
-    if absolute
-        .try_exists()
-        .map_err(|error| io("inspect_maintenance_target", &error))?
-    {
-        return absolute
-            .canonicalize()
-            .map_err(|error| io("resolve_maintenance_target", &error));
+    let absolute = std::path::absolute(target).map_err(|error| {
+        io(
+            DatabaseLocation::ResolveMaintenanceTarget.location(),
+            &error,
+        )
+    })?;
+    if absolute.try_exists().map_err(|error| {
+        io(
+            DatabaseLocation::InspectMaintenanceTarget.location(),
+            &error,
+        )
+    })? {
+        return absolute.canonicalize().map_err(|error| {
+            io(
+                DatabaseLocation::ResolveMaintenanceTarget.location(),
+                &error,
+            )
+        });
     }
     let parent = absolute
         .parent()
-        .ok_or_else(|| failure("maintenance_target_invalid", "resolve_maintenance_target"))?
+        .ok_or_else(|| {
+            failure(
+                DatabaseCode::MaintenanceTargetInvalid.code(),
+                DatabaseLocation::ResolveMaintenanceTarget.location(),
+            )
+        })?
         .canonicalize()
-        .map_err(|error| io("resolve_maintenance_target_parent", &error))?;
-    Ok(parent.join(
-        absolute
-            .file_name()
-            .ok_or_else(|| failure("maintenance_target_invalid", "resolve_maintenance_target"))?,
-    ))
+        .map_err(|error| {
+            io(
+                DatabaseLocation::ResolveMaintenanceTargetParent.location(),
+                &error,
+            )
+        })?;
+    Ok(parent.join(absolute.file_name().ok_or_else(|| {
+        failure(
+            DatabaseCode::MaintenanceTargetInvalid.code(),
+            DatabaseLocation::ResolveMaintenanceTarget.location(),
+        )
+    })?))
 }
 
 pub fn require_disjoint(source: &Path, target: &Path) -> RuntimeDatabaseResult<()> {
-    let source = source
-        .canonicalize()
-        .map_err(|error| io("resolve_maintenance_source", &error))?;
+    let source = source.canonicalize().map_err(|error| {
+        io(
+            DatabaseLocation::ResolveMaintenanceSource.location(),
+            &error,
+        )
+    })?;
     let target = resolve_maintenance_destination(target)?;
     if source.starts_with(&target) || target.starts_with(&source) {
         return Err(failure(
-            "maintenance_paths_overlap",
-            "validate_maintenance_paths",
+            DatabaseCode::MaintenancePathsOverlap.code(),
+            DatabaseLocation::ValidateMaintenancePaths.location(),
         ));
     }
     Ok(())
@@ -577,8 +708,8 @@ fn material_path(root: &Path, relative: &str) -> RuntimeDatabaseResult<PathBuf> 
             .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err(failure(
-            "maintenance_path_invalid",
-            "resolve_maintenance_material",
+            DatabaseCode::MaintenancePathInvalid.code(),
+            DatabaseLocation::ResolveMaintenanceMaterial.location(),
         ));
     }
     let mut path = root.to_path_buf();
@@ -604,21 +735,26 @@ fn copy_material(
     require_regular_file(&input)?;
     let output = material_path(target, relative)?;
     if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| io("create_backup_material_directory", &error))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            io(
+                DatabaseLocation::CreateBackupMaterialDirectory.location(),
+                &error,
+            )
+        })?;
     }
-    let mut source = fs::File::open(input).map_err(|error| io("open_backup_material", &error))?;
+    let mut source = fs::File::open(input)
+        .map_err(|error| io(DatabaseLocation::OpenBackupMaterial.location(), &error))?;
     let mut destination = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&output)
-        .map_err(|error| io("create_backup_material", &error))?;
+        .map_err(|error| io(DatabaseLocation::CreateBackupMaterial.location(), &error))?;
     let mut buffer = [0; 64 * 1024];
     let mut count = 0;
     loop {
         let read = source
             .read(&mut buffer)
-            .map_err(|error| io("read_backup_material", &error))?;
+            .map_err(|error| io(DatabaseLocation::ReadBackupMaterial.location(), &error))?;
         if read == 0 {
             break;
         }
@@ -626,16 +762,17 @@ fn copy_material(
         limits.check(count, 1, deadline)?;
         destination
             .write_all(&buffer[..read])
-            .map_err(|error| io("write_backup_material", &error))?;
+            .map_err(|error| io(DatabaseLocation::WriteBackupMaterial.location(), &error))?;
     }
     destination
         .sync_all()
-        .map_err(|error| io("sync_backup_material", &error))?;
-    sync_state_directory(
-        output
-            .parent()
-            .ok_or_else(|| failure("backup_parent_missing", "sync_backup_material"))?,
-    )
+        .map_err(|error| io(DatabaseLocation::SyncBackupMaterial.location(), &error))?;
+    sync_state_directory(output.parent().ok_or_else(|| {
+        failure(
+            DatabaseCode::BackupParentMissing.code(),
+            DatabaseLocation::SyncBackupMaterial.location(),
+        )
+    })?)
 }
 
 fn sync_file(path: &Path) -> RuntimeDatabaseResult<()> {
@@ -644,21 +781,25 @@ fn sync_file(path: &Path) -> RuntimeDatabaseResult<()> {
         .write(true)
         .open(path)
         .and_then(|file| file.sync_all())
-        .map_err(|error| io("sync_backup_database", &error))
+        .map_err(|error| io(DatabaseLocation::SyncBackupDatabase.location(), &error))
 }
 fn write_new(path: &Path, bytes: &[u8]) -> RuntimeDatabaseResult<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| io("create_backup_manifest", &error))?;
+        .map_err(|error| io(DatabaseLocation::CreateBackupManifest.location(), &error))?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| io("sync_backup_manifest", &error))
+        .map_err(|error| io(DatabaseLocation::SyncBackupManifest.location(), &error))
 }
 pub fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
-fn io(operation: &'static str, error: &std::io::Error) -> RuntimeDatabaseError {
-    RuntimeDatabaseError::io("database_maintenance_io_failed", operation, error)
+fn io(operation: Location, error: &std::io::Error) -> RuntimeDatabaseError {
+    RuntimeDatabaseError::io(
+        DatabaseCode::DatabaseMaintenanceIoFailed.code(),
+        operation,
+        error,
+    )
 }

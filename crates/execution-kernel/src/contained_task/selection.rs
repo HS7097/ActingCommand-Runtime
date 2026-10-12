@@ -18,6 +18,9 @@ use super::{
     ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, TaskControl,
     TaskOperation, TaskProgram, safe_task_local_path, sampled_tap, scene_from_frame,
 };
+use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CandidateFeature, CandidateProjection, InputAction, InputSamplingEvidence,
     InstanceFactSnapshot, TaskSelectionConfirmation, TaskSelectionPolicy, TaskSelectionRecord,
@@ -38,22 +41,25 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-const SELECT_INVALID: &str = "contained_task_select_invalid";
-const SELECT_POLICY_MISSING: &str = "contained_task_select_policy_missing";
-const SELECT_POLICY_HASH_MISMATCH: &str = "contained_task_select_policy_hash_mismatch";
-const SELECT_POLICY_INVALID: &str = "contained_task_select_policy_invalid";
-const SELECT_POLICY_MISMATCH: &str = "contained_task_select_policy_mismatch";
-const SELECTION_STATE_UNAVAILABLE: &str = "selection_state_unavailable";
-const SELECTION_FACT_CONTEXT_MISMATCH: &str = "selection_fact_context_mismatch";
-const SELECTION_EVALUATION_FAILED: &str = "selection_evaluation_failed";
-const SELECTION_NOT_SELECTED: &str = "selection_not_selected";
-const SELECTION_PAGE_CHANGED: &str = "selection_page_changed";
-const SELECTION_PROJECTION_MISMATCH: &str = "selection_projection_mismatch";
+const SELECT_INVALID: Code = ExecutionKernelCode::ContainedTaskSelectInvalid.code();
+const SELECT_POLICY_MISSING: Code = ExecutionKernelCode::ContainedTaskSelectPolicyMissing.code();
+const SELECT_POLICY_HASH_MISMATCH: Code =
+    ExecutionKernelCode::ContainedTaskSelectPolicyHashMismatch.code();
+const SELECT_POLICY_INVALID: Code = ExecutionKernelCode::ContainedTaskSelectPolicyInvalid.code();
+const SELECT_POLICY_MISMATCH: Code = ExecutionKernelCode::ContainedTaskSelectPolicyMismatch.code();
+const SELECTION_STATE_UNAVAILABLE: Code = ExecutionKernelCode::SelectionStateUnavailable.code();
+const SELECTION_FACT_CONTEXT_MISMATCH: Code =
+    ExecutionKernelCode::SelectionFactContextMismatch.code();
+const SELECTION_EVALUATION_FAILED: Code = ExecutionKernelCode::SelectionEvaluationFailed.code();
+const SELECTION_NOT_SELECTED: Code = ExecutionKernelCode::SelectionNotSelected.code();
+const SELECTION_PAGE_CHANGED: Code = ExecutionKernelCode::SelectionPageChanged.code();
+const SELECTION_PROJECTION_MISMATCH: Code = ExecutionKernelCode::SelectionProjectionMismatch.code();
 /// The confirmation code a record carries when the runtime's own capture of the confirmation
 /// frame fails, nonfatally or fatally; the task then fails with the runtime's error.
-const SELECTION_CONFIRMATION_CAPTURE_FAILED: &str = "selection_confirmation_capture_failed";
+const SELECTION_CONFIRMATION_CAPTURE_FAILED: Code =
+    ExecutionKernelCode::SelectionConfirmationCaptureFailed.code();
 /// A dry run's frame is not the step's page.
-const SELECT_PAGE_MISMATCH: &str = "select_page_mismatch";
+const SELECT_PAGE_MISMATCH: Code = ExecutionKernelCode::SelectPageMismatch.code();
 
 /// What a select step asks its runtime for (Workflow #308).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,9 +163,9 @@ impl SelectedCandidate {
     ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
         self.click.validate(resolution)?;
         let (action, sampling) = sampled_tap(self.click, action_seed)?;
-        action
-            .validate()
-            .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        action.validate().map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
         if let InputAction::Tap { x, y } = &action {
             resolution.validate_point(*x, *y)?;
         }
@@ -184,7 +190,7 @@ pub(super) fn prepare_select_steps(
         let Some(select) = &operation.select else {
             continue;
         };
-        let failure = |code: &'static str, detail: String| {
+        let failure = |code: Code, detail: String| {
             ContainedTaskError::with_detail(code, format!("operation={} {detail}", operation.id))
         };
         let layout = evaluator
@@ -572,7 +578,7 @@ impl PreparedContainedTask {
         let check_deadline = || {
             if Instant::now() >= deadline {
                 Err(ContainedTaskError::new(
-                    "candidate_sample_deadline_exceeded",
+                    ExecutionKernelCode::CandidateSampleDeadlineExceeded.code(),
                 ))
             } else {
                 Ok(())
@@ -584,9 +590,10 @@ impl PreparedContainedTask {
                 .candidate_sampling_checkpoint()
                 .map_err(ContainedTaskRunError::operation::<R>)?
             {
-                return Err(
-                    ContainedTaskError::new("candidate_sampling_runtime_unsupported").into(),
-                );
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::CandidateSamplingRuntimeUnsupported.code(),
+                )
+                .into());
             }
             let transaction_ms = layout
                 .maximum_provider_and_wait_ms(&self.evaluator)
@@ -597,7 +604,10 @@ impl PreparedContainedTask {
             if Duration::from_millis(transaction_ms)
                 > deadline.saturating_duration_since(Instant::now())
             {
-                return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
+                )
+                .into());
             }
         }
         let mut frames = Vec::with_capacity(layout.required_frames().saturating_sub(1));
@@ -605,7 +615,10 @@ impl PreparedContainedTask {
             check_deadline()?;
             let interval = Duration::from_millis(u64::from(layout.sample_interval_ms));
             if interval > deadline.saturating_duration_since(Instant::now()) {
-                return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
+                )
+                .into());
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
@@ -633,9 +646,10 @@ impl PreparedContainedTask {
                     _ => true,
                 }
             {
-                return Err(
-                    ContainedTaskError::new("candidate_sample_page_or_geometry_changed").into(),
-                );
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::CandidateSamplePageOrGeometryChanged.code(),
+                )
+                .into());
             }
             frames.push(frame);
         }
@@ -649,7 +663,10 @@ impl PreparedContainedTask {
                     * u64::from(layout.sample_interval_ms),
             );
         if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(Instant::now()) {
-            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
+            )
+            .into());
         }
         let mut recording_error = None;
         let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(deadline).project_candidates_with_samples(
@@ -662,7 +679,7 @@ impl PreparedContainedTask {
                     recording_error = Some(error);
                     return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("runtime rejected candidate sample recording"));
                 }
-                check_deadline().map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code()))
+                check_deadline().map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code().as_str()))
             });
         if let Some(error) = recording_error {
             return Err(ContainedTaskRunError::Boundary(error));
@@ -715,7 +732,10 @@ impl PreparedContainedTask {
                 || Duration::from_millis(required_ms)
                     > deadline.saturating_duration_since(Instant::now()))
         {
-            return Err(ContainedTaskError::new("candidate_sample_budget_insufficient").into());
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
+            )
+            .into());
         }
         let (projection, _) =
             self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
@@ -806,7 +826,10 @@ impl PreparedContainedTask {
         match recorded {
             Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
             Ok(()) if result.is_ok() && sampling_budget.is_some() && Instant::now() >= deadline => {
-                Err(ContainedTaskError::new("candidate_sample_deadline_exceeded").into())
+                Err(ContainedTaskError::new(
+                    ExecutionKernelCode::CandidateSampleDeadlineExceeded.code(),
+                )
+                .into())
             }
             // A `run_ending` record's failure stays with the runtime; the capture's error is
             // returned unchanged.
@@ -846,7 +869,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: error.code().to_owned(),
+                        code: error.code().as_str().to_owned(),
                     },
                     Err(error.into()),
                 ));
@@ -854,7 +877,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::NonfatalOperation(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
                     },
                     Err(ContainedTaskRunError::NonfatalOperation(error)),
                 ));
@@ -865,7 +888,7 @@ impl PreparedContainedTask {
             {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
                     },
                     Err(ContainedTaskRunError::Boundary(error)),
                 ));
@@ -909,7 +932,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::GuardFailed {
-                        code: error.code().to_owned(),
+                        code: error.code().as_str().to_owned(),
                     },
                     Err(error.into()),
                 ));
@@ -936,7 +959,7 @@ impl PreparedContainedTask {
                             Err(ContainedTaskRunError::Task(error)) => {
                                 return Ok((
                                     TaskSelectionConfirmation::GuardFailed {
-                                        code: error.code().to_owned(),
+                                        code: error.code().as_str().to_owned(),
                                     },
                                     Err(error.into()),
                                 ));
@@ -949,7 +972,7 @@ impl PreparedContainedTask {
                 Err(ContainedTaskRunError::Task(error)) => {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: error.code().to_owned(),
+                            code: error.code().as_str().to_owned(),
                         },
                         Err(error.into()),
                     ));
@@ -957,7 +980,7 @@ impl PreparedContainedTask {
                 Err(ContainedTaskRunError::NonfatalOperation(error)) => {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
                         },
                         Err(ContainedTaskRunError::NonfatalOperation(error)),
                     ));
@@ -967,7 +990,7 @@ impl PreparedContainedTask {
                 {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.to_owned(),
+                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
                         },
                         Err(ContainedTaskRunError::Boundary(error)),
                     ));
@@ -1044,7 +1067,10 @@ pub fn dry_run_select(
         .iter()
         .find(|operation| operation.id == operation_id)
         .ok_or_else(|| {
-            ContainedTaskError::with_detail("contained_task_operation_missing", operation_id)
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                operation_id,
+            )
         })?;
     let prepared = operation.prepared_select.as_deref().ok_or_else(|| {
         ContainedTaskError::with_detail(
@@ -1058,8 +1084,11 @@ pub fn dry_run_select(
         .detector
         .evaluate_all(&task.evaluator, &scene)
         .map_err(|error| {
-            ContainedTaskError::with_detail("contained_task_recognition_failed", error.to_string())
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            ContainedTaskError::with_detail(
+                SharedCode::ContainedTaskRecognitionFailed.code(),
+                error.to_string(),
+            )
+            .with_ppocr_diagnostics(error.ppocr_diagnostics())
         })?;
     let matched = evaluations
         .iter()

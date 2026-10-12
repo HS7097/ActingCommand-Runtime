@@ -1,0 +1,57 @@
+{
+  "owner": "selection-policy",
+  "codes": {
+    "arithmetic_overflow": {
+      "category": "error",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection-policy evaluation is refused: a score, weight or transform computation leaves the integer range.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "float_rejected": {
+      "category": "error",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection-policy document or evaluation input is refused because it holds a floating-point number; scores and values are milli integers.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "integer_out_of_range": {
+      "category": "error",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection-policy document or evaluation input is refused because an integer lies outside the safe integer range of canonical JSON.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "read_failed": {
+      "category": "error",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The offline selection-eval shell cannot read one of its input files (policy, candidates or facts).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

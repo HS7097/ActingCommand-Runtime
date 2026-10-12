@@ -5,13 +5,15 @@ use crate::catalog_plan::{
     CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
     decide_catalog_transition,
 };
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::SharedCode;
 
 impl HostShared {
     pub(super) fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
         if let Some(error) = self.fatal.current()? {
             return Err(error);
         }
-        Ok(lock(self.policy()?, "read_active_policy_catalog")?.active_generation())
+        Ok(lock(self.policy()?, HostLocation::ReadActivePolicyCatalog)?.active_generation())
     }
 
     pub(super) fn activate_policy_catalog(
@@ -32,7 +34,7 @@ impl HostShared {
         approval_ids: &[String],
     ) -> RuntimeHostResult<CatalogTransitionPlan> {
         let (generation, active, lineage) = {
-            let policy = lock(self.policy()?, "plan_policy_catalog_transition")?;
+            let policy = lock(self.policy()?, HostLocation::PlanPolicyCatalogTransition)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -63,7 +65,7 @@ impl HostShared {
         plan: &CatalogTransitionPlan,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, active) = {
-            let policy = lock(self.policy()?, "apply_policy_catalog_transition")?;
+            let policy = lock(self.policy()?, HostLocation::ApplyPolicyCatalogTransition)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -74,15 +76,15 @@ impl HostShared {
         };
         if active != plan.active {
             return Err(RuntimeHostError::request(
-                "catalog_active_generation_changed",
-                "apply_policy_catalog_transition",
+                HostCode::CatalogActiveGenerationChanged,
+                HostLocation::ApplyPolicyCatalogTransition,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
         if *catalog.generation() != plan.generation {
             return Err(RuntimeHostError::fatal(
-                "catalog_plan_generation_mismatch",
-                "apply_policy_catalog_transition",
+                HostCode::CatalogPlanGenerationMismatch,
+                HostLocation::ApplyPolicyCatalogTransition,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -113,7 +115,7 @@ impl HostShared {
         promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
-            let policy = lock(self.policy()?, "stage_policy_catalog")?;
+            let policy = lock(self.policy()?, HostLocation::StagePolicyCatalog)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -132,8 +134,8 @@ impl HostShared {
                 || catalog.generation().catalog_version() <= current.catalog_version())
         {
             return Err(RuntimeHostError::request(
-                "catalog_activation_not_newer",
-                "activate_policy_catalog",
+                HostCode::CatalogActivationNotNewer,
+                HostLocation::ActivatePolicyCatalog,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
@@ -155,14 +157,14 @@ impl HostShared {
         catalog_hash: &str,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous, lineage) = {
-            let policy = lock(self.policy()?, "load_policy_catalog_rollback")?;
+            let policy = lock(self.policy()?, HostLocation::LoadPolicyCatalogRollback)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
             let previous = policy.active_generation().ok_or_else(|| {
                 RuntimeHostError::request(
-                    "policy_catalog_unavailable",
-                    "rollback_policy_catalog",
+                    SharedCode::PolicyCatalogUnavailable,
+                    HostLocation::RollbackPolicyCatalog,
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
@@ -187,8 +189,8 @@ impl HostShared {
             CatalogTransitionPlanKind::First
             | CatalogTransitionPlanKind::Forward
             | CatalogTransitionPlanKind::Switch => Err(RuntimeHostError::request(
-                "catalog_rollback_not_older",
-                "rollback_policy_catalog",
+                HostCode::CatalogRollbackNotOlder,
+                HostLocation::RollbackPolicyCatalog,
                 RuntimeErrorCode::InvalidRequest,
             )),
         }
@@ -231,7 +233,7 @@ impl HostShared {
             let intent = self.events.sanitize(intent)?;
             let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
                 .map_err(|_| critical_plan_error())?;
-            let mut policy = lock(self.policy()?, "switch_active_policy_catalog")?;
+            let mut policy = lock(self.policy()?, HostLocation::SwitchActivePolicyCatalog)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -269,13 +271,13 @@ impl HostShared {
                         return Err(error);
                     };
                     let original = if rejection.fatal {
-                        RuntimeHostError::fatal(
+                        RuntimeHostError::relayed_fatal(
                             rejection.code,
                             rejection.operation,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     } else {
-                        RuntimeHostError::request(
+                        RuntimeHostError::relayed_request(
                             rejection.code,
                             rejection.operation,
                             RuntimeErrorCode::InvalidRequest,
@@ -302,8 +304,8 @@ impl HostShared {
                         Ok(draft) => draft,
                         Err(error) => {
                             let error = RuntimeHostError::fatal(
-                                "catalog_failure_fact_undurable",
-                                "build_catalog_failure",
+                                HostCode::CatalogFailureFactUndurable,
+                                HostLocation::BuildCatalogFailure,
                                 RuntimeErrorCode::LedgerFailure,
                             )
                             .with_native_detail(format!(
@@ -318,8 +320,8 @@ impl HostShared {
                     )
                     .map_err(|error| {
                         RuntimeHostError::fatal(
-                            "catalog_failure_fact_undurable",
-                            "validate_catalog_failure",
+                            HostCode::CatalogFailureFactUndurable,
+                            HostLocation::ValidateCatalogFailure,
                             RuntimeErrorCode::LedgerFailure,
                         )
                         .with_native_detail(format!("original={original:?}; failure={error:?}"))

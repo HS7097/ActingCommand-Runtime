@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{DiagnosticEventCode, RuntimeErrorCode, SharedCode};
+use crate::outcome::Code;
 use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+
+pub use crate::codes::{DeviceSelfCheckFailure, GovernanceIdentityRefusal};
 
 macro_rules! closed_code {
     ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
@@ -12,6 +16,9 @@ macro_rules! closed_code {
         }
 
         impl $name {
+            /// Every token of this set, in declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $wire),+
@@ -164,41 +171,149 @@ closed_code!(EventAction {
     DeviceSelfCheck => "device.self_check",
 });
 
-closed_code!(DiagnosticCode {
-    ProviderStartupFailed => "provider_startup_failed",
-    RuntimeDiagnostic => "runtime.diagnostic",
-    RuntimeOwnerConflict => "runtime.owner_conflict",
-    RuntimeProtocolInvalid => "runtime.protocol_invalid",
-    LeaseBusy => "lease.busy",
-    LeaseCooldown => "lease.cooldown",
-    LeaseExpired => "lease.expired",
-    LeaseFencingDenied => "lease.fencing_denied",
-    LeaseQueueCancelled => "lease.queue_cancelled",
-    LeaseQueueExpired => "lease.queue_expired",
-    LeaseQueueDisconnected => "lease.queue_disconnected",
-    BackendOpenFailed => "backend.open_failed",
-    BackendOperationFailed => "backend.operation_failed",
-    CaptureFailed => "capture.failed",
-    ArtifactWriteFailed => "artifact.write_failed",
-    ArtifactVerifyFailed => "artifact.verify_failed",
-    ArtifactExportFailed => "artifact.export_failed",
-    PinnedFrameMissing => "artifact.pinned_frame_missing",
-    RecognitionFailed => "recognition.failed",
-    InputFailed => "input.failed",
-    ApplicationFailed => "application.failed",
-    CommandRejected => "command.rejected",
-    PolicyRejected => "policy.rejected",
-    CatalogTransitionFailed => "catalog.transition_failed",
-    ReleaseTransitionFailed => "release.transition_failed",
-});
+/// The closed set of codes a ledger diagnostic names (Workflow #378 A2a, decision D4). Each
+/// variant is one registered contract code and travels as that code's spelling; the set is a
+/// closed type, not a registry of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DiagnosticCode {
+    ProviderStartupFailed,
+    RuntimeDiagnostic,
+    RuntimeOwnerConflict,
+    RuntimeProtocolInvalid,
+    LeaseBusy,
+    LeaseCooldown,
+    LeaseExpired,
+    LeaseFencingDenied,
+    LeaseQueueCancelled,
+    LeaseQueueExpired,
+    LeaseQueueDisconnected,
+    BackendOpenFailed,
+    BackendOperationFailed,
+    CaptureFailed,
+    ArtifactWriteFailed,
+    ArtifactVerifyFailed,
+    ArtifactExportFailed,
+    PinnedFrameMissing,
+    RecognitionFailed,
+    InputFailed,
+    ApplicationFailed,
+    CommandRejected,
+    PolicyRejected,
+    CatalogTransitionFailed,
+    ReleaseTransitionFailed,
+}
 
-// Workflow #318 cfg4: why the Runtime refused a governance identity card; the
-// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
-closed_code!(GovernanceIdentityRefusal {
-    ClientNotAllowed => "governance_client_not_allowed",
-    InstanceUnknown => "governance_instance_unknown",
-    AlreadyDeclared => "governance_identity_already_declared",
-});
+impl DiagnosticCode {
+    /// Every diagnostic code, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::ProviderStartupFailed,
+        Self::RuntimeDiagnostic,
+        Self::RuntimeOwnerConflict,
+        Self::RuntimeProtocolInvalid,
+        Self::LeaseBusy,
+        Self::LeaseCooldown,
+        Self::LeaseExpired,
+        Self::LeaseFencingDenied,
+        Self::LeaseQueueCancelled,
+        Self::LeaseQueueExpired,
+        Self::LeaseQueueDisconnected,
+        Self::BackendOpenFailed,
+        Self::BackendOperationFailed,
+        Self::CaptureFailed,
+        Self::ArtifactWriteFailed,
+        Self::ArtifactVerifyFailed,
+        Self::ArtifactExportFailed,
+        Self::PinnedFrameMissing,
+        Self::RecognitionFailed,
+        Self::InputFailed,
+        Self::ApplicationFailed,
+        Self::CommandRejected,
+        Self::PolicyRejected,
+        Self::CatalogTransitionFailed,
+        Self::ReleaseTransitionFailed,
+    ];
+
+    /// The registered contract code this variant names.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::ProviderStartupFailed => DiagnosticEventCode::ProviderStartupFailed.code(),
+            Self::RuntimeDiagnostic => DiagnosticEventCode::RuntimeDiagnostic.code(),
+            Self::RuntimeOwnerConflict => RuntimeErrorCode::OwnerConflict.code(),
+            Self::RuntimeProtocolInvalid => RuntimeErrorCode::ProtocolInvalid.code(),
+            Self::LeaseBusy => RuntimeErrorCode::LeaseBusy.code(),
+            Self::LeaseCooldown => RuntimeErrorCode::LeaseCooldown.code(),
+            Self::LeaseExpired => RuntimeErrorCode::LeaseExpired.code(),
+            Self::LeaseFencingDenied => DiagnosticEventCode::LeaseFencingDenied.code(),
+            Self::LeaseQueueCancelled => DiagnosticEventCode::LeaseQueueCancelled.code(),
+            Self::LeaseQueueExpired => SharedCode::LeaseQueueExpired.code(),
+            Self::LeaseQueueDisconnected => DiagnosticEventCode::LeaseQueueDisconnected.code(),
+            Self::BackendOpenFailed => RuntimeErrorCode::BackendOpenFailed.code(),
+            Self::BackendOperationFailed => RuntimeErrorCode::BackendOperationFailed.code(),
+            Self::CaptureFailed => RuntimeErrorCode::CaptureFailed.code(),
+            Self::ArtifactWriteFailed => SharedCode::ArtifactWriteFailed.code(),
+            Self::ArtifactVerifyFailed => SharedCode::ArtifactVerifyFailed.code(),
+            Self::ArtifactExportFailed => DiagnosticEventCode::ArtifactExportFailed.code(),
+            Self::PinnedFrameMissing => DiagnosticEventCode::ArtifactPinnedFrameMissing.code(),
+            Self::RecognitionFailed => RuntimeErrorCode::RecognitionFailed.code(),
+            Self::InputFailed => DiagnosticEventCode::InputFailed.code(),
+            Self::ApplicationFailed => DiagnosticEventCode::ApplicationFailed.code(),
+            Self::CommandRejected => DiagnosticEventCode::CommandRejected.code(),
+            Self::PolicyRejected => DiagnosticEventCode::PolicyRejected.code(),
+            Self::CatalogTransitionFailed => DiagnosticEventCode::CatalogTransitionFailed.code(),
+            Self::ReleaseTransitionFailed => DiagnosticEventCode::ReleaseTransitionFailed.code(),
+        }
+    }
+
+    /// The registered spelling, which is also the wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        self.code().as_str()
+    }
+}
+
+impl fmt::Display for DiagnosticCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for DiagnosticCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DiagnosticCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DiagnosticCodeVisitor;
+
+        impl Visitor<'_> for DiagnosticCodeVisitor {
+            type Value = DiagnosticCode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a registered diagnostic code")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                DiagnosticCode::ALL
+                    .iter()
+                    .copied()
+                    .find(|code| code.as_str() == value)
+                    .ok_or_else(|| E::custom("invalid schema-owned code"))
+            }
+        }
+
+        deserializer.deserialize_str(DiagnosticCodeVisitor)
+    }
+}
 
 // Workflow #317 sc3: one `device.self_check` status hint per recorded backend open.
 closed_code!(DeviceSelfCheckEntry {
@@ -211,16 +326,6 @@ closed_code!(DeviceSelfCheckStatus {
     Passed => "passed",
     Failed => "failed",
     Unknown => "unknown",
-});
-
-// Why a `device.self_check` failed: the entry's open (its status or connection) or, the open
-// having passed, the entry's own check.
-closed_code!(DeviceSelfCheckFailure {
-    InputBackendOpenFailed => "input_backend_open_failed",
-    CaptureBackendOpenFailed => "capture_backend_open_failed",
-    PairedBackendOpenFailed => "paired_backend_open_failed",
-    InputCheckFailed => "input_check_failed",
-    CaptureCheckFailed => "capture_check_failed",
 });
 
 closed_code!(RecognitionVerdict {

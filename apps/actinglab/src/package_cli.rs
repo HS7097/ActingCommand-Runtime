@@ -32,7 +32,7 @@ pub(super) fn run_preflight(flags: &FlagArgs) -> CliOutcome<Value> {
         .map_err(|_| CliError::package_invalid("preflight package ownership is shared"))?;
     let prepared = actingcommand_lab::PreparedContainedTask::from_bundle(bundle).map_err(|error| {
         CliError::package_invalid(format!("{}: {}", error.code(), error.detail().unwrap_or("task preparation failed")))
-            .with_details(json!({"code":error.code(),"declaration":error.declaration_issue(),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
+            .with_details(json!({"code":error.code().as_str(),"declaration":error.declaration_issue(),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
     })?;
     Ok(json!({
         "schema_version":"actingcommand.package-preflight.v1", "status":"prepared", "executed":false,

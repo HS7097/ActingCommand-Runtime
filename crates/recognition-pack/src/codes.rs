@@ -1,26 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The recognition pack's outcome codes (Workflow #378). Every entry is listed in the fragment
-//! `contracts/outcome-codes/recognition-pack.json`; the outcome guard (G1) checks both
-//! directions. Until slice A2d converts this crate, a code travels as its spelling
-//! (`RecognitionPackCode::as_str`) through [`crate::CandidateProjectionFailure`], with only
-//! `key=value` tokens in its detail.
+//! The recognition pack's outcome codes (Workflow #378 A2d). Every entry is listed in the
+//! fragment `contracts/outcome-codes/recognition-pack.json`; the outcome guard (G1) checks both
+//! directions. A candidate projection failure ([`crate::CandidateProjectionFailure`]) carries
+//! one of these, or one of the contract's `CandidateProjectionCode`s.
 
 actingcommand_contract::outcome_codes! {
-    /// Codes the recognition pack registered ahead of the A2d sweep (Workflow #308, list
-    /// selector slice L1).
-    pub(crate) enum RecognitionPackCode {
-        /// Error. The anchor search of a `repeated_anchor` layout reached its time limit before
-        /// it had scored every row of its region; no partial candidate set is returned (keys
-        /// `stage`, `timeout_ms`, `count`: the positions found by then).
+    /// Why no candidate projection was produced.
+    pub enum RecognitionPackCode {
+        CandidateLayoutUnknown => "candidate_layout_unknown": error,
+        CandidateFeatureFailed => "candidate_feature_failed": error,
+        CandidateFeatureProviderMissing => "candidate_feature_provider_missing": error,
+        CandidateSamplesUnavailable => "candidate_samples_unavailable": error,
+        CandidateSampleGeometryChanged => "candidate_sample_geometry_changed": error,
+        CandidateSampleRecordFailed => "candidate_sample_record_failed": error,
+        // Workflow #308 list selector L1 (begin).
+        /// The anchor search of a `repeated_anchor` layout reached its time limit before it had
+        /// scored every row of its region; no partial candidate set is returned (keys `stage`,
+        /// `timeout_ms`, `count`: the positions found by then).
         CandidateSearchIncomplete => "candidate_search_incomplete": error,
+        // Workflow #308 list selector L1 (end).
     }
 }
 
+// Workflow #308 list selector L1 (begin).
 actingcommand_contract::outcome_locations! {
-    /// Locations the recognition pack registered ahead of the A2d sweep (Workflow #308).
-    pub(crate) enum RecognitionPackLocation {
+    /// Where in the recognition pack a result arose.
+    pub enum RecognitionPackLocation {
         /// Enumerating the anchor matches of a `repeated_anchor` candidate layout.
         CandidateSearchRepeatedAnchor => "candidate_search_repeated_anchor",
     }
 }
+// Workflow #308 list selector L1 (end).

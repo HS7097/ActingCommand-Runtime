@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::GlobalLedgerError;
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::{PersistedEvent, fact::LedgerEventRead};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, DiagnosticCode, EventId,
     EventPayload, EventQuery, EventSource, EventType, FrameId, InstanceId, LeaseId, LedgerView,
@@ -375,32 +377,32 @@ pub(super) fn project_scheduling_outcomes(
 ) -> Result<SchedulingOutcomeProjection, GlobalLedgerError> {
     if ledger_position < expected.terminal_sequence() {
         return Err(GlobalLedgerError::request(
-            "outcome_projection_not_ready",
-            "project_scheduling_outcomes",
+            SharedCode::OutcomeProjectionNotReady.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     }
     let [terminal] = terminals else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_terminal_not_unique",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionTerminalNotUnique.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let [admitted] = admissions else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_admission_not_unique",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionAdmissionNotUnique.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let [lease_granted] = leases else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_lease_not_unique",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionLeaseNotUnique.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let EventPayload::Task(TaskPayload::Semantic(terminal_payload)) = terminal.payload() else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_terminal_invalid",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionTerminalInvalid.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let TaskSemanticFact::TerminalCommitted {
@@ -411,15 +413,15 @@ pub(super) fn project_scheduling_outcomes(
     } = terminal_payload.fact()
     else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_terminal_invalid",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionTerminalInvalid.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let EventPayload::Policy(PolicyPayload::DispatchAdmitted(admission)) = admitted.payload()
     else {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_admission_invalid",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionAdmissionInvalid.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     };
     let terminal_links = terminal.links();
@@ -449,8 +451,8 @@ pub(super) fn project_scheduling_outcomes(
         || admitted.sequence() >= terminal.sequence()
     {
         return Err(GlobalLedgerError::fatal(
-            "outcome_projection_identity_mismatch",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionIdentityMismatch.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         ));
     }
     let outcome = AuthoritativeSchedulingOutcome::new(
@@ -460,12 +462,15 @@ pub(super) fn project_scheduling_outcomes(
     )
     .map_err(|_| {
         GlobalLedgerError::fatal(
-            "outcome_projection_identity_invalid",
-            "project_scheduling_outcomes",
+            LedgerCode::OutcomeProjectionIdentityInvalid.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         )
     })?;
     SchedulingOutcomeProjection::new(ledger_position, outcome).map_err(|_| {
-        GlobalLedgerError::fatal("outcome_projection_invalid", "project_scheduling_outcomes")
+        GlobalLedgerError::fatal(
+            LedgerCode::OutcomeProjectionInvalid.code(),
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
+        )
     })
 }
 

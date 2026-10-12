@@ -2,6 +2,8 @@
 
 //! Pure read-only recognition decisions over caller-supplied resources and scenes.
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{EnvResolved, NeedsDetection};
 use actingcommand_page_detector::{PageDetector, PageTargetEvaluation, TimedPageEvaluation};
 use actingcommand_recognition::{MatchMetric, Scene};
@@ -164,7 +166,7 @@ impl ReadonlyRecognitionEngine {
                     .then(|| {
                         needs_detection(
                             "recognize",
-                            "target_below_threshold",
+                            SharedCode::TargetBelowThreshold.code(),
                             target,
                             &self.env_resolved,
                         )
@@ -241,7 +243,7 @@ impl ReadonlyRecognitionEngine {
                 .then(|| {
                     needs_detection(
                         "is-visible",
-                        "target_below_threshold",
+                        SharedCode::TargetBelowThreshold.code(),
                         target,
                         &self.env_resolved,
                     )
@@ -299,7 +301,14 @@ pub fn detect_current_page(
         req_id: None,
         reco_id: None,
         needs_detection: standby
-            .then(|| needs_detection(command, "current_page_unknown", &page, &env_resolved))
+            .then(|| {
+                needs_detection(
+                    command,
+                    SharedCode::CurrentPageUnknown.code(),
+                    &page,
+                    &env_resolved,
+                )
+            })
             .flatten(),
         env_resolved,
     })
@@ -307,7 +316,7 @@ pub fn detect_current_page(
 
 pub fn needs_detection(
     command: &str,
-    reason: &str,
+    reason: Code,
     subject: &str,
     values: &[EnvResolved],
 ) -> Option<NeedsDetection> {
@@ -316,7 +325,7 @@ pub fn needs_detection(
     }
     Some(NeedsDetection {
         status: "needs_detection".to_string(),
-        reason: reason.to_string(),
+        reason: reason.as_str().to_string(),
         command: Some(command.to_string()),
         subject: Some(subject.to_string()),
         detector_ids: values

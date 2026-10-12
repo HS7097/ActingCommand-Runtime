@@ -2,12 +2,15 @@
 
 //! Runtime-owned admission and execution for contained semantic task packages.
 
+use crate::codes::ExecutionKernelCode;
 use crate::{
     ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, InputFrameContext,
     ObservedFrame, RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
     RunOperationFailureDecision, RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal,
     decide_run_operation_failure, select_run_operation,
 };
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ApplicationLifecycleAction, EffectiveOperationTiming, EffectiveTaskTiming,
     EffectiveTimingSource, EffectiveTimingValue, InputAction, InputSamplingEvidence,
@@ -61,13 +64,15 @@ const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
 const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_PREREQUISITE_PACKAGE_ID_BYTES: usize = 256;
-const PREREQUISITE_ENTRY_UNMATCHED: &str = "contained_task_prerequisite_entry_unmatched";
+const PREREQUISITE_ENTRY_UNMATCHED: Code =
+    ExecutionKernelCode::ContainedTaskPrerequisiteEntryUnmatched.code();
 /// Workflow #371-2: a page-graph step whose operation decided Fail after its postcondition was
 /// not confirmed, without a declared error page.
-const STEP_UNCONFIRMED: &str = "contained_task_step_unconfirmed";
+const STEP_UNCONFIRMED: Code = ExecutionKernelCode::ContainedTaskStepUnconfirmed.code();
 /// Workflow #371-2: a page-graph step whose operation decided Fail on a declared error page.
-const ERROR_PAGE_REACHED: &str = "contained_task_error_page_reached";
-const RETURN_HOME_ENTRY_UNMATCHED: &str = "contained_task_return_home_entry_unmatched";
+const ERROR_PAGE_REACHED: Code = ExecutionKernelCode::ContainedTaskErrorPageReached.code();
+const RETURN_HOME_ENTRY_UNMATCHED: Code =
+    ExecutionKernelCode::ContainedTaskReturnHomeEntryUnmatched.code();
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
 const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
 const MAX_POST_ADMISSION_OCR_ITEMS: u32 = 4_096;
@@ -97,18 +102,63 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// A contained task failure's code: a registered code, or a code of the runtime host that the
+/// host relays through [`ContainedTaskRunError::task`] and that A2b registers (Workflow #378).
+/// Either way the failure is reported by its spelling ([`ContainedTaskCode::as_str`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ContainedTaskCode {
+    Registered(Code),
+    Host { host_code: &'static str },
+}
+
+impl ContainedTaskCode {
+    /// The code's spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Registered(code) => code.as_str(),
+            Self::Host { host_code } => host_code,
+        }
+    }
+}
+
+impl From<Code> for ContainedTaskCode {
+    fn from(code: Code) -> Self {
+        Self::Registered(code)
+    }
+}
+
+/// Prints the spelling as the former `&'static str` code did, so a derived `Debug` of a type
+/// that holds the code is unchanged.
+impl fmt::Debug for ContainedTaskCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), formatter)
+    }
+}
+
+impl fmt::Display for ContainedTaskCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainedTaskError {
-    code: &'static str,
+    code: ContainedTaskCode,
     detail: Option<String>,
-    timing: Option<TaskTimingFailure>,
+    /// Boxed: only timed failures carry it, and inline it would put the error at 128 bytes now
+    /// that the code is a 24-byte `ContainedTaskCode` (clippy `result_large_err`).
+    timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
 }
 
 impl ContainedTaskError {
-    fn new(code: &'static str) -> Self {
+    fn new(code: impl Into<Code>) -> Self {
+        Self::from_code(ContainedTaskCode::Registered(code.into()))
+    }
+
+    fn from_code(code: ContainedTaskCode) -> Self {
         Self {
             code,
             detail: None,
@@ -119,9 +169,9 @@ impl ContainedTaskError {
         }
     }
 
-    pub fn with_detail(code: &'static str, detail: impl Into<String>) -> Self {
+    pub fn with_detail(code: impl Into<Code>, detail: impl Into<String>) -> Self {
         Self {
-            code,
+            code: ContainedTaskCode::Registered(code.into()),
             detail: Some(detail.into()),
             timing: None,
             timing_check_position: None,
@@ -131,12 +181,12 @@ impl ContainedTaskError {
     }
 
     fn with_timing(mut self, timing: Option<TaskTimingFailure>) -> Self {
-        self.timing = timing;
+        self.timing = timing.map(Box::new);
         self
     }
 
     fn timed(
-        code: &'static str,
+        code: impl Into<Code>,
         scope: TaskTimingScope,
         stage: TaskTimingStage,
         elapsed: Duration,
@@ -153,7 +203,7 @@ impl ContainedTaskError {
     }
 
     pub fn timing(&self) -> Option<&TaskTimingFailure> {
-        self.timing.as_ref()
+        self.timing.as_deref()
     }
 
     fn with_timing_check_position(mut self, position: TaskTimingCheckPosition) -> Self {
@@ -165,7 +215,7 @@ impl ContainedTaskError {
         self.timing_check_position
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> ContainedTaskCode {
         self.code
     }
 
@@ -220,8 +270,12 @@ type OcrEvaluationObserver<'a> = dyn FnMut(
     + 'a;
 
 impl<E> ContainedTaskRunError<E> {
-    pub fn task(code: &'static str) -> Self {
-        Self::Task(ContainedTaskError::new(code))
+    /// A task failure with a code of the runtime host, which the host still holds as its
+    /// spelling (A2b registers the host's codes and retypes this constructor).
+    pub fn task(host_code: &'static str) -> Self {
+        Self::Task(ContainedTaskError::from_code(ContainedTaskCode::Host {
+            host_code,
+        }))
     }
 
     fn operation<R: ContainedTaskRuntime<Error = E>>(error: E) -> Self {
@@ -315,7 +369,9 @@ impl StabilityTerminationDeclaration {
             || self.consecutive_unchanged_threshold >= self.max_steps
             || self.max_steps > MAX_STEPS
         {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         }
         self.region.validate(resolution)
     }
@@ -324,17 +380,23 @@ impl StabilityTerminationDeclaration {
 impl StabilityRegion {
     fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
         let Some(end_x) = self.x.checked_add(self.width) else {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         };
         let Some(end_y) = self.y.checked_add(self.height) else {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         };
         if self.width == 0
             || self.height == 0
             || end_x > resolution.width
             || end_y > resolution.height
         {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         }
         validate_stability_crop_byte_layout(*self, resolution)
     }
@@ -344,7 +406,8 @@ fn validate_stability_crop_byte_layout(
     region: StabilityRegion,
     resolution: &Resolution,
 ) -> Result<(), ContainedTaskError> {
-    let invalid = || ContainedTaskError::new("contained_task_control_invalid");
+    let invalid =
+        || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code());
     let frame_width = usize::try_from(resolution.width).map_err(|_| invalid())?;
     let frame_height = usize::try_from(resolution.height).map_err(|_| invalid())?;
     let x = usize::try_from(region.x).map_err(|_| invalid())?;
@@ -385,6 +448,19 @@ pub enum StabilityComparisonResult {
 pub enum StabilityTerminalReason {
     ConsecutiveUnchangedThresholdReached,
     MaxStepsReached,
+}
+
+impl StabilityTerminalReason {
+    /// The registered code whose spelling the reason serializes as (Workflow #378: shared with
+    /// ledger-forensics, which reads the reason back).
+    pub const fn code(self) -> Code {
+        match self {
+            Self::ConsecutiveUnchangedThresholdReached => {
+                SharedCode::ConsecutiveUnchangedThresholdReached.code()
+            }
+            Self::MaxStepsReached => SharedCode::MaxStepsReached.code(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -706,8 +782,12 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let mut new_item_count = self.items_collected;
         let mut added_bytes = 0_u64;
         let frame_index = self.frames_collected;
-        let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
-            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
+        let max_string_bytes =
+            usize::try_from(declaration.limits.max_string_bytes).map_err(|_| {
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
+                )
+            })?;
         let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
         let mut regions = BTreeMap::new();
         for target_id in &prepared.target_ids {
@@ -722,7 +802,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 observer(target_id, &result)?;
                 let evaluated = result.map_err(|error| {
                     ContainedTaskError::with_detail(
-                        "contained_task_post_admission_ocr_failed",
+                        SharedCode::ContainedTaskPostAdmissionOcrFailed.code(),
                         error.to_string(),
                     )
                 })?;
@@ -733,14 +813,16 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                     })
                 {
                     return Err(ContainedTaskError::new(
-                        "contained_task_post_admission_ocr_evidence_mismatch",
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrEvidenceMismatch.code(),
                     ));
                 }
                 stream_bindings
                     .entry(target_id.clone())
                     .or_insert_with(|| evaluated.execution.clone());
                 let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
-                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
+                    )
                 })?;
                 let evidence_item_count = if prepared.truth_schema_v2 && block_count == 0 {
                     1
@@ -752,20 +834,25 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         .checked_add(evidence_item_count)
                         .ok_or_else(|| {
                             ContainedTaskError::new(
-                                "contained_task_post_admission_ocr_limit_exceeded",
+                                ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded
+                                    .code(),
                             )
                         })?;
                 if new_item_count > declaration.limits.max_items {
                     return Err(ContainedTaskError::new(
-                        "contained_task_post_admission_ocr_limit_exceeded",
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
                     ));
                 }
                 added_bytes = added_bytes
                     .checked_add(u64::try_from(evaluated.text.len()).map_err(|_| {
-                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
+                        )
                     })?)
                     .ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
+                        )
                     })?;
                 let mut retry_required = prepared.truth_schema_v2 && evaluated.blocks.is_empty();
                 let mut attempt_values = Vec::with_capacity(evaluated.blocks.len());
@@ -789,32 +876,35 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 for block in &evaluated.blocks {
                     if block.text.len() > max_string_bytes {
                         return Err(ContainedTaskError::new(
-                            "contained_task_post_admission_ocr_limit_exceeded",
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
                         ));
                     }
                     added_bytes = added_bytes
                         .checked_add(u64::try_from(block.text.len()).map_err(|_| {
                             ContainedTaskError::new(
-                                "contained_task_post_admission_ocr_limit_exceeded",
+                                ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded
+                                    .code(),
                             )
                         })?)
                         .ok_or_else(|| {
                             ContainedTaskError::new(
-                                "contained_task_post_admission_ocr_limit_exceeded",
+                                ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded
+                                    .code(),
                             )
                         })?;
                     let value =
                         normalize_post_admission_ocr(&block.text, declaration.normalization);
                     if value.len() > max_string_bytes {
                         return Err(ContainedTaskError::new(
-                            "contained_task_post_admission_ocr_limit_exceeded",
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
                         ));
                     }
                     if value.is_empty() {
                         discarded_empty_items =
                             discarded_empty_items.checked_add(1).ok_or_else(|| {
                                 ContainedTaskError::new(
-                                    "contained_task_post_admission_ocr_limit_exceeded",
+                                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded
+                                        .code(),
                                 )
                             })?;
                         if prepared.truth_schema_v2 {
@@ -901,7 +991,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                             aggregate.occurrences =
                                 aggregate.occurrences.checked_add(1).ok_or_else(|| {
                                     ContainedTaskError::new(
-                                        "contained_task_post_admission_ocr_limit_exceeded",
+                                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
                                     )
                                 })?;
                             aggregate.confidences.push(confidence);
@@ -912,7 +1002,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 }
             }
             let evaluated = accepted_observation.ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrEvidenceMismatch.code(),
+                )
             })?;
             regions.insert(evaluated.target_id.clone(), evaluated.region.clone());
             target_observations.push(PostAdmissionOcrTargetObservation {
@@ -927,15 +1019,19 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             .total_observed_utf8_bytes
             .checked_add(added_bytes)
             .ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
+                )
             })?;
         if new_total_bytes > declaration.limits.max_total_bytes {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_limit_exceeded",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
             ));
         }
         let frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrLimitExceeded.code(),
+            )
         })?;
         self.invocation_ids = invocation_ids;
         self.stream_bindings = stream_bindings;
@@ -950,7 +1046,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let observation = if declaration.target_id.is_some() {
             let [observation] = target_observations.as_slice() else {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_evidence_mismatch",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrEvidenceMismatch.code(),
                 ));
             };
             PostAdmissionOcrObservation {
@@ -989,7 +1085,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
     ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
         let prepared = self
             .fields
-            .ok_or_else(|| ContainedTaskError::new("ocr_fields_missing"))?;
+            .ok_or_else(|| ContainedTaskError::new(ExecutionKernelCode::OcrFieldsMissing.code()))?;
         let declaration = &prepared.declaration;
         if !declaration
             .page_ids
@@ -1038,7 +1134,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 )
                             {
                                 return Err(ContainedTaskError::new(
-                                    "contained_task_post_admission_ocr_evidence_mismatch",
+                                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrEvidenceMismatch.code(),
                                 ));
                             }
                             self.stream_bindings
@@ -1110,7 +1206,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         }
                         Err(error) if error.code() == actingcommand_recognition_pack::RecognitionPackErrorCode::RegionUnresolved => {
                             result.reason = OcrFieldReason::RegionUnresolved;
-                            let region = error.region().ok_or_else(|| ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch"))?.clone();
+                            let region = error.region().ok_or_else(|| ContainedTaskError::new(ExecutionKernelCode::ContainedTaskPostAdmissionOcrEvidenceMismatch.code()))?.clone();
                             result.region = Some(region.clone());
                             regions.insert(field.target_id.clone(), region);
                         }
@@ -1203,7 +1299,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         };
         if self.frames_collected == 0 || self.stream_bindings.is_empty() {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_observation_missing",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrObservationMissing.code(),
             ));
         }
         let observed_set = self.values.keys().cloned().collect::<BTreeSet<_>>();
@@ -1338,7 +1434,7 @@ fn tolerant_post_admission_ocr_candidates(
 ) -> Result<PostAdmissionOcrTolerantCandidates, ContainedTaskError> {
     if prepared.truth.len() != prepared.truth_scalar_lengths.len() {
         return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_truth_invalid",
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
         ));
     }
     let observed_scalars = observed.chars().collect::<Vec<_>>();
@@ -1351,11 +1447,13 @@ fn tolerant_post_admission_ocr_candidates(
         .zip(prepared.truth_scalar_lengths.iter())
     {
         *candidate_checks = candidate_checks.checked_add(1).ok_or_else(|| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrCandidateWorkExceeded.code(),
+            )
         })?;
         if *candidate_checks > MAX_POST_ADMISSION_OCR_TOLERANT_CANDIDATE_CHECKS {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_candidate_work_exceeded",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrCandidateWorkExceeded.code(),
             ));
         }
         if *canonical_scalar_length != observed_scalars.len() {
@@ -1364,11 +1462,13 @@ fn tolerant_post_admission_ocr_candidates(
         let mut differing_scalars = 0_u8;
         for (observed_scalar, canonical_scalar) in observed_scalars.iter().zip(canonical.chars()) {
             *scalar_comparisons = scalar_comparisons.checked_add(1).ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrCandidateWorkExceeded.code(),
+                )
             })?;
             if *scalar_comparisons > MAX_POST_ADMISSION_OCR_TOLERANT_SCALAR_COMPARISONS {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_candidate_work_exceeded",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrCandidateWorkExceeded.code(),
                 ));
             }
             if *observed_scalar != canonical_scalar {
@@ -1382,7 +1482,9 @@ fn tolerant_post_admission_ocr_candidates(
             continue;
         }
         count = count.checked_add(1).ok_or_else(|| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrCandidateWorkExceeded.code(),
+            )
         })?;
         if count == 1 {
             unique = Some(canonical.clone());
@@ -1582,7 +1684,7 @@ pub fn evaluate_resource_readings(
     {
         let unresolved = |reason: &str| {
             ContainedTaskError::with_detail(
-                "contained_task_resource_reading_unresolved",
+                ExecutionKernelCode::ContainedTaskResourceReadingUnresolved.code(),
                 format!("{}:{reason}", declaration.id),
             )
         };
@@ -1621,7 +1723,7 @@ fn ocr_field_reason_name(reason: OcrFieldReason) -> Result<String, ContainedTask
     match serde_json::to_value(reason) {
         Ok(serde_json::Value::String(name)) => Ok(name),
         _ => Err(ContainedTaskError::new(
-            "contained_task_resource_reading_invalid",
+            ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
         )),
     }
 }
@@ -1947,30 +2049,29 @@ impl PreparedContainedTask {
         let bundle = bundle.into_loaded_bundle();
         actingcommand_pack_containment::source::validate_contained_declarations(&bundle)
             .map_err(contained_task_declaration_error)?;
-        let control = bundle
-            .control()
-            .cloned()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_control_missing"))?;
+        let control = bundle.control().cloned().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlMissing.code())
+        })?;
         let control = parse_task_control_declaration(control)?;
-        let mut program: TaskProgram = serde_json::from_value(bundle.operation().clone())
-            .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        let evaluator = bundle
-            .evaluator()
-            .cloned()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_recognition_pack_missing"))?;
-        let detector = bundle
-            .detector()
-            .cloned()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_page_set_missing"))?;
-        detector
-            .validate(&evaluator)
-            .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
+        let mut program: TaskProgram =
+            serde_json::from_value(bundle.operation().clone()).map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
+            })?;
+        let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionPackMissing.code())
+        })?;
+        let detector = bundle.detector().cloned().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskPageSetMissing.code())
+        })?;
+        detector.validate(&evaluator).map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionInvalid.code())
+        })?;
         evaluator
             .pack()
             .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
             .map_err(|error| {
                 ContainedTaskError::with_detail(
-                    "contained_task_recognition_invalid",
+                    ExecutionKernelCode::ContainedTaskRecognitionInvalid.code(),
                     error.message(),
                 )
             })?;
@@ -1988,7 +2089,7 @@ impl PreparedContainedTask {
             && selection::page_recognition_budget_ms(&evaluator, &detector, None)? > admission_limit
         {
             return Err(ContainedTaskError::new(
-                "recognition_sample_budget_insufficient",
+                ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
             ));
         }
         for operation in &program.operations {
@@ -1997,7 +2098,7 @@ impl PreparedContainedTask {
                 && required_ms > admission_limit
             {
                 return Err(ContainedTaskError::with_detail(
-                    "recognition_sample_budget_insufficient",
+                    ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
                     format!(
                         "operation={} requires {required_ms}ms across page/candidate/guard calls and waits; limit={admission_limit}ms",
                         operation.id
@@ -2229,9 +2330,9 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
     ) -> Result<bool, ContainedTaskRunError<R::Error>> {
-        let page = self
-            .required_home_entry_page()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
+        let page = self.required_home_entry_page().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskHomeEntryNotRequired.code())
+        })?;
         let started = Instant::now();
         let budget = Duration::from_millis(
             self.control
@@ -2304,7 +2405,7 @@ impl PreparedContainedTask {
     ) -> Result<bool, ContainedTaskRunError<R::Error>> {
         let page = self
             .linear_entry_page()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let started = Instant::now();
         let timing = ContainedTaskTimingContext::new(
             started,
@@ -2337,7 +2438,7 @@ impl PreparedContainedTask {
     ) -> Result<LinearEntryAwait, ContainedTaskRunError<R::Error>> {
         let page = self
             .linear_entry_page()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let started = Instant::now();
         let timing = ContainedTaskTimingContext::new(started, started + budget, origin);
@@ -2464,7 +2565,7 @@ impl PreparedContainedTask {
             .result
             .map_err(|error| {
                 ContainedTaskError::with_detail(
-                    "contained_task_recognition_failed",
+                    SharedCode::ContainedTaskRecognitionFailed.code(),
                     error.to_string(),
                 )
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
@@ -2563,7 +2664,7 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         if !self.is_entry_recovery_compatible() {
             return Err(ContainedTaskError::new(
-                "contained_task_home_recovery_package_incompatible",
+                SharedCode::ContainedTaskHomeRecoveryPackageIncompatible.code(),
             )
             .into());
         }
@@ -2584,7 +2685,10 @@ impl PreparedContainedTask {
         runtime: &mut R,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         if !self.is_prerequisite_compatible() {
-            return Err(ContainedTaskError::new("contained_task_prerequisite_incompatible").into());
+            return Err(ContainedTaskError::new(
+                SharedCode::ContainedTaskPrerequisiteIncompatible.code(),
+            )
+            .into());
         }
         self.run_with_options(
             runtime,
@@ -2628,7 +2732,7 @@ impl PreparedContainedTask {
             && !runtime.supports_application_effect()
         {
             return Err(ContainedTaskError::new(
-                "application_effect_requires_assigned_application",
+                SharedCode::ApplicationEffectRequiresAssignedApplication.code(),
             )
             .into());
         }
@@ -2705,7 +2809,9 @@ impl PreparedContainedTask {
             .iter()
             .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
+            .map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
+            })?;
         let mut config = RunStateConfig::new_with_target_pages(
             &self.control.game,
             self.program.target_pages()?,
@@ -2713,7 +2819,9 @@ impl PreparedContainedTask {
             1,
             self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
         )
-        .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskProgramInvalid.code())
+        })?;
         if let Some(phases) = &self.program.phases {
             config = config.with_phases(
                 phases.clone(),
@@ -2725,14 +2833,14 @@ impl PreparedContainedTask {
             );
         }
         let mut machine = RunStateMachine::new(config, 0)
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         machine
             .observe_page(
                 observation
                     .as_ref()
                     .map(|observed| observed.page_label.clone()),
             )
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
 
@@ -2749,12 +2857,18 @@ impl PreparedContainedTask {
                 let candidate = candidates
                     .iter()
                     .find(|candidate| candidate.id() == application.id)
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_missing"))?;
+                    .ok_or_else(|| {
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                        )
+                    })?;
                 machine.initial_application_directive(candidate)
             } else {
                 machine.next_directive(&candidates)
             };
-            match directive.map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))? {
+            match directive.map_err(|_| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })? {
                 RunDirective::AwaitPage => {
                     observation = Some(self.capture_until_page(
                         runtime,
@@ -2769,7 +2883,9 @@ impl PreparedContainedTask {
                                 .as_ref()
                                 .map(|observed| observed.page_label.clone()),
                         )
-                        .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+                        .map_err(|_| {
+                            ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+                        })?;
                 }
                 RunDirective::ExecuteOperation {
                     operation_id,
@@ -2783,7 +2899,9 @@ impl PreparedContainedTask {
                         .iter()
                         .find(|candidate| candidate.id == operation_id)
                         .ok_or_else(|| {
-                            ContainedTaskError::new("contained_task_operation_missing")
+                            ContainedTaskError::new(
+                                ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                            )
                         })?;
                     let retry_policy = operation.retry_policy(
                         self.program.defaults,
@@ -2830,7 +2948,8 @@ impl PreparedContainedTask {
                                 ApplicationEffectSupport::Performed => {}
                                 ApplicationEffectSupport::Unsupported => {
                                     return Err(ContainedTaskError::with_detail(
-                                        "application_effect_requires_assigned_application",
+                                        SharedCode::ApplicationEffectRequiresAssignedApplication
+                                            .code(),
                                         format!("operation={}", operation.id),
                                     )
                                     .into());
@@ -2838,7 +2957,7 @@ impl PreparedContainedTask {
                             }
                         } else {
                             let observation = observation.as_ref().ok_or_else(|| {
-                                ContainedTaskError::new("contained_task_page_unknown")
+                                ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
                             })?;
                             // A select step (Workflow #308) chooses its candidate and confirms
                             // it on a fresh frame, whose input context then binds the tap; a
@@ -2880,7 +2999,8 @@ impl PreparedContainedTask {
                                             machine.operation_needs_recovery(trigger).map_err(
                                                 |_| {
                                                     ContainedTaskError::new(
-                                                        "contained_task_state_invalid",
+                                                        SharedCode::ContainedTaskStateInvalid
+                                                            .code(),
                                                     )
                                                 },
                                             )?;
@@ -2891,7 +3011,7 @@ impl PreparedContainedTask {
                                         }
                                         RunOperationFailureDecision::Retry { .. } => {
                                             return Err(ContainedTaskError::new(
-                                                "contained_task_state_invalid",
+                                                SharedCode::ContainedTaskStateInvalid.code(),
                                             )
                                             .into());
                                         }
@@ -2910,7 +3030,10 @@ impl PreparedContainedTask {
                                 }
                                 None => {
                                     let click = operation.click.as_ref().ok_or_else(|| {
-                                        ContainedTaskError::new("contained_task_operation_invalid")
+                                        ContainedTaskError::new(
+                                            ExecutionKernelCode::ContainedTaskOperationInvalid
+                                                .code(),
+                                        )
                                     })?;
                                     let (action, sampling) = click.input_action(
                                         &self.control.resolution,
@@ -2923,7 +3046,7 @@ impl PreparedContainedTask {
                             if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
                             {
                                 return Err(ContainedTaskError::new(
-                                    "recognition_sample_deadline_exceeded",
+                                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                                 )
                                 .into());
                             }
@@ -2948,7 +3071,7 @@ impl PreparedContainedTask {
                             if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
                             {
                                 return Err(ContainedTaskError::new(
-                                    "recognition_sample_deadline_exceeded",
+                                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                                 )
                                 .into());
                             }
@@ -2976,7 +3099,11 @@ impl PreparedContainedTask {
                         effected.map_err(ContainedTaskRunError::Boundary)?;
                         machine
                             .operation_effect_completed(&operation_id)
-                            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+                            .map_err(|_| {
+                                ContainedTaskError::new(
+                                    SharedCode::ContainedTaskStateInvalid.code(),
+                                )
+                            })?;
                         let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
                         let identity = runtime.task_boundary_identity(boundary);
                         let wait_started = Instant::now();
@@ -3007,7 +3134,9 @@ impl PreparedContainedTask {
                                 step_index,
                                 &operation_id,
                                 observation.as_ref().ok_or_else(|| {
-                                    ContainedTaskError::new("contained_task_page_unknown")
+                                    ContainedTaskError::new(
+                                        SharedCode::ContainedTaskPageUnknown.code(),
+                                    )
                                 })?,
                             )? {
                                 return self.finish_stability_termination(
@@ -3015,7 +3144,9 @@ impl PreparedContainedTask {
                                     ocr_collector,
                                     &machine,
                                     observation.as_ref().ok_or_else(|| {
-                                        ContainedTaskError::new("contained_task_page_unknown")
+                                        ContainedTaskError::new(
+                                            SharedCode::ContainedTaskPageUnknown.code(),
+                                        )
                                     })?,
                                     reason,
                                 );
@@ -3046,7 +3177,9 @@ impl PreparedContainedTask {
                                     step_index,
                                     &operation_id,
                                     observation.as_ref().ok_or_else(|| {
-                                        ContainedTaskError::new("contained_task_page_unknown")
+                                        ContainedTaskError::new(
+                                            SharedCode::ContainedTaskPageUnknown.code(),
+                                        )
                                     })?,
                                 )? {
                                     return self.finish_stability_termination(
@@ -3054,7 +3187,9 @@ impl PreparedContainedTask {
                                         ocr_collector,
                                         &machine,
                                         observation.as_ref().ok_or_else(|| {
-                                            ContainedTaskError::new("contained_task_page_unknown")
+                                            ContainedTaskError::new(
+                                                SharedCode::ContainedTaskPageUnknown.code(),
+                                            )
                                         })?,
                                         reason,
                                     );
@@ -3078,7 +3213,7 @@ impl PreparedContainedTask {
                                 failed_observation.as_ref(),
                             )?;
                             return Err(ContainedTaskError::with_detail(
-                                "page_confirmation_failed",
+                                ExecutionKernelCode::PageConfirmationFailed.code(),
                                 format!(
                                     "operation={operation_id} attempts={attempt} after_page={} hit_error_page={hit_error_page}",
                                     after_page.as_deref().unwrap_or("<unrecognized>")
@@ -3090,7 +3225,7 @@ impl PreparedContainedTask {
                         match operation.failure_decision(
                             policy,
                             attempt,
-                            "page_confirmation_failed",
+                            ExecutionKernelCode::PageConfirmationFailed.code(),
                             after_page,
                             RunFailureStage::PostExecution { hit_error_page },
                         )? {
@@ -3143,7 +3278,7 @@ impl PreparedContainedTask {
                                             &operation_id,
                                             observation.as_ref().ok_or_else(|| {
                                                 ContainedTaskError::new(
-                                                    "contained_task_page_unknown",
+                                                    SharedCode::ContainedTaskPageUnknown.code(),
                                                 )
                                             })?,
                                         )? {
@@ -3153,7 +3288,7 @@ impl PreparedContainedTask {
                                                 &machine,
                                                 observation.as_ref().ok_or_else(|| {
                                                     ContainedTaskError::new(
-                                                        "contained_task_page_unknown",
+                                                        SharedCode::ContainedTaskPageUnknown.code(),
                                                     )
                                                 })?,
                                                 reason,
@@ -3178,7 +3313,7 @@ impl PreparedContainedTask {
                                         match operation.failure_decision(
                                             policy,
                                             attempt,
-                                            "page_confirmation_failed",
+                                            ExecutionKernelCode::PageConfirmationFailed.code(),
                                             after_page,
                                             RunFailureStage::PostExecution {
                                                 hit_error_page: true,
@@ -3190,7 +3325,8 @@ impl PreparedContainedTask {
                                                 machine.operation_needs_recovery(trigger).map_err(
                                                     |_| {
                                                         ContainedTaskError::new(
-                                                            "contained_task_state_invalid",
+                                                            SharedCode::ContainedTaskStateInvalid
+                                                                .code(),
                                                         )
                                                     },
                                                 )?;
@@ -3211,7 +3347,7 @@ impl PreparedContainedTask {
                                             }
                                             RunOperationFailureDecision::Retry { .. } => {
                                                 return Err(ContainedTaskError::new(
-                                                    "contained_task_state_invalid",
+                                                    SharedCode::ContainedTaskStateInvalid.code(),
                                                 )
                                                 .into());
                                             }
@@ -3242,7 +3378,7 @@ impl PreparedContainedTask {
                                             None,
                                         )?;
                                         return Err(ContainedTaskError::with_detail(
-                                            "page_confirmation_failed",
+                                            ExecutionKernelCode::PageConfirmationFailed.code(),
                                             format!(
                                                 "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
                                             ),
@@ -3262,7 +3398,9 @@ impl PreparedContainedTask {
                                 )?;
                                 recovery_timing = timing_failure;
                                 machine.operation_needs_recovery(trigger).map_err(|_| {
-                                    ContainedTaskError::new("contained_task_state_invalid")
+                                    ContainedTaskError::new(
+                                        SharedCode::ContainedTaskStateInvalid.code(),
+                                    )
                                 })?;
                                 break;
                             }
@@ -3295,7 +3433,10 @@ impl PreparedContainedTask {
                     }
                 }
                 RunDirective::Continue { .. } => {
-                    return Err(ContainedTaskError::new("contained_task_state_invalid").into());
+                    return Err(ContainedTaskError::new(
+                        SharedCode::ContainedTaskStateInvalid.code(),
+                    )
+                    .into());
                 }
                 RunDirective::Terminal(RunTerminal::Completed { current_page }) => {
                     return self.finish_success(
@@ -3309,9 +3450,11 @@ impl PreparedContainedTask {
                 RunDirective::Terminal(
                     RunTerminal::SuccessorSuggested { .. } | RunTerminal::PausedNeedsHuman { .. },
                 ) => {
-                    return Err(ContainedTaskError::new("contained_task_requires_scheduler")
-                        .with_timing(recovery_timing)
-                        .into());
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
+                    )
+                    .with_timing(recovery_timing)
+                    .into());
                 }
             }
         }
@@ -3328,7 +3471,9 @@ impl PreparedContainedTask {
     ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
         let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
             let sample = observation.stability_sample.clone().ok_or_else(|| {
-                ContainedTaskError::new("contained_task_stability_capture_invalid")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
+                )
             })?;
             let transition = stability_tracker.propose(sample, declaration, step_index)?;
             let (trace, terminal_reason) = match &transition {
@@ -3378,7 +3523,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::Boundary)?;
         machine
             .operation_succeeded(operation_label, Some(observation.page_label.clone()))
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         if let Some(reason) = terminal_reason {
             runtime
                 .record(ContainedTaskTrace::StabilityTerminal {
@@ -3407,9 +3552,10 @@ impl PreparedContainedTask {
                 Some(observation.page_label.clone()),
                 machine.completed_steps(),
             ),
-            StabilityTerminalReason::MaxStepsReached => {
-                Err(ContainedTaskError::new("contained_task_requires_scheduler").into())
-            }
+            StabilityTerminalReason::MaxStepsReached => Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
+            )
+            .into()),
         }
     }
 
@@ -3425,7 +3571,7 @@ impl PreparedContainedTask {
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
             if report.frames_collected == 0 {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_observation_missing",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrObservationMissing.code(),
                 )
                 .into());
             }
@@ -3474,7 +3620,7 @@ impl PreparedContainedTask {
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let observation = terminal
             .filter(|observation| final_page == Some(observation.page_label.as_str()))
-            .ok_or_else(|| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Preserve a recorder failure's original boundary type, as page capture does.
         let mut recording_failure = None;
         let readings = evaluate_resource_readings(
@@ -3488,7 +3634,9 @@ impl PreparedContainedTask {
                     .record_ocr_evaluation(target, result)
                     .map_err(|error| {
                         recording_failure = Some(error);
-                        ContainedTaskError::new("contained_task_record_boundary")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskRecordBoundary.code(),
+                        )
                     })
             },
         );
@@ -3534,7 +3682,7 @@ impl PreparedContainedTask {
     ) -> ContainedTaskError {
         let limit = Duration::from_millis(self.control.task_timeout().milliseconds);
         ContainedTaskError::timed(
-            "contained_task_timeout",
+            ExecutionKernelCode::ContainedTaskTimeout.code(),
             TaskTimingScope::Task,
             stage,
             Instant::now().duration_since(deadline - limit),
@@ -3557,7 +3705,7 @@ impl PreparedContainedTask {
             .is_none_or(|remaining| delay >= remaining)
         {
             return Err(ContainedTaskError::timed(
-                "contained_task_timeout",
+                ExecutionKernelCode::ContainedTaskTimeout.code(),
                 TaskTimingScope::Task,
                 TaskTimingStage::PostInputDelay,
                 started.elapsed(),
@@ -3568,7 +3716,7 @@ impl PreparedContainedTask {
         thread::sleep(delay);
         if started.elapsed() >= task_timeout {
             Err(ContainedTaskError::timed(
-                "contained_task_timeout",
+                ExecutionKernelCode::ContainedTaskTimeout.code(),
                 TaskTimingScope::Task,
                 TaskTimingStage::PostInputDelay,
                 started.elapsed(),
@@ -3612,7 +3760,7 @@ impl PreparedContainedTask {
             }
             if started.elapsed() >= timeout {
                 return Err(ContainedTaskError::timed(
-                    "contained_task_page_unknown",
+                    SharedCode::ContainedTaskPageUnknown.code(),
                     TaskTimingScope::PageRecognition,
                     TaskTimingStage::PageRecognition,
                     started.elapsed(),
@@ -3656,7 +3804,8 @@ impl PreparedContainedTask {
         interval: Duration,
         timing: ContainedTaskTimingContext,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
-        let unmatched = || ContainedTaskError::new("contained_task_home_entry_not_matched");
+        let unmatched =
+            || ContainedTaskError::new(SharedCode::ContainedTaskHomeEntryNotMatched.code());
         let waits = self.evaluator.pack().target_consensus.is_empty()
             && runtime
                 .candidate_sampling_checkpoint()
@@ -3755,7 +3904,7 @@ impl PreparedContainedTask {
                     .map_err(ContainedTaskRunError::operation::<R>)?
                 {
                     return Err(ContainedTaskError::new(
-                        "recognition_sampling_runtime_unsupported",
+                        ExecutionKernelCode::RecognitionSamplingRuntimeUnsupported.code(),
                     )
                     .into());
                 }
@@ -3766,14 +3915,15 @@ impl PreparedContainedTask {
                         candidates,
                     )?) > sample_deadline.saturating_duration_since(Instant::now())
                 {
-                    return Err(
-                        ContainedTaskError::new("recognition_sample_budget_insufficient").into(),
-                    );
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
+                    )
+                    .into());
                 }
                 for _ in 1..self.evaluator.target_sample_frames() {
                     if Instant::now() >= sample_deadline {
                         return Err(ContainedTaskError::new(
-                            "recognition_sample_deadline_exceeded",
+                            ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
                         .into());
                     }
@@ -3796,7 +3946,7 @@ impl PreparedContainedTask {
                     if let Some(prior) = &sample_geometry {
                         if !sample_geometry_matches(prior, &geometry) {
                             return Err(ContainedTaskError::new(
-                                "recognition_sample_geometry_changed",
+                                ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
                             )
                             .into());
                         }
@@ -3808,7 +3958,7 @@ impl PreparedContainedTask {
                         Duration::from_millis(self.evaluator.target_sample_interval_ms());
                     if interval >= sample_deadline.saturating_duration_since(Instant::now()) {
                         return Err(ContainedTaskError::new(
-                            "recognition_sample_deadline_exceeded",
+                            ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
                         .into());
                     }
@@ -3830,14 +3980,17 @@ impl PreparedContainedTask {
                         || Instant::now() >= sample_deadline
                     {
                         return Err(ContainedTaskError::new(
-                            "recognition_sample_deadline_or_permission_lost",
+                            ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
                         )
                         .into());
                     }
                 }
             }
             if sampled && Instant::now() >= sample_deadline {
-                return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                )
+                .into());
             }
             let frame_started = Instant::now();
             let frame = runtime
@@ -3868,7 +4021,10 @@ impl PreparedContainedTask {
                 .as_ref()
                 .is_some_and(|prior| !sample_geometry_matches(prior, &input_context))
             {
-                return Err(ContainedTaskError::new("recognition_sample_geometry_changed").into());
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
+                )
+                .into());
             }
             let candidate_pages = match candidates {
                 Some(pages) => pages.iter().map(|page| (*page).to_owned()).collect(),
@@ -3887,7 +4043,10 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
             let evaluation_started = Instant::now();
             if sampled && evaluation_started >= sample_deadline {
-                return Err(ContainedTaskError::new("recognition_sample_deadline_exceeded").into());
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                )
+                .into());
             }
             let budget_before = timing.budget_at(evaluation_started);
             let mut recording_error = None;
@@ -3938,7 +4097,7 @@ impl PreparedContainedTask {
                         .scene_context_with_samples(&scenes)
                         .map_err(|error| {
                             ContainedTaskError::with_detail(
-                                "recognition_samples_unavailable",
+                                ExecutionKernelCode::RecognitionSamplesUnavailable.code(),
                                 error.to_string(),
                             )
                         })?;
@@ -3989,7 +4148,7 @@ impl PreparedContainedTask {
                 .and_then(require_all_page_evaluations)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
-                        "contained_task_recognition_failed",
+                        SharedCode::ContainedTaskRecognitionFailed.code(),
                         error.to_string(),
                     )
                     .with_ppocr_diagnostics(error.ppocr_diagnostics())
@@ -4001,7 +4160,7 @@ impl PreparedContainedTask {
                     || Instant::now() >= sample_deadline)
             {
                 return Err(ContainedTaskError::new(
-                    "recognition_sample_deadline_or_permission_lost",
+                    ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
                 )
                 .into());
             }
@@ -4012,7 +4171,7 @@ impl PreparedContainedTask {
                 .collect::<Vec<_>>();
             if candidates.is_none() && matched_pages.len() > 1 {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_recognition_conflict",
+                    ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
                     matched_pages.join(","),
                 )
                 .with_ppocr_diagnostics(ppocr_diagnostics)
@@ -4048,9 +4207,10 @@ impl PreparedContainedTask {
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if !matched {
-                    return Err(
-                        ContainedTaskError::new("contained_task_home_entry_not_matched").into(),
-                    );
+                    return Err(ContainedTaskError::new(
+                        SharedCode::ContainedTaskHomeEntryNotMatched.code(),
+                    )
+                    .into());
                 }
             }
             let Some(page_label) = page else {
@@ -4068,7 +4228,9 @@ impl PreparedContainedTask {
                         .record_ocr_evaluation(target, result)
                         .map_err(|error| {
                             recording_failure = Some(error);
-                            ContainedTaskError::new("contained_task_record_boundary")
+                            ContainedTaskError::new(
+                                ExecutionKernelCode::ContainedTaskRecordBoundary.code(),
+                            )
                         })
                 },
             );
@@ -4084,7 +4246,10 @@ impl PreparedContainedTask {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             if ocr_collector.field_failure.is_some() {
-                return Err(ContainedTaskError::new("contained_task_ocr_fields_unresolved").into());
+                return Err(ContainedTaskError::new(
+                    SharedCode::ContainedTaskOcrFieldsUnresolved.code(),
+                )
+                .into());
             }
             Ok(Some(PageObservation {
                 page_label,
@@ -4148,7 +4313,7 @@ impl PreparedContainedTask {
                     .is_error_page(&self.control, &observation.page_label);
                 if destination_matches > 1 || (destination_matches == 1 && hit_error_page) {
                     return Err(ContainedTaskError::with_detail(
-                        "contained_task_recognition_conflict",
+                        ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
                         observation.page_label,
                     )
                     .into());
@@ -4281,64 +4446,78 @@ fn stability_sample(
         PixelFormat::Rgb8 => 3usize,
         PixelFormat::Rgba8 => 4usize,
     };
-    let frame_width = usize::try_from(frame.width)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let frame_height = usize::try_from(frame.height)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let frame_width = usize::try_from(frame.width).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let frame_height = usize::try_from(frame.height).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
     let expected_frame_len = frame_width
         .checked_mul(frame_height)
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
-        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+        .ok_or_else(|| {
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
+            )
+        })?;
     if frame.pixels.len() != expected_frame_len {
         return Err(ContainedTaskError::new(
-            "contained_task_stability_capture_invalid",
+            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
         ));
     }
 
     let region = declaration.region;
-    let end_x = region
-        .x
-        .checked_add(region.width)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let end_y = region
-        .y
-        .checked_add(region.height)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let end_x = region.x.checked_add(region.width).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let end_y = region.y.checked_add(region.height).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
     if region.width == 0 || region.height == 0 || end_x > frame.width || end_y > frame.height {
         return Err(ContainedTaskError::new(
-            "contained_task_stability_capture_invalid",
+            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
         ));
     }
 
-    let x = usize::try_from(region.x)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let y = usize::try_from(region.y)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let width = usize::try_from(region.width)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let height = usize::try_from(region.height)
-        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let row_bytes = width
-        .checked_mul(bytes_per_pixel)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-    let capacity = row_bytes
-        .checked_mul(height)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let x = usize::try_from(region.x).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let y = usize::try_from(region.y).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let width = usize::try_from(region.width).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let height = usize::try_from(region.height).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let row_bytes = width.checked_mul(bytes_per_pixel).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
+    let capacity = row_bytes.checked_mul(height).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
+    })?;
     let mut pixels = Vec::with_capacity(capacity);
     for row in y..y + height {
         let start = row
             .checked_mul(frame_width)
             .and_then(|offset| offset.checked_add(x))
             .and_then(|offset| offset.checked_mul(bytes_per_pixel))
-            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-        let end = start
-            .checked_add(row_bytes)
-            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
-        pixels.extend_from_slice(
-            frame.pixels.get(start..end).ok_or_else(|| {
-                ContainedTaskError::new("contained_task_stability_capture_invalid")
-            })?,
-        );
+            .ok_or_else(|| {
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
+                )
+            })?;
+        let end = start.checked_add(row_bytes).ok_or_else(|| {
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
+            )
+        })?;
+        pixels.extend_from_slice(frame.pixels.get(start..end).ok_or_else(|| {
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
+            )
+        })?);
     }
 
     Ok(StabilityFrameSample {
@@ -4359,7 +4538,7 @@ fn compare_stability_samples(
         || previous.pixel_format != current.pixel_format
     {
         return Err(ContainedTaskError::new(
-            "contained_task_stability_comparison_failed",
+            ExecutionKernelCode::ContainedTaskStabilityComparisonFailed.code(),
         ));
     }
     match comparison.mode {
@@ -4408,21 +4587,25 @@ impl StabilityTracker {
             StabilityComparisonResult::Changed => 0,
             StabilityComparisonResult::Unchanged => {
                 prior_consecutive_unchanged.checked_add(1).ok_or_else(|| {
-                    ContainedTaskError::new("contained_task_stability_counter_overflow")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskStabilityCounterOverflow.code(),
+                    )
                 })?
             }
         };
         if new_consecutive_unchanged > declaration.consecutive_unchanged_threshold {
             return Err(ContainedTaskError::new(
-                "contained_task_stability_counter_invalid",
+                ExecutionKernelCode::ContainedTaskStabilityCounterInvalid.code(),
             ));
         }
-        let completed_steps = step_index
-            .checked_add(1)
-            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_counter_overflow"))?;
+        let completed_steps = step_index.checked_add(1).ok_or_else(|| {
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskStabilityCounterOverflow.code(),
+            )
+        })?;
         if completed_steps > declaration.max_steps {
             return Err(ContainedTaskError::new(
-                "contained_task_stability_counter_invalid",
+                ExecutionKernelCode::ContainedTaskStabilityCounterInvalid.code(),
             ));
         }
         let terminal_reason =
@@ -4468,8 +4651,9 @@ pub fn validate_control_declaration(value: serde_json::Value) -> Result<(), Cont
 fn parse_task_control_declaration(
     value: serde_json::Value,
 ) -> Result<TaskControl, ContainedTaskError> {
-    let control: TaskControl = serde_json::from_value(value)
-        .map_err(|_| ContainedTaskError::new("contained_task_control_invalid"))?;
+    let control: TaskControl = serde_json::from_value(value).map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code())
+    })?;
     control.validate()?;
     Ok(control)
 }
@@ -4561,7 +4745,9 @@ impl TaskControl {
                 "recognize_only" | "navigable_route" | "in_page_guard" | "linear_steps"
             )
         {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         }
         self.resolution.validate()?;
         validate_bounded(self.capture_interval_ms, MAX_CAPTURE_INTERVAL_MS)?;
@@ -4571,7 +4757,9 @@ impl TaskControl {
             .max_steps
             .is_some_and(|value| value == 0 || value > MAX_STEPS)
         {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         }
         match (
             self.execution_mode.as_str(),
@@ -4581,14 +4769,16 @@ impl TaskControl {
                 declaration.validate(&self.resolution, self.max_steps)?;
             }
             (_, Some(_)) => {
-                return Err(ContainedTaskError::new("contained_task_control_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+                ));
             }
             (_, None) => {}
         }
         if let Some(prerequisite) = self.prerequisite_package_id.as_deref() {
             let invalid = |reason: &str| {
                 ContainedTaskError::with_detail(
-                    "contained_task_control_invalid",
+                    ExecutionKernelCode::ContainedTaskControlInvalid.code(),
                     format!("reason={reason}"),
                 )
             };
@@ -4596,10 +4786,10 @@ impl TaskControl {
                 return Err(invalid("prerequisite_requires_linear_steps"));
             }
             if !prerequisite_package_id_valid(prerequisite) {
-                return Err(invalid("prerequisite_id_invalid"));
+                return Err(invalid(SharedCode::PrerequisiteIdInvalid.as_str()));
             }
             if prerequisite == self.package_id {
-                return Err(invalid("prerequisite_self"));
+                return Err(invalid(SharedCode::PrerequisiteSelf.as_str()));
             }
         }
         Ok(())
@@ -4608,7 +4798,9 @@ impl TaskControl {
 
 fn validate_bounded(value: Option<u64>, maximum: u64) -> Result<(), ContainedTaskError> {
     if value.is_some_and(|value| value == 0 || value > maximum) {
-        Err(ContainedTaskError::new("contained_task_control_invalid"))
+        Err(ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+        ))
     } else {
         Ok(())
     }
@@ -4623,7 +4815,9 @@ struct Resolution {
 impl Resolution {
     fn validate(&self) -> Result<(), ContainedTaskError> {
         if self.width == 0 || self.height == 0 {
-            Err(ContainedTaskError::new("contained_task_resolution_invalid"))
+            Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskResolutionInvalid.code(),
+            ))
         } else {
             Ok(())
         }
@@ -4634,7 +4828,7 @@ impl Resolution {
             Ok(())
         } else {
             Err(ContainedTaskError::new(
-                "contained_task_frame_resolution_mismatch",
+                ExecutionKernelCode::ContainedTaskFrameResolutionMismatch.code(),
             ))
         }
     }
@@ -4642,7 +4836,7 @@ impl Resolution {
     fn validate_point(&self, x: i32, y: i32) -> Result<(), ContainedTaskError> {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             Err(ContainedTaskError::new(
-                "contained_task_input_out_of_bounds",
+                ExecutionKernelCode::ContainedTaskInputOutOfBounds.code(),
             ))
         } else {
             Ok(())
@@ -4715,13 +4909,18 @@ impl TaskProgram {
             || self.coordinate_space.height != control.resolution.height
             || self.error_pages.iter().any(|value| value.trim().is_empty())
         {
-            return Err(ContainedTaskError::new("contained_task_program_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+            ));
         }
         self.validate_task_timeout(control)?;
         self.validate_task_max_steps(control)?;
         if let Some(readings) = &self.resource_readings {
             let invalid = |reason: &str| {
-                ContainedTaskError::with_detail("contained_task_resource_reading_invalid", reason)
+                ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+                    reason,
+                )
             };
             if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
                 return Err(invalid("schema_version_unsupported"));
@@ -4729,13 +4928,15 @@ impl TaskProgram {
             if self.scheduling_outcome.is_none() {
                 return Err(invalid("scheduling_outcome_missing"));
             }
-            validate_resource_readings(readings).map_err(invalid)?;
+            validate_resource_readings(readings).map_err(|code| invalid(code.as_str()))?;
         }
         if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
             || (self.phases.is_some() && self.schema_version != "0.9")
         {
-            return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
+            ));
         }
         // Workflow #336: a step plan replaces the page-graph checks below.
         if control.execution_mode == linear::LINEAR_STEPS {
@@ -4745,15 +4946,18 @@ impl TaskProgram {
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
             if self.schema_version != "0.8" || self.recovery.is_some() {
-                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+                ));
             }
             let fields: OcrFieldsDeclaration =
                 serde_json::from_value(self.post_admission_ocr.clone().unwrap_or_default())
-                    .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
-            let scheduling = self
-                .scheduling_outcome
-                .as_ref()
-                .ok_or_else(|| ContainedTaskError::new("ocr_fields_outcome_invalid"))?;
+                    .map_err(|_| {
+                        ContainedTaskError::new(SharedCode::OcrFieldsDeclarationInvalid.code())
+                    })?;
+            let scheduling = self.scheduling_outcome.as_ref().ok_or_else(|| {
+                ContainedTaskError::new(SharedCode::OcrFieldsOutcomeInvalid.code())
+            })?;
             fields
                 .validate_zero_input_task(
                     &self.game,
@@ -4770,7 +4974,9 @@ impl TaskProgram {
         if let Some(declaration) = &self.scheduling_outcome {
             validate_scheduling_outcome_execution_mode(control)?;
             declaration.validate().map_err(|_| {
-                ContainedTaskError::new("contained_task_outcome_declaration_invalid")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
+                )
             })?;
             if declaration
                 .designated_operation()
@@ -4783,7 +4989,7 @@ impl TaskProgram {
                 })
             {
                 return Err(ContainedTaskError::new(
-                    "contained_task_outcome_declaration_invalid",
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
                 ));
             }
             let terminal_pages = declaration
@@ -4801,7 +5007,7 @@ impl TaskProgram {
             operation.validate(control, self.defaults, &self.schema_version)?;
             if operation.transition.is_some() {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_operation_invalid",
+                    ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                     format!(
                         "operation={} transition requires {}",
                         operation.id,
@@ -4811,7 +5017,7 @@ impl TaskProgram {
             }
             if operation.optional.is_some() {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_operation_invalid",
+                    ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                     format!(
                         "operation={} optional requires {}",
                         operation.id,
@@ -4828,7 +5034,9 @@ impl TaskProgram {
                 detector,
             )?;
             if !operation_ids.insert(&operation.id) {
-                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+                ));
             }
         }
         if let Some(phases) = &self.phases {
@@ -4848,7 +5056,9 @@ impl TaskProgram {
                 || self.recovery.is_some()
                 || self.stability_termination.is_some()
             {
-                return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
+                ));
             }
             validate_page_references(&control.game, &[self.entry_page.clone().unwrap()], detector)?;
             for phase in phases {
@@ -4867,7 +5077,9 @@ impl TaskProgram {
                     .collect::<BTreeSet<_>>()
             };
             if canonical(&phases.last().unwrap().target_pages) != canonical(&target_pages) {
-                return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
+                ));
             }
             for operation in &self.operations {
                 if phases
@@ -4875,7 +5087,9 @@ impl TaskProgram {
                     .any(|phase| phase.operations.contains(&operation.id))
                     && operation.destination_pages()?.is_empty()
                 {
-                    return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
+                    ));
                 }
                 if self
                     .scheduling_outcome
@@ -4886,7 +5100,9 @@ impl TaskProgram {
                         .retry_policy(self.defaults, control.task_timeout().milliseconds)?
                         .is_some_and(|policy| policy.retryable())
                 {
-                    return Err(ContainedTaskError::new("contained_task_phases_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
+                    ));
                 }
             }
         }
@@ -4962,7 +5178,9 @@ impl TaskProgram {
         if valid {
             Ok(())
         } else {
-            Err(ContainedTaskError::new("contained_task_program_invalid"))
+            Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+            ))
         }
     }
 
@@ -4977,7 +5195,9 @@ impl TaskProgram {
         if valid {
             Ok(())
         } else {
-            Err(ContainedTaskError::new("contained_task_program_invalid"))
+            Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+            ))
         }
     }
 
@@ -4995,7 +5215,11 @@ impl TaskProgram {
             return Ok(None);
         };
         let declaration: PostAdmissionOcrDeclaration = serde_json::from_value(declaration.clone())
-            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
+            .map_err(|_| {
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
+                )
+            })?;
         declaration.validate()?;
         let page_ids = declaration
             .page_ids()?
@@ -5013,7 +5237,9 @@ impl TaskProgram {
             validate_post_admission_ocr_target(control, evaluator, target_id)?;
         }
         let scheduling = self.scheduling_outcome.as_ref().ok_or_else(|| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_outcome_missing")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeMissing.code(),
+            )
         })?;
         if scheduling
             .mappings()
@@ -5023,21 +5249,23 @@ impl TaskProgram {
             != 1
         {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_outcome_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeInvalid.code(),
             ));
         }
         let expected_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+            )
         })?;
         if expected_hash.to_string() != declaration.truth_set.sha256 {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_truth_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
             ));
         }
         let relative_path = format!("operations/{}/{}", self.task_id, declaration.truth_set.path);
         let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
             ContainedTaskError::with_detail(
-                "contained_task_post_admission_ocr_truth_missing",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthMissing.code(),
                 relative_path.clone(),
             )
         })?;
@@ -5046,19 +5274,21 @@ impl TaskProgram {
                 .map_or(true, |size| size > declaration.limits.max_total_bytes)
         {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_post_admission_ocr_truth_mismatch",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthMismatch.code(),
                 relative_path,
             ));
         }
         let truth: PostAdmissionOcrTruthSet = serde_json::from_slice(bytes).map_err(|_| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+            )
         })?;
         let truth_schema_v2 = match truth.schema_version.as_str() {
             POST_ADMISSION_OCR_TRUTH_SCHEMA_V1 if truth.aliases.is_none() => false,
             POST_ADMISSION_OCR_TRUTH_SCHEMA_V2 => true,
             _ => {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_truth_invalid",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                 ));
             }
         };
@@ -5067,22 +5297,26 @@ impl TaskProgram {
                 .map_or(true, |count| count > declaration.limits.max_truth_entries)
         {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_truth_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
             ));
         }
-        let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
-            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
+        let max_string_bytes =
+            usize::try_from(declaration.limits.max_string_bytes).map_err(|_| {
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
+                )
+            })?;
         let mut normalized = BTreeSet::new();
         for item in truth.items {
             if item.len() > max_string_bytes {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_truth_invalid",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                 ));
             }
             let item = normalize_post_admission_ocr(&item, declaration.normalization);
             if item.is_empty() || item.len() > max_string_bytes || !normalized.insert(item) {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_truth_invalid",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                 ));
             }
         }
@@ -5090,7 +5324,7 @@ impl TaskProgram {
         if let Some(truth_aliases) = truth.aliases {
             if truth_aliases.len() > MAX_POST_ADMISSION_OCR_ALIASES {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_truth_invalid",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                 ));
             }
             for alias in truth_aliases {
@@ -5098,7 +5332,7 @@ impl TaskProgram {
                     || alias.canonical.len() > max_string_bytes
                 {
                     return Err(ContainedTaskError::new(
-                        "contained_task_post_admission_ocr_truth_invalid",
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                     ));
                 }
                 let observed =
@@ -5114,7 +5348,7 @@ impl TaskProgram {
                     || aliases.insert(observed, canonical).is_some()
                 {
                     return Err(ContainedTaskError::new(
-                        "contained_task_post_admission_ocr_truth_invalid",
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
                     ));
                 }
             }
@@ -5142,12 +5376,11 @@ impl TaskProgram {
         if self.schema_version != "0.8" {
             return Ok(None);
         }
-        let mut declaration: OcrFieldsDeclaration = serde_json::from_value(
-            self.post_admission_ocr
-                .clone()
-                .ok_or_else(|| ContainedTaskError::new("ocr_fields_declaration_missing"))?,
-        )
-        .map_err(|_| ContainedTaskError::new("ocr_fields_declaration_invalid"))?;
+        let mut declaration: OcrFieldsDeclaration =
+            serde_json::from_value(self.post_admission_ocr.clone().ok_or_else(|| {
+                ContainedTaskError::new(SharedCode::OcrFieldsDeclarationMissing.code())
+            })?)
+            .map_err(|_| ContainedTaskError::new(SharedCode::OcrFieldsDeclarationInvalid.code()))?;
         declaration.validate().map_err(ContainedTaskError::new)?;
         if let Some(metadata) = bundle.projection_metadata() {
             for field in &mut declaration.fields {
@@ -5182,7 +5415,7 @@ impl TaskProgram {
                 == 1
         }) {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_outcome_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeInvalid.code(),
             ));
         }
         let mut dictionaries = BTreeMap::new();
@@ -5191,25 +5424,26 @@ impl TaskProgram {
             if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
                 let path = format!("operations/{}/{}", self.task_id, dictionary.path);
                 let expected = Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
-                    ContainedTaskError::new("ocr_fields_dictionary_reference_invalid")
+                    ContainedTaskError::new(SharedCode::OcrFieldsDictionaryReferenceInvalid.code())
                 })?;
-                let bytes = bundle
-                    .resource_entry(&path)
-                    .map_err(|_| ContainedTaskError::new("ocr_fields_dictionary_missing"))?;
+                let bytes = bundle.resource_entry(&path).map_err(|_| {
+                    ContainedTaskError::new(ExecutionKernelCode::OcrFieldsDictionaryMissing.code())
+                })?;
                 dictionary_bytes = dictionary_bytes
                     .checked_add(bytes.len() as u64)
                     .ok_or_else(|| {
-                        ContainedTaskError::new("ocr_fields_dictionary_limit_exceeded")
+                        ContainedTaskError::new(SharedCode::OcrFieldsDictionaryLimitExceeded.code())
                     })?;
                 if manifest_entry_sha256(bundle, &path)? != expected
                     || dictionary_bytes > declaration.limits.max_total_bytes
                 {
                     return Err(ContainedTaskError::new(
-                        "ocr_fields_dictionary_hash_or_limit_mismatch",
+                        ExecutionKernelCode::OcrFieldsDictionaryHashOrLimitMismatch.code(),
                     ));
                 }
-                let parsed: OcrFieldDictionary = serde_json::from_slice(bytes)
-                    .map_err(|_| ContainedTaskError::new("ocr_fields_dictionary_invalid"))?;
+                let parsed: OcrFieldDictionary = serde_json::from_slice(bytes).map_err(|_| {
+                    ContainedTaskError::new(ExecutionKernelCode::OcrFieldsDictionaryInvalid.code())
+                })?;
                 parsed
                     .validate(&declaration.limits)
                     .map_err(ContainedTaskError::new)?;
@@ -5233,7 +5467,7 @@ impl TaskProgram {
         for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
             let invalid = |reason: &str| {
                 let mut error = ContainedTaskError::with_detail(
-                    "contained_task_resource_reading_invalid",
+                    ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
                     format!("{}:{reason}", reading.id),
                 );
                 error.declaration_issue =
@@ -5306,19 +5540,19 @@ impl TaskProgram {
             let relative_path = format!("operations/{task_id}/task.json");
             let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
                 ContainedTaskError::with_detail(
-                    "contained_task_recovery_missing",
+                    ExecutionKernelCode::ContainedTaskRecoveryMissing.code(),
                     relative_path.clone(),
                 )
             })?;
             let recovery: TaskProgram = serde_json::from_slice(bytes).map_err(|_| {
                 ContainedTaskError::with_detail(
-                    "contained_task_recovery_invalid",
+                    ExecutionKernelCode::ContainedTaskRecoveryInvalid.code(),
                     relative_path.clone(),
                 )
             })?;
             if recovery.task_id != task_id || recovery.game != self.game {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_recovery_invalid",
+                    ExecutionKernelCode::ContainedTaskRecoveryInvalid.code(),
                     relative_path,
                 ));
             }
@@ -5335,12 +5569,20 @@ fn validate_post_admission_ocr_page_gate(
     target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
     let pages_path = bundle.pages_path().ok_or_else(|| {
-        ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
+        ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateMissing.code(),
+        )
     })?;
     let pages: PageSet = serde_json::from_slice(bundle.entry(pages_path).ok_or_else(|| {
-        ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
+        ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateMissing.code(),
+        )
     })?)
-    .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_invalid"))?;
+    .map_err(|_| {
+        ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
+        )
+    })?;
     validate_post_admission_ocr_page_set(control, evaluator, &pages, page_ids, target_ids)
 }
 
@@ -5362,7 +5604,7 @@ fn validate_post_admission_ocr_page_set(
             .any(|target| target_ids.iter().any(|target_id| target == target_id))
     }) {
         return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_target_in_page_gate",
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInPageGate.code(),
         ));
     }
     for page_id in page_ids {
@@ -5373,7 +5615,7 @@ fn validate_post_admission_ocr_page_set(
             .collect::<Vec<_>>();
         let [page] = matching.as_slice() else {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_page_gate_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
             ));
         };
         let gate_targets = page
@@ -5390,7 +5632,7 @@ fn validate_post_admission_ocr_page_set(
                 .any(|target| !post_admission_ocr_gate_target_is_pixel(evaluator, target))
         {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_page_gate_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
             ));
         }
     }
@@ -5458,7 +5700,7 @@ fn recognized_page_targets(
         .find(|evaluation| evaluation.page_id == page_id)
         .ok_or_else(|| {
             ContainedTaskError::with_detail(
-                "contained_task_recognition_targets_unavailable",
+                ExecutionKernelCode::ContainedTaskRecognitionTargetsUnavailable.code(),
                 page_id.to_owned(),
             )
         })?;
@@ -5537,7 +5779,7 @@ fn recognized_target_region(
                 })
             }
             _ => Err(ContainedTaskError::with_detail(
-                "contained_task_recognition_target_region_invalid",
+                ExecutionKernelCode::ContainedTaskRecognitionTargetRegionInvalid.code(),
                 evaluation.id.clone(),
             )),
         }
@@ -5558,7 +5800,7 @@ fn declared_target_rect(
         .find(|target| recognition_target_id(target) == target_id)
         .ok_or_else(|| {
             ContainedTaskError::with_detail(
-                "contained_task_recognition_target_region_invalid",
+                ExecutionKernelCode::ContainedTaskRecognitionTargetRegionInvalid.code(),
                 target_id.to_owned(),
             )
         })?;
@@ -5601,7 +5843,7 @@ fn validate_post_admission_ocr_target(
         .collect::<Vec<_>>();
     let [RecognitionTarget::Ocr(target)] = matching.as_slice() else {
         return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_target_invalid",
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
         ));
     };
     match &target.region {
@@ -5610,12 +5852,14 @@ fn validate_post_admission_ocr_target(
                 .ocr_anchor_target_id(target_id)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
-                        "contained_task_post_admission_ocr_target_invalid",
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
                         error.to_string(),
                     )
                 })?
                 .ok_or_else(|| {
-                    ContainedTaskError::new("contained_task_post_admission_ocr_target_invalid")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
+                    )
                 })?;
             Ok(())
         }
@@ -5635,13 +5879,13 @@ fn validate_post_admission_ocr_target(
                     .is_none_or(|end| end > i64::from(control.resolution.height))
             {
                 return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_target_out_of_bounds",
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetOutOfBounds.code(),
                 ));
             }
             Ok(())
         }
         PackRegion::Keyword(_) => Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_target_invalid",
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
         )),
     }
 }
@@ -5656,7 +5900,7 @@ impl PostAdmissionOcrDeclaration {
                 for page_id in page_ids {
                     if page_id.trim().is_empty() || !unique.insert(page_id.as_str()) {
                         return Err(ContainedTaskError::new(
-                            "contained_task_post_admission_ocr_invalid",
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
                         ));
                     }
                     ordered.push(page_id.as_str());
@@ -5664,7 +5908,7 @@ impl PostAdmissionOcrDeclaration {
                 Ok(ordered)
             }
             _ => Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
             )),
         }
     }
@@ -5680,7 +5924,7 @@ impl PostAdmissionOcrDeclaration {
                 for target_id in target_ids {
                     if target_id.trim().is_empty() || !unique.insert(target_id.as_str()) {
                         return Err(ContainedTaskError::new(
-                            "contained_task_post_admission_ocr_invalid",
+                            ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
                         ));
                     }
                     ordered.push(target_id.as_str());
@@ -5688,7 +5932,7 @@ impl PostAdmissionOcrDeclaration {
                 Ok(ordered)
             }
             _ => Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
             )),
         }
     }
@@ -5711,7 +5955,7 @@ impl PostAdmissionOcrDeclaration {
             || limits.max_truth_entries > MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES
         {
             return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_invalid",
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrInvalid.code(),
             ));
         }
         Ok(())
@@ -5742,11 +5986,15 @@ fn manifest_entry_sha256(
             .and_then(|hashes| hashes.get(relative_path))
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+                )
             })
             .and_then(|value| {
                 Sha256Hash::parse_hex(value).map_err(|_| {
-                    ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+                    )
                 })
             });
     }
@@ -5755,7 +6003,9 @@ fn manifest_entry_sha256(
         .get("files")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+            )
         })?;
     let matching = files
         .iter()
@@ -5765,16 +6015,22 @@ fn manifest_entry_sha256(
         .collect::<Vec<_>>();
     let [entry] = matching.as_slice() else {
         return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_truth_invalid",
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
         ));
     };
     entry
         .get("sha256")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid"))
+        .ok_or_else(|| {
+            ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+            )
+        })
         .and_then(|value| {
             Sha256Hash::parse_hex(value).map_err(|_| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+                ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
+                )
             })
         })
 }
@@ -5815,7 +6071,9 @@ fn validate_stability_contract(
             Ok(())
         }
         (None, None) => Ok(()),
-        _ => Err(ContainedTaskError::new("contained_task_program_invalid")),
+        _ => Err(ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskProgramInvalid.code(),
+        )),
     }
 }
 
@@ -5824,7 +6082,7 @@ fn validate_scheduling_outcome_execution_mode(
 ) -> Result<(), ContainedTaskError> {
     if control.execution_mode == "recognize_only" {
         Err(ContainedTaskError::new(
-            "contained_task_outcome_declaration_invalid",
+            ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
         ))
     } else {
         Ok(())
@@ -5844,7 +6102,9 @@ fn validate_scheduling_outcome_coverage(
         .iter()
         .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
     let mut pending = observable_pages
         .iter()
         .filter(|page| required_home.is_none_or(|home| page.as_str() == home))
@@ -5868,12 +6128,16 @@ fn validate_scheduling_outcome_coverage(
             let operation = operations
                 .iter()
                 .find(|operation| operation.id == selected.id())
-                .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                .ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
             if condition == SchedulingEffectCondition::DesignatedEffectCompleted
                 && designated_operation == Some(operation.id.as_str())
             {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_outcome_declaration_incomplete",
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
                     format!(
                         "designated_operation={} is reachable after its effect completed",
                         operation.id
@@ -5891,7 +6155,7 @@ fn validate_scheduling_outcome_coverage(
             let destinations = operation.destination_pages()?;
             if destinations.is_empty() {
                 return Err(ContainedTaskError::with_detail(
-                    "contained_task_outcome_declaration_incomplete",
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
                     format!("operation={} has no finite postcondition", operation.id),
                 ));
             }
@@ -5902,7 +6166,7 @@ fn validate_scheduling_outcome_coverage(
                     .collect::<Vec<_>>();
                 let [concrete_page] = matching_pages.as_slice() else {
                     return Err(ContainedTaskError::with_detail(
-                        "contained_task_outcome_declaration_incomplete",
+                        ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
                         format!(
                             "operation={} destination={} detector_matches={}",
                             operation.id,
@@ -5929,7 +6193,7 @@ fn validate_scheduling_outcome_coverage(
             .count();
         if mapping_count != 1 {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_outcome_declaration_incomplete",
+                ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
                 format!(
                     "effect={condition:?} terminal_page={terminal_page} mappings={mapping_count}"
                 ),
@@ -5953,11 +6217,15 @@ impl PageDeclaration {
             Self::Set(pages) => pages.clone(),
         };
         if pages.is_empty() || pages.iter().any(|page| page.trim().is_empty()) {
-            return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
+            ));
         }
         let unique = pages.iter().collect::<BTreeSet<_>>();
         if unique.len() != pages.len() {
-            return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
+            ));
         }
         let mut pages = pages;
         pages.sort();
@@ -5977,7 +6245,7 @@ fn validate_page_references(
             .count();
         if matches != 1 {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_page_set_invalid",
+                ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
                 format!("page={page} detector_matches={matches}"),
             ));
         }
@@ -5989,7 +6257,7 @@ fn validate_page_references(
             .count();
         if matches > 1 {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_page_set_invalid",
+                ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
                 format!("detector_page={candidate} declaration_matches={matches}"),
             ));
         }
@@ -6003,7 +6271,9 @@ fn resolve_page_reference(
     detector: &PageDetector,
 ) -> Result<String, ContainedTaskError> {
     if page.trim().is_empty() {
-        return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+        return Err(ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
+        ));
     }
     let matches = detector
         .page_ids()
@@ -6013,7 +6283,7 @@ fn resolve_page_reference(
     match matches.as_slice() {
         [resolved] => Ok(resolved.clone()),
         _ => Err(ContainedTaskError::with_detail(
-            "contained_task_page_set_invalid",
+            ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
             format!("page={page} detector_matches={}", matches.len()),
         )),
     }
@@ -6034,7 +6304,7 @@ fn validate_page_set_overlap(
             .any(|page| crate::page_anchor_matches(game, candidate, page));
         if destination && error {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_page_set_invalid",
+                ExecutionKernelCode::ContainedTaskPageSetInvalid.code(),
                 format!("detector_page={candidate} is both destination and error"),
             ));
         }
@@ -6063,7 +6333,9 @@ impl TaskOperationExpectation {
     fn validate(&self) -> Result<(), ContainedTaskError> {
         self.page_id.normalized()?;
         if !actingcommand_contract::postcondition_timeout_is_valid(self.timeout_ms) {
-            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+            ));
         }
         validate_bounded(self.interval_ms, MAX_CAPTURE_INTERVAL_MS)
     }
@@ -6083,7 +6355,9 @@ enum TaskRecovery {
 impl TaskRecovery {
     fn validate(&self) -> Result<(), ContainedTaskError> {
         if self.kind() != "return_home" || self.task_id().trim().is_empty() {
-            Err(ContainedTaskError::new("contained_task_recovery_invalid"))
+            Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskRecoveryInvalid.code(),
+            ))
         } else {
             Ok(())
         }
@@ -6201,7 +6475,9 @@ impl TaskOperation {
         schema_version: &str,
     ) -> Result<(), ContainedTaskError> {
         if self.id.trim().is_empty() || self.from.trim().is_empty() {
-            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
         }
         self.destination_pages()?;
         if let Some(expectation) = &self.expect_after {
@@ -6212,7 +6488,9 @@ impl TaskOperation {
             .as_deref()
             .is_some_and(|value| value != "return_home")
         {
-            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
         }
         self.retry_policy(
             defaults,
@@ -6222,13 +6500,17 @@ impl TaskOperation {
             .post_delay_ms
             .is_some_and(|value| value == 0 || value > MAX_CAPTURE_INTERVAL_MS)
         {
-            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
         }
         match (&self.click, &self.application, &self.select) {
             (Some(click), None, None) => {
                 match (&self.guard, self.unguarded_trusted_coordinate) {
                     (Some(_), true) | (None, false) => {
-                        return Err(ContainedTaskError::new("contained_task_guard_missing"));
+                        return Err(ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskGuardMissing.code(),
+                        ));
                     }
                     (Some(guard), false) => guard.validate(self, control)?,
                     (None, true) => {}
@@ -6246,7 +6528,7 @@ impl TaskOperation {
                     (Some(guard), false) if self.expect_after.is_some() => guard,
                     _ => {
                         return Err(ContainedTaskError::with_detail(
-                            "contained_task_select_invalid",
+                            ExecutionKernelCode::ContainedTaskSelectInvalid.code(),
                             format!(
                                 "operation={} requires a declared guard, an expect_after and no unguarded trusted coordinate",
                                 self.id
@@ -6257,7 +6539,9 @@ impl TaskOperation {
                 guard.validate(self, control)?;
                 select.validate(&self.id)
             }
-            _ => Err(ContainedTaskError::new("contained_task_operation_invalid")),
+            _ => Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            )),
         }
     }
 
@@ -6279,22 +6563,30 @@ impl TaskOperation {
                 (Some(true), max_attempts, retry_interval_ms) => (
                     true,
                     max_attempts.or(defaults.max_attempts).ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     retry_interval_ms
                         .or(defaults.retry_interval_ms)
                         .ok_or_else(|| {
-                            ContainedTaskError::new("contained_task_operation_invalid")
+                            ContainedTaskError::new(
+                                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                            )
                         })?,
                 ),
                 _ => {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
             };
         if retryable
             && (self.destination_pages()?.is_empty() || retry_interval_ms > task_timeout_ms)
         {
-            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ));
         }
         RunOperationPolicy::new(
             retryable,
@@ -6303,21 +6595,23 @@ impl TaskOperation {
             self.on_error.clone(),
         )
         .map(Some)
-        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })
     }
 
     fn failure_decision(
         &self,
         policy: &RunOperationPolicy,
         attempt: u32,
-        reason: &str,
+        reason: impl Into<ContainedTaskCode>,
         after_page: Option<String>,
         stage: RunFailureStage,
     ) -> Result<RunOperationFailureDecision, ContainedTaskError> {
         let observation = RunFailureObservation::new(&self.id, attempt, reason, after_page, stage)
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         decide_run_operation_failure(policy, observation)
-            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))
     }
 
     fn destination_pages(&self) -> Result<Vec<String>, ContainedTaskError> {
@@ -6333,7 +6627,7 @@ impl TaskOperation {
             .transpose()?;
         match (to, expected) {
             (Some(to), Some(expected)) if to != expected => Err(ContainedTaskError::new(
-                "contained_task_destination_conflict",
+                ExecutionKernelCode::ContainedTaskDestinationConflict.code(),
             )),
             (Some(to), _) => Ok(to),
             (None, Some(expected)) => Ok(expected),
@@ -6372,16 +6666,15 @@ impl TaskOperation {
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Ok((ContainedTaskGuardOutcome::TrustedCoordinate, None));
         }
-        let guard = self
-            .guard
-            .as_ref()
-            .ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
+        let guard = self.guard.as_ref().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardMissing.code())
+        })?;
         if !crate::page_anchor_matches(&control.game, &observation.page_label, &guard.page_id) {
             runtime
                 .record_guard_evaluation(Some(&guard.target_id), None, "page_mismatch")
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Err(ContainedTaskError::with_detail(
-                "contained_task_guard_refused",
+                ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 format!(
                     "operation={} expected_page={} observed_page={}",
                     self.id, guard.page_id, observation.page_label
@@ -6403,7 +6696,7 @@ impl TaskOperation {
                     || Instant::now() >= deadline)
             {
                 return Err(ContainedTaskError::new(
-                    "recognition_sample_deadline_or_permission_lost",
+                    ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
                 )
                 .into());
             }
@@ -6449,7 +6742,7 @@ impl TaskOperation {
                 .scene_context_with_samples(&scenes)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
-                        "recognition_samples_unavailable",
+                        ExecutionKernelCode::RecognitionSamplesUnavailable.code(),
                         error.to_string(),
                     )
                 })?;
@@ -6467,13 +6760,13 @@ impl TaskOperation {
             .map_err(ContainedTaskRunError::Boundary)?;
         let target = result.map_err(|error| {
             ContainedTaskError::with_detail(
-                "contained_task_guard_evaluation_failed",
+                SharedCode::ContainedTaskGuardEvaluationFailed.code(),
                 error.to_string(),
             )
         })?;
         if !target.passed {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_guard_refused",
+                ExecutionKernelCode::ContainedTaskGuardRefused.code(),
                 format!("operation={} target={}", self.id, guard.target_id),
             )
             .into());
@@ -6514,7 +6807,9 @@ impl OperationGuard {
                 && self.color_probe.is_none()
                 && self.check.is_none())
         {
-            return Err(ContainedTaskError::new("contained_task_guard_invalid"));
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskGuardInvalid.code(),
+            ));
         }
         self.expected_rect.validate(&control.resolution)?;
         Ok(())
@@ -6577,18 +6872,30 @@ impl TaskClick {
             "long_press" | "long_tap" => {
                 resolution.validate_point(required(self.x)?, required(self.y)?)?;
                 if self.duration_ms == Some(0) || self.duration_ms.is_none() {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
             }
             "drag" => {
                 self.from_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .ok_or_else(|| {
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
+                    })?
                     .validate(resolution)?;
                 self.to_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .ok_or_else(|| {
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
+                    })?
                     .validate(resolution)?;
                 if self.duration_ms == Some(0) || self.duration_ms.is_none() {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
             }
             "single_touch_drag_with_vertical_brake_v1" => {
@@ -6607,36 +6914,55 @@ impl TaskClick {
                     || self.brake_distance_px != Some(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)
                     || self.brake_duration_ms != Some(SEGMENTED_SWIPE_BRAKE_DURATION_MS)
                 {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
                 self.from_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .ok_or_else(|| {
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
+                    })?
                     .validate(resolution)?;
-                let corner = self
-                    .corner_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let corner = self.corner_rect.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
                 corner.validate(resolution)?;
-                let brake_distance = self
-                    .brake_distance_px
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let brake_distance = self.brake_distance_px.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
                 if !(1..=256).contains(&brake_distance) || corner.y < brake_distance {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
             }
             "target" | "target_center" | "offset" => {
-                let guard =
-                    guard.ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
+                let guard = guard.ok_or_else(|| {
+                    ContainedTaskError::new(ExecutionKernelCode::ContainedTaskGuardMissing.code())
+                })?;
                 if guard.verify_template.is_none()
                     || self
                         .target_id
                         .as_deref()
                         .is_some_and(|target_id| target_id != guard.target_id)
                 {
-                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    ));
                 }
                 if self.kind == "offset" {
                     self.offset
-                        .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                        .ok_or_else(|| {
+                            ContainedTaskError::new(
+                                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                            )
+                        })?
                         .validate_shape()?;
                 } else if let Some(offset) = self.offset {
                     offset.validate_shape()?;
@@ -6644,7 +6970,7 @@ impl TaskClick {
             }
             _ => {
                 return Err(ContainedTaskError::new(
-                    "contained_task_primitive_unsupported",
+                    ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
                 ));
             }
         }
@@ -6680,60 +7006,84 @@ impl TaskClick {
                     x: required(self.x)?,
                     y: required(self.y)?,
                     duration_ms: self.duration_ms.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                 },
                 None,
             ),
             "drag" => {
-                let from = self
-                    .from_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
-                let to = self
-                    .to_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let from = self.from_rect.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
+                let to = self.to_rect.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
                 from.validate(resolution)?;
                 to.validate(resolution)?;
                 sampled_swipe(
                     from,
                     to,
                     self.duration_ms.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     action_seed,
                 )?
             }
             "single_touch_drag_with_vertical_brake_v1" => {
-                let from = self
-                    .from_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
-                let corner = self
-                    .corner_rect
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let from = self.from_rect.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
+                let corner = self.corner_rect.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
                 sampled_segmented_swipe(
                     from,
                     corner,
                     self.horizontal_duration_ms.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     self.corner_hold_ms.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     self.brake_distance_px.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     self.brake_duration_ms.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?,
                     action_seed,
                 )?
             }
             "target" | "target_center" | "offset" => {
                 let target = target.ok_or_else(|| {
-                    ContainedTaskError::new("contained_task_guard_target_missing")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskGuardTargetMissing.code(),
+                    )
                 })?;
                 let template = target.template.ok_or_else(|| {
-                    ContainedTaskError::new("contained_task_guard_target_invalid")
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskGuardTargetInvalid.code(),
+                    )
                 })?;
                 let mut rect = ClickRect {
                     x: template.x,
@@ -6743,7 +7093,9 @@ impl TaskClick {
                 };
                 if self.kind == "offset" {
                     let offset = self.offset.ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_operation_invalid")
+                        ContainedTaskError::new(
+                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                        )
                     })?;
                     rect = ClickRect {
                         x: rect.x + offset.x,
@@ -6774,13 +7126,13 @@ impl TaskClick {
             }
             _ => {
                 return Err(ContainedTaskError::new(
-                    "contained_task_primitive_unsupported",
+                    ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
                 ));
             }
         };
-        action
-            .validate()
-            .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        action.validate().map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
         match &action {
             InputAction::Tap { x, y } | InputAction::LongTap { x, y, .. } => {
                 resolution.validate_point(*x, *y)?;
@@ -6804,7 +7156,7 @@ impl TaskClick {
             }
             _ => {
                 return Err(ContainedTaskError::new(
-                    "contained_task_primitive_unsupported",
+                    ExecutionKernelCode::ContainedTaskPrimitiveUnsupported.code(),
                 ));
             }
         }
@@ -6825,14 +7177,16 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
 }
 
 fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> ContainedTaskError {
-    let mut failure =
-        ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+    let mut failure = ContainedTaskError::with_detail(
+        SharedCode::ResourceDeclarationInvalid.code(),
+        error.to_string(),
+    );
     if let Some(details) = error.details {
         match serde_json::from_value(details) {
             Ok(issue) => failure.declaration_issue = Some(Box::new(issue)),
             Err(error) => {
                 return ContainedTaskError::with_detail(
-                    "resource_declaration_diagnostic_invalid",
+                    ExecutionKernelCode::ResourceDeclarationDiagnosticInvalid.code(),
                     error.to_string(),
                 );
             }
@@ -6845,8 +7199,10 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
     if let ExecutionBundleError::Containment(ContainmentError::ResourceDeclaration { issue }) =
         &error
     {
-        let mut rejected =
-            ContainedTaskError::with_detail("resource_declaration_invalid", error.to_string());
+        let mut rejected = ContainedTaskError::with_detail(
+            SharedCode::ResourceDeclarationInvalid.code(),
+            error.to_string(),
+        );
         rejected.declaration_issue = Some(Box::new(issue.clone()));
         return rejected;
     }
@@ -6854,24 +7210,26 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
         ExecutionBundleError::Containment(ContainmentError::ContentDirectoryDigestMismatch {
             ..
-        }) => "content_directory_digest_mismatch",
+        }) => ExecutionKernelCode::ContentDirectoryDigestMismatch.code(),
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code: RecognitionPackErrorCode::VisionProviderMissing,
             ..
-        }) => "contained_task_vision_provider_missing",
+        }) => ExecutionKernelCode::ContainedTaskVisionProviderMissing.code(),
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code:
                 RecognitionPackErrorCode::VisionProviderFailure
                 | RecognitionPackErrorCode::VisionProviderInvalidResponse,
             ..
-        }) => "contained_task_vision_provider_failed",
-        _ => "contained_task_admission_failed",
+        }) => ExecutionKernelCode::ContainedTaskVisionProviderFailed.code(),
+        _ => ExecutionKernelCode::ContainedTaskAdmissionFailed.code(),
     };
     ContainedTaskError::with_detail(code, error.to_string())
 }
 
 fn required<T: Copy>(value: Option<T>) -> Result<T, ContainedTaskError> {
-    value.ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))
+    value.ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+    })
 }
 
 fn sampled_tap(
@@ -6889,8 +7247,10 @@ fn sampled_tap(
     };
     let mut state = normalized_xorshift64_state(action_seed);
     let (x, y) = rect.sample(&mut state)?;
-    let sampling = InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?])
-        .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+    let sampling =
+        InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?]).map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })?;
     Ok((InputAction::Tap { x, y }, Some(sampling)))
 }
 
@@ -6919,7 +7279,9 @@ fn sampled_swipe(
         action_seed,
         vec![from.sampling_region()?, to.sampling_region()?],
     )
-    .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+    .map_err(|_| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+    })?;
     Ok((
         InputAction::Swipe {
             x1,
@@ -6949,7 +7311,9 @@ fn sampled_segmented_swipe(
             action_seed,
             vec![from.sampling_region()?, corner.sampling_region()?],
         )
-        .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })?;
         (start, corner_point, Some(sampling))
     } else {
         (
@@ -6958,9 +7322,9 @@ fn sampled_segmented_swipe(
             None,
         )
     };
-    let y3 = y2
-        .checked_sub(brake_distance_px)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+    let y3 = y2.checked_sub(brake_distance_px).ok_or_else(|| {
+        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+    })?;
     Ok((
         InputAction::SingleTouchDragWithVerticalBrakeV1 {
             x1,
@@ -7008,7 +7372,9 @@ struct ClickRect {
 impl ClickRect {
     fn validate_shape(&self) -> Result<(), ContainedTaskError> {
         if self.width <= 0 || self.height <= 0 {
-            Err(ContainedTaskError::new("contained_task_operation_invalid"))
+            Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            ))
         } else {
             Ok(())
         }
@@ -7016,21 +7382,20 @@ impl ClickRect {
 
     fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
         self.validate_shape()?;
-        let end_x = self
-            .x
-            .checked_add(self.width - 1)
-            .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
-        let end_y = self
-            .y
-            .checked_add(self.height - 1)
-            .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        let end_x = self.x.checked_add(self.width - 1).ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
+        let end_y = self.y.checked_add(self.height - 1).ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })?;
         resolution.validate_point(self.x, self.y)?;
         resolution.validate_point(end_x, end_y)
     }
 
     fn sampling_region(&self) -> Result<InputSamplingRegion, ContainedTaskError> {
-        InputSamplingRegion::new(self.x, self.y, self.width, self.height)
-            .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))
+        InputSamplingRegion::new(self.x, self.y, self.width, self.height).map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })
     }
 
     fn sample(&self, state: &mut u64) -> Result<(i32, i32), ContainedTaskError> {
@@ -7040,10 +7405,12 @@ impl ClickRect {
         let x = i64::from(self.x) + x_offset as i64;
         let y = i64::from(self.y) + y_offset as i64;
         Ok((
-            i32::try_from(x)
-                .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?,
-            i32::try_from(y)
-                .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?,
+            i32::try_from(x).map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+            })?,
+            i32::try_from(y).map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+            })?,
         ))
     }
 }
@@ -7054,7 +7421,7 @@ fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
         PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
     };
     Scene::from_pixels(frame.width, frame.height, &frame.pixels, format)
-        .map_err(|_| ContainedTaskError::new("contained_task_frame_invalid"))
+        .map_err(|_| ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code()))
 }
 
 #[cfg(test)]
@@ -7490,7 +7857,7 @@ mod post_admission_ocr_tests {
                 canonical: "TokenB".into(),
             });
         assert_eq!(
-            ambiguous.validate(&limits),
+            ambiguous.validate(&limits).map_err(|code| code.as_str()),
             Err("ocr_fields_dictionary_ambiguous")
         );
         assert_eq!(
@@ -7788,7 +8155,7 @@ mod post_admission_ocr_tests {
                     _ => "contained_task_ocr_fields_unresolved",
                 };
                 assert!(
-                    matches!(outcome,Err(ContainedTaskRunError::Task(error)) if error.code() == expected),
+                    matches!(outcome,Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == expected),
                     "{case} keeps its original task failure"
                 );
             }
@@ -7939,7 +8306,8 @@ mod post_admission_ocr_tests {
                         Duration::from_secs(1)
                     )
                     .unwrap_err()
-                    .code(),
+                    .code()
+                    .as_str(),
                     "contained_task_timeout"
                 );
                 assert_eq!(runtime.inner.inputs, 1);
@@ -8178,7 +8546,7 @@ mod post_admission_ocr_tests {
             let outcome = task.run(&mut runtime);
             if result_first {
                 assert!(
-                    matches!(outcome, Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_entry_not_matched")
+                    matches!(outcome, Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == "contained_task_home_entry_not_matched")
                 );
                 assert_eq!(runtime.captures, 1);
                 assert_eq!(runtime.inputs, 0);
@@ -8694,7 +9062,10 @@ mod post_admission_ocr_tests {
             .observe("neutral", &evaluator, "neutral/operator", &scene)
             .expect_err("production OCR must require its provider");
 
-        assert_eq!(error.code(), "contained_task_post_admission_ocr_failed");
+        assert_eq!(
+            error.code().as_str(),
+            "contained_task_post_admission_ocr_failed"
+        );
         assert!(
             error
                 .detail()
@@ -8749,7 +9120,8 @@ mod post_admission_ocr_tests {
                 declaration
                     .validate()
                     .expect_err("invalid target form must fail closed")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_post_admission_ocr_invalid"
             );
         }
@@ -8790,7 +9162,8 @@ mod post_admission_ocr_tests {
                 declaration
                     .validate()
                     .expect_err("invalid page form must fail closed")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_post_admission_ocr_invalid"
             );
         }
@@ -8818,7 +9191,8 @@ mod post_admission_ocr_tests {
         assert_eq!(
             validate_post_admission_ocr_target(&control, &evaluator, "missing")
                 .expect_err("unknown target must fail closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_post_admission_ocr_target_invalid"
         );
 
@@ -8834,7 +9208,8 @@ mod post_admission_ocr_tests {
         assert_eq!(
             validate_post_admission_ocr_target(&control, &off_page, "fixture/off-page")
                 .expect_err("target outside admitted page bounds must fail closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_post_admission_ocr_target_out_of_bounds"
         );
 
@@ -8859,7 +9234,8 @@ mod post_admission_ocr_tests {
         assert_eq!(
             validate_post_admission_ocr_target(&control, &non_ocr, "fixture/not-ocr")
                 .expect_err("non-OCR target must fail closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_post_admission_ocr_target_invalid"
         );
     }
@@ -8912,7 +9288,8 @@ mod post_admission_ocr_tests {
                 &target_ids,
             )
             .expect_err("unknown page must fail closed")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_post_admission_ocr_page_gate_invalid"
         );
         let duplicate = pages(json!([
@@ -8929,7 +9306,8 @@ mod post_admission_ocr_tests {
                 &target_ids,
             )
             .expect_err("duplicate page resolution must fail closed")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_post_admission_ocr_page_gate_invalid"
         );
         let empty_positive = pages(json!([
@@ -8945,7 +9323,8 @@ mod post_admission_ocr_tests {
                 &target_ids,
             )
             .expect_err("each page requires a positive gate")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_post_admission_ocr_page_gate_invalid"
         );
         let ocr_gate = pages(json!([
@@ -8961,7 +9340,8 @@ mod post_admission_ocr_tests {
                 &target_ids,
             )
             .expect_err("selected OCR target must stay out of every page gate")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_post_admission_ocr_target_in_page_gate"
         );
         #[derive(Debug)]
@@ -9071,7 +9451,8 @@ mod post_admission_ocr_tests {
             bounded
                 .validate_task_timeout(&control(Some(299_999)))
                 .expect_err("timeout mismatch must fail closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
         assert!(program("0.7", Some(Value::Null)).is_err());
@@ -9080,7 +9461,8 @@ mod post_admission_ocr_tests {
                 .expect("legacy timeout parses for explicit validation")
                 .validate_task_timeout(&control(None))
                 .expect_err("legacy schema cannot declare task timeout")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
         for invalid in [0, 1_800_001] {
@@ -9088,7 +9470,8 @@ mod post_admission_ocr_tests {
                 control(Some(invalid))
                     .validate()
                     .expect_err("control timeout must remain bounded")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_control_invalid"
             );
         }
@@ -9157,7 +9540,8 @@ mod post_admission_ocr_tests {
                 .expect("mismatch program")
                 .validate_task_max_steps(&control(Some(62)))
                 .expect_err("max-steps mismatch must fail closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
         for invalid in [json!(-1), json!(1.5), json!("61"), Value::Null] {
@@ -9169,7 +9553,8 @@ mod post_admission_ocr_tests {
                     .expect("integer max steps")
                     .validate_task_max_steps(&control(Some(invalid)))
                     .expect_err("out-of-range max steps must fail closed")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_program_invalid"
             );
         }
@@ -9178,7 +9563,8 @@ mod post_admission_ocr_tests {
                 .expect("legacy max steps parses for explicit validation")
                 .validate_task_max_steps(&control(Some(61)))
                 .expect_err("legacy schema cannot declare max steps")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
     }
@@ -9540,7 +9926,7 @@ mod retry_wiring_tests {
         )
         .expect_err("reachable effect terminal must be covered");
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             "contained_task_outcome_declaration_incomplete"
         );
 
@@ -9848,7 +10234,7 @@ mod retry_wiring_tests {
         )
         .expect_err("the concrete intermediate page must expose the reachable terminal");
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             "contained_task_outcome_declaration_incomplete"
         );
     }
@@ -9882,7 +10268,7 @@ mod retry_wiring_tests {
         )
         .expect_err("mapped operation without a finite postcondition must fail admission");
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             "contained_task_outcome_declaration_incomplete"
         );
 
@@ -9898,7 +10284,7 @@ mod retry_wiring_tests {
         )
         .expect_err("a reachable second designated effect must fail admission");
         assert_eq!(
-            error.code(),
+            error.code().as_str(),
             "contained_task_outcome_declaration_incomplete"
         );
     }
@@ -9911,7 +10297,10 @@ mod retry_wiring_tests {
         let error = validate_scheduling_outcome_execution_mode(&recognize_only)
             .expect_err("recognize-only has no finite declared terminal-page closure");
 
-        assert_eq!(error.code(), "contained_task_outcome_declaration_invalid");
+        assert_eq!(
+            error.code().as_str(),
+            "contained_task_outcome_declaration_invalid"
+        );
     }
 
     fn omitted_policy_task(with_destination: bool, with_error_page: bool) -> PreparedContainedTask {
@@ -10151,7 +10540,7 @@ mod retry_wiring_tests {
         ) else {
             panic!("changed page must fail");
         };
-        assert_eq!(error.code(), "contained_task_guard_refused");
+        assert_eq!(error.code().as_str(), "contained_task_guard_refused");
         assert_eq!(
             error.detail(),
             Some("operation=open_terminal expected_page=home observed_page=neutral/terminal")
@@ -10225,7 +10614,7 @@ mod retry_wiring_tests {
         ) else {
             panic!("target mismatch must fail");
         };
-        assert_eq!(error.code(), "contained_task_guard_refused");
+        assert_eq!(error.code().as_str(), "contained_task_guard_refused");
         assert_eq!(
             error.detail(),
             Some("operation=open_terminal target=guard/ready")
@@ -10349,7 +10738,9 @@ mod retry_wiring_tests {
             .expect("exact source/control max-steps binding");
         let mut bounded_runtime = ScriptedRuntime::new("home");
         assert_eq!(
-            run_to_scheduler(&bounded, &mut bounded_runtime).code(),
+            run_to_scheduler(&bounded, &mut bounded_runtime)
+                .code()
+                .as_str(),
             "contained_task_requires_scheduler"
         );
         assert_eq!(bounded_runtime.inputs, 61);
@@ -10365,7 +10756,9 @@ mod retry_wiring_tests {
         let default = omitted_policy_task(false, false);
         let mut default_runtime = ScriptedRuntime::new("home");
         assert_eq!(
-            run_to_scheduler(&default, &mut default_runtime).code(),
+            run_to_scheduler(&default, &mut default_runtime)
+                .code()
+                .as_str(),
             "contained_task_requires_scheduler"
         );
         assert_eq!(default_runtime.inputs, DEFAULT_MAX_STEPS as usize);
@@ -10437,7 +10830,8 @@ mod retry_wiring_tests {
                 &["home".to_owned()],
                 &graph,
                 &declaration
-            ),
+            )
+            .map_err(|code| code.as_str()),
             Err("task_phases_designated_effect_repeated")
         );
         let mut runtime = ScriptedRuntime::new("home");
@@ -10494,7 +10888,7 @@ mod retry_wiring_tests {
             .map(page_frame)
             .into();
         assert!(
-            matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_requires_scheduler")
+            matches!(task.run(&mut limited), Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == "contained_task_requires_scheduler")
         );
         assert_eq!(limited.inputs, 3);
         assert_eq!(limited.progress, [0, 1, 2, 3]);
@@ -10514,7 +10908,7 @@ mod retry_wiring_tests {
         let Err(ContainedTaskRunError::Task(error)) = task.run(&mut runtime) else {
             panic!("expected task deadline failure")
         };
-        assert_eq!(error.code(), "contained_task_timeout");
+        assert_eq!(error.code().as_str(), "contained_task_timeout");
         let timing = error.timing().expect("owner timing decision");
         assert_eq!(timing.scope, TaskTimingScope::Task);
         assert_eq!(timing.stage, TaskTimingStage::Postcondition);
@@ -10651,7 +11045,7 @@ mod retry_wiring_tests {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
-        assert_eq!(error.code(), "page_confirmation_failed");
+        assert_eq!(error.code().as_str(), "page_confirmation_failed");
         if after_page == "error" {
             assert_eq!(error.timing(), None, "an error page is not a timeout");
         } else {
@@ -10695,7 +11089,8 @@ mod retry_wiring_tests {
                 operation
                     .validate(&task_control, TaskOperationDefaults::default(), "0.6")
                     .expect_err("invalid post delay must fail admission")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_operation_invalid"
             );
         }
@@ -10801,7 +11196,7 @@ mod retry_wiring_tests {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
-        assert_eq!(timeout.code(), "contained_task_timeout");
+        assert_eq!(timeout.code().as_str(), "contained_task_timeout");
         let timing = timeout.timing().expect("insufficient delay facts");
         assert_eq!(timing.scope, TaskTimingScope::Task);
         assert_eq!(timing.stage, TaskTimingStage::PostInputDelay);
@@ -11002,7 +11397,11 @@ mod retry_wiring_tests {
             PageDeclaration::Set(vec!["".to_string()]),
         ] {
             assert_eq!(
-                invalid.normalized().expect_err("invalid page set").code(),
+                invalid
+                    .normalized()
+                    .expect_err("invalid page set")
+                    .code()
+                    .as_str(),
                 "contained_task_page_set_invalid"
             );
         }
@@ -11012,7 +11411,8 @@ mod retry_wiring_tests {
         assert_eq!(
             validate_page_references(&task.control.game, &missing, &task.detector)
                 .expect_err("missing page reference")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_page_set_invalid"
         );
     }
@@ -11026,7 +11426,8 @@ mod retry_wiring_tests {
             operation
                 .destination_pages()
                 .expect_err("conflicting destinations")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_destination_conflict"
         );
     }
@@ -11042,7 +11443,8 @@ mod retry_wiring_tests {
                 &task.detector,
             )
             .expect_err("destination/error overlap")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_page_set_invalid"
         );
     }
@@ -11057,7 +11459,8 @@ mod retry_wiring_tests {
                 &task.detector,
             )
             .expect_err("ambiguous aliases")
-            .code(),
+            .code()
+            .as_str(),
             "contained_task_page_set_invalid"
         );
     }
@@ -11092,7 +11495,7 @@ mod retry_wiring_tests {
                     .failure_decision(
                         &policy,
                         attempt,
-                        "page_confirmation_failed",
+                        ExecutionKernelCode::PageConfirmationFailed.code(),
                         Some("home".to_string()),
                         RunFailureStage::PostExecution {
                             hit_error_page: false,
@@ -11110,7 +11513,7 @@ mod retry_wiring_tests {
                 .failure_decision(
                     &policy,
                     6,
-                    "page_confirmation_failed",
+                    ExecutionKernelCode::PageConfirmationFailed.code(),
                     Some("home".to_string()),
                     RunFailureStage::PostExecution {
                         hit_error_page: false,
@@ -11141,7 +11544,7 @@ mod retry_wiring_tests {
             }
         };
 
-        assert_eq!(error.code(), "contained_task_step_unconfirmed");
+        assert_eq!(error.code().as_str(), "contained_task_step_unconfirmed");
         assert_eq!(runtime.inputs, 6);
         assert_closed_effect_attempts(&runtime, 6);
     }
@@ -11179,7 +11582,7 @@ mod retry_wiring_tests {
             }
         };
 
-        assert_eq!(error.code(), "page_confirmation_failed");
+        assert_eq!(error.code().as_str(), "page_confirmation_failed");
         assert_single_effect(&runtime);
         assert_closed_effect_attempts(&runtime, 1);
     }
@@ -11215,7 +11618,7 @@ mod retry_wiring_tests {
                 .failure_decision(
                     &policy,
                     1,
-                    "page_confirmation_failed",
+                    ExecutionKernelCode::PageConfirmationFailed.code(),
                     Some("home".to_string()),
                     RunFailureStage::PostExecution {
                         hit_error_page: false,
@@ -11235,7 +11638,8 @@ mod retry_wiring_tests {
                 operation(invalid, None)
                     .retry_policy(TaskOperationDefaults::default(), 100)
                     .expect_err("invalid retry policy")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_operation_invalid"
             );
         }
@@ -11577,7 +11981,7 @@ mod retry_wiring_tests {
             Some(77),
         )
         .expect_err("invalid sampling region");
-        assert_eq!(error.code(), "contained_task_operation_invalid");
+        assert_eq!(error.code().as_str(), "contained_task_operation_invalid");
     }
 
     #[test]
@@ -11617,7 +12021,7 @@ mod retry_wiring_tests {
                 .failure_decision(
                     &policy,
                     1,
-                    "page_confirmation_failed",
+                    ExecutionKernelCode::PageConfirmationFailed.code(),
                     Some("neutral/error".to_string()),
                     RunFailureStage::PostExecution { hit_error_page },
                 )
@@ -11649,7 +12053,7 @@ mod retry_wiring_tests {
                 .failure_decision(
                     &policy,
                     2,
-                    "page_confirmation_failed",
+                    ExecutionKernelCode::PageConfirmationFailed.code(),
                     Some("home".to_string()),
                     RunFailureStage::PostExecution {
                         hit_error_page: false,
@@ -11805,7 +12209,8 @@ mod retry_wiring_tests {
         assert_eq!(
             validate_stability_contract(&task.control, &task.program)
                 .expect_err("task declaration must exactly match control")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
 
@@ -11829,7 +12234,8 @@ mod retry_wiring_tests {
                 rejected
                     .validate()
                     .expect_err("other modes reject stability termination")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_control_invalid"
             );
         }
@@ -11849,7 +12255,8 @@ mod retry_wiring_tests {
                 rejected
                     .validate()
                     .expect_err("invalid threshold or max-step relation")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_control_invalid"
             );
         }
@@ -11884,7 +12291,8 @@ mod retry_wiring_tests {
                 rejected
                     .validate()
                     .expect_err("invalid or unbounded crop")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_control_invalid"
             );
         }
@@ -11908,7 +12316,8 @@ mod retry_wiring_tests {
             byte_layout_overflow
                 .validate()
                 .expect_err("checked four-byte frame layout must fit the platform")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_control_invalid"
         );
 
@@ -11917,7 +12326,8 @@ mod retry_wiring_tests {
         assert_eq!(
             validate_stability_contract(&target_conflict.control, &target_conflict.program)
                 .expect_err("stability rejects target-page terminal ownership")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
         let mut outcome_conflict = stability_task(2, 4);
@@ -11931,7 +12341,8 @@ mod retry_wiring_tests {
         assert_eq!(
             validate_stability_contract(&outcome_conflict.control, &outcome_conflict.program)
                 .expect_err("stability rejects scheduling terminal ownership")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_program_invalid"
         );
 
@@ -11992,7 +12403,8 @@ mod retry_wiring_tests {
             assert_eq!(
                 validate_stability_contract(&rejected.control, &rejected.program)
                     .expect_err("missing, duplicate, or mismatched ownership must fail closed")
-                    .code(),
+                    .code()
+                    .as_str(),
                 "contained_task_program_invalid",
                 "case={case}"
             );
@@ -12088,7 +12500,8 @@ mod retry_wiring_tests {
         assert_eq!(
             compare_stability_samples(&baseline, &other_format, &declaration.comparison)
                 .expect_err("pixel-format drift fails closed")
-                .code(),
+                .code()
+                .as_str(),
             "contained_task_stability_comparison_failed"
         );
     }
@@ -12211,7 +12624,7 @@ mod retry_wiring_tests {
                 panic!("unexpected fixture boundary error: {error}")
             }
         };
-        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(error.code().as_str(), "contained_task_requires_scheduler");
         assert_eq!(error.timing(), None, "stability failure is not a timeout");
         assert_eq!(runtime.progress, [0, 1, 2, 3, 4]);
         assert_eq!(runtime.inputs, 4);

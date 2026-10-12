@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lease::HostClaim;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 
 impl HostShared {
     pub(super) fn input(
@@ -27,7 +32,7 @@ impl HostShared {
         } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             let resolved = self.validated_instance(request, token, connection_id)?;
             let transferred =
                 self.transfer_preempted_while_guarded(token, connection_id, &admission)?;
@@ -36,8 +41,8 @@ impl HostShared {
         if resolved.provenance() != execution_provenance {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "execution_backend_provenance_mismatch",
-                    "execute_input",
+                    HostCode::ExecutionBackendProvenanceMismatch,
+                    HostLocation::ExecuteInput,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             ));
@@ -49,7 +54,7 @@ impl HostShared {
                 Some(token.lease_id()),
                 resolved.audit_endpoint(),
                 RuntimeHostError::scheduler(
-                    "input_preempted_at_safe_boundary",
+                    HostLocation::InputPreemptedAtSafeBoundary,
                     &SchedulerError::TransferNotSafe,
                 ),
             )?);
@@ -71,8 +76,8 @@ impl HostShared {
         {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "nemu_input_capability_unsupported",
-                    "execute_input",
+                    HostCode::NemuInputCapabilityUnsupported,
+                    HostLocation::ExecuteInput,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -82,8 +87,8 @@ impl HostShared {
         if input_check.is_some() && input_frame.is_none() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "nemu_input_frame_required",
-                    "execute_input",
+                    SharedCode::NemuInputFrameRequired,
+                    HostLocation::ExecuteInput,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -96,8 +101,8 @@ impl HostShared {
                 .map_err(|error| {
                     RequestFailure::request(
                         RuntimeHostError::request(
-                            "input_frame_unavailable",
-                            "resolve_input_frame",
+                            HostCode::InputFrameUnavailable,
+                            HostLocation::ResolveInputFrame,
                             RuntimeErrorCode::InvalidRequest,
                         )
                         .with_native_detail(error.to_string()),
@@ -115,7 +120,7 @@ impl HostShared {
             .prepare_input(action.clone())
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    "prepare_input",
+                    HostLocation::PrepareInput,
                     &error,
                 ))
             })?;
@@ -183,28 +188,32 @@ impl HostShared {
         // Acquire only after the device action: its lifecycle writes take this gate too.
         let outcome_fact_gate = RefCell::new(None);
         let outcome_gate_error = RefCell::new(None);
-        let lock_outcome_facts = || match lock(&self.fact_write_gate, "commit_input_outcome") {
-            Ok(gate) => {
-                *outcome_fact_gate.borrow_mut() = Some(gate);
-                Ok(())
-            }
-            Err(error) => {
-                *outcome_gate_error.borrow_mut() = Some(error);
-                Err(actingcommand_contract::SanitizationError::fingerprinter_failure())
-            }
-        };
+        let lock_outcome_facts =
+            || match lock(&self.fact_write_gate, HostLocation::CommitInputOutcome) {
+                Ok(gate) => {
+                    *outcome_fact_gate.borrow_mut() = Some(gate);
+                    Ok(())
+                }
+                Err(error) => {
+                    *outcome_gate_error.borrow_mut() = Some(error);
+                    Err(actingcommand_contract::SanitizationError::fingerprinter_failure())
+                }
+            };
         let execution = self.execution()?;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
             plan,
             || {
-                let destructive =
-                    lock(&self.scheduler, "begin_destructive_input").and_then(|mut scheduler| {
+                let destructive = lock(&self.scheduler, HostLocation::BeginDestructiveInput)
+                    .and_then(|mut scheduler| {
                         scheduler
                             .begin_destructive_step(token, connection_id, self.monotonic_ms()?)
                             .map_err(|error| {
-                                RuntimeHostError::scheduler("begin_destructive_input", &error)
+                                RuntimeHostError::scheduler(
+                                    HostLocation::BeginDestructiveInput,
+                                    &error,
+                                )
                             })
                     });
                 let witness = match destructive {
@@ -312,7 +321,7 @@ impl HostShared {
                                 Ok(error) => {
                                     let mut failure =
                                         ActionFailure::backend(RuntimeHostError::execution(
-                                            "execute_input_backend",
+                                            HostLocation::ExecuteInputBackend,
                                             &error,
                                         ));
                                     failure.destructive_started = false;
@@ -449,7 +458,7 @@ impl HostShared {
         self.require_physical_instance_id(token.instance_id())?;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             let resolved = self.validated_instance(request, token, connection_id)?;
             let transferred =
                 self.transfer_preempted_while_guarded(token, connection_id, &admission)?;
@@ -462,7 +471,7 @@ impl HostShared {
                 Some(token.lease_id()),
                 resolved.audit_endpoint(),
                 RuntimeHostError::scheduler(
-                    "application_lifecycle_preempted_at_safe_boundary",
+                    HostLocation::ApplicationLifecyclePreemptedAtSafeBoundary,
                     &SchedulerError::TransferNotSafe,
                 ),
             )?);
@@ -512,15 +521,16 @@ impl HostShared {
             self.events.fingerprinter(),
             plan,
             || {
-                let admission = match lock(&instance_guard, "lock_application_preparation") {
-                    Ok(admission) => admission,
-                    Err(error) => {
-                        return CriticalActionReport::Failed {
-                            error: ActionFailure::poison(error),
-                            effect: EffectDisposition::NotPerformed,
-                        };
-                    }
-                };
+                let admission =
+                    match lock(&instance_guard, HostLocation::LockApplicationPreparation) {
+                        Ok(admission) => admission,
+                        Err(error) => {
+                            return CriticalActionReport::Failed {
+                                error: ActionFailure::poison(error),
+                                effect: EffectDisposition::NotPerformed,
+                            };
+                        }
+                    };
                 // ResourceClose is finished and its witness reclaimed before the separate
                 // Business admission. Keep capture admission locked across both phases.
                 match self.prepare_application_resources_result(
@@ -532,7 +542,7 @@ impl HostShared {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         let mut failure = ActionFailure::backend(RuntimeHostError::execution(
-                            "prepare_application_resources",
+                            HostLocation::PrepareApplicationResources,
                             &error,
                         ));
                         failure.destructive_started = false;
@@ -548,15 +558,17 @@ impl HostShared {
                         };
                     }
                 }
-                let destructive = lock(&self.scheduler, "begin_destructive_application").and_then(
-                    |mut scheduler| {
+                let destructive = lock(&self.scheduler, HostLocation::BeginDestructiveApplication)
+                    .and_then(|mut scheduler| {
                         scheduler
                             .begin_destructive_step(token, connection_id, self.monotonic_ms()?)
                             .map_err(|error| {
-                                RuntimeHostError::scheduler("begin_destructive_application", &error)
+                                RuntimeHostError::scheduler(
+                                    HostLocation::BeginDestructiveApplication,
+                                    &error,
+                                )
                             })
-                    },
-                );
+                    });
                 let witness = match destructive {
                     Ok(witness) => Arc::new(witness),
                     Err(error) => {
@@ -588,7 +600,7 @@ impl HostShared {
                     },
                     Err(error) => CriticalActionReport::Failed {
                         error: ActionFailure::backend(RuntimeHostError::execution(
-                            "execute_application_backend",
+                            HostLocation::ExecuteApplicationBackend,
                             &error,
                         )),
                         effect: EffectDisposition::Indeterminate,
@@ -703,7 +715,9 @@ impl HostShared {
                 ..EventQuery::default()
             })
             .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("recover_safe_reset"))
+                RequestFailure::poison_without_terminal(ledger_error(
+                    HostLocation::RecoverSafeReset,
+                ))
             })?;
         if events.is_empty() {
             return Ok(None);
@@ -716,7 +730,7 @@ impl HostShared {
                     .is_some_and(|actual| actual != &instance_id)
         }) {
             return Err(safe_reset_replay_denied(
-                "safe_reset_request_identity_reused",
+                HostCode::SafeResetRequestIdentityReused,
             ));
         }
         let c4_lifecycle = events.iter().any(|event| {
@@ -728,7 +742,7 @@ impl HostShared {
             .iter()
             .any(|event| event.event_type() == EventType::CommandValidated);
         if !c4_lifecycle {
-            return Err(safe_reset_replay_denied("safe_reset_request_id_reused"));
+            return Err(safe_reset_replay_denied(HostCode::SafeResetRequestIdReused));
         }
         let committed = events
             .iter()
@@ -749,8 +763,8 @@ impl HostShared {
             ([input], [release]) if input.sequence() < release.sequence() => {
                 let action_id = input.links().action_id().copied().ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "safe_reset_action_id_missing",
-                        "recover_safe_reset",
+                        HostCode::SafeResetActionIdMissing,
+                        HostLocation::RecoverSafeReset,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -761,12 +775,12 @@ impl HostShared {
                 }))
             }
             ([], []) => Err(safe_reset_replay_denied(
-                "safe_reset_previous_attempt_incomplete",
+                HostCode::SafeResetPreviousAttemptIncomplete,
             )),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "safe_reset_durable_state_inconsistent",
-                    "recover_safe_reset",
+                    HostCode::SafeResetDurableStateInconsistent,
+                    HostLocation::RecoverSafeReset,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             )),
@@ -792,25 +806,8 @@ impl HostShared {
             EventAction::InputReset,
             None,
         )?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request,
-            request_id: original.request_id(),
-            instance_alias,
-            holder_id,
-            connection_id,
-            run_links: None,
-            lease_ttl_ms: None,
-            kind: ClaimKind::InputLifecycle,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "safe_reset_lease_result_invalid",
-                    "execute_safe_reset",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
+        let token =
+            self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
         let action = match self.input(
             request,
             &token,
@@ -829,8 +826,8 @@ impl HostShared {
                 token,
                 connection_id,
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "safe_reset_input_result_invalid",
-                    "execute_safe_reset",
+                    HostCode::SafeResetInputResultInvalid,
+                    HostLocation::ExecuteSafeReset,
                     RuntimeErrorCode::RuntimeFatal,
                 )),
             ));
@@ -863,7 +860,7 @@ impl HostShared {
             })
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(ledger_error(
-                    "recover_application_lifecycle",
+                    HostLocation::RecoverApplicationLifecycle,
                 ))
             })?;
         if events.is_empty() {
@@ -877,7 +874,7 @@ impl HostShared {
                     .is_some_and(|actual| actual != &instance_id)
         }) {
             return Err(application_replay_denied(
-                "application_lifecycle_request_identity_reused",
+                HostCode::ApplicationLifecycleRequestIdentityReused,
             ));
         }
         let expected_action = action.event_action();
@@ -899,8 +896,8 @@ impl HostShared {
             ([application], [release]) if application.sequence() < release.sequence() => {
                 let action_id = application.links().action_id().copied().ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "application_lifecycle_action_id_missing",
-                        "recover_application_lifecycle",
+                        HostCode::ApplicationLifecycleActionIdMissing,
+                        HostLocation::RecoverApplicationLifecycle,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
@@ -911,12 +908,12 @@ impl HostShared {
                 }))
             }
             ([], []) => Err(application_replay_denied(
-                "application_lifecycle_previous_attempt_incomplete",
+                HostCode::ApplicationLifecyclePreviousAttemptIncomplete,
             )),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "application_lifecycle_durable_state_inconsistent",
-                    "recover_application_lifecycle",
+                    HostCode::ApplicationLifecycleDurableStateInconsistent,
+                    HostLocation::RecoverApplicationLifecycle,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             )),
@@ -945,25 +942,8 @@ impl HostShared {
             action.event_action(),
             None,
         )?;
-        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
-            request,
-            request_id: original.request_id(),
-            instance_alias,
-            holder_id,
-            connection_id,
-            run_links: None,
-            lease_ttl_ms: None,
-            kind: ClaimKind::InputLifecycle,
-        })?;
-        let RuntimeResult::LeaseGranted { token } = acquired.result else {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "application_lifecycle_lease_result_invalid",
-                    "execute_application_lifecycle",
-                    RuntimeErrorCode::RuntimeFatal,
-                ),
-            ));
-        };
+        let token =
+            self.await_input_lifecycle_claim(original, instance_alias, holder_id, connection_id)?;
         let executed = match self.application_control(request, &token, action, connection_id, None)
         {
             Ok(success) => success,
@@ -976,8 +956,8 @@ impl HostShared {
                 token,
                 connection_id,
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "application_lifecycle_result_invalid",
-                    "execute_application_lifecycle",
+                    HostCode::ApplicationLifecycleResultInvalid,
+                    HostLocation::ExecuteApplicationLifecycle,
                     RuntimeErrorCode::RuntimeFatal,
                 )),
             ));
@@ -997,11 +977,40 @@ impl HostShared {
     }
 }
 
-fn safe_reset_replay_denied(code: &'static str) -> RequestFailure {
+impl HostShared {
+    /// Workflow #369 Q-2, W-3: the claim of a safe reset or an application lifecycle command
+    /// (`InputLifecycle`, with the scheduler's default lease TTL) waits at most
+    /// `INPUT_LIFECYCLE_CLAIM_WAIT_MS` for its turn in the instance's queue.
+    fn await_input_lifecycle_claim(
+        &self,
+        original: &RuntimeRequest,
+        instance_alias: &str,
+        holder_id: actingcommand_contract::HolderId,
+        connection_id: ConnectionId,
+    ) -> Result<LeaseToken, RequestFailure> {
+        let lease_ttl_ms = lock(&self.scheduler, HostLocation::ReadInputLifecycleClaimTtl)?
+            .config()
+            .lease_ttl_ms;
+        self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::InputLifecycle,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            INPUT_LIFECYCLE_CLAIM_WAIT_MS,
+        )
+    }
+}
+
+fn safe_reset_replay_denied(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "recover_safe_reset",
+            HostLocation::RecoverSafeReset,
             RuntimeErrorCode::ProtocolInvalid,
         ),
         RuntimeReceiptState::Denied,
@@ -1009,11 +1018,11 @@ fn safe_reset_replay_denied(code: &'static str) -> RequestFailure {
     )
 }
 
-fn application_replay_denied(code: &'static str) -> RequestFailure {
+fn application_replay_denied(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "recover_application_lifecycle",
+            HostLocation::RecoverApplicationLifecycle,
             RuntimeErrorCode::ProtocolInvalid,
         ),
         RuntimeReceiptState::Denied,
@@ -1059,8 +1068,8 @@ fn input_execution_plan_record(
         .map(Some)
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "input_execution_plan_invalid",
-                "prepare_input_execution_plan",
+                HostCode::InputExecutionPlanInvalid,
+                HostLocation::PrepareInputExecutionPlan,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })

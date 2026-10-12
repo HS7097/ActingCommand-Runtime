@@ -47,6 +47,11 @@ pub(super) trait LedgerStore: Send + 'static {
         after: Option<actingcommand_contract::ArtifactId>,
         policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
+    fn frame_retention_view(
+        &self,
+        now_unix_ms: u64,
+        switches: super::FrameRetentionSwitches,
+    ) -> GlobalLedgerResult<super::FrameRetentionView>;
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
@@ -141,6 +146,13 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
         Self::retention_candidates(self, after, policy)
+    }
+    fn frame_retention_view(
+        &self,
+        now_unix_ms: u64,
+        switches: super::FrameRetentionSwitches,
+    ) -> GlobalLedgerResult<super::FrameRetentionView> {
+        Self::frame_retention_view(self, now_unix_ms, switches)
     }
     fn admit_artifact_eviction(
         &mut self,

@@ -5,6 +5,8 @@
 //! own failures and the tick's stderr to the same file.
 
 use super::Failure;
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Code;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -32,11 +34,11 @@ pub(crate) fn append(
     directory: &Path,
     now_unix_ms: u64,
     level: Level,
-    code: &str,
+    code: impl Into<Code>,
     fields: &[(&str, String)],
 ) -> Result<(), Failure> {
     let path = directory.join(LOG_FILE);
-    let line = format_line(now_unix_ms, level, code, fields);
+    let line = format_line(now_unix_ms, level, code.into(), fields);
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -44,7 +46,7 @@ pub(crate) fn append(
         .and_then(|mut file| file.write_all(line.as_bytes()))
         .map_err(|error| {
             Failure::misconfigured(
-                "watchdog_log_unwritable",
+                ActingctlCode::WatchdogLogUnwritable,
                 format!("{}: {error}", path.display()),
             )
         })
@@ -53,7 +55,7 @@ pub(crate) fn append(
 /// Whether the log's last structured line is `<code>` with `code=<value>`; a misconfiguration
 /// found before the state is readable is written once, not every minute. Lines the launcher
 /// appended from a tick's stderr are skipped.
-pub(crate) fn last_line_matches(directory: &Path, code: &str, value: &str) -> bool {
+pub(crate) fn last_line_matches(directory: &Path, code: Code, value: Code) -> bool {
     let mut tail = Vec::new();
     let read = File::open(directory.join(LOG_FILE)).and_then(|mut file| {
         let length = file.metadata()?.len();
@@ -69,7 +71,8 @@ pub(crate) fn last_line_matches(directory: &Path, code: &str, value: &str) -> bo
         .rev()
         .find(|line| structured(line))
         .is_some_and(|line| {
-            line.split(' ').nth(3) == Some(code) && line.split(' ').any(|field| field == wanted)
+            line.split(' ').nth(3) == Some(code.as_str())
+                && line.split(' ').any(|field| field == wanted)
         })
 }
 
@@ -85,7 +88,7 @@ fn structured(line: &str) -> bool {
             .is_some_and(|level| matches!(level, "INFO" | "WARN" | "ERROR"))
 }
 
-fn format_line(now_unix_ms: u64, level: Level, code: &str, fields: &[(&str, String)]) -> String {
+fn format_line(now_unix_ms: u64, level: Level, code: Code, fields: &[(&str, String)]) -> String {
     let mut line = format!(
         "{} {now_unix_ms} {} {code}",
         rfc3339_utc(now_unix_ms),
@@ -149,7 +152,7 @@ mod tests {
             format_line(
                 1_759_800_000_123,
                 Level::Warn,
-                "watchdog_started_runtime",
+                ActingctlCode::WatchdogStartedRuntime.code(),
                 &[
                     ("method", "breakaway".to_owned()),
                     ("log", r"C:\Install Root\watchdog\actingd-1.log".to_owned()),
@@ -167,7 +170,7 @@ mod tests {
             directory.path(),
             1_759_800_000_123,
             Level::Error,
-            "watchdog_misconfigured",
+            ActingctlCode::WatchdogMisconfigured,
             &[("code", "watchdog_layout_unknown".to_owned())],
         )
         .expect("append");
@@ -178,13 +181,13 @@ mod tests {
             .expect("stderr line");
         assert!(last_line_matches(
             directory.path(),
-            "watchdog_misconfigured",
-            "watchdog_layout_unknown"
+            ActingctlCode::WatchdogMisconfigured.code(),
+            ActingctlCode::WatchdogLayoutUnknown.code()
         ));
         assert!(!last_line_matches(
             directory.path(),
-            "watchdog_misconfigured",
-            "watchdog_root_mismatch"
+            ActingctlCode::WatchdogMisconfigured.code(),
+            ActingctlCode::WatchdogRootMismatch.code()
         ));
     }
 }

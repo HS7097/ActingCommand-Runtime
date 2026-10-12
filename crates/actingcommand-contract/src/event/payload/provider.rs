@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::SanitizationCode;
 use crate::emulator::EmulatorCapability;
 use std::collections::BTreeSet;
 
@@ -187,7 +188,7 @@ impl ProviderStartupRecord {
         };
         if !valid {
             return Err(SanitizationError::new(
-                "invalid_provider_startup_record",
+                SanitizationCode::InvalidProviderStartupRecord,
                 "provider_payload",
             ));
         }

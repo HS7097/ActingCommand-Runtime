@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_device::{DeviceError, DeviceResult, InputCheckPhase, InputOperationCheck};
 
 pub(super) struct RuntimeInputCheck {
@@ -87,7 +88,7 @@ impl HostShared {
         closing: bool,
     ) -> RuntimeHostResult<Option<RuntimeInputCheck>> {
         let resolved = self.execution()?.resolve(alias).map_err(|error| {
-            RuntimeHostError::execution("resolve_nemu_input_configuration", &error)
+            RuntimeHostError::execution(HostLocation::ResolveNemuInputConfiguration, &error)
         })?;
         let Some(configuration) = resolved
             .configuration()
@@ -100,8 +101,8 @@ impl HostShared {
             .checked_add(configuration.input_command_timeout_ms)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "nemu_input_deadline_overflow",
-                    "prepare_nemu_input",
+                    HostCode::NemuInputDeadlineOverflow,
+                    HostLocation::PrepareNemuInput,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?
@@ -109,8 +110,8 @@ impl HostShared {
         if let Some(control) = &control {
             if control.deadline() == 0 {
                 return Err(RuntimeHostError::fatal(
-                    "nemu_input_task_deadline_missing",
-                    "prepare_nemu_input",
+                    HostCode::NemuInputTaskDeadlineMissing,
+                    HostLocation::PrepareNemuInput,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -134,16 +135,19 @@ impl HostShared {
         witness: Arc<FencedWrite>,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<Option<Arc<dyn InputOperationCheck>>> {
-        let alias = lock(&self.registered_instances, "resolve_nemu_close_instance")?
-            .get(&token.instance_id())
-            .map(|instance| instance.instance_alias.clone())
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "nemu_close_instance_missing",
-                    "prepare_nemu_close",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
+        let alias = lock(
+            &self.registered_instances,
+            HostLocation::ResolveNemuCloseInstance,
+        )?
+        .get(&token.instance_id())
+        .map(|instance| instance.instance_alias.clone())
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::NemuCloseInstanceMissing,
+                HostLocation::PrepareNemuClose,
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
         self.nemu_input_check(&alias, token, connection_id, None, true)
             .map(|check| check.map(|check| check.fenced(witness)))
     }

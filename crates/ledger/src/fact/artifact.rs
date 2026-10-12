@@ -2,6 +2,7 @@
 
 use super::*;
 use actingcommand_contract::ArtifactEvictionProof;
+use actingcommand_contract::codes::SharedCode;
 
 /// A read projection is excluded from historical fact identity and serialization.
 #[derive(Debug, Clone, Default)]
@@ -61,11 +62,11 @@ impl LedgerArtifactReference {
         reference: ProjectedArtifactReference,
     ) -> Result<Self, FactValidationError> {
         reference.validate().map_err(|_| FactValidationError {
-            code: "invalid_artifact_reference",
+            code: SharedCode::InvalidArtifactReference.code(),
         })?;
         if reference.object_key.is_none() {
             return Err(FactValidationError {
-                code: "artifact_object_key_missing",
+                code: SharedCode::ArtifactObjectKeyMissing.code(),
             });
         }
         Ok(Self {
@@ -94,7 +95,7 @@ impl LedgerArtifactReference {
             && verified.reference().project(true) != reference
         {
             return Err(FactValidationError::new(
-                "artifact_store_verification_mismatch",
+                LedgerCode::ArtifactStoreVerificationMismatch.code(),
             ));
         }
         let valid = match &availability {
@@ -129,7 +130,7 @@ impl LedgerArtifactReference {
         };
         if !valid {
             return Err(FactValidationError {
-                code: "artifact_availability_proof_invalid",
+                code: LedgerCode::ArtifactAvailabilityProofInvalid.code(),
             });
         }
         Ok(Self::recorded(reference)?.with_availability(availability))

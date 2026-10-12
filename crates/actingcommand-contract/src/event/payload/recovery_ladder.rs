@@ -5,6 +5,7 @@
 // the payload validation share.
 
 use super::{RuntimeLifecyclePhase, SanitizationError, validate_diagnostic_detail_token};
+use crate::codes::{DeviceSelfCheckFailure, SanitizationCode, SharedCode};
 use crate::{RunId, TaskId, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
@@ -12,20 +13,21 @@ use serde::{Deserialize, Serialize};
 /// `contained_task_page_unknown`, any `contained_task_recovery_*` code or any
 /// `contained_task_home_recovery_*` (entry recovery / return home) code.
 pub fn is_stuck_recovery_trigger(failure_code: &str) -> bool {
-    failure_code == "contained_task_page_unknown"
+    failure_code == SharedCode::ContainedTaskPageUnknown.as_str()
         || failure_code.starts_with("contained_task_recovery_")
         || failure_code.starts_with("contained_task_home_recovery_")
 }
 
 /// Ordinary preparation failures eligible only after their resource disposal is confirmed.
 pub fn is_preparation_recovery_trigger(failure_code: &str) -> bool {
-    matches!(
-        failure_code,
-        "input_backend_open_failed"
-            | "capture_backend_open_failed"
-            | "paired_backend_open_failed"
-            | "capture_backend_operation_failed"
-    )
+    [
+        DeviceSelfCheckFailure::InputBackendOpenFailed,
+        DeviceSelfCheckFailure::CaptureBackendOpenFailed,
+        DeviceSelfCheckFailure::PairedBackendOpenFailed,
+    ]
+    .iter()
+    .any(|code| code.as_str() == failure_code)
+        || failure_code == SharedCode::CaptureBackendOperationFailed.as_str()
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +145,12 @@ pub enum RecoveryLadderSuppression {
 pub(super) fn validate_recovery_ladder_phase(
     phase: &RuntimeLifecyclePhase,
 ) -> Result<(), SanitizationError> {
-    let invalid = || SanitizationError::new("invalid_recovery_ladder_phase", "runtime_payload");
+    let invalid = || {
+        SanitizationError::new(
+            SanitizationCode::InvalidRecoveryLadderPhase,
+            "runtime_payload",
+        )
+    };
     match phase {
         RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, rungs } => {
             validate_diagnostic_detail_token(&trigger.failure_code, "recovery_ladder_trigger")?;

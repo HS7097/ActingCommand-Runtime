@@ -2,7 +2,9 @@
 
 //! Contention-driven Runtime control with bounded escalation and staged recovery.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ArbitrationBasis, ArbitrationBasisKind, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, RuntimeErrorCode,
@@ -94,8 +96,8 @@ impl PerformanceControlConfig {
             || self.pressured_heavy_dispatch_limit > self.normal_heavy_dispatch_limit
         {
             return Err(control_fatal(
-                "performance_control_config_invalid",
-                "validate_performance_control_config",
+                HostCode::PerformanceControlConfigInvalid,
+                HostLocation::ValidatePerformanceControlConfig,
             ));
         }
         Ok(())
@@ -121,8 +123,8 @@ impl PerformanceControlObservation {
                 .is_some_and(|value| value > BASIS_POINTS_MAX)
         {
             return Err(control_fatal(
-                "performance_control_observation_invalid",
-                "observe_performance_contention",
+                HostCode::PerformanceControlObservationInvalid,
+                HostLocation::ObservePerformanceContention,
             ));
         }
         Ok(())
@@ -160,19 +162,14 @@ pub struct PerformanceControlDirective {
 pub(crate) enum PerformanceDispatchGate {
     Allowed,
     Deferred {
-        reason: &'static str,
+        reason: Code,
+        /// Always `None`: urgency no longer changes a deferral (Workflow #385 P-0).
         deadline_disposition: Option<PerformanceDeadlineDisposition>,
+        /// Always `None`: a deferral records no balance event (Workflow #385 P-0).
         event: Option<PerformanceControlEventData>,
-        /// Present only for a throttle deferral: the earliest-start wait still owed.
+        /// Always `None`: no level opens a throttle window (Workflow #385 P-0).
         retry_after_ms: Option<u64>,
     },
-}
-
-/// One instance's open throttle window: the level that opened it and when a dispatch may start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ThrottleWindow {
-    level: PerformanceControlLevel,
-    not_before_unix_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -182,7 +179,6 @@ pub(crate) struct PerformanceBalanceController {
     instance_levels: BTreeMap<String, PerformanceControlLevel>,
     /// The arbitration input of the latest workloads; an instance without one has no entry.
     instance_arbitration: BTreeMap<String, InstanceArbitrationRank>,
-    throttle_windows: BTreeMap<String, ThrottleWindow>,
     last_observed_at_unix_ms: Option<u64>,
     cooldown_until_unix_ms: u64,
     candidate_level: Option<PerformanceControlLevel>,
@@ -200,7 +196,6 @@ impl PerformanceBalanceController {
             level: PerformanceControlLevel::Normal,
             instance_levels: BTreeMap::new(),
             instance_arbitration: BTreeMap::new(),
-            throttle_windows: BTreeMap::new(),
             last_observed_at_unix_ms: None,
             cooldown_until_unix_ms: 0,
             candidate_level: None,
@@ -233,8 +228,8 @@ impl PerformanceBalanceController {
                 return Ok(Vec::new());
             }
             return Err(control_fatal(
-                "performance_control_sample_identity_conflict",
-                "observe_performance_contention",
+                HostCode::PerformanceControlSampleIdentityConflict,
+                HostLocation::ObservePerformanceContention,
             ));
         }
         self.sync_workloads(workloads)?;
@@ -254,8 +249,8 @@ impl PerformanceBalanceController {
                     .checked_add(duration_ms(self.config.transition_cooldown)?)
                     .ok_or_else(|| {
                         control_fatal(
-                            "performance_control_time_overflow",
-                            "observe_performance_clock_jump",
+                            HostCode::PerformanceControlTimeOverflow,
+                            HostLocation::ObservePerformanceClockJump,
                         )
                     })?;
                 self.last_observed_at_unix_ms = Some(observation.observed_at_unix_ms);
@@ -292,8 +287,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<Vec<PerformanceControlEventData>> {
         if now_unix_ms == 0 {
             return Err(control_fatal(
-                "performance_control_tick_invalid",
-                "observe_performance_tick",
+                HostCode::PerformanceControlTickInvalid,
+                HostLocation::ObservePerformanceTick,
             ));
         }
         let previous_tick = self.last_tick_unix_ms;
@@ -322,8 +317,8 @@ impl PerformanceBalanceController {
                     .checked_add(duration_ms(self.config.transition_cooldown)?)
                     .ok_or_else(|| {
                         control_fatal(
-                            "performance_control_time_overflow",
-                            "observe_performance_tick_clock_jump",
+                            HostCode::PerformanceControlTimeOverflow,
+                            HostLocation::ObservePerformanceTickClockJump,
                         )
                     })?;
                 return Ok(vec![self.event(
@@ -380,8 +375,8 @@ impl PerformanceBalanceController {
             .checked_add(duration_ms(self.config.transition_cooldown)?)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_time_overflow",
-                    "transition_performance_control",
+                    HostCode::PerformanceControlTimeOverflow,
+                    HostLocation::TransitionPerformanceControl,
                 )
             })?;
         let previous = self.level;
@@ -442,11 +437,10 @@ impl PerformanceBalanceController {
         )
         .map_err(|_| {
             control_fatal(
-                "performance_heavy_count_overflow",
-                "apply_performance_control_resources",
+                HostCode::PerformanceHeavyCountOverflow,
+                HostLocation::ApplyPerformanceControlResources,
             )
         })?;
-        let budget_factor = control_budget_factor_milli(self.level);
         for host in resources {
             if let Some(observation) = &self.last_observation {
                 if let Some(value) = observation.host_responsiveness_basis_points {
@@ -456,9 +450,7 @@ impl PerformanceBalanceController {
                     host.third_party_pressure_basis_points = value;
                 }
             }
-            host.cpu_available_milli = scaled_budget(host.cpu_available_milli, budget_factor)?;
-            host.gpu_available_milli = scaled_budget(host.gpu_available_milli, budget_factor)?;
-            host.io_available_milli = scaled_budget(host.io_available_milli, budget_factor)?;
+            // The host budgets only express capacity: no level scales them (Workflow #385 P-0).
             host.heavy_dispatch_limit = if self.level == PerformanceControlLevel::Normal {
                 self.config.normal_heavy_dispatch_limit
             } else {
@@ -470,125 +462,37 @@ impl PerformanceBalanceController {
     }
 
     /// Gates one policy dispatch on the instance's own directive (its level falls back to the
-    /// global level when it has no entry). Pause levels defer; throttle levels defer until the
-    /// instance's throttle window has elapsed, then allow.
+    /// global level when it has no entry). Normal through QosReduced allow, with no throttle
+    /// window and no wait; Suspended and ShutdownRequested defer with
+    /// `performance_contention_dispatch_deferred` at any urgency (Workflow #385 P-0). The
+    /// urgency is validated only: it orders candidates in the evaluator, never this gate.
     pub(crate) fn gate_dispatch(
-        &mut self,
+        &self,
         instance_id: &str,
         urgency_milli: u16,
         observed_at_unix_ms: u64,
     ) -> RuntimeHostResult<PerformanceDispatchGate> {
         if urgency_milli > 1_000 || instance_id.is_empty() || observed_at_unix_ms == 0 {
             return Err(control_fatal(
-                "performance_dispatch_gate_invalid",
-                "gate_performance_dispatch",
+                HostCode::PerformanceDispatchGateInvalid,
+                HostLocation::GatePerformanceDispatch,
             ));
         }
-        let directive = self.directive(instance_id)?;
-        let retry_after_ms = match directive.level {
-            PerformanceControlLevel::Normal => {
-                self.throttle_windows.remove(instance_id);
-                return Ok(PerformanceDispatchGate::Allowed);
-            }
-            PerformanceControlLevel::DispatchPaused
-            | PerformanceControlLevel::Suspended
-            | PerformanceControlLevel::ShutdownRequested => {
-                self.throttle_windows.remove(instance_id);
-                None
-            }
-            PerformanceControlLevel::Throttled
+        Ok(match self.directive(instance_id)?.level {
+            PerformanceControlLevel::Normal
+            | PerformanceControlLevel::DispatchPaused
+            | PerformanceControlLevel::Throttled
             | PerformanceControlLevel::YieldRequested
-            | PerformanceControlLevel::QosReduced => {
-                match self.throttle_dispatch(&directive, observed_at_unix_ms)? {
-                    Some(remaining_ms) => Some(remaining_ms),
-                    None => return Ok(PerformanceDispatchGate::Allowed),
+            | PerformanceControlLevel::QosReduced => PerformanceDispatchGate::Allowed,
+            PerformanceControlLevel::Suspended | PerformanceControlLevel::ShutdownRequested => {
+                PerformanceDispatchGate::Deferred {
+                    reason: HostCode::PerformanceContentionDispatchDeferred.code(),
+                    deadline_disposition: None,
+                    event: None,
+                    retry_after_ms: None,
                 }
             }
-        };
-        let deadline_disposition = if urgency_milli >= 950 {
-            Some(PerformanceDeadlineDisposition::CapacityFailure)
-        } else if urgency_milli >= 750 {
-            Some(PerformanceDeadlineDisposition::InformationWarning)
-        } else {
-            None
-        };
-        let event = deadline_disposition.map(|disposition| {
-            let mut observation =
-                self.last_observation
-                    .clone()
-                    .unwrap_or(PerformanceControlObservation {
-                        observed_at_unix_ms,
-                        host_responsiveness_basis_points: None,
-                        third_party_pressure_basis_points: None,
-                        foreground_fullscreen: false,
-                    });
-            observation.observed_at_unix_ms = observed_at_unix_ms;
-            self.event(
-                Some(instance_id.to_owned()),
-                directive.level,
-                directive.level,
-                PerformanceControlReason::DeadlineConflict,
-                false,
-                Some(disposition),
-                &observation,
-            )
-        });
-        Ok(PerformanceDispatchGate::Deferred {
-            reason: if deadline_disposition == Some(PerformanceDeadlineDisposition::CapacityFailure)
-            {
-                "performance_capacity_deadline_conflict"
-            } else {
-                "performance_contention_dispatch_deferred"
-            },
-            deadline_disposition,
-            event,
-            retry_after_ms,
         })
-    }
-
-    /// Returns the wait still owed before a dispatch on this instance may start, or `None`
-    /// once its throttle window has elapsed (the window is then closed). The first throttled
-    /// attempt opens the window at `observed_at + throttle_delay_ms`; a window opened under a
-    /// different level, or a wait longer than the level's own delay (a clock anomaly), restarts
-    /// the window instead of granting by default.
-    fn throttle_dispatch(
-        &mut self,
-        directive: &PerformanceControlDirective,
-        observed_at_unix_ms: u64,
-    ) -> RuntimeHostResult<Option<u64>> {
-        let delay_ms = directive.throttle_delay_ms;
-        if delay_ms == 0 {
-            self.throttle_windows.remove(&directive.instance_id);
-            return Ok(None);
-        }
-        if let Some(window) = self.throttle_windows.get(&directive.instance_id).copied()
-            && window.level == directive.level
-        {
-            let remaining_ms = window
-                .not_before_unix_ms
-                .saturating_sub(observed_at_unix_ms);
-            if remaining_ms == 0 {
-                self.throttle_windows.remove(&directive.instance_id);
-                return Ok(None);
-            }
-            if remaining_ms <= delay_ms {
-                return Ok(Some(remaining_ms));
-            }
-        }
-        let not_before_unix_ms = observed_at_unix_ms.checked_add(delay_ms).ok_or_else(|| {
-            control_fatal(
-                "performance_control_time_overflow",
-                "gate_performance_dispatch",
-            )
-        })?;
-        self.throttle_windows.insert(
-            directive.instance_id.clone(),
-            ThrottleWindow {
-                level: directive.level,
-                not_before_unix_ms,
-            },
-        );
-        Ok(Some(delay_ms))
     }
 
     pub(crate) fn directive(
@@ -597,8 +501,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<PerformanceControlDirective> {
         if instance_id.is_empty() {
             return Err(control_fatal(
-                "performance_control_instance_invalid",
-                "read_performance_control_directive",
+                HostCode::PerformanceControlInstanceInvalid,
+                HostLocation::ReadPerformanceControlDirective,
             ));
         }
         let level = self
@@ -627,8 +531,8 @@ impl PerformanceBalanceController {
         for workload in workloads {
             if workload.instance_id.is_empty() || !active.insert(workload.instance_id.clone()) {
                 return Err(control_fatal(
-                    "performance_control_workload_invalid",
-                    "sync_performance_workloads",
+                    HostCode::PerformanceControlWorkloadInvalid,
+                    HostLocation::SyncPerformanceWorkloads,
                 ));
             }
             self.instance_levels
@@ -681,8 +585,8 @@ impl PerformanceBalanceController {
             .checked_add(duration_ms(self.config.transition_cooldown)?)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_time_overflow",
-                    "recover_performance_instance",
+                    HostCode::PerformanceControlTimeOverflow,
+                    HostLocation::RecoverPerformanceInstance,
                 )
             })?;
         Ok(self
@@ -715,8 +619,8 @@ impl PerformanceBalanceController {
         };
         let previous = *self.instance_levels.get(&instance_id).ok_or_else(|| {
             control_fatal(
-                "performance_control_instance_missing",
-                "recover_performance_instance",
+                HostCode::PerformanceControlInstanceMissing,
+                HostLocation::RecoverPerformanceInstance,
             )
         })?;
         let level = previous_level(previous).max(global);
@@ -761,8 +665,8 @@ impl PerformanceBalanceController {
             .insert(instance_id.clone(), step)
             .ok_or_else(|| {
                 control_fatal(
-                    "performance_control_instance_missing",
-                    "suspend_performance_instance",
+                    HostCode::PerformanceControlInstanceMissing,
+                    HostLocation::SuspendPerformanceInstance,
                 )
             })?;
         let mut event = self.event(
@@ -787,8 +691,8 @@ impl PerformanceBalanceController {
     ) -> RuntimeHostResult<Option<(String, ArbitrationBasis)>> {
         let count = u16::try_from(candidates.len()).map_err(|_| {
             control_fatal(
-                "performance_control_candidates_overflow",
-                "arbitrate_performance_instances",
+                HostCode::PerformanceControlCandidatesOverflow,
+                HostLocation::ArbitratePerformanceInstances,
             )
         })?;
         let ranked = candidates
@@ -954,26 +858,6 @@ const fn previous_level(level: PerformanceControlLevel) -> PerformanceControlLev
     }
 }
 
-const fn control_budget_factor_milli(level: PerformanceControlLevel) -> u16 {
-    match level {
-        PerformanceControlLevel::Normal | PerformanceControlLevel::DispatchPaused => 1_000,
-        PerformanceControlLevel::Throttled => 750,
-        PerformanceControlLevel::YieldRequested => 600,
-        PerformanceControlLevel::QosReduced => 500,
-        PerformanceControlLevel::Suspended => 250,
-        PerformanceControlLevel::ShutdownRequested => 0,
-    }
-}
-
-fn scaled_budget(value: u16, factor_milli: u16) -> RuntimeHostResult<u16> {
-    u16::try_from(u32::from(value).saturating_mul(u32::from(factor_milli)) / 1_000).map_err(|_| {
-        control_fatal(
-            "performance_budget_overflow",
-            "apply_performance_control_resources",
-        )
-    })
-}
-
 fn is_heavy(profile: &LoadProfile) -> bool {
     match profile {
         LoadProfile::Heavy => true,
@@ -994,13 +878,13 @@ fn is_heavy(profile: &LoadProfile) -> bool {
 fn duration_ms(duration: Duration) -> RuntimeHostResult<u64> {
     u64::try_from(duration.as_millis()).map_err(|_| {
         control_fatal(
-            "performance_control_duration_overflow",
-            "convert_performance_control_duration",
+            HostCode::PerformanceControlDurationOverflow,
+            HostLocation::ConvertPerformanceControlDuration,
         )
     })
 }
 
-fn control_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn control_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
@@ -1168,37 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn deadline_conflict_never_crosses_the_dispatch_gate() {
-        let config = PerformanceControlConfig {
-            escalation_samples: 1,
-            ..PerformanceControlConfig::default()
-        };
-        let mut controller = PerformanceBalanceController::new(config).expect("new");
-        controller
-            .observe(observation(1_000, Some(7_000), Some(0)), &[])
-            .expect("pressure");
-        let PerformanceDispatchGate::Deferred {
-            deadline_disposition,
-            event,
-            ..
-        } = controller
-            .gate_dispatch("instance-a", 1_000, 1_001)
-            .expect("gate")
-        else {
-            panic!("deadline must not bypass contention");
-        };
-        assert_eq!(
-            deadline_disposition,
-            Some(PerformanceDeadlineDisposition::CapacityFailure)
-        );
-        assert_eq!(
-            event.expect("deadline event").reason,
-            PerformanceControlReason::DeadlineConflict
-        );
-    }
-
-    #[test]
-    fn resource_overlay_caps_heavy_concurrency_and_scales_budgets() {
+    fn resource_overlay_caps_heavy_concurrency() {
         let config = PerformanceControlConfig {
             escalation_samples: 1,
             ..PerformanceControlConfig::default()
@@ -1228,6 +1082,5 @@ mod tests {
             .expect("overlay");
         assert_eq!(resources[0].heavy_dispatch_limit, 1);
         assert_eq!(resources[0].active_heavy_dispatches, 1);
-        assert!(resources[0].cpu_available_milli < 1_000);
     }
 }

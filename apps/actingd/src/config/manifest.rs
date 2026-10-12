@@ -6,6 +6,9 @@
 //! configuration file only decides whether a value is `explicit` or `default`. Data only;
 //! the host records it as the two `config.*` runtime facts.
 
+use crate::codes::ActingdCode;
+use crate::monitor_retry::PolicyMonitorSettings;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSubsystem, DeviceDiagnosticMode, FactScalar,
     InstanceId, RuntimeConfigManifest,
@@ -48,12 +51,25 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) policy_configured: bool,
     /// The configured `policy.catalog_transition` (Workflow #361 A), reported only when set.
     pub(super) catalog_transition: Option<&'a CatalogTransitionRequest>,
+    /// `policy.monitor` (Workflow #397), reported with an assembled `policy` section.
+    pub(super) policy_monitor: Option<PolicyMonitorParameters>,
     pub(super) vision_provider_configured: bool,
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
     /// Every configured instance in declaration order (Workflow #318 cfg3).
     pub(super) instances: &'a [InstanceParameters],
+}
+
+/// The effective `policy.monitor` settings (Workflow #397) and which of them the file named.
+/// They are actingd's own, not the host's, so they are reported as `assemble` resolved them.
+#[derive(Clone, Copy)]
+pub(super) struct PolicyMonitorParameters {
+    pub(super) settings: PolicyMonitorSettings,
+    pub(super) io_timeout_explicit: bool,
+    pub(super) retry_limit_explicit: bool,
+    pub(super) retry_backoff_explicit: bool,
+    pub(super) retry_backoff_max_explicit: bool,
 }
 
 /// What the file named for one instance's manifest keys; the values are read back from
@@ -65,7 +81,7 @@ pub(super) struct InstanceParameters {
     pub(super) stuck_recovery_cooldown_secs_explicit: bool,
 }
 
-pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, &'static str> {
+pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, Code> {
     let host = inputs.host;
     let bind_address = host.bind_address();
     let device_diagnostic_mode = host.device_diagnostic_mode();
@@ -79,7 +95,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
     // build error, never a default written in its place.
     let performance_monitor = host
         .performance_monitor()
-        .ok_or("config_manifest_incomplete")?;
+        .ok_or(ActingdCode::ConfigManifestIncomplete.code())?;
     let discovery_bound = inputs.instances_deferred_count > 0;
     // Workflow #318 cfg4: the effective allow-list read back from the host; `any` when the
     // host accepts every well-formed card.
@@ -249,6 +265,31 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             ),
         ]);
     }
+    if let Some(monitor) = inputs.policy_monitor {
+        let settings = monitor.settings;
+        parameters.extend([
+            ConfigParameter {
+                key: "policy.monitor.io_timeout_ms".to_owned(),
+                value: duration_ms(settings.io_timeout)?,
+                source: explicit_or_default(monitor.io_timeout_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_limit".to_owned(),
+                value: FactScalar::Integer(i64::from(settings.retry_limit)),
+                source: explicit_or_default(monitor.retry_limit_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_backoff_ms".to_owned(),
+                value: duration_ms(settings.retry_backoff)?,
+                source: explicit_or_default(monitor.retry_backoff_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_backoff_max_ms".to_owned(),
+                value: duration_ms(settings.retry_backoff_max)?,
+                source: explicit_or_default(monitor.retry_backoff_max_explicit),
+            },
+        ]);
+    }
     if let Some(mumu_root) = inputs.mumu_root {
         parameters.push(explicit(
             "mumu_root",
@@ -281,7 +322,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         let settings = host
             .stuck_recovery()
             .get(&instance.alias)
-            .ok_or("config_manifest_incomplete")?;
+            .ok_or(ActingdCode::ConfigManifestIncomplete.code())?;
         let prefix = format!("instance.{}", instance_id_text(instance.instance_id)?);
         parameters.extend([
             ConfigParameter {
@@ -420,7 +461,9 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         subsystems,
         parameters,
     };
-    manifest.validate().map_err(|_| "config_manifest_invalid")?;
+    manifest
+        .validate()
+        .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
     Ok(manifest)
 }
 
@@ -450,9 +493,9 @@ fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSu
     let reason = if ignored.is_empty() {
         state.to_owned()
     } else {
-        let warnings = ignored
+        let warnings = super::env_override_warnings(ignored)
             .iter()
-            .map(|name| super::env_override_warning(name))
+            .map(super::env_override_warning_v1)
             .collect::<Vec<_>>()
             .join(", ");
         format!("{state}; {warnings}")
@@ -465,10 +508,10 @@ fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSu
 }
 
 /// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.
-fn instance_id_text(instance_id: InstanceId) -> Result<String, &'static str> {
+fn instance_id_text(instance_id: InstanceId) -> Result<String, Code> {
     match serde_json::to_value(instance_id) {
         Ok(serde_json::Value::String(text)) => Ok(text),
-        _ => Err("config_manifest_invalid"),
+        _ => Err(ActingdCode::ConfigManifestInvalid.code()),
     }
 }
 
@@ -488,17 +531,17 @@ fn default(key: &str, value: FactScalar) -> ConfigParameter {
     }
 }
 
-fn integer(value: impl TryInto<i64>) -> Result<FactScalar, &'static str> {
+fn integer(value: impl TryInto<i64>) -> Result<FactScalar, Code> {
     value
         .try_into()
         .map(FactScalar::Integer)
-        .map_err(|_| "config_manifest_value_out_of_range")
+        .map_err(|_| ActingdCode::ConfigManifestValueOutOfRange.code())
 }
 
-fn duration_ms(value: Duration) -> Result<FactScalar, &'static str> {
+fn duration_ms(value: Duration) -> Result<FactScalar, Code> {
     u64::try_from(value.as_millis())
         .map(FactScalar::DurationMs)
-        .map_err(|_| "config_manifest_value_out_of_range")
+        .map_err(|_| ActingdCode::ConfigManifestValueOutOfRange.code())
 }
 
 /// The wire spelling of the mode (`serde` snake case); a closed match so a new mode

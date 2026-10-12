@@ -1273,7 +1273,7 @@ mod tests {
         let exe = PathBuf::from("repo")
             .join("target")
             .join("debug")
-            .join("actingcommand-device-test");
+            .join("actingcommand-actingd");
         let candidates = maatouch_path_candidates_from_exe(&exe);
 
         assert!(candidates.iter().any(|path| {
@@ -1289,7 +1289,7 @@ mod tests {
         let exe = PathBuf::from("repo")
             .join("target")
             .join("debug")
-            .join("actingcommand-device-test");
+            .join("actingcommand-actingd");
 
         assert_eq!(
             likely_repo_maatouch_path_from_exe(&exe),

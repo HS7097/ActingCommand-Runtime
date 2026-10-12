@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::PackageRef;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::page_projection::{
     ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
 };
@@ -24,18 +26,20 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use zip::ZipArchive;
 
+mod codes;
 mod container;
 mod content_dir;
 pub mod source;
 mod source_pack;
 
+pub use codes::PackContainmentCode;
 pub use container::{CONTENT_JSON_V1, ContentContainer, expand_content_container};
 
 pub type ContainmentResult<T> = Result<T, ContainmentError>;
 
 /// A source or package admission failure carrying only its stable code.
-fn source_error(code: &'static str) -> ContainmentError {
-    ContainmentError::SourceTree { code }
+fn source_error(code: impl Into<Code>) -> ContainmentError {
+    ContainmentError::SourceTree { code: code.into() }
 }
 
 pub const DEFAULT_MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
@@ -200,29 +204,31 @@ impl Containment {
     ) -> ContainmentResult<&LoadedBundle> {
         expected
             .validate()
-            .map_err(|_| source_error("package_reference_invalid"))?;
+            .map_err(|_| source_error(SharedCode::PackageReferenceInvalid))?;
         match expected {
             PackageRef::LegacyZipSha256(hash) => {
                 let file = std::fs::File::open(locator)
-                    .map_err(|_| source_error("package_open_failed"))?;
+                    .map_err(|_| source_error(PackContainmentCode::PackageOpenFailed))?;
                 let metadata = file
                     .metadata()
-                    .map_err(|_| source_error("package_metadata_failed"))?;
+                    .map_err(|_| source_error(PackContainmentCode::PackageMetadataFailed))?;
                 if !metadata.is_file() || metadata.len() > self.limits.max_compressed_bytes {
-                    return Err(source_error("package_size_invalid"));
+                    return Err(source_error(PackContainmentCode::PackageSizeInvalid));
                 }
                 let mut bytes = Vec::new();
                 file.take(self.limits.max_compressed_bytes.saturating_add(1))
                     .read_to_end(&mut bytes)
-                    .map_err(|_| source_error("package_read_failed"))?;
+                    .map_err(|_| source_error(SharedCode::PackageReadFailed))?;
                 if std::time::Instant::now() >= deadline {
-                    return Err(source_error("package_deadline"));
+                    return Err(source_error(PackContainmentCode::PackageDeadline));
                 }
                 self.load_for(instance, &bytes, &Sha256Hash::parse_hex(hash)?, observation)
             }
             // Workflow #288 A4: the Git source-tree loader is retired. The reference still
             // decodes and validates unchanged; loading it never reads the locator.
-            PackageRef::GitSourceTree(_) => Err(source_error("source_tree_loader_retired")),
+            PackageRef::GitSourceTree(_) => {
+                Err(source_error(PackContainmentCode::SourceTreeLoaderRetired))
+            }
             PackageRef::ContentDirectory(reference) => {
                 let (entries, verified) =
                     content_dir::snapshot(locator, reference, self.limits, deadline)?;
@@ -259,7 +265,7 @@ impl Containment {
     ) -> ContainmentResult<&LoadedBundle> {
         expected
             .validate()
-            .map_err(|_| source_error("package_reference_invalid"))?;
+            .map_err(|_| source_error(SharedCode::PackageReferenceInvalid))?;
         let entries = content_dir::admit_entries(entries, self.limits, deadline)?;
         let verified = content_dir::verify(&entries, expected)?;
         self.admit_source(instance, entries, verified, observation, deadline)
@@ -277,7 +283,7 @@ impl Containment {
     ) -> ContainmentResult<&LoadedBundle> {
         let (package, operation) = source_pack::compile(entries, self.limits, deadline)?;
         if std::time::Instant::now() >= deadline {
-            return Err(source_error("source_tree_deadline"));
+            return Err(source_error(PackContainmentCode::SourceTreeDeadline));
         }
         let bundle = LoadedBundle::from_memory_package(
             package,
@@ -287,7 +293,7 @@ impl Containment {
             Some(operation),
         )?;
         if std::time::Instant::now() >= deadline {
-            return Err(source_error("source_tree_deadline"));
+            return Err(source_error(PackContainmentCode::SourceTreeDeadline));
         }
         let bench = self
             .benches
@@ -1017,7 +1023,7 @@ pub enum ContainmentError {
         issue: actingcommand_contract::ResourceDeclarationIssue,
     },
     SourceTree {
-        code: &'static str,
+        code: Code,
     },
     ContentDirectoryDigestMismatch {
         expected: Sha256Hash,
@@ -1244,7 +1250,7 @@ fn recognition_declaration_error(
 }
 
 fn declaration_error(path: &str, error: actingcommand_contract::LabError) -> ContainmentError {
-    if error.code == "resource_declaration_invalid" {
+    if error.code == SharedCode::ResourceDeclarationInvalid.as_str() {
         return match serde_json::from_value::<actingcommand_contract::ResourceDeclarationIssue>(
             error.details.clone().unwrap_or(Value::Null),
         ) {

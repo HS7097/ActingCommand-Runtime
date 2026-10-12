@@ -40,12 +40,8 @@ fn ledger_owners(root: &Path) -> Vec<LedgerOwnerModule> {
 
 const GENERIC_NON_CARGO_ROOTS: &[&str] = &["contracts", "tests"];
 
-const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] = &[
-    "apps/actinglab",
-    "apps/device-test",
-    "crates/lab",
-    "crates/resource-tooling",
-];
+const GENERIC_AUTHORING_MEMBER_ROOTS: &[&str] =
+    &["apps/actinglab", "crates/lab", "crates/resource-tooling"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericityDomain {
@@ -1374,10 +1370,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .iter()
         .find(|package| package["name"] == "actingcommand-vision-provider-check")
         .expect("Provider ledger consumer package");
-    let device_test = packages
-        .iter()
-        .find(|package| package["name"] == "actingcommand-device-test")
-        .expect("non-production device ledger consumer package");
 
     let internal_dependencies = |package: &serde_json::Value| {
         let mut names = package["dependencies"]
@@ -1419,25 +1411,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
             "actingcommand-vision-ffi".to_owned(),
         ],
         "Provider checker internal dependency boundary changed"
-    );
-    // DEVICE-TEST-B-READ-v1: the named non-production tool also consumes B.
-    // Its capture factory uses FrameStore and the existing memory source for prime admission.
-    // First red: https://github.com/HS7097/ActingCommand-Runtime/actions/runs/35676181277/attempts/1
-    assert_eq!(
-        internal_dependencies(device_test),
-        vec![
-            "actingcommand-artifact-store".to_owned(),
-            "actingcommand-contract".to_owned(),
-            "actingcommand-device".to_owned(),
-            "actingcommand-execution-kernel".to_owned(),
-            "actingcommand-host-metrics".to_owned(),
-            "actingcommand-ledger-forensics".to_owned(),
-            "actingcommand-page-detector".to_owned(),
-            "actingcommand-recognition".to_owned(),
-            "actingcommand-recognition-pack".to_owned(),
-            "actingcommand-scheduler".to_owned(),
-        ],
-        "device-test internal dependency boundary changed"
     );
 
     let artifact_dependency = leaf["dependencies"]
@@ -1493,11 +1466,7 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
         .filter(|package| {
             !matches!(
                 package["name"].as_str(),
-                Some(
-                    "actingledger"
-                        | "actingcommand-vision-provider-check"
-                        | "actingcommand-device-test"
-                )
+                Some("actingledger" | "actingcommand-vision-provider-check")
             )
         })
         .filter(|package| {
@@ -1512,7 +1481,6 @@ fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
                             Some(
                                 "actingcommand-ledger-forensics"
                                     | "actingcommand-vision-provider-check"
-                                    | "actingcommand-device-test"
                             )
                         )
                 })
@@ -1699,7 +1667,6 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
                     name,
                     "actingcommand-runtime-host"
                         | "actingcommand-actingd"
-                        | "actingcommand-device-test"
                         | "actingcommand-lab"
                         | "actingcommand-resource-tooling"
                 ),
@@ -2285,16 +2252,6 @@ fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
             "execution-kernel must own task planning dependency {required}"
         );
     }
-
-    let device_test_dependencies = dependencies("actingcommand-device-test");
-    assert!(
-        device_test_dependencies.contains(&"actingcommand-execution-kernel"),
-        "device-test must consume planning from execution-kernel"
-    );
-    assert!(
-        !device_test_dependencies.contains(&"actingcommand-task-loop"),
-        "device-test must not retain the legacy task-loop dependency"
-    );
 
     let mut planning_sources = Vec::new();
     collect_rust_files(
@@ -3509,6 +3466,9 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
 const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "AcquireLease",
     "ApplicationLifecycle",
+    // Workflow #389 U-1: the new request kinds take no origin gate here; the channel decides
+    // at the door (U-6), and LoadPack and UnloadPack take the Lab-only gate with U-3.
+    "BindChannel",
     "CancelContainedTask",
     "CancelQueuedLease",
     "CaptureSequence",
@@ -3516,6 +3476,7 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "ConfigureMonitor",
     "Health",
     "Input",
+    "LoadPack",
     "MonitorStatus",
     "ObserveContainedPage",
     "ObserveReadonly",
@@ -3533,6 +3494,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "SafeReset",
     "Status",
     "SubscribeEvents",
+    "UnloadPack",
+    "UpgradeState",
+    "UpgradeStateStatus",
 ];
 
 const RUNTIME_CONTRACT_SOURCE: &str = "crates/actingcommand-contract/src/runtime.rs";
@@ -3962,6 +3926,10 @@ const ARTIFACT_BYTE_WRITES: &[(&str, &str)] = &[
         "the export temporary, created after its zero-byte admission",
     ),
     (
+        "crates/artifact-store/src/kept.rs::KeptMoves::record_move -> fs::write [NOT admitted]",
+        "the 16-byte move counter kept\\.moves (the cleaner's process start time and move count), which tells other processes to look in the kept folders again; it holds no artifact bytes",
+    ),
+    (
         "crates/artifact-store/src/pipeline.rs::CapturePipeline::publish_candidate [reaches admit_bytes via CapturePipeline::publish_candidate -> ArtifactStore::put -> ArtifactStore::commit_prepared]",
         "the FrameStore overflow segment: spilled frames publish as ordinary artifacts",
     ),
@@ -4168,6 +4136,8 @@ const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/lease.rs::HostShared::grant_prepared_lease_with_links -> require_business_capacity",
     // Workflow #369 Q-4: the pump reads capacity silently and leaves a business claim queued.
     "crates/runtime-host/src/host/lease.rs::HostShared::pump -> admit_capacity",
+    // Workflow #369 review L5: an immediate host claim asks capacity first and queues on a refusal.
+    "crates/runtime-host/src/host/lease.rs::HostShared::request_host_claim -> admit_capacity",
     "crates/runtime-host/src/host/monitor_control.rs::HostShared::run_monitor_probe -> admit_capacity",
     "crates/runtime-host/src/host/observation.rs::HostShared::capture_observation_with_links -> require_business_capacity",
     "crates/runtime-host/src/host/performance.rs::HostShared::admit_capacity -> admit_capacity",
@@ -4175,6 +4145,8 @@ const BUSINESS_CAPACITY_ADMISSION_CALLERS: &[&str] = &[
     "crates/runtime-host/src/host/performance.rs::HostShared::require_business_capacity -> admit_capacity",
     "crates/runtime-host/src/host/policy_dispatch.rs::HostShared::admit_policy_dispatch -> admit_capacity",
     "crates/runtime-host/src/host/recovery_ladder.rs::HostShared::recovery_admitted -> require_business_capacity",
+    // Workflow #369 H-3: a holding ladder rechecks capacity silently at every step.
+    "crates/runtime-host/src/host/recovery_ladder.rs::HostShared::recovery_gate_open -> admit_capacity",
     "crates/runtime-host/src/performance/capacity.rs::PerformanceMonitor::preflight_capacity -> admit_capacity",
 ];
 
@@ -4853,6 +4825,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("foreground_gate", &["HostShared"]),
     host_module("frame_retention", &["HostShared"]),
     host_module("governance", &["HostShared"]),
+    host_module("host_claims", &["HostShared"]),
     host_module("input", &["HostShared"]),
     host_module("instance_discovery", &["HostShared"]),
     host_module("installation", &["HostShared"]),

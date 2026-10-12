@@ -7,6 +7,7 @@
 
 use super::Failure;
 use super::powershell;
+use crate::codes::ActingctlCode;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
@@ -89,7 +90,7 @@ pub(crate) fn current_user_sid() -> Result<String, Failure> {
         "whoami.exe",
         &["/user", "/fo", "csv", "/nh"].map(OsStr::new),
     )
-    .map_err(|detail| Failure::misconfigured("watchdog_user_unavailable", detail))?;
+    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogUserUnavailable, detail))?;
     let text = decode(&output.stdout);
     let sid = csv_fields(text.lines().next().unwrap_or_default())
         .pop()
@@ -97,7 +98,7 @@ pub(crate) fn current_user_sid() -> Result<String, Failure> {
     match (output.status.success(), sid) {
         (true, Some(sid)) => Ok(sid),
         _ => Err(Failure::misconfigured(
-            "watchdog_user_unavailable",
+            ActingctlCode::WatchdogUserUnavailable,
             format!("whoami /user printed no SID: {}", printed(&output)),
         )),
     }
@@ -221,12 +222,12 @@ pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Failure> {
             OsStr::new("/F"),
         ],
     )
-    .map_err(|detail| Failure::misconfigured("watchdog_task_register_failed", detail))?;
+    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskRegisterFailed, detail))?;
     if output.status.success() {
         Ok(())
     } else {
         Err(Failure::misconfigured(
-            "watchdog_task_register_failed",
+            ActingctlCode::WatchdogTaskRegisterFailed,
             format!("schtasks /Create {}: {}", output.status, printed(&output)),
         ))
     }
@@ -237,12 +238,12 @@ pub(crate) fn delete(name: &str) -> Result<(), Failure> {
         "schtasks.exe",
         &["/Delete", "/TN", name, "/F"].map(OsStr::new),
     )
-    .map_err(|detail| Failure::misconfigured("watchdog_task_delete_failed", detail))?;
+    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskDeleteFailed, detail))?;
     if output.status.success() {
         Ok(())
     } else {
         Err(Failure::misconfigured(
-            "watchdog_task_delete_failed",
+            ActingctlCode::WatchdogTaskDeleteFailed,
             format!("schtasks /Delete {}: {}", output.status, printed(&output)),
         ))
     }
@@ -300,12 +301,13 @@ pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Failure> 
         &[("AC_WD_TASK", OsStr::new(name))],
         Duration::from_secs(60),
     )
-    .map_err(|detail| Failure::misconfigured("watchdog_task_query_failed", detail))?;
+    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskQueryFailed, detail))?;
     parse_query(&output)
 }
 
 pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Failure> {
-    let unreadable = |detail: String| Failure::misconfigured("watchdog_task_query_failed", detail);
+    let unreadable =
+        |detail: String| Failure::misconfigured(ActingctlCode::WatchdogTaskQueryFailed, detail);
     let value: Value = serde_json::from_str(output.trim())
         .map_err(|error| unreadable(format!("task query output is not JSON: {error}")))?;
     let others = match &value["others"] {

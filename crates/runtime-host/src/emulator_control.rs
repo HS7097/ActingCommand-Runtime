@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_device::{
@@ -16,8 +17,8 @@ pub fn admit_emulator_capabilities(
         || required_capability_ids.len() > EmulatorCapability::ALL.len()
     {
         return Err(RuntimeHostError::fatal(
-            "invalid_emulator_capability_requirement_count",
-            "admit_emulator_capabilities",
+            HostCode::InvalidEmulatorCapabilityRequirementCount,
+            HostLocation::AdmitEmulatorCapabilities,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }
@@ -26,15 +27,15 @@ pub fn admit_emulator_capabilities(
     for capability_id in required_capability_ids {
         let capability = capability_id.parse::<EmulatorCapability>().map_err(|_| {
             RuntimeHostError::fatal(
-                "unknown_emulator_capability",
-                "admit_emulator_capabilities",
+                HostCode::UnknownEmulatorCapability,
+                HostLocation::AdmitEmulatorCapabilities,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         if !required.insert(capability) {
             return Err(RuntimeHostError::fatal(
-                "duplicate_emulator_capability_requirement",
-                "admit_emulator_capabilities",
+                HostCode::DuplicateEmulatorCapabilityRequirement,
+                HostLocation::AdmitEmulatorCapabilities,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -42,16 +43,16 @@ pub fn admit_emulator_capabilities(
 
     let profile = backend.probe_capabilities().map_err(|_| {
         RuntimeHostError::fatal(
-            "emulator_capability_probe_failed",
-            "admit_emulator_capabilities",
+            HostCode::EmulatorCapabilityProbeFailed,
+            HostLocation::AdmitEmulatorCapabilities,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
     for capability in required {
         profile.capability(capability).map_err(|_| {
             RuntimeHostError::fatal(
-                "emulator_capability_unavailable",
-                "admit_emulator_capabilities",
+                HostCode::EmulatorCapabilityUnavailable,
+                HostLocation::AdmitEmulatorCapabilities,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;

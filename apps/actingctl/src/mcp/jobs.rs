@@ -9,6 +9,7 @@
 
 use super::lock;
 use super::tools::ToolError;
+use crate::codes::ActingctlCode;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,7 +68,7 @@ impl Jobs {
         if running >= MAX_RUNNING {
             return Err(ToolError::new(
                 "safety",
-                "job_capacity_exhausted",
+                ActingctlCode::JobCapacityExhausted,
                 format!("{MAX_RUNNING} background jobs are running; wait for one with ac_get_run"),
             ));
         }
@@ -147,7 +148,7 @@ impl Jobs {
             .map_err(|error| {
                 ToolError::new(
                     "runtime",
-                    "job_start_failed",
+                    ActingctlCode::JobStartFailed,
                     format!("cannot start the background job: {error}"),
                 )
             })?;

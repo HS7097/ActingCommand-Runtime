@@ -82,6 +82,9 @@ impl GlobalLedgerEvidenceConfig {
 pub struct GlobalLedgerEvidence {
     source: EvidenceSource,
     writer: GlobalLedgerWriterMetadataObservation,
+    /// Workflow #375: the retention index of the events, built for the first frame view.
+    pub(super) frame_index:
+        std::sync::OnceLock<(retention::RetentionIndex, projection::EventIndexes)>,
 }
 enum EvidenceSource {
     Segment(Box<GlobalLedgerReadOnly>),
@@ -150,8 +153,8 @@ impl GlobalLedgerEvidence {
             EvidenceSource::Records(source) => {
                 if !(1..=MAX_QUERY_PAGE_EVENTS).contains(&limit) || after > through {
                     return Err(GlobalLedgerError::request(
-                        "invalid_query_page",
-                        "query_read_only_event_page",
+                        LedgerCode::InvalidQueryPage.code(),
+                        LedgerLocation::QueryReadOnlyEventPage.location(),
                     ));
                 }
                 Ok(source
@@ -247,8 +250,8 @@ impl GlobalLedgerSelection {
             .is_some_and(|event_type| self.types.contains(&event_type));
         if !selected || query.view.is_some() {
             return Err(GlobalLedgerError::request(
-                LedgerCode::SelectionQueryUnsupported.as_str(),
-                LedgerLocation::QuerySelection.as_str(),
+                LedgerCode::SelectionQueryUnsupported.code(),
+                LedgerLocation::QuerySelection.location(),
             ));
         }
         Ok(self.indexes.query(&self.events, query))
@@ -283,8 +286,8 @@ impl LedgerArtifactSelection {
             || self.byte_count == 0
         {
             return Err(GlobalLedgerError::request(
-                "invalid_artifact_selection",
-                "resolve_ledger_artifact",
+                LedgerCode::InvalidArtifactSelection.code(),
+                LedgerLocation::ResolveLedgerArtifact.location(),
             ));
         }
         Ok(())
@@ -349,27 +352,28 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
     let budget = Some(artifact_read_budget(None, deadline));
     read_only::check_read_budget(budget, 0, 0)?;
     selection.validate()?;
-    let denied = |code| GlobalLedgerError::request(code, "resolve_ledger_artifact");
+    let denied =
+        |code| GlobalLedgerError::request(code, LedgerLocation::ResolveLedgerArtifact.location());
     if !read_complete {
-        return Err(denied("ledger_source_incomplete"));
+        return Err(denied(LedgerCode::LedgerSourceIncomplete.code()));
     }
     if selection.snapshot_position > through_sequence {
-        return Err(denied("artifact_snapshot_position_invalid"));
+        return Err(denied(LedgerCode::ArtifactSnapshotPositionInvalid.code()));
     }
     let position = events
         .binary_search_by_key(&selection.event.sequence, |event| event.sequence())
-        .map_err(|_| denied("artifact_event_not_found"))?;
+        .map_err(|_| denied(LedgerCode::ArtifactEventNotFound.code()))?;
     let event = &events[position];
     if event.event_id() != &selection.event.event_id {
-        return Err(denied("artifact_event_not_found"));
+        return Err(denied(LedgerCode::ArtifactEventNotFound.code()));
     }
     let reference = event
         .projected_artifacts(true)
         .into_iter()
         .find(|reference| reference.artifact_id == selection.artifact_id)
-        .ok_or_else(|| denied("artifact_reference_not_found"))?;
+        .ok_or_else(|| denied(LedgerCode::ArtifactReferenceNotFound.code()))?;
     if reference.sha256 != selection.sha256 || reference.byte_count != selection.byte_count {
-        return Err(denied("artifact_reference_mismatch"));
+        return Err(denied(LedgerCode::ArtifactReferenceMismatch.code()));
     }
     let links = event.links();
     if selection
@@ -385,7 +389,7 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
             .correlation_id
             .is_some_and(|id| links.correlation_id() != Some(&id))
     {
-        return Err(denied("artifact_event_links_mismatch"));
+        return Err(denied(LedgerCode::ArtifactEventLinksMismatch.code()));
     }
     let proof = match retention {
         Some(retention) => retention.proof(&reference)?,
@@ -400,8 +404,8 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
         .is_some_and(|proof| proof.identity.artifact != reference)
     {
         return Err(GlobalLedgerError::fatal(
-            "artifact_identity_conflict",
-            "resolve_ledger_artifact",
+            LedgerCode::ArtifactIdentityConflict.code(),
+            LedgerLocation::ResolveLedgerArtifact.location(),
         ));
     }
     let eviction = proof.and_then(|proof| proof.observation(through_sequence));
@@ -522,7 +526,10 @@ impl GlobalLedger {
         read_only::check_read_budget(budget, 0, 0)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
-            GlobalLedgerError::fatal("writer_unavailable", "resolve_ledger_artifact")
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ResolveLedgerArtifact.location(),
+            )
         })?;
         send_command(
             sender,
@@ -531,9 +538,10 @@ impl GlobalLedger {
                 deadline,
                 response,
             },
-            "resolve_ledger_artifact",
+            LedgerLocation::ResolveLedgerArtifact.location(),
         )?;
-        let resolved = receive_response(receiver, "resolve_ledger_artifact")??;
+        let resolved =
+            receive_response(receiver, LedgerLocation::ResolveLedgerArtifact.location())??;
         read_only::check_read_budget(budget, 0, 0)?;
         Ok(resolved)
     }
@@ -545,8 +553,8 @@ impl GlobalLedger {
     ) -> GlobalLedgerResult<GlobalLedgerMetadata> {
         if config.prefix.is_some() {
             return Err(GlobalLedgerError::request(
-                "ledger_prefix_unsupported",
-                "open_ledger_metadata",
+                LedgerCode::LedgerPrefixUnsupported.code(),
+                LedgerLocation::OpenLedgerMetadata.location(),
             ));
         }
         let ledger_root = config.root.join("ledger");
@@ -555,13 +563,23 @@ impl GlobalLedger {
             .join(actingcommand_runtime_database::DATABASE_FILE)
             .try_exists()
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "inspect_evidence_database", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceDatabase.location(),
+                    &error,
+                )
             })?;
         let key_exists = config
             .root
             .join(actingcommand_runtime_database::INTEGRITY_KEY_FILE)
             .try_exists()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "inspect_evidence_key", &error))?;
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceKey.location(),
+                    &error,
+                )
+            })?;
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing(&config.root, true)?;
             if sqlite::has_schema(&database)? {
@@ -614,8 +632,8 @@ impl GlobalLedger {
         // Workflow #363: a prefix leaves later material facts unread, so it needs a record path.
         if config.prefix.is_some() && config.material == EvidenceMaterial::Required {
             return Err(GlobalLedgerError::request(
-                "invalid_evidence_prefix",
-                "open_runtime_evidence",
+                LedgerCode::InvalidEvidencePrefix.code(),
+                LedgerLocation::OpenRuntimeEvidence.location(),
             ));
         }
         let ledger_root = config.root.join("ledger");
@@ -623,13 +641,23 @@ impl GlobalLedger {
             .root
             .join(actingcommand_runtime_database::DATABASE_FILE);
         let database_exists = database_path.try_exists().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "inspect_evidence_database", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::InspectEvidenceDatabase.location(),
+                &error,
+            )
         })?;
         let key_exists = config
             .root
             .join(actingcommand_runtime_database::INTEGRITY_KEY_FILE)
             .try_exists()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "inspect_evidence_key", &error))?;
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceKey.location(),
+                    &error,
+                )
+            })?;
         if database_exists || key_exists {
             let database = RuntimeDatabase::open_existing(&config.root, true)?;
             if sqlite::has_schema(&database)? {
@@ -640,6 +668,7 @@ impl GlobalLedger {
                     return Ok(GlobalLedgerEvidence {
                         source: EvidenceSource::Sqlite(Box::new(source)),
                         writer,
+                        frame_index: std::sync::OnceLock::new(),
                     });
                 }
                 // The same record authentication, ready marker and eviction annotation as
@@ -678,6 +707,7 @@ impl GlobalLedger {
                         extent,
                     })),
                     writer,
+                    frame_index: std::sync::OnceLock::new(),
                 });
             }
         }
@@ -688,14 +718,16 @@ impl GlobalLedger {
         Ok(GlobalLedgerEvidence {
             source: EvidenceSource::Segment(Box::new(source)),
             writer,
+            frame_index: std::sync::OnceLock::new(),
         })
     }
 
     /// Workflow #375 R375-3: the events of `event_types`, each authenticated on its own,
     /// with the keyed head row and sequence contiguity. Rows of other types are never read,
     /// so this opening does not establish their integrity; artifacts are restored
-    /// Unrecorded and no retention state is derived. A segment root is read whole, as
-    /// `open_evidence` with `sqlite_material_not_read`.
+    /// Unrecorded and no retention state is derived. The database is opened without the
+    /// whole-file check (`RuntimeDatabase::open_existing_unchecked`, R375-3 v1.2). A segment
+    /// root is read whole, as `open_evidence` with `sqlite_material_not_read`.
     pub fn open_selected(
         root: impl Into<PathBuf>,
         event_types: &[EventType],
@@ -708,14 +740,24 @@ impl GlobalLedger {
             .join(actingcommand_runtime_database::DATABASE_FILE)
             .try_exists()
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "inspect_evidence_database", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceDatabase.location(),
+                    &error,
+                )
             })?;
         let key_exists = root
             .join(actingcommand_runtime_database::INTEGRITY_KEY_FILE)
             .try_exists()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "inspect_evidence_key", &error))?;
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceKey.location(),
+                    &error,
+                )
+            })?;
         if database_exists || key_exists {
-            let database = RuntimeDatabase::open_existing(&root, true)?;
+            let database = RuntimeDatabase::open_existing_unchecked(&root)?;
             if sqlite::has_schema(&database)? {
                 let read = sqlite::read_selected(&database, event_types, budget)?;
                 let mut events = Vec::with_capacity(read.events.len());
@@ -725,7 +767,10 @@ impl GlobalLedger {
                         event
                             .into_event_with_artifact_availability(&mut |_| Ok(None))
                             .map_err(|error| {
-                                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
+                                GlobalLedgerError::fatal(
+                                    error.code(),
+                                    LedgerLocation::ValidatePersistedEvent.location(),
+                                )
                             })?,
                     );
                 }

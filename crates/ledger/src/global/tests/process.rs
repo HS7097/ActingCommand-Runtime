@@ -581,7 +581,7 @@ fn all_secret_classes_are_absent_from_files_indexes_errors_and_every_projection(
     )
     .sanitize(&FailingBoundaryRedactor)
     .expect_err("redaction-boundary failure must surface");
-    assert_eq!(boundary_error.code(), "fingerprinter_failed");
+    assert_eq!(boundary_error.code().as_str(), "fingerprinter_failed");
 
     let query_text = serde_json::to_string(&query).expect("serialize query");
     let error_text = format!("{duplicate:?}{duplicate}{boundary_error:?}{boundary_error}");

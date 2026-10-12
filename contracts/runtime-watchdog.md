@@ -2,9 +2,10 @@
 
 `actingctl watchdog` (Workflow #374) starts the Runtime of an A/B installation again
 when it is gone without a formal close: a crash, a closed console window, an end in
-Task Manager, a reboot. It never starts a Runtime that was closed formally, that is
-alive, that the installer is working on, or whose last log ends in FATAL; those stay
-down, and the FATAL case stays down loudly. Task Scheduler runs one tick a minute
+Task Manager, a reboot; and when its held start stopped (Workflow #381 A). It never
+starts a Runtime that was closed formally, that is alive, that the installer is
+working on, or whose last log ends in any other FATAL; those stay down, and the FATAL
+case stays down loudly. Task Scheduler runs one tick a minute
 through `<root>\tools\actingwatch.exe`.
 
 The watchdog reads the ledger never and writes it never. It adds no event type, no
@@ -44,7 +45,9 @@ Only A/B installations qualify: `install\active.json` read by
 2. **J**, the last complete owner record: a v1 or v2 record, or the checkpoint's
    `last_record` when the checkpoint is the last line. A torn tail is ignored. Any
    other schema is `watchdog_journal_unrecognised`. J carries `owner.lock`'s
-   modification time.
+   modification time. For row 6′ only, every owner's last record too (one per run of
+   records of one epoch, the checkpoint's `last_record` included); a complete line
+   that is no owner record is then `watchdog_journal_unrecognised`.
 3. **Live owner**, with L locked only: the owner that `runtime-info.json` names
    answers a health request through the Runtime client. Health records nothing.
 4. **F**, with L unlocked and a record only: among `actingd-*.log` in `<root>`, in
@@ -78,8 +81,10 @@ First match wins.
 | 3 | no journal, or no record yet | `never_started` | 0 | INFO |
 | 4 | J of an unknown schema | `misconfigured` | 13 | ERROR |
 | 4′ | J active with `resource_disposition: unconfirmed` (retention) | `owner_retained_unconfirmed` | 10 | ERROR; next step: a formal start, whose startup releases a retained owner whose process has exited |
-| 5 | F present | `fatal_hold` | 10 | ERROR, once per log file |
-| 6 | J inactive | `formal_close` | 0 | INFO, once per epoch |
+| 5 | F present, its top code `install_startup_stopped`, `held_timeout` or `release_timeout` (a held start that stopped) | a start is considered: rows 7a-7f | as rows 7a-7f | as rows 7a-7f |
+| 5′ | F present otherwise | `fatal_hold` | 10 | ERROR, once per log file |
+| 6′ | J inactive, no candidate log written between its start and its close plus 2 s, and among the 16 owners before it the newest whose epoch a log covers (from its start to its close plus 2 s, or to the next owner's start) has a FATAL in the newest such log | rows 5 and 5′ for that FATAL | as those rows | as those rows |
+| 6 | J inactive otherwise | `formal_close` | 0 | INFO, once per epoch |
 | 7a | W held | `installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `selection_changed` | 0 | INFO |
 | 7b | P present, under 10 minutes | `runtime_process_present` | 0 | INFO |
@@ -90,8 +95,17 @@ First match wins.
 | 7f | otherwise (J active: a crash, a closed window, Task Manager, a reboot) | start: `started` or `start_failed` | 0 or 12 | WARN `watchdog_started_runtime` or ERROR `watchdog_start_failed`, every attempt |
 
 Row 5 precedes row 6 because a FATAL exit also writes `active=false`. A FATAL before
-the owner lock was taken leaves J untouched and is still newer than it. A FATAL of an
-earlier owner cannot hold a later one: every later owner appended a record. A
+the owner lock was taken leaves J untouched and is still newer than it. Rows 5 and 5′
+never see a FATAL of an earlier owner: every later owner appended a record; only row
+6′ looks back, past a close that no log covers. Rows 5 and
+5′ read only the FATAL line's top code (`FATAL actingd: runtime host error <code>
+during …`), never its operation or a `cause=` token: a held start that stopped is a
+halt a restart may fix (Workflow #381 A R5′), so the start rows, the budget among
+them, decide as after a crash. Row 6′ (R5b) covers an installer that, after such a
+stop, closed a maintenance owner without a log of its own: that later record would
+otherwise hide the FATAL as a formal close. An owner that closed formally has no
+FATAL, so it stays `formal_close`. A held start whose shutdown was accepted ends as
+`install_startup_shut_down`, a formal stop that row 5′ holds, never restarts. A
 process probe that fails is `start_failed` with `process_probe_failed`.
 
 **Formal starts.** A live owner is the watchdog's own when a start record names its

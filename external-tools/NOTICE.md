@@ -4,12 +4,12 @@ This repository does not commit DroidCast_raw APK files or MuMu/Nemu IPC DLL fil
 
 The Rust capture backend can use optional local tools named by environment variables:
 
-- `ACTINGCOMMAND_ADB_PATH`: local path to an adb executable, read by `actinglab` and `device-test` only (`actingd` has no reader for it, see "ADB version boundary").
+- `ACTINGCOMMAND_ADB_PATH`: local path to an adb executable, read by `actinglab` only (`actingd` has no reader for it, see "ADB version boundary").
 - `ACTINGCOMMAND_DROIDCAST_RAW_APK`: local path to a reviewed DroidCast_raw APK.
 - `ACTINGCOMMAND_NEMU_FOLDER`: local MuMu Player folder.
 - `ACTINGCOMMAND_NEMU_IPC_DLL`: local path to `external_renderer_ipc.dll`.
 
-The device crate never reads these variables itself; the calling program injects them (`EnvOverrides`, Workflow #318 cfg3). `actingd` does so only when its configuration sets `allow_env_overrides: true` and otherwise reports each set variable as `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`, "Environment overrides"); prefer the `device_paths` section there. `actinglab` and `device-test` pass them through unconditionally.
+The device crate never reads these variables itself; the calling program injects them (`EnvOverrides`, Workflow #318 cfg3). `actingd` does so only when its configuration sets `allow_env_overrides: true` and otherwise reports each set variable as `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`, "Environment overrides"); prefer the `device_paths` section there. `actinglab` passes them through unconditionally.
 
 When one MuMu installation has several kernel versions (`nx_device\<version>`) and capture uses the shared `nx_main\adb.exe`, Runtime picks `external_renderer_ipc.dll` from the version the target instance's running `MuMuNxDevice.exe` belongs to. `ACTINGCOMMAND_NEMU_IPC_DLL` and an explicit Nemu DLL configuration still take priority. If no running process matches the target instance, capture keeps failing with the `shared_adb_multiple_dll_versions` ambiguity error.
 
@@ -30,6 +30,6 @@ Which adb `actingd` uses (Workflow #337; `contracts/actingd-check-config.md`, "D
 
 All adb clients on a host share one adb server on port 5037. A client whose adb server protocol version differs from the running server's kills and restarts that server; tools with different adb builds can then keep restarting each other, which disconnects emulator devices and can make `adb exec-out screencap -p` hang until the Runtime timeout fires. By the adb source only the protocol version (the third field of the first `adb version` line, `41` for 37.0.1) decides; mixing builds has not been measured, so every adb that shares port 5037 stays on 37.0.1 (ruling of 2026-09-30). `actingd` does not check the version of a configured adb: a non-empty `adb_path` must point at a 37.0.1 adb, such as the install root's adb, a MuMu adb whose files were replaced by the same 37.0.1 files, or a separate byte-identical copy. Other tools that share port 5037 should use their own 37.0.1 copy, not the install root's adb: an upgrade replaces a root tool whose content changed, and stops while another program still runs it.
 
-`actinglab` and `device-test` resolve their own adb, in this order: `ACTINGCOMMAND_ADB_PATH`, the configured `adb_path` (`actinglab config set adb_path <path>`), `ACTINGCOMMAND_NEMU_FOLDER`, MuMu discovery, then `adb` on `PATH` with a warning. `actinglab`'s device commands run in the Runtime; its `adb_source` label does not show which adb the Runtime uses.
+`actinglab` resolves its own adb, in this order: `ACTINGCOMMAND_ADB_PATH`, the configured `adb_path` (`actinglab config set adb_path <path>`), `ACTINGCOMMAND_NEMU_FOLDER`, MuMu discovery, then `adb` on `PATH` with a warning. `actinglab`'s device commands run in the Runtime; its `adb_source` label does not show which adb the Runtime uses.
 
 `actingd` never falls back to a bare `adb` on `PATH`; it runs one only when an explicit instance names it as `adb_path`.
