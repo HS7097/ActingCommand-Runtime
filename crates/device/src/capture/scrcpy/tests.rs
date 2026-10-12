@@ -551,6 +551,6 @@ fn a_server_that_is_not_the_pinned_one_makes_only_this_instance_backend_unavaila
         error.message()
     );
     assert_eq!(error.severity(), DeviceErrorSeverity::Transient);
-    assert_eq!(error.resource_quiescence(), None);
+    assert!(error.resource_quiescence().is_none());
     assert!(error.resource_close_causes().is_empty());
 }
