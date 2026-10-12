@@ -8,7 +8,7 @@ use crate::mumu::{
 use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{
     DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
-    DeviceErrorSensitivity, DeviceResourceCloseOutcome, DeviceResourceClosePhase,
+    DeviceErrorSensitivity, DeviceLocation, DeviceResourceCloseOutcome, DeviceResourceClosePhase,
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     NemuResolutionContext, NemuResolutionCountKind, NemuResolutionReason,
 };
@@ -1798,11 +1798,11 @@ impl NemuCaptureResolutionDetail {
         }
     }
 
-    const fn operation(self) -> &'static str {
+    const fn operation(self) -> DeviceLocation {
         match self {
-            Self::Installation => "installation_resolve",
-            Self::Identity => "capture_identity",
-            Self::Target => "target_resolve",
+            Self::Installation => DeviceLocation::InstallationResolve,
+            Self::Identity => DeviceLocation::CaptureIdentity,
+            Self::Target => DeviceLocation::TargetResolve,
         }
     }
 
@@ -1825,7 +1825,7 @@ fn with_nemu_capture_resolution_detail(
         .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, detail.stage())
         .with_diagnostic_context_if_absent(
             "nemu_ipc",
-            detail.operation(),
+            detail.operation().as_str(),
             DeviceErrorSensitivity::Internal,
         );
     if producer_complete || producer_message {
@@ -3097,7 +3097,7 @@ fn verify_adb_device(
         .map_err(|error| {
             error.with_diagnostic_context_if_absent(
                 backend.as_str(),
-                "ensure_device",
+                DeviceLocation::EnsureDevice.as_str(),
                 DeviceErrorSensitivity::Sensitive,
             )
         })

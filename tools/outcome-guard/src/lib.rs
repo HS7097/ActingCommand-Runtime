@@ -55,10 +55,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/actinglab",
         "A2d lists it until B4 converts the actinglab sites",
     ),
-    member(
-        "crates/device",
-        "A2e converts the device crate (mechanical: registry, constructors, literals)",
-    ),
     member("crates/lab", "A2d lists it until B4 converts the lab sites"),
     member(
         "tools/actinglab-architecture",
@@ -395,7 +391,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/emulator.rs",
         "EmulatorVersionEvidence::Unavailable.reason",
         &[Check::G2],
-        "A2e: carries the device layer's reason; A2e registers it and retypes the channel",
+        "A2-P: the unavailable version's reason is English text (the device layer's offline fake, the host's backend registry) sent in Status capabilities; a typed reason changes that emitted value, so A2-P replaces it (A2e keeps every emitted string)",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/artifact.rs",
@@ -1020,6 +1016,116 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "ContainedRunTerminal.failure_code",
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+    ),
+    // A2e bridges: channels of the device crate that stay strings until the slice the reason
+    // names removes the entry (brief-a2e.md; A2e is mechanical and keeps every emitted string).
+    bridge(
+        "crates/device/src/adb.rs",
+        "CommandProgram.timeout_stage",
+        &[Check::G2],
+        "A2-P: a child program's bound-expiry stage (mumu_manager.timeout) is dotted and breaks the form; A2-P renames it",
+    ),
+    bridge(
+        "crates/device/src/adb_bounds_diagnostic.rs",
+        "AdbBoundsAction::operation",
+        &[Check::G2],
+        "A2-P: the adb input bounds operations tap and swipe are one word and break the form; A2-P renames them",
+    ),
+    bridge(
+        "crates/device/src/capture.rs",
+        "NemuCaptureResolutionDetail::stage",
+        &[Check::G2],
+        "A2-P: the Nemu capture resolution stages (nemu.installation.resolve, nemu.capture.identity, nemu.target.resolve) are dotted and break the form; A2-P renames them",
+    ),
+    bridge(
+        "crates/device/src/discovery.rs",
+        "mumu_instance_id",
+        &[Check::G2],
+        "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
+    ),
+    bridge(
+        "crates/device/src/discovery.rs",
+        "parse_dash_v_instance",
+        &[Check::G2],
+        "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic.stage",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic::new",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic::stage",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_if_absent",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorContext.operation",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorContext::operation",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_context",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_context_if_absent",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/mumu_manager.rs",
+        "registry_error",
+        &[Check::G2],
+        "B5: the Windows registry step (open, enumerate, query) names a foreign failure inside developer text; B5 wraps the registry failure as a foreign_os_error link",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "TouchBackendAttempt.error_reason",
+        &[Check::G2],
+        "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "TouchBackendDiagnostics::push_failure",
+        &[Check::G2],
+        "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "adb_shell_input_connect_error",
+        &[Check::G2],
+        "A2-P: the stage parameter carries a dotted device stage (adb.*) and the operation parameter feeds the device error's operation channel, which carries one-word operations (and rotation_resolve, which A2e cannot register: its prefix rotation_ lists only the contract); A2-P renames them",
     ),
     // A2a part 2 bridges: channels of actingd, actingctl and vision-provider-check that stay
     // strings until the slice the reason names removes the entry (brief-a2a.md A2a-9).

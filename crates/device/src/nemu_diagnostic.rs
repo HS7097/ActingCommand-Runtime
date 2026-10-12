@@ -1,67 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::MumuInstallSource;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NemuResolutionReason {
-    InstallationAbsent,
-    InstallationAmbiguous,
-    SharedAdbMultipleDllVersions,
-    ConfiguredAdbIdentityUnrecognized,
-    RootMismatch,
-    DllOutsideRoot,
-    DllVersionMissing,
-    VersionMismatch,
-    CandidateAbsent,
-    CandidateOutsideRoot,
-    RunningExecutableTopologyInvalid,
-    RunningVersionMissing,
-    TargetIdentityUnavailable,
-    TargetIdentityInvalid,
-    TargetIdentityMismatch,
-    TargetProcessAbsent,
-    TargetProcessAmbiguous,
-    TargetExecutableMissing,
-    CaptureIdentityUncoordinated,
-    /// `MuMuManager version` is below `MUMU_MANAGER_MINIMUM_VERSION` (a Runtime policy floor).
-    ProviderVersionBelowMinimum,
-    /// `MuMuManager version` did not produce a four-part numeric version.
-    ProviderVersionUnparseable,
-    /// The Windows uninstall registry source cannot be read on this platform.
-    RegistrySourceUnavailable,
-    /// A `MuMuPlayer*` uninstall entry carries no usable install location or an unsupported value type.
-    RegistryEntryInvalid,
-}
-
-impl NemuResolutionReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::InstallationAbsent => "installation_absent",
-            Self::InstallationAmbiguous => "installation_ambiguous",
-            Self::SharedAdbMultipleDllVersions => "shared_adb_multiple_dll_versions",
-            Self::ConfiguredAdbIdentityUnrecognized => "configured_adb_identity_unrecognized",
-            Self::RootMismatch => "root_mismatch",
-            Self::DllOutsideRoot => "dll_outside_root",
-            Self::DllVersionMissing => "dll_version_missing",
-            Self::VersionMismatch => "version_mismatch",
-            Self::CandidateAbsent => "candidate_absent",
-            Self::CandidateOutsideRoot => "candidate_outside_root",
-            Self::RunningExecutableTopologyInvalid => "running_executable_topology_invalid",
-            Self::RunningVersionMissing => "running_version_missing",
-            Self::TargetIdentityUnavailable => "target_identity_unavailable",
-            Self::TargetIdentityInvalid => "target_identity_invalid",
-            Self::TargetIdentityMismatch => "target_identity_mismatch",
-            Self::TargetProcessAbsent => "target_process_absent",
-            Self::TargetProcessAmbiguous => "target_process_ambiguous",
-            Self::TargetExecutableMissing => "target_executable_missing",
-            Self::CaptureIdentityUncoordinated => "capture_identity_uncoordinated",
-            Self::ProviderVersionBelowMinimum => "provider_version_below_minimum",
-            Self::ProviderVersionUnparseable => "provider_version_unparseable",
-            Self::RegistrySourceUnavailable => "registry_source_unavailable",
-            Self::RegistryEntryInvalid => "registry_entry_invalid",
-        }
-    }
-}
+use crate::codes::NemuResolutionReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NemuResolutionCountKind {
