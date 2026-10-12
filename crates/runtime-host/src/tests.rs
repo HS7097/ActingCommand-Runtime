@@ -129,6 +129,7 @@ mod monitor;
 mod ocr_diagnostics;
 mod ocr_fields;
 mod online_observation;
+mod package_pins;
 mod planning;
 mod policy_admission;
 mod policy_budget;

@@ -320,3 +320,72 @@ pub fn validate_bundle_maintenance(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::{
+        BundleIndexV3Version, BundlePackV2, ContentDirectory, ContentDirectoryVersion,
+    };
+
+    /// A described pack whose recorded reference is `reference`.
+    fn descriptor(package_id: &str, reference: &str) -> TaskPackageDescriptor {
+        TaskPackageDescriptor {
+            package_id: package_id.to_owned(),
+            entry_task_id: "neutral_task".to_owned(),
+            reference: PackageRef::ContentDirectory(ContentDirectory {
+                schema_version: ContentDirectoryVersion::V1,
+                sha256: reference.to_owned(),
+            }),
+            execution_mode: "navigable_route".to_owned(),
+            game: "neutral".to_owned(),
+            server: "test".to_owned(),
+            resolution: (2, 1),
+            prerequisite_package_id: None,
+            linear_entry_page: None,
+            maximum_executed_steps: 1,
+            startup_incompatibility: None,
+            prerequisite_incompatibility: None,
+        }
+    }
+
+    /// A one-pack bundle index whose pack entry names `package_id` and the digest `a…a`.
+    fn index(package_id: &str) -> BundleIndexV3 {
+        let digest = "a".repeat(64);
+        BundleIndexV3 {
+            schema_version: BundleIndexV3Version::V3,
+            game: "neutral".to_owned(),
+            source: None,
+            packs: vec![BundlePackV2 {
+                package_id: package_id.to_owned(),
+                server: "test".to_owned(),
+                entry_task_id: "neutral_task".to_owned(),
+                path: format!("packs/{digest}"),
+                digest,
+                file_count: 3,
+                byte_count: 64,
+            }],
+            maintenance: Vec::new(),
+        }
+    }
+
+    // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T6: bundle maintenance matches each pack
+    // by `(package_id, server, entry_task_id)`; the index digest is compared with nothing.
+    #[test]
+    fn s1_t6_bundle_maintenance_matches_packs_by_identity_and_ignores_the_index_digest() {
+        validate_bundle_maintenance(
+            &index("neutral.pack"),
+            &[descriptor("neutral.pack", &"b".repeat(64))],
+        )
+        .expect("an index digest that differs from the admitted content does not refuse");
+        let error = validate_bundle_maintenance(
+            &index("neutral.pack"),
+            &[descriptor("neutral.other", &"a".repeat(64))],
+        )
+        .expect_err("a pack with another package_id is refused");
+        assert_eq!(
+            error.code().as_str(),
+            ExecutionKernelCode::BundleMaintenanceInvalid.as_str()
+        );
+    }
+}

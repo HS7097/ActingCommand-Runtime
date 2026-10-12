@@ -10417,6 +10417,121 @@ mod retry_wiring_tests {
         }
     }
 
+    // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T4: a select step whose `policy.sha256`
+    // is well formed but is not the SHA-256 of the document is admitted, its document read and
+    // prepared for evaluation; the pin is compared with nothing (it stays required until S2).
+    #[test]
+    fn s1_t4_select_policy_pin_is_not_compared_at_admission() {
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let mut task = omitted_policy_task(false, false);
+        let mut pack = task.evaluator.pack().clone();
+        pack.schema_version = "0.7".into();
+        pack.candidate_layouts = vec![
+            serde_json::from_value(json!({
+                "id": "choices",
+                "page_id": "neutral/home",
+                "kind": "fixed_slots",
+                "features": [{"name": "ready", "value": "passed"}],
+                "slots": [{
+                    "rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "targets": {"ready": "guard/ready"}
+                }]
+            }))
+            .expect("candidate layout"),
+        ];
+        task.evaluator =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect("recognition evaluator");
+        task.program.operations[0].select = Some(
+            serde_json::from_value(json!({
+                "layout_id": "choices",
+                "policy": {"path": "policies/choices.json", "sha256": "b".repeat(64)}
+            }))
+            .expect("select declaration"),
+        );
+        task.program.operations[0].click = None;
+        let policy = serde_json::to_vec(&json!({
+            "schema_version": actingcommand_selection_policy::SELECTION_POLICY_SCHEMA_VERSION,
+            "policy_id": "policy.choices",
+            "applies_to": {
+                "candidate_layout_id": "choices",
+                "outcome_keys": {
+                    "selected": "outcome.selected",
+                    "empty": "outcome.empty",
+                    "insufficient": "outcome.insufficient",
+                    "ambiguous": "outcome.ambiguous",
+                    "unknown": "outcome.unknown"
+                }
+            },
+            "fields": [{"name": "ready", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": []
+        }))
+        .expect("policy document");
+        assert_ne!(format!("{:x}", Sha256::digest(&policy)), "b".repeat(64));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes) in [
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/operations/task/task.json",
+                br#"{"task_id":"task"}"#.to_vec(),
+            ),
+            ("resources/operations/task/policies/choices.json", policy),
+        ] {
+            zip.start_file(path, zip::write::FileOptions::default())
+                .expect("zip entry");
+            zip.write_all(&bytes).expect("zip bytes");
+        }
+        let bytes = zip.finish().expect("zip").into_inner();
+        let directory = std::env::temp_dir().join(format!(
+            "actingcommand-s1-t4-select-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        let package = directory.join("select.zip");
+        std::fs::write(&package, &bytes).expect("package file");
+        let reference = actingcommand_contract::PackageRef::LegacyZipSha256(format!(
+            "{:x}",
+            Sha256::digest(&bytes)
+        ));
+        let mut containment = actingcommand_pack_containment::Containment::new();
+        let admitted = containment.load_path(
+            &actingcommand_pack_containment::InstanceId::new("neutral-select").expect("instance"),
+            &package,
+            &reference,
+            false,
+            Instant::now() + std::time::Duration::from_secs(60),
+        );
+        let prepared = admitted.map(|bundle| {
+            selection::prepare_select_steps(
+                &mut task.program,
+                &task.control,
+                bundle,
+                &task.evaluator,
+            )
+        });
+        std::fs::remove_dir_all(&directory).expect("remove scratch directory");
+        prepared
+            .expect("the package is admitted")
+            .expect("the select step is admitted with its declared pin unchecked");
+        assert!(task.program.operations[0].prepared_select.is_some());
+    }
+
     #[test]
     fn pre_execution_guard_passes_when_page_and_target_match() {
         let mut task = omitted_policy_task(false, false);

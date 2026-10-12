@@ -708,6 +708,143 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     );
 }
 
+// Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T7: package admission (containment, the
+// kernel's package ingress and the host's contained-task preparation) computes no content
+// digest and compares no digest or pin; `content_directory_digest` keeps only its designated
+// callers, the authoring and recording tools PKG-S5 retires.
+#[test]
+fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
+    let root = workspace_root();
+    let read = |path: &str| {
+        fs::read_to_string(root.join(path)).unwrap_or_else(|error| panic!("read {path}: {error}"))
+    };
+    for (path, forbidden) in [
+        (
+            "crates/pack-containment/src/lib.rs",
+            &[
+                "constant_time_hash_eq",
+                "HashMismatch",
+                "DigestMismatch",
+                "TrustSource",
+                "validate_manifest_hash",
+            ][..],
+        ),
+        (
+            "crates/pack-containment/src/content_dir.rs",
+            &[
+                "content_directory_digest",
+                "constant_time_hash_eq",
+                "DigestMismatch",
+                "digest_named",
+                "Sha256Hash::digest",
+            ][..],
+        ),
+        (
+            "crates/pack-containment/src/source_pack.rs",
+            &["Sha256Hash::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/pack-containment/src/source/mod.rs",
+            &["Sha256::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/pack-containment/src/source/declarations.rs",
+            &["Sha256Hash::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/execution-kernel/src/bundle.rs",
+            &[
+                "ExternalExpectedSha256",
+                "Sha256Hash",
+                "content_directory_digest",
+            ][..],
+        ),
+        (
+            "crates/execution-kernel/src/contained_task.rs",
+            &[
+                "ExternalExpectedSha256",
+                "manifest_entry_sha256",
+                "content_directory_digest",
+                "Sha256Hash::digest",
+            ][..],
+        ),
+        (
+            "crates/execution-kernel/src/contained_task/selection.rs",
+            &[
+                "Sha256Hash",
+                "SELECT_POLICY_HASH_MISMATCH",
+                "content_directory_digest",
+            ][..],
+        ),
+        (
+            "crates/runtime-host/src/host/contained_task.rs",
+            &[
+                "ExternalExpectedSha256",
+                "content_directory_digest",
+                ".is_directory_source()",
+                ".legacy_sha256()",
+            ][..],
+        ),
+    ] {
+        let source = read(path);
+        for token in forbidden {
+            assert!(
+                !source.contains(token),
+                "package admission in {path} still holds {token}"
+            );
+        }
+    }
+
+    let containment = read("crates/pack-containment/src/lib.rs");
+    let measuring = containment
+        .find("pub fn snapshot_content_directory(")
+        .expect("containment keeps its measuring snapshot");
+    let measuring_end = containment[measuring..]
+        .find("\n    }\n")
+        .map(|end| measuring + end)
+        .expect("end of the measuring snapshot");
+    let calls = containment
+        .match_indices("content_directory_digest(")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(
+        !calls.is_empty()
+            && calls
+                .iter()
+                .all(|index| (measuring..measuring_end).contains(index)),
+        "containment computes a content digest outside its measuring snapshot"
+    );
+
+    let designated = [
+        "crates/actingcommand-contract/src/package.rs",
+        "crates/pack-containment/src/lib.rs",
+        "crates/resource-tooling/src/package_directory.rs",
+        "crates/lab/src/recording/container.rs",
+    ];
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let mut callers = Vec::new();
+    for file in files {
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if source.contains("content_directory_digest(") && !designated.contains(&display.as_str()) {
+            callers.push(display);
+        }
+    }
+    assert!(
+        callers.is_empty(),
+        "content_directory_digest has undesignated callers: {callers:?}"
+    );
+}
+
 #[test]
 fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device_authority() {
     let root = workspace_root();
