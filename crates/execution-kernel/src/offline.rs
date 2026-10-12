@@ -623,7 +623,7 @@ mod tests {
         assert_same_refusal(
             &exhaustion,
             vec![solid_frame([0, 0, 0], [0, 0, 0])],
-            FIXTURE_EXHAUSTED_CODE,
+            FIXTURE_EXHAUSTED_CODE.as_str(),
         );
     }
 
