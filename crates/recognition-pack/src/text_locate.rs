@@ -265,8 +265,12 @@ impl RecognitionEvaluator {
             provider
                 .require_ocr_model(&target.model_ref, &target.model_sha256)
                 .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let result =
-                context.read_text_once(provider, target, region, locate.provider_blocks())?;
+            let result = context.read_text_once(
+                provider.as_ref(),
+                target,
+                region,
+                locate.provider_blocks(),
+            )?;
             let detection = result.detection;
             let ocr = validate_ocr_result(result, region)?;
             let truncated = detection.is_some_and(OcrProviderDetection::truncated);

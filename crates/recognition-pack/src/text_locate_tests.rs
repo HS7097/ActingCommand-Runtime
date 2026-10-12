@@ -3,7 +3,6 @@
 //! Workflow #396 REC-1 logic tests: located text, its cells, the per-request memory and the
 //! per-consumer budget, with a scripted OCR provider and synthetic neutral frames.
 
-use super::*;
 use crate::*;
 use actingcommand_contract::ResourceDeclarationIssue;
 use serde_json::{Value, json};
