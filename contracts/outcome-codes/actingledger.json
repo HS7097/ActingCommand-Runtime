@@ -1,0 +1,107 @@
+{
+  "owner": "actingledger",
+  "codes": {
+    "ledger_view_source_incomplete": {
+      "category": "error",
+      "owner": "actingledger",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger reports ledger view source incomplete.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "output_failed": {
+      "category": "error",
+      "owner": "actingledger",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger reports output failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "stability_export_incomplete": {
+      "category": "error",
+      "owner": "actingledger",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger reports stability export incomplete.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "task_evidence_export_incomplete": {
+      "category": "error",
+      "owner": "actingledger",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger reports task evidence export incomplete.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {
+    "export_stability": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: export stability."
+    },
+    "export_task_evidence": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: export task evidence."
+    },
+    "parse_arguments": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: parse arguments."
+    },
+    "replay_signatures": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: replay signatures."
+    },
+    "serialize_forensic_report": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: serialize forensic report."
+    },
+    "write_forensic_output": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: write forensic output."
+    }
+  }
+}

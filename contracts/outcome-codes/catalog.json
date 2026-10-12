@@ -5165,6 +5165,9 @@
       "runtime-database",
       "runtime-host"
     ],
+    "inspect_state_": [
+      "runtime-state"
+    ],
     "install_": [
       "actingctl",
       "actingd",
@@ -6113,6 +6116,9 @@
       "ledger",
       "runtime-host",
       "runtime-state"
+    ],
+    "rollback_evidence_": [
+      "artifact-store"
     ],
     "root_": [
       "device"

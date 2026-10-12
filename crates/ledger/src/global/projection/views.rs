@@ -33,27 +33,24 @@ pub(in crate::global) fn page_bounds(
     request: &RuntimeEventQueryPageRequest,
     latest: u64,
 ) -> Result<(u64, u64), GlobalLedgerError> {
-    let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
-    query
-        .validate()
-        .map_err(|error| invalid(error.code().as_str()))?;
-    request
-        .validate()
-        .map_err(|error| invalid(error.code().as_str()))?;
+    let invalid =
+        |code| GlobalLedgerError::request(code, LedgerLocation::ProjectLedgerViewPage.location());
+    query.validate().map_err(|error| invalid(error.code()))?;
+    request.validate().map_err(|error| invalid(error.code()))?;
     let (snapshot, after) = match request.cursor() {
         Some(cursor) => {
             if !cursor
                 .matches(query, profile)
-                .map_err(|error| invalid(error.code().as_str()))?
+                .map_err(|error| invalid(error.code()))?
             {
-                return Err(invalid("runtime_event_query_cursor_invalid"));
+                return Err(invalid(LedgerCode::RuntimeEventQueryCursorInvalid.code()));
             }
             (cursor.snapshot_ledger_position(), cursor.after_sequence())
         }
         None => (request.snapshot_position().unwrap_or(latest), 0),
     };
     if snapshot > latest {
-        return Err(invalid("invalid_runtime_event_query_snapshot"));
+        return Err(invalid(SharedCode::InvalidRuntimeEventQuerySnapshot.code()));
     }
     Ok((snapshot, after))
 }
@@ -68,13 +65,15 @@ impl EventIndexes {
         scope: LedgerReadScope,
         selection: PageSelection<'_>,
     ) -> Result<RuntimeEventQueryPage, GlobalLedgerError> {
-        let invalid = |code| GlobalLedgerError::request(code, "project_ledger_view_page");
+        let invalid = |code| {
+            GlobalLedgerError::request(code, LedgerLocation::ProjectLedgerViewPage.location())
+        };
         let latest = selection.through_sequence;
         let (snapshot, after) = page_bounds(query, profile, request, latest)?;
         if events.last().map_or(0, E::sequence) != latest {
             return Err(GlobalLedgerError::fatal(
-                "ledger_snapshot_boundary_mismatch",
-                "project_ledger_view_page",
+                LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
+                LedgerLocation::ProjectLedgerViewPage.location(),
             ));
         }
         let mut selected = if let Some(sequences) = selection.sequences {
@@ -91,8 +90,8 @@ impl EventIndexes {
                         && self.matches(query, *event, snapshot)
                 }) else {
                     return Err(GlobalLedgerError::fatal(
-                        "ledger_sql_selection_mismatch",
-                        "project_ledger_view_page",
+                        LedgerCode::LedgerSqlSelectionMismatch.code(),
+                        LedgerLocation::ProjectLedgerViewPage.location(),
                     ));
                 };
                 previous = *sequence;
@@ -100,8 +99,8 @@ impl EventIndexes {
             }
             if selected.len() > usize::from(request.limit()) + 1 {
                 return Err(GlobalLedgerError::fatal(
-                    "ledger_sql_selection_mismatch",
-                    "project_ledger_view_page",
+                    LedgerCode::LedgerSqlSelectionMismatch.code(),
+                    LedgerLocation::ProjectLedgerViewPage.location(),
                 ));
             }
             selected
@@ -143,10 +142,10 @@ impl EventIndexes {
             let cursor = if has_more {
                 let last = rows
                     .last()
-                    .ok_or_else(|| invalid("runtime_event_query_response_too_large"))?;
+                    .ok_or_else(|| invalid(SharedCode::RuntimeEventQueryResponseTooLarge.code()))?;
                 Some(
                     RuntimeEventQueryCursor::new(snapshot, last.sequence, query, profile)
-                        .map_err(|error| invalid(error.code().as_str()))?,
+                        .map_err(|error| invalid(error.code()))?,
                 )
             } else {
                 None
@@ -181,7 +180,8 @@ impl EventIndexes {
             match page {
                 Ok(page) => return Ok(page),
                 Err(error)
-                    if error.code().as_str() == "runtime_event_query_response_too_large"
+                    if error.code().as_str()
+                        == SharedCode::RuntimeEventQueryResponseTooLarge.as_str()
                         && rows.len() > 1 =>
                 {
                     rows.pop();
@@ -191,7 +191,7 @@ impl EventIndexes {
                     });
                     byte_limited = true;
                 }
-                Err(error) => return Err(invalid(error.code().as_str())),
+                Err(error) => return Err(invalid(error.code())),
             }
         }
     }

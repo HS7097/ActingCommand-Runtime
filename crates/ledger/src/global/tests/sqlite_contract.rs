@@ -2,7 +2,7 @@
 
 // Workflow #109 S2: the existing bounded store corpus, using the candidate owner.
 use super::*;
-use actingcommand_runtime_database::RuntimeDatabase;
+use actingcommand_runtime_database::{DatabaseLocation, RuntimeDatabase};
 
 // Shared Host startup configuration.
 mod host {
@@ -79,7 +79,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         .expect("writer");
     let first = ledger.append(event("first")).expect("first");
     let before = database
-        .connection("test snapshot")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("connection")
         .total_changes();
     let snapshot = GlobalLedger::open_sqlite_candidate_read_only(
@@ -92,7 +92,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert_eq!(snapshot.latest_sequence(), 1);
     assert_eq!(
         database
-            .connection("test snapshot")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .expect("connection")
             .total_changes(),
         before
@@ -290,7 +290,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     assert_eq!(facts.len(), 3);
     {
         let mut connection = imported_database
-            .connection("formal original rows")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .unwrap();
         let before = connection.total_changes();
         let transaction = connection.transaction().unwrap();
@@ -385,7 +385,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     imported.close().expect("formal writer close");
     {
         let connection = imported_database
-            .connection("supported pre-view offline root")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .unwrap();
         let objects = connection
             .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")
@@ -429,7 +429,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     }
     assert_eq!(
         imported_database
-            .connection("read-only view schema unchanged")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .unwrap()
             .query_row(
                 "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'ledger_view_*'",
@@ -452,7 +452,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         }
     ));
     imported_database
-        .connection("mutate marker in existing integrity specification")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .unwrap()
         .execute("UPDATE ledger_meta SET migration_record='{}'", [])
         .unwrap();
@@ -468,7 +468,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
             .expect("metadata does not skip malformed marker")
             .is_fatal()
     );
-    imported_database.connection("remove schema in existing integrity specification").unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();
+    imported_database.connection(DatabaseLocation::OpenExistingDatabase.location()).unwrap().execute_batch("DROP TABLE ledger_artifacts; DROP TABLE ledger_links; DROP TABLE ledger_events; DROP TABLE ledger_meta;").unwrap();
     assert!(
         reopened
             .status(&imported_database)

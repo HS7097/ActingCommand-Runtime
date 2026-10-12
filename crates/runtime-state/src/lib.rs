@@ -4,8 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+mod codes;
 mod error;
 mod store;
 
+pub use codes::{StateCode, StateLocation};
 pub use error::*;
 pub use store::*;

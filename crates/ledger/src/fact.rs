@@ -2,6 +2,8 @@
 
 //! Opaque facts whose sequence and durable identity are owned by the ledger.
 
+use crate::codes::LedgerCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
@@ -306,7 +308,7 @@ impl StoredEventRecord {
         // therefore fails closed instead of promoting a syntactically coherent record.
         if !self.artifacts.is_empty() {
             return Err(FactValidationError {
-                code: "artifact_store_verification_unavailable",
+                code: LedgerCode::ArtifactStoreVerificationUnavailable.code(),
             });
         }
         self.into_event_with_artifacts(Vec::new())
@@ -363,16 +365,27 @@ impl StoredEventRecord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FactValidationError {
-    code: &'static str,
+    code: Code,
+}
+
+/// The derived form this error printed before its code was typed: the code prints as a quoted
+/// spelling (Workflow #378 keeps developer text unchanged).
+impl fmt::Debug for FactValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FactValidationError")
+            .field("code", &self.code.as_str())
+            .finish()
+    }
 }
 
 impl FactValidationError {
-    pub(crate) const fn new(code: &'static str) -> Self {
+    pub(crate) const fn new(code: Code) -> Self {
         Self { code }
     }
-    pub(crate) const fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> Code {
         self.code
     }
 }

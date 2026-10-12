@@ -42,6 +42,9 @@ pub use read_only::{
 };
 
 use crate::PersistedEvent;
+use crate::codes::{LedgerCode, LedgerLocation};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     CorrelationId, EventId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
@@ -398,6 +401,11 @@ impl LedgerAppendObservation {
     }
 }
 
+/// A ledger failure. Every code and location the ledger raises is registered (`LedgerCode`,
+/// `LedgerLocation`, shared contract entries) and built through the typed constructors; the
+/// error keeps their spellings because a rolled-back transaction carries the work code of its
+/// owner ([`TransactionWorkError`]), which the runtime host fills with its own codes until
+/// slice A2b registers them (Workflow #378).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalLedgerError {
     code: &'static str,
@@ -479,53 +487,55 @@ pub trait LedgerTransactionWork: Send + 'static {
 /// appended leaves that execution durable), and a start records the run and carries on. Every
 /// other settlement failure (an event id, a sanitize or an action id failure, any storage
 /// fault) stays terminal.
-pub const SCHEDULED_SETTLEMENT_REFUSALS: [&str; 38] = [
-    "scheduled_execution_recovery_admission_not_unique",
-    "scheduled_execution_recovery_clock_regressed",
-    "scheduled_execution_recovery_conflict",
-    "scheduled_execution_recovery_draft_invalid",
-    "scheduled_execution_recovery_draft_type_invalid",
-    "scheduled_execution_recovery_fact_type_invalid",
-    "scheduled_execution_recovery_failure_conflict",
-    "scheduled_execution_recovery_failure_invalid",
-    "scheduled_execution_recovery_failure_severity_ambiguous",
-    "scheduled_execution_recovery_intent_not_unique",
-    "scheduled_execution_recovery_interruption_conflict",
-    "scheduled_execution_recovery_lease_not_unique",
-    "scheduled_execution_recovery_links_invalid",
-    "scheduled_execution_recovery_not_unique",
-    "scheduled_execution_recovery_order_invalid",
-    "scheduled_execution_recovery_outcome_conflict",
-    "scheduled_execution_recovery_payload_conflict",
-    "scheduled_execution_recovery_release_invalid",
-    "scheduled_execution_recovery_release_not_unique",
-    "scheduled_execution_recovery_severity_invalid",
-    "scheduled_execution_recovery_success_conflict",
-    "scheduled_execution_recovery_task_request_not_unique",
-    "scheduled_execution_recovery_terminal_not_unique",
-    "scheduled_execution_recovery_time_conflict",
-    "scheduled_recovery_admission_not_unique",
-    "scheduled_recovery_completion_conflict",
-    "scheduled_recovery_completion_not_unique",
-    "scheduled_recovery_draft_invalid",
-    "scheduled_recovery_draft_type_invalid",
-    "scheduled_recovery_execution_links_conflict",
-    "scheduled_recovery_execution_not_unique",
-    "scheduled_recovery_fact_type_invalid",
-    "scheduled_recovery_intent_not_unique",
-    "scheduled_recovery_lease_not_unique",
-    "scheduled_recovery_links_invalid",
-    "scheduled_recovery_payload_conflict",
-    "scheduled_recovery_release_not_unique",
-    "scheduled_recovery_release_order_invalid",
+pub const SCHEDULED_SETTLEMENT_REFUSALS: [Code; 38] = [
+    LedgerCode::ScheduledExecutionRecoveryAdmissionNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryClockRegressed.code(),
+    LedgerCode::ScheduledExecutionRecoveryConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryDraftInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryDraftTypeInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryFactTypeInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryFailureConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryFailureInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryFailureSeverityAmbiguous.code(),
+    LedgerCode::ScheduledExecutionRecoveryIntentNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryInterruptionConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryLeaseNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryLinksInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryOrderInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryOutcomeConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryPayloadConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryReleaseInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoveryReleaseNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoverySeverityInvalid.code(),
+    LedgerCode::ScheduledExecutionRecoverySuccessConflict.code(),
+    LedgerCode::ScheduledExecutionRecoveryTaskRequestNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
+    LedgerCode::ScheduledExecutionRecoveryTimeConflict.code(),
+    LedgerCode::ScheduledRecoveryAdmissionNotUnique.code(),
+    LedgerCode::ScheduledRecoveryCompletionConflict.code(),
+    LedgerCode::ScheduledRecoveryCompletionNotUnique.code(),
+    SharedCode::ScheduledRecoveryDraftInvalid.code(),
+    LedgerCode::ScheduledRecoveryDraftTypeInvalid.code(),
+    LedgerCode::ScheduledRecoveryExecutionLinksConflict.code(),
+    LedgerCode::ScheduledRecoveryExecutionNotUnique.code(),
+    LedgerCode::ScheduledRecoveryFactTypeInvalid.code(),
+    LedgerCode::ScheduledRecoveryIntentNotUnique.code(),
+    LedgerCode::ScheduledRecoveryLeaseNotUnique.code(),
+    LedgerCode::ScheduledRecoveryLinksInvalid.code(),
+    LedgerCode::ScheduledRecoveryPayloadConflict.code(),
+    LedgerCode::ScheduledRecoveryReleaseNotUnique.code(),
+    LedgerCode::ScheduledRecoveryReleaseOrderInvalid.code(),
 ];
 
 /// Whether `code` is one of [`SCHEDULED_SETTLEMENT_REFUSALS`] (with test hooks, also the test
 /// refusal `scheduled_execution_recovery_refused_for_test`).
 pub fn is_scheduled_settlement_refusal_code(code: &str) -> bool {
-    SCHEDULED_SETTLEMENT_REFUSALS.contains(&code)
+    SCHEDULED_SETTLEMENT_REFUSALS
+        .iter()
+        .any(|refusal| refusal.as_str() == code)
         || cfg!(any(test, feature = "test-hooks"))
-            && code == "scheduled_execution_recovery_refused_for_test"
+            && code == LedgerCode::ScheduledExecutionRecoveryRefusedForTest.as_str()
 }
 
 /// Workflow #369 E3 (#670 safety net), test hook: the next scheduled settlement of each listed
@@ -591,11 +601,14 @@ impl GlobalLedgerError {
 
     /// A refusal of one run's scheduled settlement ([`SCHEDULED_SETTLEMENT_REFUSALS`]): not
     /// terminal.
-    pub(crate) fn settlement_refusal(code: &'static str, operation: &'static str) -> Self {
-        debug_assert!(is_scheduled_settlement_refusal_code(code), "{code}");
+    pub(crate) fn settlement_refusal(code: Code, operation: Location) -> Self {
+        debug_assert!(
+            is_scheduled_settlement_refusal_code(code.as_str()),
+            "{code}"
+        );
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             detail: None,
             terminal: false,
             rolled_back_work: None,
@@ -609,11 +622,71 @@ impl GlobalLedgerError {
         !self.terminal && is_scheduled_settlement_refusal_code(self.code)
     }
 
-    pub(crate) fn fatal(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) fn fatal(code: Code, operation: Location) -> Self {
+        Self {
+            code: code.as_str(),
+            operation: operation.as_str(),
+            detail: None,
+            terminal: true,
+            rolled_back_work: None,
+            io_kind: None,
+        }
+    }
+
+    /// A fatal failure that relays another ledger failure's code, or names an operation the
+    /// failing input supplies (a contract field name). Both stay spelled as they came: a ledger
+    /// failure's code can be a transaction work code of the runtime host until slice A2b types
+    /// those, and a field-named operation carries data, which slice A2-P splits into a fixed
+    /// location and a value (Workflow #378).
+    pub(crate) fn relayed_fatal(
+        relayed_code: &'static str,
+        relayed_operation: &'static str,
+    ) -> Self {
+        Self {
+            code: relayed_code,
+            operation: relayed_operation,
+            detail: None,
+            terminal: true,
+            rolled_back_work: None,
+            io_kind: None,
+        }
+    }
+
+    /// Test builds only: the legacy segment store and the test hooks, compiled only for tests,
+    /// name their failures with spellings outside the registry (Workflow #378).
+    #[cfg(test)]
+    pub(crate) fn fatal_untyped(code: &'static str, operation: &'static str) -> Self {
+        Self::relayed_fatal(code, operation)
+    }
+
+    /// Test builds only: [`Self::fatal_untyped`] for an I/O failure.
+    #[cfg(test)]
+    pub(crate) fn io_untyped(
+        code: &'static str,
+        operation: &'static str,
+        error: &std::io::Error,
+    ) -> Self {
         Self {
             code,
             operation,
-            detail: None,
+            detail: Some(error.to_string()),
+            terminal: true,
+            rolled_back_work: None,
+            io_kind: Some(error.kind().into()),
+        }
+    }
+
+    /// Test builds only: [`Self::fatal_untyped`] for a JSON failure.
+    #[cfg(test)]
+    pub(crate) fn json_untyped(
+        code: &'static str,
+        operation: &'static str,
+        error: &serde_json::Error,
+    ) -> Self {
+        Self {
+            code,
+            operation,
+            detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
@@ -626,10 +699,10 @@ impl GlobalLedgerError {
         self
     }
 
-    pub(crate) fn request(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) fn request(code: Code, operation: Location) -> Self {
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             detail: None,
             terminal: false,
             rolled_back_work: None,
@@ -637,10 +710,10 @@ impl GlobalLedgerError {
         }
     }
 
-    fn io(code: &'static str, operation: &'static str, error: &std::io::Error) -> Self {
+    fn io(code: Code, operation: Location, error: &std::io::Error) -> Self {
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             detail: Some(error.to_string()),
             terminal: true,
             rolled_back_work: None,
@@ -648,10 +721,10 @@ impl GlobalLedgerError {
         }
     }
 
-    fn json(code: &'static str, operation: &'static str, error: &serde_json::Error) -> Self {
+    fn json(code: Code, operation: Location, error: &serde_json::Error) -> Self {
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             detail: Some(format!("line {}, column {}", error.line(), error.column())),
             terminal: true,
             rolled_back_work: None,
@@ -746,33 +819,33 @@ impl GlobalLedgerConfig {
     fn validate(&self) -> GlobalLedgerResult<()> {
         if self.root.as_os_str().is_empty() {
             return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_root",
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ValidateRoot.location(),
             ));
         }
         if !is_identifier(&self.owner_id) {
             return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_owner_id",
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ValidateOwnerId.location(),
             ));
         }
         #[cfg(test)]
         if self.segment_max_bytes < 128 {
-            return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
+            return Err(GlobalLedgerError::fatal_untyped(
+                LedgerCode::InvalidLedgerConfig.as_str(),
                 "validate_segment_size",
             ));
         }
         if self.ingress_capacity == 0 {
             return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_ingress_capacity",
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ValidateIngressCapacity.location(),
             ));
         }
         if self.subscription_capacity == 0 {
             return Err(GlobalLedgerError::fatal(
-                "invalid_ledger_config",
-                "validate_subscription_capacity",
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ValidateSubscriptionCapacity.location(),
             ));
         }
         Ok(())
@@ -788,8 +861,8 @@ impl SubscriptionOptions {
     pub fn new(replay_page_events: usize) -> GlobalLedgerResult<Self> {
         if !(1..=MAX_REPLAY_PAGE_EVENTS).contains(&replay_page_events) {
             return Err(GlobalLedgerError::fatal(
-                "invalid_replay_page_size",
-                "configure_subscription",
+                LedgerCode::InvalidReplayPageSize.code(),
+                LedgerLocation::ConfigureSubscription.location(),
             ));
         }
         Ok(Self { replay_page_events })
@@ -823,8 +896,8 @@ impl Sha256SecretFingerprinter {
         let salt = salt.as_ref();
         if salt.is_empty() {
             return Err(GlobalLedgerError::fatal(
-                "invalid_redactor_config",
-                "configure_redactor",
+                LedgerCode::InvalidRedactorConfig.code(),
+                LedgerLocation::ConfigureRedactor.location(),
             ));
         }
         Ok(Self {
@@ -1087,16 +1160,16 @@ impl CommitStatistics {
     fn new(through_sequence: u64) -> GlobalLedgerResult<Self> {
         let issuer = IdentifierIssuer::new().map_err(|_| {
             GlobalLedgerError::fatal(
-                "ledger_statistics_identity_failed",
-                "start_commit_statistics",
+                LedgerCode::LedgerStatisticsIdentityFailed.code(),
+                LedgerLocation::StartCommitStatistics.location(),
             )
         })?;
         let writer_id = *issuer
             .mint_correlation_id()
             .map_err(|_| {
                 GlobalLedgerError::fatal(
-                    "ledger_statistics_identity_failed",
-                    "start_commit_statistics",
+                    LedgerCode::LedgerStatisticsIdentityFailed.code(),
+                    LedgerLocation::StartCommitStatistics.location(),
                 )
             })?
             .transport();
@@ -1150,7 +1223,10 @@ impl CommitStatistics {
     /// The statistics lock is acquired only after file I/O has completed.
     fn record_success(&self, sequence: u64, elapsed_ns: Option<u64>) -> GlobalLedgerResult<()> {
         let mut totals = self.totals.lock().map_err(|_| {
-            GlobalLedgerError::fatal("ledger_statistics_poisoned", "record_commit_statistics")
+            GlobalLedgerError::fatal(
+                LedgerCode::LedgerStatisticsPoisoned.code(),
+                LedgerLocation::RecordCommitStatistics.location(),
+            )
         })?;
         *totals = totals.and_then(|previous| {
             let elapsed = elapsed_ns?;
@@ -1177,8 +1253,8 @@ impl CommitStatistics {
             }
             Err(TryLockError::Poisoned(_)) => {
                 return Err(GlobalLedgerError::fatal(
-                    "ledger_statistics_poisoned",
-                    "sample_commit_statistics",
+                    LedgerCode::LedgerStatisticsPoisoned.code(),
+                    LedgerLocation::SampleCommitStatistics.location(),
                 ));
             }
         };
@@ -1233,12 +1309,15 @@ impl LedgerSubscription {
             return match result {
                 Ok(event) => self.deliver(event),
                 Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
-                    "subscription_timeout",
-                    "receive_subscription",
+                    LedgerCode::SubscriptionTimeout.code(),
+                    LedgerLocation::ReceiveSubscription.location(),
                 )),
-                Err(mpsc::RecvTimeoutError::Disconnected) => Err(self.latch_after_terminal_check(
-                    GlobalLedgerError::fatal("writer_unavailable", "receive_subscription"),
-                )),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(self.latch_after_terminal_check(GlobalLedgerError::fatal(
+                        LedgerCode::WriterUnavailable.code(),
+                        LedgerLocation::ReceiveSubscription.location(),
+                    )))
+                }
             };
         }
     }
@@ -1265,11 +1344,11 @@ impl LedgerSubscription {
                 page_events: self.replay_page_events,
                 response,
             },
-            "replay_subscription",
+            LedgerLocation::ReplaySubscription.location(),
         ) {
             return Err(self.latch_after_terminal_check(error));
         }
-        let page = match receive_response(receiver, "replay_subscription") {
+        let page = match receive_response(receiver, LedgerLocation::ReplaySubscription.location()) {
             Ok(Ok(page)) => page,
             Ok(Err(error)) | Err(error) => {
                 return Err(self.latch_after_terminal_check(error));
@@ -1278,14 +1357,14 @@ impl LedgerSubscription {
         self.check_terminal()?;
         if page.is_empty() || page.len() > self.replay_page_events {
             return Err(self.latch_terminal(GlobalLedgerError::fatal(
-                "subscription_replay_invalid",
-                "validate_replay_page",
+                LedgerCode::SubscriptionReplayInvalid.code(),
+                LedgerLocation::ValidateReplayPage.location(),
             )));
         }
         let mut expected_sequence = after_sequence.checked_add(1).ok_or_else(|| {
             self.latch_terminal(GlobalLedgerError::fatal(
-                "subscription_replay_invalid",
-                "validate_replay_page",
+                LedgerCode::SubscriptionReplayInvalid.code(),
+                LedgerLocation::ValidateReplayPage.location(),
             ))
         })?;
         for event in &page {
@@ -1293,8 +1372,8 @@ impl LedgerSubscription {
                 || event.sequence() > self.replay_through_sequence
             {
                 return Err(self.latch_terminal(GlobalLedgerError::fatal(
-                    "subscription_replay_invalid",
-                    "validate_replay_page",
+                    LedgerCode::SubscriptionReplayInvalid.code(),
+                    LedgerLocation::ValidateReplayPage.location(),
                 )));
             }
             expected_sequence = expected_sequence.saturating_add(1);
@@ -1310,14 +1389,14 @@ impl LedgerSubscription {
     fn deliver(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
         let expected_sequence = self.last_delivered_sequence.checked_add(1).ok_or_else(|| {
             self.latch_terminal(GlobalLedgerError::fatal(
-                "subscription_sequence_invalid",
-                "deliver_subscription",
+                LedgerCode::SubscriptionSequenceInvalid.code(),
+                LedgerLocation::DeliverSubscription.location(),
             ))
         })?;
         if event.sequence() != expected_sequence {
             return Err(self.latch_terminal(GlobalLedgerError::fatal(
-                "subscription_sequence_invalid",
-                "deliver_subscription",
+                LedgerCode::SubscriptionSequenceInvalid.code(),
+                LedgerLocation::DeliverSubscription.location(),
             )));
         }
         self.last_delivered_sequence = event.sequence();
@@ -1332,8 +1411,8 @@ impl LedgerSubscription {
             Ok(error) => Err(self.latch_terminal(error)),
             Err(TryRecvError::Empty) => Ok(()),
             Err(TryRecvError::Disconnected) => Err(self.latch_terminal(GlobalLedgerError::fatal(
-                "writer_unavailable",
-                "receive_subscription_terminal",
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ReceiveSubscriptionTerminal.location(),
             ))),
         }
     }
@@ -1399,8 +1478,8 @@ impl GlobalLedger {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
             _ => Err(GlobalLedgerError::fatal(
-                "writer_unavailable",
-                "read_writer_health",
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ReadWriterHealth.location(),
             )),
         }
     }
@@ -1485,12 +1564,19 @@ impl GlobalLedger {
             .name("actingcommand-global-ledger".to_string())
             .spawn(move || {
                 let store = store_receiver.recv().map_err(|_| {
-                    GlobalLedgerError::fatal("writer_start_cancelled", "start_writer")
+                    GlobalLedgerError::fatal(
+                        LedgerCode::WriterStartCancelled.code(),
+                        LedgerLocation::StartWriter.location(),
+                    )
                 })?;
                 writer_loop(store, receiver, subscription_capacity)
             })
             .map_err(|error| {
-                GlobalLedgerError::io("writer_spawn_failed", "spawn_writer", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::WriterSpawnFailed.code(),
+                    LedgerLocation::SpawnWriter.location(),
+                    &error,
+                )
             })?;
 
         let store = match open_store(config) {
@@ -1517,8 +1603,8 @@ impl GlobalLedger {
                 close_result?;
                 join_result?;
                 Err(GlobalLedgerError::fatal(
-                    "writer_unavailable",
-                    "start_writer",
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::StartWriter.location(),
                 ))
             }
         }
@@ -1531,10 +1617,12 @@ impl GlobalLedger {
         work: Box<dyn LedgerTransactionWork>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_transaction"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::AppendTransaction.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::AppendTransaction {
@@ -1542,9 +1630,9 @@ impl GlobalLedger {
                 work,
                 response,
             },
-            "append_transaction",
+            LedgerLocation::AppendTransaction.location(),
         )?;
-        receive_response(receiver, "append_transaction")?
+        receive_response(receiver, LedgerLocation::AppendTransaction.location())?
     }
 
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
@@ -1563,10 +1651,12 @@ impl GlobalLedger {
         let mut observation = observe.then(LedgerAppendObservation::default);
         let result = (|| {
             let (response, receiver) = mpsc::sync_channel(1);
-            let sender = self
-                .sender
-                .as_ref()
-                .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
+            let sender = self.sender.as_ref().ok_or_else(|| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::AppendEvent.location(),
+                )
+            })?;
             let draft = Box::new(draft);
             let queued_at = observe.then(Instant::now);
             observation = queued_at.map(LedgerAppendObservation::sent);
@@ -1578,12 +1668,12 @@ impl GlobalLedger {
             if let Some(value) = &mut observation {
                 value.send.begin(Instant::now());
             }
-            let sent = send_command(sender, command, "append_event");
+            let sent = send_command(sender, command, LedgerLocation::AppendEvent.location());
             if let Some(value) = &mut observation {
                 value.send.finish(Instant::now(), sent.is_ok());
             }
             sent?;
-            receive_response(receiver, "append_event")
+            receive_response(receiver, LedgerLocation::AppendEvent.location())
         })();
         match result {
             Ok((result, Some(value))) => (
@@ -1607,15 +1697,17 @@ impl GlobalLedger {
         &self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<DeferredAppend> {
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_deferred"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::AppendDeferred.location(),
+            )
+        })?;
         let event_id = *draft.event_id();
         let event_type = draft.event_type();
         let (response, receiver) = mpsc::sync_channel(1);
         // Held across the send so a concurrent confirmation cannot miss this reply.
-        let mut deferred = self.deferred_replies("append_deferred")?;
+        let mut deferred = self.deferred_replies(LedgerLocation::AppendDeferred.location())?;
         send_command(
             sender,
             WriterCommand::Append {
@@ -1623,7 +1715,7 @@ impl GlobalLedger {
                 queued_at: None,
                 response,
             },
-            "append_deferred",
+            LedgerLocation::AppendDeferred.location(),
         )?;
         let ticket = deferred.len();
         deferred.push(PendingReply {
@@ -1640,7 +1732,7 @@ impl GlobalLedger {
     /// still missing at the deadline stay pending and are counted. A zero deadline is a
     /// drain-only confirmation.
     pub fn confirm_deferred(&self, deadline: Duration) -> GlobalLedgerResult<DeferredSummary> {
-        let mut deferred = self.deferred_replies("confirm_deferred")?;
+        let mut deferred = self.deferred_replies(LedgerLocation::ConfirmDeferred.location())?;
         let mut summary = DeferredSummary::default();
         let mut waiting = Vec::new();
         for pending in deferred.drain(..) {
@@ -1648,8 +1740,8 @@ impl GlobalLedger {
                 Ok((result, _)) => summary.record(result),
                 Err(TryRecvError::Empty) => waiting.push(pending),
                 Err(TryRecvError::Disconnected) => summary.record(Err(GlobalLedgerError::fatal(
-                    "writer_unavailable",
-                    "confirm_deferred",
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::ConfirmDeferred.location(),
                 ))),
             }
         }
@@ -1659,9 +1751,12 @@ impl GlobalLedger {
             match pending.receiver.recv_timeout(remaining) {
                 Ok((result, _)) => summary.record(result),
                 Err(mpsc::RecvTimeoutError::Timeout) => deferred.push(pending),
-                Err(mpsc::RecvTimeoutError::Disconnected) => summary.record(Err(
-                    GlobalLedgerError::fatal("writer_unavailable", "confirm_deferred"),
-                )),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    summary.record(Err(GlobalLedgerError::fatal(
+                        LedgerCode::WriterUnavailable.code(),
+                        LedgerLocation::ConfirmDeferred.location(),
+                    )))
+                }
             }
         }
         summary.pending = deferred.len();
@@ -1670,15 +1765,15 @@ impl GlobalLedger {
 
     fn deferred_replies(
         &self,
-        operation: &'static str,
+        operation: Location,
     ) -> GlobalLedgerResult<MutexGuard<'_, Vec<PendingReply>>> {
-        self.deferred
-            .lock()
-            .map_err(|_| GlobalLedgerError::fatal("deferred_replies_poisoned", operation))
+        self.deferred.lock().map_err(|_| {
+            GlobalLedgerError::fatal(LedgerCode::DeferredRepliesPoisoned.code(), operation)
+        })
     }
 
     /// A reply still pending when the writer is asked to stop; never a silent drop.
-    fn deferred_unconfirmed(&self, operation: &'static str) -> GlobalLedgerError {
+    fn deferred_unconfirmed(&self, operation: Location) -> GlobalLedgerError {
         let detail = self.deferred.lock().ok().and_then(|deferred| {
             deferred.first().map(|oldest| {
                 format!(
@@ -1690,7 +1785,7 @@ impl GlobalLedger {
             })
         });
         GlobalLedgerError {
-            code: "deferred_append_unconfirmed",
+            code: LedgerCode::DeferredAppendUnconfirmed.as_str(),
             operation,
             detail,
             terminal: true,
@@ -1710,8 +1805,8 @@ impl GlobalLedger {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
             GlobalLedgerError::fatal(
-                "writer_unavailable",
-                "reconcile_scheduled_policy_settlement",
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ReconcileScheduledPolicySettlement.location(),
             )
         })?;
         send_command(
@@ -1720,26 +1815,31 @@ impl GlobalLedger {
                 execution: Box::new(execution),
                 response,
             },
-            "reconcile_scheduled_policy_settlement",
+            LedgerLocation::ReconcileScheduledPolicySettlement.location(),
         )?;
-        receive_response(receiver, "reconcile_scheduled_policy_settlement")?
+        receive_response(
+            receiver,
+            LedgerLocation::ReconcileScheduledPolicySettlement.location(),
+        )?
     }
 
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
-        query
-            .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code().as_str(), "query_events"))?;
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), LedgerLocation::QueryEvents.location())
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "query_events"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEvents.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::Query { query, response },
-            "query_events",
+            LedgerLocation::QueryEvents.location(),
         )?;
-        receive_response(receiver, "query_events")?
+        receive_response(receiver, LedgerLocation::QueryEvents.location())?
     }
 
     pub fn query_page(
@@ -1750,13 +1850,15 @@ impl GlobalLedger {
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         query.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code().as_str(), "query_event_page")
+            GlobalLedgerError::request(error.code(), LedgerLocation::QueryEventPage.location())
         })?;
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "query_event_page"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::QueryEventPage.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::QueryPage {
@@ -1766,9 +1868,9 @@ impl GlobalLedger {
                 page_events,
                 response,
             },
-            "query_event_page",
+            LedgerLocation::QueryEventPage.location(),
         )?;
-        receive_response(receiver, "query_event_page")?
+        receive_response(receiver, LedgerLocation::QueryEventPage.location())?
     }
 
     pub fn project_view_page(
@@ -1778,14 +1880,23 @@ impl GlobalLedger {
         request: RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         query.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code().as_str(), "project_ledger_view_page")
+            GlobalLedgerError::request(
+                error.code(),
+                LedgerLocation::ProjectLedgerViewPage.location(),
+            )
         })?;
         request.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code().as_str(), "project_ledger_view_page")
+            GlobalLedgerError::request(
+                error.code(),
+                LedgerLocation::ProjectLedgerViewPage.location(),
+            )
         })?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
-            GlobalLedgerError::fatal("writer_unavailable", "project_ledger_view_page")
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ProjectLedgerViewPage.location(),
+            )
         })?;
         send_command(
             sender,
@@ -1795,9 +1906,9 @@ impl GlobalLedger {
                 request,
                 response,
             },
-            "project_ledger_view_page",
+            LedgerLocation::ProjectLedgerViewPage.location(),
         )?;
-        receive_response(receiver, "project_ledger_view_page")?
+        receive_response(receiver, LedgerLocation::ProjectLedgerViewPage.location())?
     }
 
     pub fn project_scheduling_outcomes(
@@ -1807,7 +1918,10 @@ impl GlobalLedger {
     ) -> GlobalLedgerResult<SchedulingOutcomeProjection> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
-            GlobalLedgerError::fatal("writer_unavailable", "project_scheduling_outcomes")
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ProjectSchedulingOutcomes.location(),
+            )
         })?;
         send_command(
             sender,
@@ -1816,23 +1930,28 @@ impl GlobalLedger {
                 through_sequence,
                 response,
             },
-            "project_scheduling_outcomes",
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
         )?;
-        receive_response(receiver, "project_scheduling_outcomes")?
+        receive_response(
+            receiver,
+            LedgerLocation::ProjectSchedulingOutcomes.location(),
+        )?
     }
 
     pub fn latest_sequence(&self) -> GlobalLedgerResult<u64> {
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "latest_sequence"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::LatestSequence.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::LatestSequence { response },
-            "latest_sequence",
+            LedgerLocation::LatestSequence.location(),
         )?;
-        receive_response(receiver, "latest_sequence")?
+        receive_response(receiver, LedgerLocation::LatestSequence.location())?
     }
 
     pub fn subscribe(&self, cursor: SubscriptionCursor) -> GlobalLedgerResult<LedgerSubscription> {
@@ -1845,16 +1964,18 @@ impl GlobalLedger {
         options: SubscriptionOptions,
     ) -> GlobalLedgerResult<LedgerSubscription> {
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "subscribe_events"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::SubscribeEvents.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::Subscribe { cursor, response },
-            "subscribe_events",
+            LedgerLocation::SubscribeEvents.location(),
         )?;
-        let registration = receive_response(receiver, "subscribe_events")??;
+        let registration = receive_response(receiver, LedgerLocation::SubscribeEvents.location())??;
         Ok(LedgerSubscription {
             sender: sender.clone(),
             replay: VecDeque::new(),
@@ -1874,14 +1995,16 @@ impl GlobalLedger {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
-        query
-            .validate()
-            .map_err(|error| GlobalLedgerError::request(error.code().as_str(), "project_events"))?;
+        query.validate().map_err(|error| {
+            GlobalLedgerError::request(error.code(), LedgerLocation::ProjectEvents.location())
+        })?;
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "project_events"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ProjectEvents.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::Project {
@@ -1889,9 +2012,9 @@ impl GlobalLedger {
                 profile,
                 response,
             },
-            "project_events",
+            LedgerLocation::ProjectEvents.location(),
         )?;
-        receive_response(receiver, "project_events")?
+        receive_response(receiver, LedgerLocation::ProjectEvents.location())?
     }
 
     pub fn project_page(
@@ -1903,13 +2026,15 @@ impl GlobalLedger {
         page_events: usize,
     ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
         query.validate().map_err(|error| {
-            GlobalLedgerError::request(error.code().as_str(), "project_event_page")
+            GlobalLedgerError::request(error.code(), LedgerLocation::ProjectEventPage.location())
         })?;
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self
-            .sender
-            .as_ref()
-            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "project_event_page"))?;
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ProjectEventPage.location(),
+            )
+        })?;
         send_command(
             sender,
             WriterCommand::ProjectPage {
@@ -1920,9 +2045,9 @@ impl GlobalLedger {
                 page_events,
                 response,
             },
-            "project_event_page",
+            LedgerLocation::ProjectEventPage.location(),
         )?;
-        receive_response(receiver, "project_event_page")?
+        receive_response(receiver, LedgerLocation::ProjectEventPage.location())?
     }
 
     pub fn close(mut self) -> GlobalLedgerResult<()> {
@@ -1934,29 +2059,42 @@ impl GlobalLedger {
             return Ok(());
         };
         let Some(sender) = self.sender.take() else {
-            return writer
-                .join()
-                .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
+            return writer.join().map_err(|_| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterPanicked.code(),
+                    LedgerLocation::JoinWriter.location(),
+                )
+            })?;
         };
         // Deferred appends are confirmed before the writer is asked to stop: a failed reply
         // fails the close with that error and a still-pending reply is fatal, never dropped.
         let deferred_result = self.confirm_deferred(COMMAND_TIMEOUT).and_then(|summary| {
             match summary.failed.into_iter().next() {
                 Some(first) => Err(first),
-                None if summary.pending > 0 => Err(self.deferred_unconfirmed("shutdown_writer")),
+                None if summary.pending > 0 => {
+                    Err(self.deferred_unconfirmed(LedgerLocation::ShutdownWriter.location()))
+                }
                 None => Ok(()),
             }
         });
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = sender
             .send(WriterCommand::Shutdown { response })
-            .map_err(|_| GlobalLedgerError::fatal("writer_unavailable", "shutdown_writer"));
+            .map_err(|_| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::ShutdownWriter.location(),
+                )
+            });
         drop(sender);
-        let response_result =
-            send_result.and_then(|()| receive_response(receiver, "shutdown_writer")?);
-        let join_result = writer
-            .join()
-            .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
+        let response_result = send_result
+            .and_then(|()| receive_response(receiver, LedgerLocation::ShutdownWriter.location())?);
+        let join_result = writer.join().map_err(|_| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterPanicked.code(),
+                LedgerLocation::JoinWriter.location(),
+            )
+        })?;
         deferred_result.and(response_result).and(join_result)
     }
 }
@@ -1971,15 +2109,15 @@ pub fn project_subscription_event(
 
 fn join_cancelled_writer(writer: JoinHandle<GlobalLedgerResult<()>>) -> GlobalLedgerResult<()> {
     match writer.join() {
-        Ok(Err(error)) if error.code() == "writer_start_cancelled" => Ok(()),
+        Ok(Err(error)) if error.code() == LedgerCode::WriterStartCancelled.as_str() => Ok(()),
         Ok(Ok(())) => Err(GlobalLedgerError::fatal(
-            "writer_unavailable",
-            "join_cancelled_writer",
+            LedgerCode::WriterUnavailable.code(),
+            LedgerLocation::JoinCancelledWriter.location(),
         )),
         Ok(Err(error)) => Err(error),
         Err(_) => Err(GlobalLedgerError::fatal(
-            "writer_panicked",
-            "join_cancelled_writer",
+            LedgerCode::WriterPanicked.code(),
+            LedgerLocation::JoinCancelledWriter.location(),
         )),
     }
 }
@@ -2188,8 +2326,8 @@ fn writer_loop<S: LedgerStore>(
                             == actingcommand_contract::ArtifactEvictionDisposition::Failed
                         {
                             Err(GlobalLedgerError::fatal(
-                                "artifact_eviction_failed",
-                                "finish_artifact_eviction",
+                                LedgerCode::ArtifactEvictionFailed.code(),
+                                LedgerLocation::FinishArtifactEviction.location(),
                             ))
                         } else {
                             Ok(event)
@@ -2325,8 +2463,8 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store.query_page(&query, after_sequence, through_sequence, page_events))
                 } else {
                     Err(GlobalLedgerError::request(
-                        "invalid_query_page",
-                        "query_event_page",
+                        LedgerCode::InvalidQueryPage.code(),
+                        LedgerLocation::QueryEventPage.location(),
                     ))
                 };
                 read_events = result.as_ref().map_or(0, Vec::len);
@@ -2360,13 +2498,13 @@ fn writer_loop<S: LedgerStore>(
                 let actual_high_watermark = store.latest_sequence();
                 let result = if through_sequence > actual_high_watermark {
                     Err(GlobalLedgerError::request(
-                        "outcome_projection_position_invalid",
-                        "project_scheduling_outcomes",
+                        LedgerCode::OutcomeProjectionPositionInvalid.code(),
+                        LedgerLocation::ProjectSchedulingOutcomes.location(),
                     ))
                 } else if terminal_sequence > through_sequence {
                     Err(GlobalLedgerError::request(
-                        "outcome_projection_not_ready",
-                        "project_scheduling_outcomes",
+                        SharedCode::OutcomeProjectionNotReady.code(),
+                        LedgerLocation::ProjectSchedulingOutcomes.location(),
                     ))
                 } else {
                     let mut terminals = Vec::new();
@@ -2473,8 +2611,8 @@ fn writer_loop<S: LedgerStore>(
                     Ok(store.replay_page(after_sequence, through_sequence, page_events))
                 } else {
                     Err(GlobalLedgerError::fatal(
-                        "invalid_replay_page_size",
-                        "replay_subscription",
+                        LedgerCode::InvalidReplayPageSize.code(),
+                        LedgerLocation::ReplaySubscription.location(),
                     ))
                 };
                 command_succeeded = result.is_ok();
@@ -2511,8 +2649,8 @@ fn writer_loop<S: LedgerStore>(
                         .collect())
                 } else {
                     Err(GlobalLedgerError::request(
-                        "invalid_query_page",
-                        "project_event_page",
+                        LedgerCode::InvalidQueryPage.code(),
+                        LedgerLocation::ProjectEventPage.location(),
                     ))
                 };
                 command_succeeded = result.is_ok();
@@ -2524,7 +2662,10 @@ fn writer_loop<S: LedgerStore>(
                     Ok(()) => {
                         notify_terminal_failure(
                             &mut subscribers,
-                            GlobalLedgerError::request("subscription_closed", "shutdown_writer"),
+                            GlobalLedgerError::request(
+                                LedgerCode::SubscriptionClosed.code(),
+                                LedgerLocation::ShutdownWriter.location(),
+                            ),
                         );
                         let _ = response.send(Ok(()));
                         return Ok(());
@@ -2566,7 +2707,10 @@ fn writer_loop<S: LedgerStore>(
     match &result {
         Ok(()) => notify_terminal_failure(
             &mut subscribers,
-            GlobalLedgerError::request("subscription_closed", "close_writer"),
+            GlobalLedgerError::request(
+                LedgerCode::SubscriptionClosed.code(),
+                LedgerLocation::CloseWriter.location(),
+            ),
         ),
         Err(error) => notify_terminal_failure(&mut subscribers, error.clone()),
     }
@@ -2585,8 +2729,8 @@ fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &Persist
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
                 let _ = subscriber.terminal.try_send(GlobalLedgerError::fatal(
-                    "subscription_lagged",
-                    "deliver_subscription",
+                    LedgerCode::SubscriptionLagged.code(),
+                    LedgerLocation::DeliverSubscription.location(),
                 ));
                 false
             }
@@ -2602,27 +2746,32 @@ fn notify_terminal_failure(subscribers: &mut Vec<ActiveSubscription>, error: Glo
 fn send_command(
     sender: &SyncSender<WriterCommand>,
     command: WriterCommand,
-    operation: &'static str,
+    operation: Location,
 ) -> GlobalLedgerResult<()> {
     match sender.try_send(command) {
         Ok(()) => Ok(()),
-        Err(TrySendError::Full(_)) => Err(GlobalLedgerError::fatal("ingress_full", operation)),
-        Err(TrySendError::Disconnected(_)) => {
-            Err(GlobalLedgerError::fatal("writer_unavailable", operation))
-        }
+        Err(TrySendError::Full(_)) => Err(GlobalLedgerError::fatal(
+            LedgerCode::IngressFull.code(),
+            operation,
+        )),
+        Err(TrySendError::Disconnected(_)) => Err(GlobalLedgerError::fatal(
+            LedgerCode::WriterUnavailable.code(),
+            operation,
+        )),
     }
 }
 
-fn receive_response<T>(receiver: Receiver<T>, operation: &'static str) -> GlobalLedgerResult<T> {
+fn receive_response<T>(receiver: Receiver<T>, operation: Location) -> GlobalLedgerResult<T> {
     match receiver.recv_timeout(COMMAND_TIMEOUT) {
         Ok(result) => Ok(result),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::fatal(
-            "writer_response_timeout",
+            LedgerCode::WriterResponseTimeout.code(),
             operation,
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err(GlobalLedgerError::fatal("writer_unavailable", operation))
-        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(GlobalLedgerError::fatal(
+            LedgerCode::WriterUnavailable.code(),
+            operation,
+        )),
     }
 }
 

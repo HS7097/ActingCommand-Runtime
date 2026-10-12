@@ -2,6 +2,7 @@
 
 use super::storage::LockedWriterFile;
 use super::*;
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::{LedgerMigrationPhase, LedgerMigrationRecord, LedgerMigrationResult};
 use actingcommand_runtime_database::{
     MaintenanceFile, MaintenanceLimits, RuntimeDatabase, digest, list_material,
@@ -57,8 +58,8 @@ impl FrozenLedgerSource {
         let material = serde_json::to_vec(&(&self.identity, backup_sha256, state_sha256)).map_err(
             |error| {
                 GlobalLedgerError::json(
-                    "migration_identity_invalid",
-                    "encode_migration_identity",
+                    LedgerCode::MigrationIdentityInvalid.code(),
+                    LedgerLocation::EncodeMigrationIdentity.location(),
                     &error,
                 )
             },
@@ -73,17 +74,21 @@ impl FrozenLedgerSource {
             source_head_sha256: self.identity.head_sha256.clone(),
             imported_content_sha256: self.identity.content_sha256.clone(),
             state_sha256: state_sha256.into(),
-            cutover_sequence: self
-                .identity
-                .last_sequence
-                .checked_add(1)
-                .ok_or_else(|| failure("sequence_exhausted", "prepare_migration"))?,
+            cutover_sequence: self.identity.last_sequence.checked_add(1).ok_or_else(|| {
+                failure(
+                    LedgerCode::SequenceExhausted.code(),
+                    LedgerLocation::PrepareMigration.location(),
+                )
+            })?,
             phase: LedgerMigrationPhase::Cutover,
             result: LedgerMigrationResult::Committed,
         };
-        record
-            .validate()
-            .map_err(|error| failure(error.code().as_str(), "validate_migration_record"))?;
+        record.validate().map_err(|error| {
+            failure(
+                error.code(),
+                LedgerLocation::ValidateMigrationRecord.location(),
+            )
+        })?;
         Ok(record)
     }
 }
@@ -118,7 +123,11 @@ impl LedgerMaintenance {
     ) -> GlobalLedgerResult<Self> {
         limits.check(0, 0, deadline)?;
         let root = root.canonicalize().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "resolve_maintenance_root", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::ResolveMaintenanceRoot.location(),
+                &error,
+            )
         })?;
         let compatibility_path = root.join("writer.lock");
         let compatibility = match fs::symlink_metadata(&compatibility_path) {
@@ -130,8 +139,8 @@ impl LedgerMaintenance {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
                 return Err(GlobalLedgerError::io(
-                    "ledger_io",
-                    "inspect_candidate_writer_lock",
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectCandidateWriterLock.location(),
                     &error,
                 ));
             }
@@ -139,7 +148,11 @@ impl LedgerMaintenance {
         let ledger_root = root.join("ledger");
         if allow_new {
             fs::create_dir_all(&ledger_root).map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "create_runtime_ledger_root", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::CreateRuntimeLedgerRoot.location(),
+                    &error,
+                )
             })?;
         }
         let lock = LockedWriterFile::open(&ledger_root.join("writer.lock"), allow_new)?;
@@ -172,8 +185,8 @@ impl LedgerMaintenance {
             || snapshot.repairs().iter().any(|repair| !repair.completed())
         {
             return Err(failure(
-                "migration_source_incomplete",
-                "validate_segment_import_source",
+                LedgerCode::MigrationSourceIncomplete.code(),
+                LedgerLocation::ValidateSegmentImportSource.location(),
             ));
         }
         // The native reader's physical atomic=false remains unchanged. These locks and
@@ -182,8 +195,8 @@ impl LedgerMaintenance {
         let after = self.source_files()?;
         if before != after {
             return Err(failure(
-                "migration_source_changed",
-                "freeze_segment_import_source",
+                LedgerCode::MigrationSourceChanged.code(),
+                LedgerLocation::FreezeSegmentImportSource.location(),
             ));
         }
         let events = snapshot.events().to_vec();
@@ -191,8 +204,8 @@ impl LedgerMaintenance {
         let identity = LedgerSourceIdentity {
             source_sha256: digest(&serde_json::to_vec(&before).map_err(|error| {
                 GlobalLedgerError::json(
-                    "migration_source_invalid",
-                    "encode_source_material",
+                    LedgerCode::MigrationSourceInvalid.code(),
+                    LedgerLocation::EncodeSourceMaterial.location(),
                     &error,
                 )
             })?),
@@ -279,13 +292,16 @@ impl LedgerMaintenance {
         self.validate_database(database)?;
         self.lock.require_closed()?;
         if self.source_files()? != source.identity.files {
-            return Err(failure("migration_source_changed", "import_segment_ledger"));
+            return Err(failure(
+                LedgerCode::MigrationSourceChanged.code(),
+                ContractLocation::ImportSegmentLedger.location(),
+            ));
         }
         let expected = source.migration_record(&record.backup_sha256, &record.state_sha256)?;
         if expected != *record {
             return Err(failure(
-                "migration_binding_mismatch",
-                "import_segment_ledger",
+                LedgerCode::MigrationBindingMismatch.code(),
+                ContractLocation::ImportSegmentLedger.location(),
             ));
         }
         sqlite::import_source(database, source, record, completion, dry_run, self.budget())
@@ -298,8 +314,8 @@ impl LedgerMaintenance {
             || !self.source_files()?.is_empty()
         {
             return Err(failure(
-                "ledger_not_an_empty_root",
-                "initialize_runtime_ledger",
+                LedgerCode::LedgerNotAnEmptyRoot.code(),
+                LedgerLocation::InitializeRuntimeLedger.location(),
             ));
         }
         sqlite::initialize_formal_empty(database)
@@ -354,13 +370,18 @@ impl LedgerMaintenance {
         Some((self.limits.max_bytes, self.limits.max_events, self.deadline))
     }
     fn validate_database(&self, database: &RuntimeDatabase) -> GlobalLedgerResult<()> {
-        if database
-            .root()
-            .canonicalize()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "resolve_database_root", &error))?
-            != self.root
+        if database.root().canonicalize().map_err(|error| {
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::ResolveDatabaseRoot.location(),
+                &error,
+            )
+        })? != self.root
         {
-            return Err(failure("ledger_database_root_mismatch", "maintain_ledger"));
+            return Err(failure(
+                LedgerCode::LedgerDatabaseRootMismatch.code(),
+                LedgerLocation::MaintainLedger.location(),
+            ));
         }
         self.limits.check(0, 0, self.deadline)?;
         Ok(())
@@ -370,7 +391,11 @@ impl LedgerMaintenance {
 /// Write side only: the canonical bytes that append and import store for a fact.
 pub(super) fn canonical_record(event: &PersistedEvent) -> GlobalLedgerResult<Vec<u8>> {
     serde_json::to_vec(&crate::fact::StoredEventRecord::from_event(event)).map_err(|error| {
-        GlobalLedgerError::json("migration_record_invalid", "encode_import_record", &error)
+        GlobalLedgerError::json(
+            LedgerCode::MigrationRecordInvalid.code(),
+            LedgerLocation::EncodeImportRecord.location(),
+            &error,
+        )
     })
 }
 /// The source identity: a `PrefixDigest` over the write-side canonical bytes.
@@ -424,6 +449,6 @@ impl PrefixDigest {
         }
     }
 }
-fn failure(code: &'static str, operation: &'static str) -> GlobalLedgerError {
+fn failure(code: Code, operation: Location) -> GlobalLedgerError {
     GlobalLedgerError::fatal(code, operation)
 }

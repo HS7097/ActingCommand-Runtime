@@ -125,8 +125,8 @@ fn ledger_error(error: GlobalLedgerError) -> RuntimeHostError {
 
 fn database_error(error: RuntimeDatabaseError) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        error.code(),
-        error.operation(),
+        error.code().as_str(),
+        error.operation().as_str(),
         RuntimeErrorCode::LedgerFailure,
     )
     .with_native_detail(format!("{error:?}"))

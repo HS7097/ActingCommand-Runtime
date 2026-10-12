@@ -24,6 +24,7 @@ mod pipeline;
 mod store;
 mod usage;
 
+pub use codes::{StoreCode, StoreLocation};
 pub use error::*;
 #[cfg(feature = "evidence-archive")]
 pub use evidence_archive::*;

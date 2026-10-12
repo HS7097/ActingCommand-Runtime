@@ -25,6 +25,7 @@
 //!   walk began, when it walks again.
 
 use crate::codes::StoreCode;
+use crate::codes::StoreLocation;
 use crate::{ArtifactStoreError, ArtifactStoreResult};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -342,9 +343,9 @@ fn kept_walk_failed(error: Option<&std::io::Error>, entry: Option<&str>) -> Arti
             tokens.push(format!("os_error={code}"));
         }
     }
-    let failed = ArtifactStoreError::fatal(
-        StoreCode::ArtifactKeptWalkFailed.as_str(),
-        "read_projected_artifact",
+    let failed = ArtifactStoreError::new(
+        StoreCode::ArtifactKeptWalkFailed.code(),
+        StoreLocation::ReadProjectedArtifact.location(),
         tokens.join(" "),
     );
     let failed = match error {

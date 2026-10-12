@@ -669,7 +669,7 @@ pub(super) fn subscription_reports_terminal_writer_failure(
     let mut subscription = ledger
         .subscribe(SubscriptionCursor::default())
         .expect("subscribe");
-    let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+    let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
 
     let (count_response, count_receiver) = mpsc::sync_channel(1);
     ledger

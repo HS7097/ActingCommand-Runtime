@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStoreError, ArtifactStoreResult, canonical_sha256};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ArtifactKind, CapturePayload, CapturePersistedEvidence, CapturePinnedEvidence,
     CaptureSummaryRecord, CorrelationId, EventActor, EventPayload, EventSource, EventType,
@@ -47,17 +49,17 @@ impl EvidencePackage {
                 .and_then(|value| value.to_str())
                 != Some(file_name.as_str())
         {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_package_invalid",
-                "create_evidence_package",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidencePackageInvalid.code(),
+                StoreLocation::CreateEvidencePackage.location(),
                 "package file name must be one safe file-name component",
             ));
         }
         let sha256 = sha256.into();
         sha256.validate().map_err(|_| {
-            ArtifactStoreError::fatal(
-                "evidence_package_invalid",
-                "create_evidence_package",
+            ArtifactStoreError::new(
+                StoreCode::EvidencePackageInvalid.code(),
+                StoreLocation::CreateEvidencePackage.location(),
                 "package reference is invalid",
             )
         })?;
@@ -170,9 +172,9 @@ pub fn verify_evidence_archive(
     let expected = normalize_sha256(expected_zip_sha256)?;
     let verification = inspect_evidence_archive(path.as_ref())?;
     if verification.zip_sha256 != expected {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_archive_hash_mismatch",
-            "verify_evidence_archive",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceArchiveHashMismatch.code(),
+            StoreLocation::VerifyEvidenceArchive.location(),
             "evidence ZIP SHA-256 does not match the expected receipt",
         ));
     }
@@ -183,17 +185,17 @@ pub(crate) fn inspect_evidence_archive(
     path: &Path,
 ) -> ArtifactStoreResult<EvidenceArchiveVerification> {
     let bytes = fs::read(path).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_archive_read_failed",
-            "read_evidence_archive",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceArchiveReadFailed.code(),
+            StoreLocation::ReadEvidenceArchive.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
     })?;
     let zip_byte_count = u64::try_from(bytes.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "verify_evidence_archive",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceCountOverflow.code(),
+            StoreLocation::VerifyEvidenceArchive.location(),
             "evidence ZIP byte count exceeds u64",
         )
     })?;
@@ -203,9 +205,9 @@ pub(crate) fn inspect_evidence_archive(
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(zip_read_error)?;
         if entry.is_dir() {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_archive_invalid",
-                "verify_evidence_archive",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceArchiveInvalid.code(),
+                StoreLocation::VerifyEvidenceArchive.location(),
                 "evidence ZIP must not contain directory entries",
             ));
         }
@@ -213,33 +215,33 @@ pub(crate) fn inspect_evidence_archive(
         validate_archive_path(&name)?;
         let mut entry_bytes = Vec::new();
         entry.read_to_end(&mut entry_bytes).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_archive_read_failed",
-                "read_evidence_entry",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceArchiveReadFailed.code(),
+                StoreLocation::ReadEvidenceEntry.location(),
                 error.to_string(),
             )
             .with_raw_os_error(error.raw_os_error())
         })?;
         if archived.insert(name, entry_bytes).is_some() {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_entry_collision",
-                "verify_evidence_archive",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceEntryCollision.code(),
+                StoreLocation::VerifyEvidenceArchive.location(),
                 "evidence ZIP contains a duplicate entry name",
             ));
         }
     }
     let manifest_bytes = archived.remove(EVIDENCE_MANIFEST_PATH).ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "evidence_manifest_missing",
-            "verify_evidence_archive",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceManifestMissing.code(),
+            StoreLocation::VerifyEvidenceArchive.location(),
             "evidence ZIP is missing evidence/manifest.json",
         )
     })?;
     let manifest_sha256 = canonical_sha256(&manifest_bytes);
     let manifest: EvidenceManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_manifest_invalid",
-            "parse_evidence_manifest",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceManifestInvalid.code(),
+            StoreLocation::ParseEvidenceManifest.location(),
             error.to_string(),
         )
     })?;
@@ -260,18 +262,18 @@ pub(crate) fn validate_projected_events(
     task_outcome: TaskOutcome,
 ) -> ArtifactStoreResult<()> {
     if events.is_empty() {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_ledger_missing",
-            "validate_evidence_events",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceLedgerMissing.code(),
+            StoreLocation::ValidateEvidenceEvents.location(),
             "evidence export requires at least one projected event",
         ));
     }
     let mut previous = 0;
     for event in events {
         if event.sequence == 0 || event.sequence <= previous {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_ledger_invalid",
-                "validate_evidence_events",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceLedgerInvalid.code(),
+                StoreLocation::ValidateEvidenceEvents.location(),
                 "projected events must have strictly increasing non-zero sequences",
             ));
         }
@@ -281,9 +283,9 @@ pub(crate) fn validate_projected_events(
                 .run_id()
                 .is_some_and(|event_run_id| event_run_id != &run_id)
         {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_ledger_invalid",
-                "validate_evidence_events",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceLedgerInvalid.code(),
+                StoreLocation::ValidateEvidenceEvents.location(),
                 "projected event links do not match the export identity",
             ));
         }
@@ -294,9 +296,9 @@ pub(crate) fn validate_projected_events(
         || terminal.event_type != terminal_event_type(task_outcome)
         || !events.iter().any(|event| event == terminal)
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_terminal_invalid",
-            "validate_evidence_events",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceTerminalInvalid.code(),
+            StoreLocation::ValidateEvidenceEvents.location(),
             "terminal receipt is missing, mismatched, or inconsistent with task outcome",
         ));
     }
@@ -313,40 +315,40 @@ pub(crate) fn terminal_event_type(outcome: TaskOutcome) -> EventType {
 
 fn parse_events_jsonl(bytes: &[u8]) -> ArtifactStoreResult<Vec<ProjectedEvent>> {
     if bytes.is_empty() || !bytes.ends_with(b"\n") {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_ledger_invalid",
-            "parse_evidence_events",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceLedgerInvalid.code(),
+            StoreLocation::ParseEvidenceEvents.location(),
             "events.jsonl must be non-empty and newline terminated",
         ));
     }
     let text = std::str::from_utf8(bytes).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_ledger_invalid",
-            "parse_evidence_events",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceLedgerInvalid.code(),
+            StoreLocation::ParseEvidenceEvents.location(),
             error.to_string(),
         )
     })?;
     text.strip_suffix('\n')
         .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_ledger_invalid",
-                "parse_evidence_events",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceLedgerInvalid.code(),
+                StoreLocation::ParseEvidenceEvents.location(),
                 "events.jsonl newline terminator is invalid",
             )
         })?
         .split('\n')
         .map(|line| {
             if line.is_empty() {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_ledger_invalid",
-                    "parse_evidence_events",
+                return Err(ArtifactStoreError::new(
+                    StoreCode::EvidenceLedgerInvalid.code(),
+                    StoreLocation::ParseEvidenceEvents.location(),
                     "events.jsonl contains an empty record",
                 ));
             }
             serde_json::from_str(line).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "evidence_ledger_invalid",
-                    "parse_evidence_events",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceLedgerInvalid.code(),
+                    StoreLocation::ParseEvidenceEvents.location(),
                     error.to_string(),
                 )
             })
@@ -371,9 +373,9 @@ fn validate_manifest(
         || manifest.terminal_receipt.links.correlation_id() != Some(&manifest.correlation_id)
         || !Path::new(&manifest.normalized_output_path).is_absolute()
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_manifest_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceManifestInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "evidence manifest identity, ledger bounds, terminal receipt, or output path is invalid",
         ));
     }
@@ -383,16 +385,16 @@ fn validate_manifest(
         manifest.package.verification(),
     )?;
     if validated_package != manifest.package {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_package_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidencePackageInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "manifest package metadata is not canonical",
         ));
     }
     let event_bytes = archived.get("evidence/events.jsonl").ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "evidence_ledger_missing",
-            "verify_evidence_manifest",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceLedgerMissing.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "evidence/events.jsonl is missing",
         )
     })?;
@@ -407,9 +409,9 @@ fn validate_manifest(
     if events.first().map(|event| event.sequence) != Some(manifest.ledger_sequence_start)
         || events.last().map(|event| event.sequence) != Some(manifest.ledger_sequence_end)
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_ledger_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceLedgerInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "manifest ledger bounds do not match archived projected events",
         ));
     }
@@ -419,23 +421,23 @@ fn validate_manifest(
         .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
         .collect::<Vec<_>>();
     let [summary_event] = summary_events.as_slice() else {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "archive must contain exactly one authoritative capture summary",
         ));
     };
     let ProjectionPayload::Full(payload) = &summary_event.payload else {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "archived capture summary is not a forensic full projection",
         ));
     };
     let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref() else {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_invalid",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryInvalid.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "archived capture summary payload is incompatible",
         ));
     };
@@ -447,23 +449,23 @@ fn validate_manifest(
         || summary_event.origin.actor() != EventActor::Runtime
         || payload.summary() != &summary
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_conflict",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryConflict.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "manifest capture summary does not match the archived ledger fact",
         ));
     }
     let artifact_count = u64::try_from(manifest.screenshots.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "verify_evidence_manifest",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceCountOverflow.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "evidence screenshot count exceeds u64",
         )
     })?;
     let pinned_count = u64::try_from(manifest.pinned.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "verify_evidence_manifest",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceCountOverflow.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "evidence pinned count exceeds u64",
         )
     })?;
@@ -472,9 +474,9 @@ fn validate_manifest(
         || manifest.pinned_count != pinned_count
         || manifest.pinned_count != manifest.pinned_reason_counts.values().copied().sum::<u64>()
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_count_mismatch",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceCountMismatch.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "manifest artifact, screenshot, or pinned counts are inconsistent",
         ));
     }
@@ -483,53 +485,53 @@ fn validate_manifest(
     for entry in &manifest.entries {
         validate_archive_path(&entry.path)?;
         if !expected_paths.insert(entry.path.clone()) || !is_sha256(&entry.sha256) {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_manifest_invalid",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceManifestInvalid.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "manifest entry paths or hashes are invalid",
             ));
         }
         let bytes = archived.get(&entry.path).ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_entry_missing",
-                "verify_evidence_manifest",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceEntryMissing.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "manifest-declared archive entry is missing",
             )
         })?;
         let byte_count = u64::try_from(bytes.len()).map_err(|_| {
-            ArtifactStoreError::fatal(
-                "evidence_count_overflow",
-                "verify_evidence_manifest",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceCountOverflow.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "archive entry byte count exceeds u64",
             )
         })?;
         if byte_count != entry.byte_count || canonical_sha256(bytes) != entry.sha256 {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_entry_hash_mismatch",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceEntryHashMismatch.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "archive entry byte count or SHA-256 does not match the manifest",
             ));
         }
     }
     if expected_paths != archived.keys().cloned().collect() {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_entry_set_mismatch",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceEntrySetMismatch.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "evidence ZIP contains undeclared or missing entries",
         ));
     }
     let content_hash =
         canonical_sha256(&serde_json::to_vec(&manifest.entries).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_manifest_invalid",
-                "verify_evidence_content_hash",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceManifestInvalid.code(),
+                StoreLocation::VerifyEvidenceContentHash.location(),
                 error.to_string(),
             )
         })?);
     if content_hash != manifest.archive_content_sha256 {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_content_hash_mismatch",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceContentHashMismatch.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "canonical archive content hash does not match the manifest",
         ));
     }
@@ -541,9 +543,9 @@ fn validate_manifest(
             || !screenshot_artifacts.insert(screenshot.artifact.artifact_id)
             || !screenshot_paths.insert(screenshot.archive_path.as_str())
         {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_screenshot_invalid",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceScreenshotInvalid.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "screenshot frame, artifact, and archive-path identities must be unique",
             ));
         }
@@ -552,9 +554,9 @@ fn validate_manifest(
             .iter()
             .find(|entry| entry.path == screenshot.archive_path)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "evidence_screenshot_missing",
-                    "verify_evidence_manifest",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceScreenshotMissing.code(),
+                    StoreLocation::VerifyEvidenceManifest.location(),
                     "screenshot is absent from the entry digest list",
                 )
             })?;
@@ -566,9 +568,9 @@ fn validate_manifest(
             || screenshot.artifact.run_id != Some(manifest.run_id)
             || screenshot.artifact.correlation_id != Some(manifest.correlation_id)
         {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_screenshot_invalid",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceScreenshotInvalid.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "screenshot artifact metadata does not match archived bytes",
             ));
         }
@@ -578,9 +580,9 @@ fn validate_manifest(
             .find(|pin| pin.frame_index == Some(screenshot.frame_index) && pin.artifact.is_some())
             .map(|pin| pin.reason);
         if screenshot.pinned_reason != expected_legacy_reason {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_pinned_mismatch",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidencePinnedMismatch.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "legacy screenshot pin projection differs from the authoritative pin mapping",
             ));
         }
@@ -590,9 +592,9 @@ fn validate_manifest(
     let mut expected_missing = Vec::new();
     for pin in &manifest.pinned {
         if !pin_pairs.insert((pin.frame_index, pin.reason)) {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_pinned_mismatch",
-                "verify_evidence_manifest",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidencePinnedMismatch.code(),
+                StoreLocation::VerifyEvidenceManifest.location(),
                 "authoritative pinned frame/reason pairs must be unique",
             ));
         }
@@ -604,16 +606,16 @@ fn validate_manifest(
                     .iter()
                     .find(|screenshot| screenshot.frame_index == *frame_index)
                     .ok_or_else(|| {
-                        ArtifactStoreError::fatal(
-                            "evidence_pinned_mismatch",
-                            "verify_evidence_manifest",
+                        ArtifactStoreError::new(
+                            StoreCode::EvidencePinnedMismatch.code(),
+                            StoreLocation::VerifyEvidenceManifest.location(),
                             "pinned artifact is absent from screenshots",
                         )
                     })?;
                 if &screenshot.artifact != artifact {
-                    return Err(ArtifactStoreError::fatal(
-                        "evidence_pinned_mismatch",
-                        "verify_evidence_manifest",
+                    return Err(ArtifactStoreError::new(
+                        StoreCode::EvidencePinnedMismatch.code(),
+                        StoreLocation::VerifyEvidenceManifest.location(),
                         "pinned artifact does not match the persisted screenshot",
                     ));
                 }
@@ -623,9 +625,9 @@ fn validate_manifest(
                 reason: pin.reason,
             }),
             (None, Some(_)) => {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_pinned_mismatch",
-                    "verify_evidence_manifest",
+                return Err(ArtifactStoreError::new(
+                    StoreCode::EvidencePinnedMismatch.code(),
+                    StoreLocation::VerifyEvidenceManifest.location(),
                     "pinned artifact is missing its frame index",
                 ));
             }
@@ -635,9 +637,9 @@ fn validate_manifest(
     if actual_pinned_reasons != manifest.pinned_reason_counts
         || expected_missing != manifest.missing_pinned
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_pinned_mismatch",
-            "verify_evidence_manifest",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidencePinnedMismatch.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             "pinned reason or missing-frame accounting is inconsistent",
         ));
     }
@@ -652,17 +654,17 @@ fn manifest_capture_summary(
         .iter()
         .map(|screenshot| {
             let frame_index = u64::try_from(screenshot.frame_index).map_err(|_| {
-                ArtifactStoreError::fatal(
-                    "evidence_count_overflow",
-                    "verify_evidence_manifest",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceCountOverflow.code(),
+                    StoreLocation::VerifyEvidenceManifest.location(),
                     "screenshot frame index exceeds u64",
                 )
             })?;
             CapturePersistedEvidence::new(frame_index, screenshot.artifact.clone()).map_err(
                 |error| {
-                    ArtifactStoreError::fatal(
-                        error.code().as_str(),
-                        "verify_evidence_manifest",
+                    ArtifactStoreError::new(
+                        error.code(),
+                        StoreLocation::VerifyEvidenceManifest.location(),
                         error.to_string(),
                     )
                 },
@@ -678,17 +680,17 @@ fn manifest_capture_summary(
                 .map(u64::try_from)
                 .transpose()
                 .map_err(|_| {
-                    ArtifactStoreError::fatal(
-                        "evidence_count_overflow",
-                        "verify_evidence_manifest",
+                    ArtifactStoreError::new(
+                        StoreCode::EvidenceCountOverflow.code(),
+                        StoreLocation::VerifyEvidenceManifest.location(),
                         "pinned frame index exceeds u64",
                     )
                 })?;
             CapturePinnedEvidence::new(frame_index, pin.reason, pin.artifact.clone()).map_err(
                 |error| {
-                    ArtifactStoreError::fatal(
-                        error.code().as_str(),
-                        "verify_evidence_manifest",
+                    ArtifactStoreError::new(
+                        error.code(),
+                        StoreLocation::VerifyEvidenceManifest.location(),
                         error.to_string(),
                     )
                 },
@@ -705,9 +707,9 @@ fn manifest_capture_summary(
         pinned,
     )
     .map_err(|error| {
-        ArtifactStoreError::fatal(
-            error.code().as_str(),
-            "verify_evidence_manifest",
+        ArtifactStoreError::new(
+            error.code(),
+            StoreLocation::VerifyEvidenceManifest.location(),
             error.to_string(),
         )
     })
@@ -724,9 +726,9 @@ pub(crate) fn validate_archive_path(path: &str) -> ArtifactStoreResult<()> {
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_entry_path_invalid",
-            "validate_evidence_entry_path",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceEntryPathInvalid.code(),
+            StoreLocation::ValidateEvidenceEntryPath.location(),
             "evidence archive entry path is unsafe",
         ));
     }
@@ -742,9 +744,9 @@ fn normalize_sha256(value: &str) -> ArtifactStoreResult<String> {
     if is_sha256(&normalized) {
         Ok(normalized)
     } else {
-        Err(ArtifactStoreError::fatal(
-            "sha256_invalid",
-            "normalize_sha256",
+        Err(ArtifactStoreError::new(
+            StoreCode::Sha256Invalid.code(),
+            StoreLocation::NormalizeSha256.location(),
             "SHA-256 must contain exactly 64 lowercase hexadecimal digits",
         ))
     }
@@ -764,9 +766,9 @@ fn zip_read_error(error: zip::result::ZipError) -> ArtifactStoreError {
         zip::result::ZipError::Io(error) => error.raw_os_error(),
         _ => None,
     };
-    ArtifactStoreError::fatal(
-        "evidence_archive_invalid",
-        "read_evidence_archive",
+    ArtifactStoreError::new(
+        StoreCode::EvidenceArchiveInvalid.code(),
+        StoreLocation::ReadEvidenceArchive.location(),
         error.to_string(),
     )
     .with_raw_os_error(raw_os_error)

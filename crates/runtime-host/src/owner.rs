@@ -535,7 +535,11 @@ impl Drop for OwnerGuard {
 }
 
 fn owner_journal_error(error: OwnerJournalError) -> RuntimeHostError {
-    RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(
+        error.code.as_str(),
+        error.operation.as_str(),
+        RuntimeErrorCode::RuntimeFatal,
+    )
 }
 
 fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal> {

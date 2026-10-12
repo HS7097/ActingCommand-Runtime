@@ -1088,8 +1088,8 @@ impl RuntimeHost {
             )
             .map_err(|error| {
                 RuntimeHostError::fatal(
-                    error.code(),
-                    error.operation(),
+                    error.code().as_str(),
+                    error.operation().as_str(),
                     RuntimeErrorCode::LedgerFailure,
                 )
                 .with_native_detail(format!("{error:?}"))
@@ -1111,8 +1111,8 @@ impl RuntimeHost {
             limits,
             limits.deadline().map_err(|error| {
                 RuntimeHostError::fatal(
-                    error.code(),
-                    error.operation(),
+                    error.code().as_str(),
+                    error.operation().as_str(),
                     RuntimeErrorCode::LedgerFailure,
                 )
                 .with_native_detail(format!("{error:?}"))

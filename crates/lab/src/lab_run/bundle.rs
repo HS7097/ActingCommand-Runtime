@@ -230,7 +230,7 @@ impl LabControl {
         }
         self.frame_store
             .validate()
-            .map_err(CliError::package_invalid)?;
+            .map_err(|refusal| CliError::package_invalid(refusal.to_string()))?;
         Ok(())
     }
 }

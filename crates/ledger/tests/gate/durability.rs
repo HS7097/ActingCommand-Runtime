@@ -12,7 +12,7 @@ use actingcommand_ledger::critical::EventAppender;
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerConfig, GlobalLedgerError, Sha256SecretFingerprinter,
 };
-use actingcommand_runtime_database::RuntimeDatabase;
+use actingcommand_runtime_database::{DatabaseLocation, RuntimeDatabase};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -84,7 +84,7 @@ fn gate_observational_append_restores_full_sync() {
     assert!(appended.is_ok(), "{appended:?}");
 
     let connection = database
-        .connection("gate_l1_sync_readback")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .unwrap_or_else(|error| panic!("the connection is refused after the append: {error:?}"));
     let synchronous = connection
         .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))

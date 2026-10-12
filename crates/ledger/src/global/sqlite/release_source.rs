@@ -10,7 +10,7 @@ use std::fmt;
 pub const RELEASE_BASELINE_STATE_KEY: &str = "release.legacy.baseline";
 const SOURCE_SCHEMA: &str = "actingcommand.release-ledger-source.v1";
 const BASELINE_PAGE_EVENTS: usize = 256;
-const OPERATION: &str = "verify_release_ledger_source";
+const OPERATION: Location = LedgerLocation::VerifyReleaseLedgerSource.location();
 
 /// A persistable locator, not a fact or material capability. Every use requires verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,14 +114,18 @@ pub fn verify_release_source_reference(
     require_owner(database, transaction)?;
     if reference.schema_version != SOURCE_SCHEMA || reference.sequence == 0 {
         return Err(failure(
-            "release_ledger_source_reference_invalid",
+            LedgerCode::ReleaseLedgerSourceReferenceInvalid.code(),
             OPERATION,
         ));
     }
-    let head = read_source_head(database, transaction.sql())?
-        .ok_or_else(|| failure("release_ledger_source_storage_missing", OPERATION))?;
+    let head = read_source_head(database, transaction.sql())?.ok_or_else(|| {
+        failure(
+            LedgerCode::ReleaseLedgerSourceStorageMissing.code(),
+            OPERATION,
+        )
+    })?;
     if reference.sequence > head.sequence {
-        return Err(failure("ledger_record_missing", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMissing.code(), OPERATION));
     }
     let previous = if reference.sequence == 1 {
         None
@@ -141,7 +145,7 @@ pub fn verify_release_source_reference(
         || event.sequence() == head.sequence && Some(&projected.hash) != head.hash.as_ref()
     {
         return Err(failure(
-            "release_ledger_source_reference_mismatch",
+            LedgerCode::ReleaseLedgerSourceReferenceMismatch.code(),
             OPERATION,
         ));
     }
@@ -185,12 +189,12 @@ pub fn read_release_baseline_source(
         for row in rows {
             let (event, projected) = verify_source_row(database, &row, previous.as_deref())?;
             if event.sequence() != increment_sequence(after)? || event.sequence() > head.sequence {
-                return Err(failure("sequence_discontinuity", OPERATION));
+                return Err(failure(LedgerCode::SequenceDiscontinuity.code(), OPERATION));
             }
             verify_source_indexes(connection, &projected)?;
             artifact_count = artifact_count
                 .checked_add(projected.artifacts.len() as u64)
-                .ok_or_else(|| failure("ledger_snapshot_overflow", OPERATION))?;
+                .ok_or_else(|| failure(LedgerCode::LedgerSnapshotOverflow.code(), OPERATION))?;
             after = event.sequence();
             previous = Some(projected.hash.clone());
             if is_release_baseline(event.payload()) {
@@ -204,7 +208,8 @@ pub fn read_release_baseline_source(
                     event,
                 };
                 if let Some(first) = found {
-                    let mut error = failure("release_baseline_source_conflict", OPERATION);
+                    let mut error =
+                        failure(LedgerCode::ReleaseBaselineSourceConflict.code(), OPERATION);
                     error.detail = Some(format!(
                         "first={:?}; conflicting={:?}",
                         first.reference, current.reference,
@@ -216,7 +221,7 @@ pub fn read_release_baseline_source(
         }
     }
     if after != head.sequence || previous != head.hash {
-        return Err(failure("ledger_meta_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
     }
     let (events, links, artifacts): (i64, i64, i64) = connection
         .query_row(
@@ -229,7 +234,7 @@ pub fn read_release_baseline_source(
         || u64::try_from(links).ok() != Some(after)
         || u64::try_from(artifacts).ok() != Some(artifact_count)
     {
-        return Err(failure("ledger_index_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerIndexMismatch.code(), OPERATION));
     }
     Ok(found)
 }
@@ -244,7 +249,10 @@ fn require_owner(
     transaction: &RuntimeTransaction<'_, '_>,
 ) -> GlobalLedgerResult<()> {
     if !transaction.belongs_to(database) {
-        return Err(failure("ledger_transaction_owner_mismatch", OPERATION));
+        return Err(failure(
+            LedgerCode::LedgerTransactionOwnerMismatch.code(),
+            OPERATION,
+        ));
     }
     Ok(())
 }
@@ -263,12 +271,20 @@ fn read_source_head(
                 )
                 .map_err(|error| sql_error(error, OPERATION))?;
             if declared != 0 {
-                return Err(failure("ledger_schema_incomplete", OPERATION));
+                return Err(failure(
+                    LedgerCode::LedgerSchemaIncomplete.code(),
+                    OPERATION,
+                ));
             }
             return Ok(None);
         }
         (0 | FORMAL_FORMAT_VERSION, 4) => {}
-        _ => return Err(failure("ledger_schema_incomplete", OPERATION)),
+        _ => {
+            return Err(failure(
+                LedgerCode::LedgerSchemaIncomplete.code(),
+                OPERATION,
+            ));
+        }
     }
     views::installed(connection)?;
     let meta = read_meta(connection)?;
@@ -279,23 +295,26 @@ fn read_source_head(
         0
     };
     if format_version(connection)? != expected_format {
-        return Err(failure("ledger_format_marker_mismatch", OPERATION));
+        return Err(failure(
+            LedgerCode::LedgerFormatMarkerMismatch.code(),
+            OPERATION,
+        ));
     }
     let (Some(SqlValue::Integer(next)), Some(SqlValue::Integer(head)), Some(hash)) =
         (meta.get(2), meta.get(3), meta.get(4))
     else {
-        return Err(failure("ledger_meta_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
     };
     let head = decode(*head);
     let hash = match hash {
         SqlValue::Null if head == 0 => None,
         SqlValue::Text(hash) if head != 0 => Some(hash.as_str()),
-        _ => return Err(failure("ledger_meta_mismatch", OPERATION)),
+        _ => return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION)),
     };
     if decode(*next) != increment_sequence(head)?
         || meta != meta_row_with_marker(database, decode(*next), head, hash, &marker)
     {
-        return Err(failure("ledger_meta_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerMetaMismatch.code(), OPERATION));
     }
     Ok(Some(SourceHead {
         sequence: head,
@@ -315,7 +334,7 @@ fn read_source_row(connection: &Connection, sequence: u64) -> GlobalLedgerResult
         true,
     )?;
     if rows.len() != 1 {
-        return Err(failure("ledger_record_missing", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMissing.code(), OPERATION));
     }
     Ok(rows.remove(0))
 }
@@ -324,7 +343,7 @@ fn previous_hash(row: &SqlRow) -> GlobalLedgerResult<Option<&str>> {
     match row.get(12) {
         Some(SqlValue::Null) => Ok(None),
         Some(SqlValue::Text(hash)) => Ok(Some(hash)),
-        _ => Err(failure("ledger_record_mismatch", OPERATION)),
+        _ => Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION)),
     }
 }
 
@@ -334,19 +353,21 @@ fn verify_source_row(
     previous: Option<&str>,
 ) -> GlobalLedgerResult<(LedgerEventMetadata, ProjectedRecord)> {
     let Some(SqlValue::Blob(bytes)) = row.get(10) else {
-        return Err(failure("corrupt_ledger_record", OPERATION));
+        return Err(failure(LedgerCode::CorruptLedgerRecord.code(), OPERATION));
     };
-    let unique: UniqueJsonValue = serde_json::from_slice(bytes)
-        .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?;
-    let stored: StoredEventRecord = serde_json::from_value(unique.0)
-        .map_err(|error| GlobalLedgerError::json("corrupt_ledger_record", OPERATION, &error))?;
+    let unique: UniqueJsonValue = serde_json::from_slice(bytes).map_err(|error| {
+        GlobalLedgerError::json(LedgerCode::CorruptLedgerRecord.code(), OPERATION, &error)
+    })?;
+    let stored: StoredEventRecord = serde_json::from_value(unique.0).map_err(|error| {
+        GlobalLedgerError::json(LedgerCode::CorruptLedgerRecord.code(), OPERATION, &error)
+    })?;
     let event = stored
         .clone()
         .into_metadata()
         .map_err(|error| failure(error.code(), OPERATION))?;
     let projected = project_stored_bytes(database, &stored, bytes.clone(), previous)?;
     if *row != projected.event {
-        return Err(failure("ledger_record_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
     }
     Ok((event, projected))
 }
@@ -356,7 +377,7 @@ fn verify_source_indexes(
     projected: &ProjectedRecord,
 ) -> GlobalLedgerResult<()> {
     let Some(SqlValue::Integer(sequence)) = projected.event.first() else {
-        return Err(failure("ledger_record_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerRecordMismatch.code(), OPERATION));
     };
     let links = read_rows(
         connection,
@@ -376,7 +397,7 @@ fn verify_source_indexes(
         false,
     )?;
     if links != vec![projected.links.clone()] || artifacts != projected.artifacts {
-        return Err(failure("ledger_index_mismatch", OPERATION));
+        return Err(failure(LedgerCode::LedgerIndexMismatch.code(), OPERATION));
     }
     Ok(())
 }
@@ -398,6 +419,9 @@ fn require_release_payload(payload: &EventPayload) -> GlobalLedgerResult<()> {
     {
         Ok(())
     } else {
-        Err(failure("release_ledger_source_type_unsupported", OPERATION))
+        Err(failure(
+            LedgerCode::ReleaseLedgerSourceTypeUnsupported.code(),
+            OPERATION,
+        ))
     }
 }
