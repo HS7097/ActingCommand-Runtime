@@ -3,6 +3,7 @@
   "codes": {
     "ledger_selection_query_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,

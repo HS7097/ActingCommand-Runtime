@@ -1496,6 +1496,10 @@
     "pacing_stage": {
       "type": "vocab:pacing_stage",
       "description": "The performance pacing stage of an instance."
+    },
+    "ladder_class": {
+      "type": "vocab:ladder_class",
+      "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
     }
   },
   "vocabularies": {
@@ -4219,6 +4223,32 @@
         },
         "s4": {
           "description": "Severe: every dispatch pauses and running policy runs are held."
+        }
+      }
+    },
+    "ladder_class": {
+      "description": "How the recovery ladder's trigger matching reads a code (Workflow #387). Every code entry names exactly one class: the first of these tokens, in this order, whose rule the code meets.",
+      "tokens": {
+        "planned_stop": {
+          "description": "1. Planned stop: a person, a rule or the pack's design stopped the run on purpose (a cancel, a pause, a performance yield or hold, a blackout window, a locked feature)."
+        },
+        "budget_or_permission": {
+          "description": "2. Budget or permission: the work lacked time, samples, attempts, quota or permission (a sampling deadline, an insufficient sample budget, a run timeout, an exhausted policy budget)."
+        },
+        "declaration_error": {
+          "description": "3. Declaration error: a pack, a binding or a configuration the work uses is itself wrong or incompatible; decided without looking at the screen, the same on every run."
+        },
+        "pack_logic_mismatch": {
+          "description": "4. Pack logic mismatch: the screen or the flow differs from what the pack declares; known only by looking at the screen (an unknown page, a failed or conflicting recognition, an unconfirmed step, an error page, an unmatched entry)."
+        },
+        "environment_fault": {
+          "description": "5. Environment fault: a device, a backend, ADB, the emulator or the vision provider could not open or failed, and the work ended because of it."
+        },
+        "stability_warning": {
+          "description": "6. Stability warning: a device, connection, capture or input anomaly on one instance that the Runtime retried or survived; its category is warning or error. Repeated, it shows the environment getting worse."
+        },
+        "none": {
+          "description": "7. Not applicable: a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error."
         }
       }
     }

@@ -3,6 +3,7 @@
   "codes": {
     "artifact_kept_walk_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "artifact-store",
       "layer": "store",
       "uncertain": false,

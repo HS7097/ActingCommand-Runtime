@@ -3,6 +3,7 @@
   "codes": {
     "fact_refresh_unbound": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -21,6 +22,7 @@
     },
     "selection_evaluation_aborted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -35,6 +37,7 @@
     },
     "selection_input_unknown": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -52,6 +55,7 @@
     },
     "selection_unknown_clause_ignored": {
       "category": "warning",
+      "ladder_class": "declaration_error",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,

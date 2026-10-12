@@ -20,6 +20,9 @@ pub struct RegistryEntry {
     pub spelling: String,
     /// `None` for a location.
     pub category: Option<String>,
+    /// The code's ladder class (Workflow #387), written after its category as
+    /// `: <category> / <ladder_class>`; `None` for a location.
+    pub ladder_class: Option<String>,
     pub line: usize,
 }
 
@@ -316,15 +319,18 @@ fn parse_entries(content: ParseStream, with_category: bool) -> syn::Result<Entri
         content.parse::<Ident>()?;
         content.parse::<Token![=>]>()?;
         let spelling: LitStr = content.parse()?;
-        let category = if with_category {
+        let (category, ladder_class) = if with_category {
             content.parse::<Token![:]>()?;
-            Some(content.parse::<Ident>()?.to_string())
+            let category = content.parse::<Ident>()?.to_string();
+            content.parse::<Token![/]>()?;
+            (Some(category), Some(content.parse::<Ident>()?.to_string()))
         } else {
-            None
+            (None, None)
         };
         entries.push(RegistryEntry {
             spelling: spelling.value(),
             category,
+            ladder_class,
             line: line_of(spelling.span()),
         });
         if content.is_empty() {

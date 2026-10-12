@@ -363,4 +363,6 @@ outcome_keys! {
     blackout_start_unix_ms: unix_ms,
     pacing_stage: vocab(pacing_stage),
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
+    // Workflow #387 D1a: a code's ladder class, as a value.
+    ladder_class: vocab(ladder_class),
 }
