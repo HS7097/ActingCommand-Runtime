@@ -369,3 +369,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::agent_sessions::agent_dispatcher_paged_recovery_matches_the_whole_ledger_fold",
 ]
 incident = ["#381 A R4a"]
+
+# A crash mid-run: the next start comes up with its instance usable and winds the killed epoch down
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_epoch_close::gate_after_a_crash_mid_run_the_new_process_starts_and_its_instance_is_usable",
+    "actingcommand-runtime-host::lib::tests::gate_epoch_close::gate_after_a_crash_mid_run_the_new_start_winds_the_old_epoch_down",
+]
+incident = ["#394"]
