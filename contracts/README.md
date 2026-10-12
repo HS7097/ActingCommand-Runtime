@@ -208,6 +208,24 @@ postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
 
+Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task
+(`navigable_route`, `in_page_guard`, `recognize_only`) may declare `entry_page` as
+an array of 1–16 distinct pages instead of one page; `any` is never a member and
+each member must resolve to exactly one page of the package. A `linear_steps` task
+keeps one entry page, and `"any"` keeps its meaning (no entry check; never with
+phases). A set is always checked before the run: one frame evaluates only the set's
+pages; exactly one match starts the run, none goes to entry recovery, and more than
+one fails with `contained_task_recognition_conflict` before any input. An entry
+recovery package must end on a page of the set, and the recheck accepts any page
+of it. In a phased task each page of the set starts the one stage that lists an
+operation whose `from` is that page, and the run enters at the stage of the page it
+matched; static reachability is checked from every such start. A single entry page
+still starts the first stage. Admission refuses a set with
+`contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,
+`duplicate`, `any_in_set`, `unresolved`, `phase_start_missing`,
+`phase_start_ambiguous`). The `EntryRecognition` record carries `required_pages`
+and, when one matched, `matched_page`.
+
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.
 Existing StepStarted/StepFinished ledger facts carry optional `phase` evidence
 (`index`, `id`, `completed`); a completed StepFinished is committed before the

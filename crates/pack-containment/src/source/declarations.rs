@@ -2598,9 +2598,9 @@ impl Declaration<'_> {
         for (field, value) in object {
             let pointer = child("", field);
             match field.as_str() {
-                "locale" | "goal" | "entry_page" if !value.is_null() => {
-                    self.string(value, &pointer)?
-                }
+                "locale" | "goal" if !value.is_null() => self.string(value, &pointer)?,
+                // Workflow #373 NAV-3b: one entry page or an entry page set.
+                "entry_page" if !value.is_null() => self.page(value, &pointer)?,
                 "on_exhausted" if !value.is_null() => self.string(value, &pointer)?,
                 "max_task_retries" if !value.is_null() => self.unsigned(value, &pointer)?,
                 "provenance" if !value.is_null() && !value.is_object() => {

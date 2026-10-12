@@ -1152,8 +1152,8 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .iter()
                     .filter(|fact| matches!(fact,
                         TaskSemanticFact::EntryRecognition {
-                            phase: TaskEntryRecognitionPhase::Initial, required_page, matched,
-                        } if required_page == "neutral/home" && *matched == starts_home
+                            phase: TaskEntryRecognitionPhase::Initial, required_pages, matched, ..
+                        } if required_pages == &["neutral/home"] && *matched == starts_home
                     ))
                     .count(),
                 1
