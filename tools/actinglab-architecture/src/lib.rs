@@ -6595,8 +6595,9 @@ pub fn inspect_artifact_byte_writes(
 /// `as_mut`, `as_deref_mut`. Each row is `path::f -> <expression>: <use>`, the use being:
 /// - `let-else Err(<codes>)` / `let-else no Err`, `if-let else Err(<codes>)` /
 ///   `if-let None falls through`, `match None Err(<codes>)` / `match None no Err`,
-///   `ok_or Err(<codes>)`: an absent handle is decided here; `<codes>` are the string literals
-///   passed first to a call inside the error;
+///   `ok_or Err(<codes>)`: an absent handle is decided here; `<codes>` are the codes passed
+///   first to a call inside the error (a string literal, or a registry constant read as its
+///   spelling);
 /// - `None decided by .<method>` / `None decided by ?`: an absent handle turned into a value;
 /// - `argument of <callee>`, `bound to <name>`, `field <name>`, `receiver of .<method>`,
 ///   `projection .<member>`, `other use`: the handle passed on or read, never decided.
@@ -6696,8 +6697,8 @@ fn peel_handle(expr: &Expr) -> &Expr {
     }
 }
 
-/// `Err(<codes>)` when `visit` reaches an `Err(..)` call: its codes are the string literals
-/// passed first to a call inside the error. `no Err` otherwise.
+/// `Err(<codes>)` when `visit` reaches an `Err(..)` call: its codes are the codes passed first
+/// to a call inside the error. `no Err` otherwise.
 fn refusal_label(visit: impl FnOnce(&mut ErrCodeVisitor)) -> String {
     let mut visitor = ErrCodeVisitor {
         inside: 0,
@@ -6722,14 +6723,24 @@ struct ErrCodeVisitor {
 }
 
 impl ErrCodeVisitor {
+    /// A string literal, or a registry constant read as its registered spelling (Workflow #378).
     fn first_literal(&mut self, arguments: &syn::punctuated::Punctuated<Expr, syn::Token![,]>) {
-        if self.inside > 0
-            && let Some(Expr::Lit(syn::ExprLit {
+        if self.inside == 0 {
+            return;
+        }
+        match arguments.first() {
+            Some(Expr::Lit(syn::ExprLit {
                 lit: Lit::Str(code),
                 ..
-            })) = arguments.first()
-        {
-            self.codes.insert(code.value());
+            })) => {
+                self.codes.insert(code.value());
+            }
+            Some(argument) => {
+                if let Some(code) = registry_spelling(argument) {
+                    self.codes.insert(code);
+                }
+            }
+            None => {}
         }
     }
 }
@@ -6755,8 +6766,8 @@ impl<'ast> Visit<'ast> for ErrCodeVisitor {
     }
 }
 
-/// The codes of an `ok_or(..)` / `ok_or_else(..)` error value: the string literals passed first
-/// to a call inside it.
+/// The codes of an `ok_or(..)` / `ok_or_else(..)` error value: the codes passed first to a call
+/// inside it.
 fn error_value_label(arguments: &syn::punctuated::Punctuated<Expr, syn::Token![,]>) -> String {
     let mut visitor = ErrCodeVisitor {
         inside: 1,

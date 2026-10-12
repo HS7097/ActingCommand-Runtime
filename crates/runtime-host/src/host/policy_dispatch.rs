@@ -476,7 +476,6 @@ impl SchedulingPauseTable {
             .is_some_and(|connections| connections.contains(&connection))
     }
 
-    /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
     /// The pause that defers a dispatch on `instance_alias`, as the spelling the policy
     /// evaluator's scheduling-pause callback takes (the policy crate types it in A2d).
     pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {

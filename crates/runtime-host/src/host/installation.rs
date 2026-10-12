@@ -704,7 +704,7 @@ impl HostShared {
                 Phase::Failed
             };
             status.admission_closed = !reopen;
-            status.failure_code = Some(code.to_owned());
+            status.failure_code = Some(code.as_str().to_owned());
             self.record_install_status(&status)?;
             admission.closed = !reopen;
             // A drain timeout reopens the old owner; a held or release timeout ends the start.
