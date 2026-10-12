@@ -2552,6 +2552,7 @@
     },
     "contained_task_geometry_frame_display_mismatch": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,

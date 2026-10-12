@@ -260,7 +260,7 @@ crate::outcome_codes! {
         NotImplemented => "not_implemented": error / none,
         // OCR-CONF (R-11): the kernel fails a fields task with it, the client reads it as a
         // fields-failure terminal.
-        OcrFieldLowConfidence => "ocr_field_low_confidence": error,
+        OcrFieldLowConfidence => "ocr_field_low_confidence": error / pack_logic_mismatch,
         OcrFieldsDeclarationInvalid => "ocr_fields_declaration_invalid": error / declaration_error,
         OcrFieldsDeclarationMissing => "ocr_fields_declaration_missing": error / declaration_error,
         OcrFieldsDictionaryLimitExceeded => "ocr_fields_dictionary_limit_exceeded": error / declaration_error,

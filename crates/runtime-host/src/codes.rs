@@ -289,7 +289,7 @@ actingcommand_contract::outcome_codes! {
         /// captured from have different aspect ratios, so the run is refused before any input.
         /// The frame's own aspect ratio is never checked. Replaces
         /// `contained_task_geometry_aspect_mismatch`.
-        ContainedTaskGeometryFrameDisplayMismatch => "contained_task_geometry_frame_display_mismatch": error,
+        ContainedTaskGeometryFrameDisplayMismatch => "contained_task_geometry_frame_display_mismatch": error / environment_fault,
         ContainedTaskGeometryFrameExtentInvalid => "contained_task_geometry_frame_extent_invalid": error / environment_fault,
         ContainedTaskGeometryFrameUnavailable => "contained_task_geometry_frame_unavailable": error / environment_fault,
         ContainedTaskGeometryInputPrerequisiteMissing => "contained_task_geometry_input_prerequisite_missing": error / none,

@@ -1137,6 +1137,7 @@
     },
     "contained_task_entry_pages_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,

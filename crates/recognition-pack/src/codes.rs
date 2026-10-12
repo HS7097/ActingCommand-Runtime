@@ -18,14 +18,14 @@ actingcommand_contract::outcome_codes! {
         /// The anchor search of a `repeated_anchor` layout reached its time limit before it had
         /// scored every row of its region; no partial candidate set is returned (keys `stage`,
         /// `timeout_ms`, `count`: the positions found by then).
-        CandidateSearchIncomplete => "candidate_search_incomplete": error,
+        CandidateSearchIncomplete => "candidate_search_incomplete": error / budget_or_permission,
         // Workflow #308 list selector L1 (end).
         // Workflow #396 REC-1: text located by OCR. A target that did not pass carries the
         // first two as its `failure`; the last two are evaluation errors.
-        TextLocateNotFound => "text_locate_not_found": error,
-        TextLocateOutsideCells => "text_locate_outside_cells": error,
-        TextReadBudgetExceeded => "text_read_budget_exceeded": error,
-        TextReadBlocksTruncated => "text_read_blocks_truncated": error,
+        TextLocateNotFound => "text_locate_not_found": error / pack_logic_mismatch,
+        TextLocateOutsideCells => "text_locate_outside_cells": error / pack_logic_mismatch,
+        TextReadBudgetExceeded => "text_read_budget_exceeded": error / budget_or_permission,
+        TextReadBlocksTruncated => "text_read_blocks_truncated": error / budget_or_permission,
     }
 }
 

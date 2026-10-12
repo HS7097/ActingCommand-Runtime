@@ -1893,6 +1893,7 @@
     },
     "ocr_field_low_confidence": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,

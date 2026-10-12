@@ -99,7 +99,7 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskRequiresScheduler => "contained_task_requires_scheduler": error / none,
         ContainedTaskHomeEntryNotRequired => "contained_task_home_entry_not_required": error / none,
         // Workflow #373 NAV-3b: a task's entry page set is refused (key `entry_problem`).
-        ContainedTaskEntryPagesInvalid => "contained_task_entry_pages_invalid": error,
+        ContainedTaskEntryPagesInvalid => "contained_task_entry_pages_invalid": error / declaration_error,
         // Contained task prerequisites and entry.
         ContainedTaskPrerequisiteUnbound => "contained_task_prerequisite_unbound": error / declaration_error,
         ContainedTaskPrerequisiteCycle => "contained_task_prerequisite_cycle": error / declaration_error,
