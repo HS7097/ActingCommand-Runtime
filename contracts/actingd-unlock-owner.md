@@ -39,10 +39,15 @@ and `started_at_unix_ms` (Workflow #315 B2c-2):
   refusal stays and its message ends in `: probe unknown: <reason>`. A probe
   failure is never read as dead.
 
-The automatic release concerns the owner guard only. It is not close evidence
-for the ledger, and device writes still require a live scheduler lease: taken
-over instances go through the takeover cool-down, reconnection and a new lease
-as before. In the alive and unknown cases this command remains required.
+The automatic release concerns the owner guard only and is not itself close
+evidence for the ledger. The same start imports the released epoch into the
+ledger as unproven with reason `process_exit_only` (`proof_missing` when its
+journal block is inconsistent or recorded `confirmed_closed` before) and closes
+its remaining scopes (`contracts/ledger-store.md`, "Prior-epoch scope close
+(proven or unproven)"); those closes serve retention only. Device writes still
+require a live scheduler lease: taken over instances go through the takeover
+cool-down, reconnection and a new lease as before. In the alive and unknown
+cases this command remains required.
 
 ## Invocation
 
