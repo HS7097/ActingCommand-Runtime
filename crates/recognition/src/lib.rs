@@ -6,16 +6,21 @@ use imageproc::template_matching::{
 };
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod codes;
 pub mod color_digest;
+// Workflow #396 REC-2.
+mod exact_score;
 
 pub use codes::ColorDigestErrorCode;
+pub use exact_score::{ExactScoreMap, RegionSpectra, score_milli};
 
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
 
-const TEMPLATE_MATCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// The limit of one template search; past it the search fails, never succeeds partially.
+pub const TEMPLATE_MATCH_TIMEOUT: Duration = Duration::from_secs(5);
 const FULL_FRAME_FAST_PATH_WORK_THRESHOLD: u64 = 50_000_000;
 const FULL_FRAME_COARSE_WORK_TARGET: u64 = 5_000_000;
 const FULL_FRAME_MAX_DOWNSAMPLE: u32 = 8;
@@ -48,6 +53,39 @@ pub enum TemplateMatchTimingStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateMatchTimingIssue {
     DurationOverflow,
+}
+
+/// Where a template search reads the time its deadline is measured on (Workflow #396 REC-2).
+/// The Runtime reads the system's monotonic clock; a test injects a clock that runs past the
+/// limit.
+#[derive(Clone)]
+pub struct SearchClock(Arc<dyn Fn() -> Instant + Send + Sync>);
+
+impl SearchClock {
+    /// The system's monotonic clock.
+    pub fn system() -> Self {
+        Self(Arc::new(Instant::now))
+    }
+
+    pub fn new(now: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        Self(Arc::new(now))
+    }
+
+    fn now(&self) -> Instant {
+        (self.0)()
+    }
+}
+
+impl Default for SearchClock {
+    fn default() -> Self {
+        Self::system()
+    }
+}
+
+impl fmt::Debug for SearchClock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SearchClock")
+    }
 }
 
 /// The original deadline owner's observation; None means conversion was unavailable.
@@ -255,15 +293,23 @@ impl Scene {
                 if use_fast_path {
                     full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
                 } else {
-                    exact_metric_match(
-                        &search,
-                        &template,
-                        metric,
-                        offset_x,
-                        offset_y,
-                        SearchWindow::full(&search, &template),
-                        &deadline,
-                    )
+                    // Workflow #396 REC-2: the exact score map gives the direct scorer's
+                    // scores bit for bit.
+                    let engine = exact_score::choose_engine(&search, &template);
+                    ExactScoreMap::compute(
+                        exact_score::ScoreSearch {
+                            search: &search,
+                            template: &template,
+                            metric,
+                            offset_x,
+                            offset_y,
+                        },
+                        engine,
+                        None,
+                        deadline,
+                        TemplateMatchTimingStage::Exact,
+                    )?
+                    .best()
                 }
             }
         }
@@ -287,46 +333,58 @@ impl Scene {
         let (search, template, offset_x, offset_y) =
             self.prepare_template_match(template_png, region)?;
         let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
-        let stats = TemplateStats::new(&template, metric)?;
-        let integrals = IntegralImages::new(&search);
-        let window = SearchWindow::full(&search, &template);
-        let mut best: Option<TemplateMatch> = None;
-        let mut accepted: Option<TemplateMatch> = None;
         // Evaluate the full declared ROI within the existing deadline. A grayscale
         // shortlist cannot exclude a lower scoring candidate whose color is valid.
-        for y in window.min_y..=window.max_y {
-            for x in window.min_x..=window.max_x {
-                deadline.check(
-                    "joint template/color match",
-                    TemplateMatchTimingStage::JointTemplateColor,
-                )?;
-                let raw_score = score_window(&search, &stats, &integrals, metric, x, y);
-                let candidate = template_match_from_candidate(
-                    MatchCandidate { x, y, raw_score },
-                    &template,
-                    offset_x,
-                    offset_y,
-                )?;
-                if best.is_none_or(|best| raw_score > best.raw_score) {
-                    best = Some(candidate);
-                }
-                if candidate.score >= threshold
-                    && accepted.is_none_or(|best| raw_score > best.raw_score)
-                    && accept(candidate)?
-                {
-                    accepted = Some(candidate);
-                }
-            }
-        }
-        deadline.check(
-            "joint template/color match",
+        // Workflow #396 REC-2: the exact score map gives the direct scorer's scores bit for
+        // bit, and the selection visits the positions in the same order.
+        let engine = exact_score::choose_engine(&search, &template);
+        ExactScoreMap::compute(
+            exact_score::ScoreSearch {
+                search: &search,
+                template: &template,
+                metric,
+                offset_x,
+                offset_y,
+            },
+            engine,
+            None,
+            deadline,
             TemplateMatchTimingStage::JointTemplateColor,
-        )?;
-        Ok(TemplateMatchSelection {
-            best_template: best
-                .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?,
-            accepted,
-        })
+        )?
+        .select(threshold, &mut accept)
+    }
+
+    /// Workflow #396 REC-2: the exact score of every position of `template_png` in `region`
+    /// (the whole frame when `None`), within the 5 s search limit read on `clock`. `stage`
+    /// names the search a passed limit reports: `Exact`, or `JointTemplateColor` when the
+    /// selection also checks a relative color. The region's transform is kept in `spectra`
+    /// for the next template searched in the same region of this frame.
+    pub fn exact_score_map(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+        stage: TemplateMatchTimingStage,
+        spectra: &mut RegionSpectra,
+        clock: &SearchClock,
+    ) -> RecognitionResult<ExactScoreMap> {
+        let (search, template, offset_x, offset_y) =
+            self.prepare_template_match(template_png, region)?;
+        let deadline = TemplateMatchDeadline::with_clock(TEMPLATE_MATCH_TIMEOUT, clock.clone());
+        let engine = exact_score::choose_engine(&search, &template);
+        ExactScoreMap::compute(
+            exact_score::ScoreSearch {
+                search: &search,
+                template: &template,
+                metric,
+                offset_x,
+                offset_y,
+            },
+            engine,
+            Some(spectra),
+            deadline,
+            stage,
+        )
     }
 
     fn prepare_template_match(
@@ -585,7 +643,18 @@ fn score_window(
     let image_sum = integrals.sum(x, y, template.width, template.height);
     let image_sq_sum = integrals.squared_sum(x, y, template.width, template.height);
     let dot = dot_product(search, template, x, y);
+    score_from_sums(template, metric, dot, image_sum, image_sq_sum)
+}
 
+/// The raw score of one position from its exact sums: `dot` is `sum(T * I)`, `image_sum` and
+/// `image_sq_sum` are the window's `sum(I)` and `sum(I^2)`.
+fn score_from_sums(
+    template: &TemplateStats,
+    metric: MatchMetric,
+    dot: f64,
+    image_sum: f64,
+    image_sq_sum: f64,
+) -> f32 {
     let raw = match metric {
         MatchMetric::CrossCorrelationNormalized => {
             let denominator = (image_sq_sum * template.squared_sum).sqrt();
@@ -824,18 +893,24 @@ impl IntegralImages {
 struct TemplateMatchDeadline {
     started: Instant,
     timeout: Duration,
+    clock: SearchClock,
 }
 
 impl TemplateMatchDeadline {
     fn new(timeout: Duration) -> Self {
+        Self::with_clock(timeout, SearchClock::system())
+    }
+
+    fn with_clock(timeout: Duration, clock: SearchClock) -> Self {
         Self {
-            started: Instant::now(),
+            started: clock.now(),
             timeout,
+            clock,
         }
     }
 
     fn check(&self, label: &str, stage: TemplateMatchTimingStage) -> RecognitionResult<()> {
-        let elapsed = self.started.elapsed();
+        let elapsed = self.clock.now().saturating_duration_since(self.started);
         if elapsed > self.timeout {
             let mut error = RecognitionError::fatal(format!(
                 "{label} exceeded {} ms deadline",

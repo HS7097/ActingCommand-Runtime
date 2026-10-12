@@ -140,12 +140,12 @@ rule or an operation guard references as one target. The page matches only when 
 
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
-| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`) |
+| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches) |
 | Template with color | `anchors[].color_check` | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
-| Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text) |
+| Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text); with `unique`, no other matching block lies within its margin |
 | Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
 
 ### Pack schema `0.7` declarations
@@ -180,6 +180,57 @@ derives every document byte for byte as before; one that uses `locate` derives p
 | --- | --- |
 | `ocr_targets[].locate` | `{"normalize": "identity_v1", "blocks": "detect" \| "region", "line_merge"?, "cells"?}` (`ocr-fields.md`, section Located text). The target is never an OCR field or reading target, an OCR relative anchor, a candidate layout slot target or feature, nor declares `target_consensus`. |
 | `operations[].guard.verify_text` | A string naming the guard's own `target_id`, a locate OCR target. The guard evaluates that target; a `target` or `offset` click takes the found cell, or block, as its box; `target_center` is refused. |
+
+### Task schema `0.9` unique matches
+
+Workflow #396 REC-2. Task schema `0.9` accepts `"unique": {"margin_milli": n}` on
+`anchors[]`, `verify_templates[]` and `ocr_targets[]` entries; an older task schema refuses it
+with `UnconsumedField` at its pointer. It passes to the derived target as declared, and a
+source that uses it derives pack schema `0.7`; a source that does not derives every document
+byte for byte as before. In the recognition pack, `unique` is a member of a template target or
+of an OCR target that declares `locate`; another target, or a pack schema before `0.7`,
+refuses it with `UnconsumedField`. `margin_milli` is required (`MissingField`), an integer
+(`InvalidType`) from 1 to 1000 (`InvalidValue`); there is no default.
+
+The declaration holds wherever the target is evaluated: page rules, guards, clicks, OCR
+anchors, checks and candidate layout slots. A target that would pass fails when a second place
+scores at least the best match's score minus `margin_milli`. Scores are compared in milli,
+rounded down: a template's normalized match score under its own metric, a text block's
+confidence (0 when absent).
+
+- **Template.** The best match is found by the target's ordinary rules: the highest score,
+  with the target's threshold and color check (`template-relative-color.md` for a relative
+  color, which picks the highest joint candidate). A second place is a position whose box
+  does not intersect the best match's box, that meets the target's own acceptance condition
+  (a relative color is checked at each position; an absolute color holds for all positions
+  alike) and scores within the margin; a score below the threshold counts when it is within
+  the margin. Without a relative color, a margin of 1000 therefore fails whenever the search
+  region holds a second box that does not overlap the best one.
+- **Located text.** A second place is another block whose text matches an `expected` value
+  (`ocr-fields.md`, section Located text), whether its confidence reaches
+  `minimum_confidence` or not, and whatever its cell. A detection with more boxes than the
+  model folder's `max_boxes` fails the target with `text_read_blocks_truncated`, since the
+  dropped boxes could hold a second place.
+
+A second place makes the target fail with `failure` `target_match_not_unique` (`target_id`,
+`target_kind` `template` or `ocr`, `score_milli`, `second_score_milli`, `margin_milli`): a
+guard refuses its input (`contained_task_guard_refused`, the code as its `cause=` token) and a
+page rule does not hold. A target that declares `unique` and otherwise passes carries
+`uniqueness` (`score_milli`, `margin_milli`, and `second_score_milli` and `second_rect` when a
+second place exists) on its evaluation and on the task diagnostic target row.
+
+A template that declares `unique` is scored at every position of its search region from exact
+integer sums, `full_frame` included: the products `sum(T * I)` by an FFT cross-correlation
+rounded to integers, or directly when that is cheaper, and the window sums from the exact
+integral images. Its scores are bit for bit the direct scorer's; for `ccorr_normed` they can
+differ from the default search in the last bit, and a large region can find the true best
+that the default coarse search misses, so authors calibrate thresholds again with the same
+engine. Admission sets no limit on the search's work. The search keeps the five-second limit;
+past it, evaluation fails with `target_match_search_incomplete` (`target_id`, `timeout_ms`)
+and the target never passes on a partial search: a guard's evaluation fails
+(`contained_task_guard_evaluation_failed`, the code as its `cause=` token). The joint
+relative-color search and the `ccoeff_normed` search of a bounded region use the same exact
+scores for every target, with their results unchanged.
 
 Color digest and check IDs share one namespace with every other target ID. The same ID with
 an identical definition, repeated by several tasks, is kept once; any other reuse of the ID

@@ -49,7 +49,10 @@ mod selection;
 // Workflow #396 REC-1.
 #[cfg(test)]
 mod text_locate_tests;
+// Workflow #396 REC-2.
 mod timing;
+#[cfg(test)]
+mod unique_tests;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -11896,6 +11899,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            uniqueness: None,
         };
         for click in [
             serde_json::from_value::<TaskClick>(json!({
@@ -12041,6 +12045,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            uniqueness: None,
         };
         let target_center: TaskClick = serde_json::from_value(json!({
             "kind": "target_center",

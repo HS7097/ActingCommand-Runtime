@@ -10,7 +10,7 @@
 //! request call the provider once, and stay within the consumer's budget of
 //! [`TEXT_READ_MAX_CALLS`] calls and one frame of summed area.
 
-use crate::codes::{RecognitionPackCode, RecognitionPackLocation, TextReadBudget};
+use crate::codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget};
 use crate::*;
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::outcome::Outcome;
@@ -276,20 +276,23 @@ impl RecognitionEvaluator {
             let truncated = detection.is_some_and(OcrProviderDetection::truncated);
             let mut matched_expected = None;
             let mut located = None;
-            let failure = match find_located_text(&ocr.blocks, target) {
-                None if truncated => {
-                    let detection = detection.unwrap_or(OcrProviderDetection {
-                        detected: 0,
-                        limit: 0,
-                    });
-                    return Err(RecognitionPackError::text_read(
-                        Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)
-                            .target_id(target.id.as_str())
-                            .count(detection.detected)
-                            .limit_count(detection.limit)
-                            .stage(RecognitionPackLocation::TextLocateEvaluate),
-                    ));
-                }
+            let hit = find_located_text(&ocr.blocks, target);
+            // Dropped boxes could hold the text when nothing matched, or (Workflow #396 REC-2)
+            // a second place when the target declares `unique`.
+            if truncated && (hit.is_none() || target.unique.is_some()) {
+                let detection = detection.unwrap_or(OcrProviderDetection {
+                    detected: 0,
+                    limit: 0,
+                });
+                return Err(RecognitionPackError::text_read(
+                    Outcome::new(RecognitionPackCode::TextReadBlocksTruncated)
+                        .target_id(target.id.as_str())
+                        .count(detection.detected)
+                        .limit_count(detection.limit)
+                        .stage(RecognitionPackLocation::TextLocateEvaluate),
+                ));
+            }
+            let failure = match hit {
                 None => Some(
                     Outcome::new(RecognitionPackCode::TextLocateNotFound)
                         .target_id(target.id.as_str())
@@ -335,6 +338,21 @@ impl RecognitionEvaluator {
                 }
             };
             let passed = located.is_some();
+            let mut uniqueness_check = None;
+            if let (Some(unique), Some(found)) = (target.unique, located) {
+                // Workflow #396 REC-2: the same text elsewhere, whatever its cell.
+                let second = crate::target_unique::second_text_block(
+                    &ocr.blocks,
+                    target,
+                    found.block_index,
+                    found.confidence_milli,
+                    unique,
+                );
+                uniqueness_check = Some((unique, found.confidence_milli, second));
+                if second.is_some() {
+                    located = None;
+                }
+            }
             let message = match (&failure, passed) {
                 (_, true) => "ocr text located",
                 (Some(failure), false)
@@ -345,7 +363,7 @@ impl RecognitionEvaluator {
                 _ => "ocr text not located",
             }
             .to_string();
-            Ok(TargetEvaluation {
+            let mut evaluation = TargetEvaluation {
                 id: target.id.clone(),
                 kind: TargetKind::Ocr,
                 sample_evaluations: Vec::new(),
@@ -369,8 +387,19 @@ impl RecognitionEvaluator {
                 color_digest: None,
                 composite: None,
                 failure,
+                uniqueness: None,
                 message,
-            })
+            };
+            if let Some((unique, score_milli, second)) = uniqueness_check {
+                crate::target_unique::apply_uniqueness(
+                    &mut evaluation,
+                    TargetMatchKind::Ocr,
+                    unique,
+                    score_milli,
+                    second,
+                );
+            }
+            Ok(evaluation)
         })()
         .map_err(|error: RecognitionPackError| error.with_region(&region_evidence))
     }
@@ -546,21 +575,9 @@ struct LocatedHit {
 /// character) matches nothing. A match is a hit only with a confidence of at least
 /// `minimum_confidence`. The highest confidence in milli wins; on a tie the earlier block.
 fn find_located_text(blocks: &[OcrTextEvidence], target: &OcrTarget) -> Option<LocatedHit> {
-    let confusions = BTreeMap::new();
-    let expected = target
-        .expected
-        .iter()
-        .filter_map(|value| normalize_name(value, &confusions).map(|name| (value, name)))
-        .collect::<Vec<_>>();
     let mut best: Option<LocatedHit> = None;
     for (block_index, block) in blocks.iter().enumerate() {
-        let Some(text) = normalize_name(&block.text, &confusions) else {
-            continue;
-        };
-        let Some((declared, _)) = expected.iter().find(|(_, name)| match target.match_mode {
-            OcrMatchMode::Exact => text == *name,
-            OcrMatchMode::Contains => text.contains(name.as_str()),
-        }) else {
+        let Some(declared) = block_match(block, target) else {
             continue;
         };
         let Some(confidence) = block
@@ -578,11 +595,28 @@ fn find_located_text(blocks: &[OcrTextEvidence], target: &OcrTarget) -> Option<L
             best = Some(LocatedHit {
                 block_index,
                 confidence_milli,
-                expected: (*declared).clone(),
+                expected: declared.clone(),
             });
         }
     }
     best
+}
+
+/// The `expected` value, as declared, that the block's text matches under the target's
+/// `match_mode` after the identity normalization; `None` when the block matches none or has
+/// no normalized text.
+pub(crate) fn block_match<'a>(
+    block: &OcrTextEvidence,
+    target: &'a OcrTarget,
+) -> Option<&'a String> {
+    let confusions = BTreeMap::new();
+    let text = normalize_name(&block.text, &confusions)?;
+    target.expected.iter().find(|value| {
+        normalize_name(value, &confusions).is_some_and(|name| match target.match_mode {
+            OcrMatchMode::Exact => text == name,
+            OcrMatchMode::Contains => text.contains(name.as_str()),
+        })
+    })
 }
 
 /// The cell that holds the block's center `(x + floor(w/2), y + floor(h/2))`, as its index and

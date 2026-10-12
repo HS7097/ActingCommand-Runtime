@@ -12,3 +12,6 @@ publish = false
 actingcommand-contract = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 imageproc = "0.25"
+# Workflow #396 REC-2: the exact score map sums template products by FFT.
+realfft = "3.5"
+rustfft = "6.4"

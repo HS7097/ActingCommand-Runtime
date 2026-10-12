@@ -562,6 +562,22 @@
       "type": "vocab:text_read_budget",
       "description": "Which per-consumer text read budget ran out."
     },
+    "target_kind": {
+      "type": "vocab:target_kind",
+      "description": "Which kind of target a uniqueness check compared."
+    },
+    "score_milli": {
+      "type": "integer",
+      "description": "A best match's score in milli, rounded down: a template's normalized match score or a text block's confidence."
+    },
+    "second_score_milli": {
+      "type": "integer",
+      "description": "The score in milli, rounded down, of the second place found within the margin of the best match."
+    },
+    "margin_milli": {
+      "type": "integer",
+      "description": "A declared margin in milli below the best match's score."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -3101,6 +3117,21 @@
         },
         "area": {
           "description": "The summed region area of one consumer, in pixels."
+        }
+      }
+    },
+    "target_kind": {
+      "description": "Which kind of target a uniqueness check compared (Workflow #396 REC-2).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TargetMatchKind"
+      },
+      "tokens": {
+        "template": {
+          "description": "A template target: positions of its match score."
+        },
+        "ocr": {
+          "description": "A locate OCR target: text blocks and their confidence."
         }
       }
     },
@@ -6544,6 +6575,9 @@
       "execution-kernel",
       "lab",
       "pack-containment"
+    ],
+    "target_match_": [
+      "recognition-pack"
     ],
     "task_": [
       "actingctl",

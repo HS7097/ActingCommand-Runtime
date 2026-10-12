@@ -145,7 +145,44 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1), or a block matched and the target declares unique (Workflow #396 REC-2). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "target_match_not_unique": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "target_kind": "required",
+        "score_milli": "required",
+        "second_score_milli": "required",
+        "margin_milli": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A target that declares unique did not pass: a second place scores at least the best match's score minus margin_milli (Workflow #396 REC-2). For a template, a position whose box does not intersect the best match's and that meets the target's own acceptance condition; for a locate OCR target, another block whose text matches, its confidence counted as 0 when absent. Scores are in milli, rounded down. Carried as the target evaluation's failure; a guard refuses its input with it as the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "target_match_search_incomplete": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "timeout_ms": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The exact score map of a template target that declares unique was not complete within the search limit timeout_ms (Workflow #396 REC-2). An evaluation error: the target never passes on a partial search.",
       "common_causes": "TBD",
       "handling": "TBD"
     }
@@ -166,6 +203,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Checking one consumer's text read budget before calling the OCR provider (Workflow #396 REC-1)."
+    },
+    "target_match_unique": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Searching a second place within the declared margin of a unique target's best match, or the exact score map that search reads (Workflow #396 REC-2)."
     }
   }
 }

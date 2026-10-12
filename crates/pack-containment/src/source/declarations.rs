@@ -808,6 +808,20 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Workflow #396 REC-2: `unique` of an `anchors[]`, `verify_templates[]` or `ocr_targets[]`
+    /// entry of task schema `0.9`. Its shape is checked here; its value with the derived
+    /// recognition pack.
+    fn unique(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["margin_milli"])?;
+        self.unsigned(
+            self.required(object, pointer, "margin_milli")?,
+            &child(pointer, "margin_milli"),
+        )
+    }
+
     fn method(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if value.is_string() || value.as_i64().is_some() {
             super::normalize_maa_method(value)
@@ -921,6 +935,7 @@ impl Declaration<'_> {
                 "maa_task",
                 "maa_task_id",
                 "provenance",
+                "unique",
             ],
             "verify_templates" => &[
                 "id",
@@ -934,6 +949,7 @@ impl Declaration<'_> {
                 "maa_task",
                 "maa_task_id",
                 "provenance",
+                "unique",
             ],
             "color_probes" => &[
                 "id",
@@ -956,6 +972,7 @@ impl Declaration<'_> {
                 "model_sha256",
                 "click",
                 "locate",
+                "unique",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -990,6 +1007,7 @@ impl Declaration<'_> {
                 "max_distance" => self.max_distance(value, &pointer)?,
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
+                "unique" => self.unique(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 "mask" | "maskRange" => {

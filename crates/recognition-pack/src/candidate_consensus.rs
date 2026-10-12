@@ -350,9 +350,7 @@ impl SceneEvaluation<'_> {
         }
         let context = evaluator.scene_context(self.scene());
         match target {
-            RecognitionTarget::Template(target) => {
-                evaluator.evaluate_template(self.scene(), &target)
-            }
+            RecognitionTarget::Template(target) => evaluator.evaluate_template(&context, &target),
             RecognitionTarget::Ocr(target) => evaluator.evaluate_ocr(&context, &target),
             RecognitionTarget::Color(target) => evaluator.evaluate_color(self.scene(), &target),
             RecognitionTarget::ColorDigest(target) => {
