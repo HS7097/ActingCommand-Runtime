@@ -655,10 +655,7 @@ impl HostShared {
     /// (`lease_cooldown`) is prepared once more after the first pass, once that cooldown ended;
     /// every takeover cooldown ends at the same deadline (the scheduler's start plus
     /// `takeover_cooldown_ms`), which bounds the whole wait. A second refusal is recorded like
-    /// the first and is a failed self-check (`lease_cooldown`).
-    /// INST-1 (Workflow #390): an install start settles the self-checks of every prepared
-    /// instance once all are prepared (`settle_install_selfchecks`); one unreachable device
-    /// leaves only its instance unavailable, and only a start that reached no device ends.
+    /// the first.
     pub(super) fn prepare_physical_instances_on_start(&self) -> RuntimeHostResult<()> {
         let instances = lock(
             &self.registered_instances,
@@ -669,7 +666,6 @@ impl HostShared {
         .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
         .collect::<Vec<_>>();
         let mut cooling = Vec::new();
-        let mut checks = Vec::new();
         for (instance_alias, instance_id) in instances {
             self.check_install_preparation()?;
             self.withhold_policy_instance_availability(instance_id)?;
@@ -683,32 +679,39 @@ impl HostShared {
             }) {
                 continue;
             }
-            match self.prepare_physical_instance_on_start(&instance_alias, instance_id)? {
-                (_, Some(cooldown_until)) => {
-                    cooling.push((instance_alias, instance_id, cooldown_until));
-                }
-                (check, None) => checks.push((instance_id, check)),
+            if let Some(cooldown_until) =
+                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?
+            {
+                cooling.push((instance_alias, instance_id, cooldown_until));
             }
         }
         for (instance_alias, instance_id, cooldown_until) in cooling {
             let wait_ms = cooldown_until.saturating_sub(self.monotonic_ms()?);
             thread::sleep(Duration::from_millis(wait_ms));
             self.check_install_preparation()?;
-            let (check, _) =
-                self.prepare_physical_instance_on_start(&instance_alias, instance_id)?;
-            checks.push((instance_id, check));
+            if self
+                .prepare_physical_instance_on_start(&instance_alias, instance_id)?
+                .is_some()
+            {
+                self.require_install_selfcheck(
+                    instance_id,
+                    &scheduling_resume_selfcheck(
+                        &[],
+                        Some(RuntimeErrorCode::LeaseCooldown.as_str()),
+                    ),
+                )?;
+            }
         }
-        self.settle_install_selfchecks(&checks)
+        Ok(())
     }
 
-    /// One start preparation of `instance_id` under its admission guard. Returns its self-check
-    /// and the monotonic deadline of the takeover cooldown that refused its preparation lease,
-    /// if one did (the self-check then fails with `lease_cooldown`).
+    /// One start preparation of `instance_id` under its admission guard. Returns the monotonic
+    /// deadline of the takeover cooldown that refused its preparation lease, if one did.
     fn prepare_physical_instance_on_start(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
-    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<u64>)> {
+    ) -> RuntimeHostResult<Option<u64>> {
         let links = self
             .events
             .system_links()?
@@ -725,7 +728,10 @@ impl HostShared {
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
             PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
         )?;
-        Ok((check, cooldown_until))
+        if cooldown_until.is_none() {
+            self.require_install_selfcheck(instance_id, &check)?;
+        }
+        Ok(cooldown_until)
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
