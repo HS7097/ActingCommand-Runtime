@@ -1786,7 +1786,7 @@ impl GlobalLedger {
         });
         GlobalLedgerError {
             code: LedgerCode::DeferredAppendUnconfirmed.as_str(),
-            operation,
+            operation: operation.as_str(),
             detail,
             terminal: true,
             rolled_back_work: None,
