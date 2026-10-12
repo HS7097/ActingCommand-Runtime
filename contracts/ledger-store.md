@@ -6,6 +6,50 @@ through [Ledger maintenance and cutover](ledger-maintenance.md). The explicit
 [SQLite candidate](sqlite-ledger-candidate.md) and Segment corpus share the same
 semantic core, query, projection and subscription behavior.
 
+> **Workflow #383 (ledger observer).** The paragraph above and the sections marked "Superseded"
+> below describe today's code. Their target is the section "Ledger observer target" that follows
+> and [Ledger observer](ledger-observer.md). The slice named in each note deletes the old text
+> in the PR that changes the code.
+
+## Ledger observer target (Workflow #383)
+
+- **Role** (replaces "public fact owner"; AO-2 to AO-4): the ledger is an observer. It is the
+  only authoritative record for every reader outside the Runtime and the authoritative history
+  inside it; the live state belongs to the instance fact store and the scheduler workbench (rule
+  12). The Runtime hands records over through the capture interface; only records of the
+  exception table, which no probe can see, are appended directly (rule 14).
+- **Append failure** (replaces "The writer terminates on a fatal append/settlement error"; AO-1):
+  a write failure is retried at once with the same batch and event ids, after reading the
+  database head and the batch's event ids back (an id already present counts as written); the
+  store stays usable after a failed write; exhausted retries or a stalled attempt
+  (`flush_attempt_stall_ms`) write every unflushed record to the dump file and stop the process
+  as `ledger_write_failed` (fatal); the next start imports the dump before any new record and
+  deletes it. A refused record (sanitizing, validation) is `ledger_record_rejected` with a gap
+  record and no retry. An integrity or format failure stays fatal without retry. See
+  [ledger-observer.md §9](ledger-observer.md#9-write-failure-retry-dump-fatal-ao-1).
+- **One queue, categories, batch sync** (replaces "Durability classes"; AO-2): one capture queue
+  in capture order. A record's category is *decision* (today's durable) or *observation* (today's
+  observational), fixed by its type as today, with the exceptions of the gate table
+  ([ledger-observer.md §4](ledger-observer.md#4-silent-gates-g1g16), which decides where the two
+  differ): `artifact.verified` becomes decision (business reads it, X6; G9); instance-scoped
+  `runtime.fact_recorded` / `runtime.fact_invalidated` become decision, except the instance's
+  self-check records, which stay observation (G3); `task.step_*`, `task.effect_*` and
+  `task.entry_preflight` become observation (G7, Appendix A.8 M10). A batch with a decision
+  record commits with FULL sync, otherwise NORMAL. A tagged record commits on arrival, alone if
+  needed, with FULL sync. Watermarks and spilling: [ledger-observer.md §7](ledger-observer.md#7-capture-queue-and-watermarks-ao-2).
+- **Capture instead of deferred append; the close drain** (replaces "Deferred append"; AO-2,
+  AO-4): business captures and never waits; the ledger assigns sequences in capture order. At
+  close, business stops, the close record is captured last, the flush thread drains the dump and
+  memory segments, and the ledger closes last. Nothing is dropped; a drain that cannot be written
+  ends in the dump and `ledger_write_failed`.
+- **Index table** (new; AO-2): `ledger_index` in the same database, one row per tagged key
+  (`state`), open intent (`open`), recent request id (`request`) and lifecycle mark
+  (`lifecycle`), updated in the same SQLite transaction as the batch whose records it points to;
+  see [ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads).
+- **Every stored record** carries `capture_seq`, its capture time (also its `timestamp`) and, for
+  a revisioned source, the source (lineage, revision); per (source, lineage) revisions are
+  contiguous or covered by gap records (`ledger_store_revision_skipped` otherwise).
+
 ## Open, ownership and append durability
 
 `GlobalLedger::open_with_store` accepts an internal constructor. Configuration
@@ -59,6 +103,10 @@ Callers must recover/read authoritative facts before deciding whether an effect
 occurred. For external effects, durable intent still precedes the attempt and
 outcome follows it; storage cannot make a device action transactional.
 
+> **Superseded by Workflow #383** (the paragraph above): AO-1 replaces the writer's termination
+> with "Append failure" in "Ledger observer target"; AO-4 drops the wait for a durable intent
+> before the effect (rule 9: intent and result stay two records, copied in order, never waited on).
+
 Close drains the existing command path, syncs the Segment medium (the SQLite medium
 adds no sync at close; see [Durability classes](#durability-classes-workflow-191-i))
 and releases ownership.
@@ -69,6 +117,13 @@ successful writes by the current owner; timings and the owner incarnation are
 observations, not event identity or portable equality inputs.
 
 ## Durability classes (Workflow #191 I)
+
+> **Superseded by Workflow #383 AO-2**: "One queue, categories, batch sync" above. The table of
+> observational types below stays the category table, with the exceptions of
+> [ledger-observer.md §4](ledger-observer.md#4-silent-gates-g1g16): `artifact.verified` becomes a
+> decision record (G9); instance-scoped runtime facts other than the instance's self-check
+> records become decision records (G3); `task.step_*`, `task.effect_*` and `task.entry_preflight`
+> become observation records (G7).
 
 Every append has a durability class fixed by the Ledger from its payload: durable
 or observational. Callers cannot choose it; a joint `append_transaction` is always
@@ -119,6 +174,10 @@ no barrier; the Host's last append before a successful close is the durable devi
 diagnostic summary.
 
 ## Deferred append
+
+> **Superseded by Workflow #383 AO-2 and AO-4**: "Capture instead of deferred append; the close
+> drain" above. `ingress_full`, `deferred_append_unconfirmed` and the `lifecycle_append_failed`
+> latch leave with it ([ledger-observer.md §9.5](ledger-observer.md#95-fatal-paths-removed-or-changed-ao-1-unless-named)).
 
 `GlobalLedger::append_deferred(draft)` accepts a sanitized draft on the same writer
 command as `append`: the same bounded ingress queue, the same store transaction, the
@@ -175,19 +234,24 @@ Every import and scope close carries a `basis`: `proven`, or `unproven` with one
 of three reasons. A prior owner without a native proof is still imported and
 closed, once per owner epoch and once per scope, through the same append path,
 links rule and startup barrier. `legacy_journal`: the owner's journal epoch
-contains a record older than the v2 schema. `process_exit_only`: a consistent v2
-epoch ends in a normal exit record and never recorded ConfirmedClosed.
-`proof_missing`: no journal epoch for the owner, or one whose records support no
-positive close (a block that ends active, reuses an epoch, contradicts its own
-identity or follows ConfirmedClosed with later resource use). An epoch whose last
-record still declares InUse or Unconfirmed is left open; a block the native
+contains a record older than the v2 schema. `process_exit_only` (released by
+process exit): a consistent v2 epoch that never recorded ConfirmedClosed and
+either ends in a normal exit record or whose last record still declares InUse or
+Unconfirmed. An epoch of the second kind reaches this startup step only after the
+OwnerGuard released it because its process had exited
+(`contracts/actingd-unlock-owner.md`, "When startup releases the owner itself"),
+which is recorded as the lifecycle observation
+`prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
+`last_disposition`). So the start after a crash imports the crashed epoch with
+this reason and closes every scope it left open (Workflow #394 EPOCH-CLOSE;
+#332 Q5, Alice's choice (a) of 09-30). `proof_missing`: no journal epoch for
+the owner, or one whose records support no positive close (a block that ends
+active with None or ConfirmedClosed, reuses an epoch, contradicts its own
+identity or follows ConfirmedClosed with later resource use). A block the native
 reader could not have produced fails startup as `prior_epoch_unproven_unclassified`.
-Such an epoch reaches this startup step when the OwnerGuard released it because
-its process had exited (`contracts/actingd-unlock-owner.md`, "When startup
-releases the owner itself"). That release is recorded as the lifecycle
-observation `prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
-`last_disposition`); it is not close evidence, the epoch stays open here, and it
-authorises nothing on the device side.
+The release observation itself is not close evidence and authorises nothing on
+the device side; the unproven import and scope closes of the same start serve
+retention only.
 The unproven import seals the observation instead of a suffix: no positive close,
 the block identity when one exists and the complete-read bounds, which a later
 startup must still support. Facts sealed before `basis` existed read as proven.

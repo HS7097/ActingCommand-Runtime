@@ -3,6 +3,7 @@
   "codes": {
     "batch_validation_failed": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "page-detector",
       "layer": "vision",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "batch_terminated": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "page-detector",
       "layer": "vision",
       "uncertain": false,
