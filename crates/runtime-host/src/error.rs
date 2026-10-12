@@ -386,6 +386,23 @@ impl RuntimeHostError {
         self
     }
 
+    /// This refusal naming the lease it refused (Workflow #378 A4): the catalog entries of
+    /// `lease_expired` and `lease_missing` require `lease_id`. An error with any other code is
+    /// returned as it is.
+    pub(crate) fn naming_lease(self, lease_id: actingcommand_contract::LeaseId) -> Self {
+        if !spelled(
+            self.code(),
+            &[
+                RuntimeErrorCode::LeaseExpired.code(),
+                RuntimeErrorCode::LeaseMissing.code(),
+            ],
+        ) {
+            return self;
+        }
+        let lease_id = crate::failure_identity::identifier_text(&lease_id);
+        self.with_outcome_values(|outcome| outcome.lease_id(lease_id))
+    }
+
     /// The error's code, a relayed spelling looked up in the registries it can come from.
     fn registered_code(&self) -> Option<Code> {
         match self.code {
@@ -857,5 +874,19 @@ impl FatalState {
 
     pub(crate) fn is_shutdown_requested(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
+    }
+}
+
+/// A scheduler claim kind as a token of the catalog vocabulary `claim_kind` (the scheduler's
+/// Q-2 kinds), so an outcome can carry it as `holder_kind` (Workflow #378 A4; the same token as
+/// A3's ledger revision 3).
+#[derive(Clone, Copy)]
+pub(crate) struct ClaimKindToken(pub(crate) actingcommand_scheduler::ClaimKind);
+
+impl actingcommand_contract::outcome::VocabularyToken for ClaimKindToken {
+    const VOCABULARY: &'static str = "claim_kind";
+
+    fn token(self) -> &'static str {
+        self.0.as_str()
     }
 }

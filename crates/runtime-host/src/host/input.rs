@@ -214,6 +214,7 @@ impl HostShared {
                                     HostLocation::BeginDestructiveInput,
                                     &error,
                                 )
+                                .naming_lease(token.lease_id())
                             })
                     });
                 let witness = match destructive {
@@ -567,6 +568,7 @@ impl HostShared {
                                     HostLocation::BeginDestructiveApplication,
                                     &error,
                                 )
+                                .naming_lease(token.lease_id())
                             })
                     });
                 let witness = match destructive {

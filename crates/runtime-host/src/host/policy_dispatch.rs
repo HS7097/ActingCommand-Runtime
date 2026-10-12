@@ -35,7 +35,10 @@ fn policy_rejection_severity(code: &str) -> EventSeverity {
 
 /// Workflow #369 W-1 (review L-6): the refusal that ends a dispatch intent whose admission guard
 /// stayed taken; it may run again about one second later.
-fn dispatch_contended_error(now_unix_ms: u64) -> RuntimeHostResult<RuntimeHostError> {
+fn dispatch_contended_error(
+    now_unix_ms: u64,
+    instance_id: &str,
+) -> RuntimeHostResult<RuntimeHostError> {
     let next_eligible_unix_ms = now_unix_ms
         .checked_add(DISPATCH_CONTENDED_RETRY_AFTER_MS)
         .ok_or_else(|| {
@@ -49,7 +52,14 @@ fn dispatch_contended_error(now_unix_ms: u64) -> RuntimeHostResult<RuntimeHostEr
         HostLocation::AdmitPolicyDispatch,
         RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
             .with_retry_after(DISPATCH_CONTENDED_RETRY_AFTER_MS),
-    );
+    )
+    // Workflow #378 A4: the receipt's outcome carries the policy's instance id and the time
+    // the candidate may run again.
+    .with_outcome_values(|outcome| {
+        outcome
+            .instance_id(instance_id)
+            .next_eligible_unix_ms(next_eligible_unix_ms)
+    });
     let mut rejection = error.policy_rejection();
     rejection.next_eligible_unix_ms = Some(next_eligible_unix_ms);
     error.lifecycle.policy_rejection = Some(Box::new(rejection));
@@ -136,6 +146,13 @@ impl HostShared {
                 HostLocation::AdmitPolicyDispatch,
                 RuntimeErrorCode::InvalidRequest,
             )
+            // Workflow #378 A4: the policy's instance id, the holder and the waiting count.
+            .with_outcome_values(|outcome| {
+                outcome
+                    .instance_id(instance_alias)
+                    .holder_kind(crate::error::ClaimKindToken(holder_kind))
+                    .count(count)
+            })
             .with_native_detail(format!(
                 "holder_kind={} count={count}",
                 holder_kind.as_str()
@@ -1724,14 +1741,17 @@ impl HostShared {
                         POLICY_ADMISSION_CONTENTION_RETRY,
                     ) {
                         Ok(Some(success)) => Ok(success),
-                        Ok(None) => match dispatch_contended_error(context.now_unix_ms) {
-                            Ok(error) => Err(RequestFailure::request(
-                                error,
-                                RuntimeReceiptState::Denied,
-                                None,
-                            )),
-                            Err(error) => Err(RequestFailure::poison_without_terminal(error)),
-                        },
+                        Ok(None) => {
+                            match dispatch_contended_error(context.now_unix_ms, &intent.instance_id)
+                            {
+                                Ok(error) => Err(RequestFailure::request(
+                                    error,
+                                    RuntimeReceiptState::Denied,
+                                    None,
+                                )),
+                                Err(error) => Err(RequestFailure::poison_without_terminal(error)),
+                            }
+                        }
                         Err(failure) => Err(failure),
                     };
                     match admission {

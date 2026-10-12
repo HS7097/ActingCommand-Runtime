@@ -60,8 +60,32 @@ struct QueueTerminalRecord {
 
 #[derive(Clone, Copy)]
 enum QueueTerminalOutcome {
-    Expired,
-    Cancelled { instance_id: InstanceId },
+    /// `timeout_ms` is the queued request's wait cap (Workflow #378 A4: the refusal
+    /// `lease_queue_expired` names it).
+    Expired {
+        timeout_ms: Option<u64>,
+    },
+    Cancelled {
+        instance_id: InstanceId,
+    },
+}
+
+/// The wait cap of a client's queued lease request (its `QueueLease` policy's `timeout_ms`);
+/// a Runtime-internal claim waits in the queue without one.
+fn queued_wait_cap_ms(context: &QueuedRequestContext) -> Option<u64> {
+    match context.request.operation() {
+        RuntimeOperation::QueueLease { policy, .. } => Some(policy.timeout_ms()),
+        _ => None,
+    }
+}
+
+/// A queue wait refused at its cap (Workflow #378 A4): the catalog entry of
+/// `lease_queue_expired` requires the cap as `timeout_ms`.
+fn naming_queue_cap(error: RuntimeHostError, timeout_ms: Option<u64>) -> RuntimeHostError {
+    match timeout_ms {
+        Some(timeout_ms) => error.with_outcome_values(|outcome| outcome.timeout_ms(timeout_ms)),
+        None => error,
+    }
 }
 
 /// Bounded process-local replay cache; durable terminal history remains in the ledger.
@@ -220,6 +244,19 @@ impl HostShared {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.append_lease_requested(request, &resolved)?;
+                if error == SchedulerError::QueueExpired {
+                    // Workflow #378 A4: a replayed request whose wait ended names its cap.
+                    return Err(self.scheduler_denied_error(
+                        request,
+                        Some(resolved.instance_id()),
+                        None,
+                        resolved.audit_endpoint(),
+                        naming_queue_cap(
+                            RuntimeHostError::scheduler(HostLocation::SchedulerAdmission, &error),
+                            Some(policy.timeout_ms()),
+                        ),
+                    )?);
+                }
                 return Err(self.scheduler_denied(request, &resolved, None, error)?);
             }
         };
@@ -388,11 +425,14 @@ impl HostShared {
             ));
         }
         match record.outcome {
-            QueueTerminalOutcome::Expired => Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    SharedCode::LeaseQueueExpired,
-                    operation,
-                    RuntimeErrorCode::QueueExpired,
+            QueueTerminalOutcome::Expired { timeout_ms } => Err(RequestFailure::request(
+                naming_queue_cap(
+                    RuntimeHostError::request(
+                        SharedCode::LeaseQueueExpired,
+                        operation,
+                        RuntimeErrorCode::QueueExpired,
+                    ),
+                    timeout_ms,
                 ),
                 RuntimeReceiptState::Denied,
                 Some(record.terminal),
@@ -473,9 +513,12 @@ impl HostShared {
                 })?;
                 let event = self.finish_queue_expiry(&context)?;
                 Err(RequestFailure::request(
-                    RuntimeHostError::scheduler(
-                        ContractLocation::PollQueuedLease,
-                        &SchedulerError::QueueExpired,
+                    naming_queue_cap(
+                        RuntimeHostError::scheduler(
+                            ContractLocation::PollQueuedLease,
+                            &SchedulerError::QueueExpired,
+                        ),
+                        queued_wait_cap_ms(&context),
                     ),
                     RuntimeReceiptState::Denied,
                     Some(terminal(&event)),
@@ -704,7 +747,9 @@ impl HostShared {
         self.finish_queue_terminal(
             context,
             DiagnosticCode::LeaseQueueExpired,
-            QueueTerminalOutcome::Expired,
+            QueueTerminalOutcome::Expired {
+                timeout_ms: queued_wait_cap_ms(context),
+            },
         )
     }
 
@@ -1535,6 +1580,7 @@ impl HostShared {
                             .renew(request_id, token, connection_id, self.monotonic_ms()?)
                             .map_err(|error| {
                                 RuntimeHostError::scheduler(ContractLocation::RenewLease, &error)
+                                    .naming_lease(token.lease_id())
                             })
                     },
                 );
@@ -1843,10 +1889,10 @@ impl HostShared {
         let mut scheduler =
             lock(&self.scheduler, HostLocation::CommitLease).map_err(ActionFailure::poison)?;
         if let Err(error) = scheduler.commit_acquire(preparation, now) {
-            return Err(ActionFailure::scheduler(RuntimeHostError::scheduler(
-                HostLocation::CommitLease,
-                &error,
-            )));
+            return Err(ActionFailure::scheduler(
+                RuntimeHostError::scheduler(HostLocation::CommitLease, &error)
+                    .naming_lease(token.lease_id()),
+            ));
         }
         let protected = scheduler.protected_instance_ids(now);
         if let Err(error) = lock(&self.owner, HostLocation::UpdateOwnerFile)
@@ -1854,7 +1900,10 @@ impl HostShared {
         {
             let rollback = scheduler.rollback_lease(&token).err();
             let rollback_error = rollback
-                .map(|rollback| RuntimeHostError::scheduler(HostLocation::RollbackLease, &rollback))
+                .map(|rollback| {
+                    RuntimeHostError::scheduler(HostLocation::RollbackLease, &rollback)
+                        .naming_lease(token.lease_id())
+                })
                 .unwrap_or(error);
             return Err(ActionFailure::poison(rollback_error));
         }
@@ -1878,10 +1927,10 @@ impl HostShared {
                     self.monotonic_ms().map_err(ActionFailure::poison)?,
                 )
                 .map_err(|error| {
-                    ActionFailure::scheduler(RuntimeHostError::scheduler(
-                        ContractLocation::ReleaseLease,
-                        &error,
-                    ))
+                    ActionFailure::scheduler(
+                        RuntimeHostError::scheduler(ContractLocation::ReleaseLease, &error)
+                            .naming_lease(token.lease_id()),
+                    )
                 })?;
         }
         self.persist_active_instances()
@@ -2427,10 +2476,10 @@ impl HostShared {
                         }
                     }
                     Err(error) => CriticalActionReport::Failed {
-                        error: ActionFailure::scheduler(RuntimeHostError::scheduler(
-                            HostLocation::CleanupRuntimeLease,
-                            &error,
-                        )),
+                        error: ActionFailure::scheduler(
+                            RuntimeHostError::scheduler(HostLocation::CleanupRuntimeLease, &error)
+                                .naming_lease(token.lease_id()),
+                        ),
                         effect: EffectDisposition::NotPerformed,
                     },
                 }
@@ -3093,6 +3142,11 @@ impl HostShared {
         endpoint: &str,
         error: RuntimeHostError,
     ) -> RuntimeHostResult<RequestFailure> {
+        // Workflow #378 A4: a refusal of the request's lease names it.
+        let error = match lease_id {
+            Some(lease_id) => error.naming_lease(lease_id),
+            None => error,
+        };
         let links = self
             .events
             .request_links(request, instance_id, lease_id, None);
@@ -3738,13 +3792,22 @@ impl HostShared {
         if let Some(holder_kind) = holder_kind {
             detail.push_str(&format!(" holder_kind={}", holder_kind.as_str()));
         }
-        detail.push_str(&format!(" queue_position={}", removed.queued().position()));
+        let queue_position = removed.queued().position();
+        detail.push_str(&format!(" queue_position={queue_position}"));
         Err(RequestFailure::request(
             RuntimeHostError::request(
                 actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
                 HostLocation::AwaitOperatorClaim,
                 RuntimeErrorCode::QueueExpired,
             )
+            // Workflow #378 A4: the receipt's outcome carries the wait as values.
+            .with_outcome_values(|outcome| {
+                let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
+                match holder_kind {
+                    Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
+                    None => outcome,
+                }
+            })
             .with_native_detail(detail),
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),
@@ -3818,6 +3881,7 @@ impl HostShared {
                             )
                             .map_err(|error| {
                                 RuntimeHostError::scheduler(HostLocation::RenewHeldLease, &error)
+                                    .naming_lease(token.lease_id())
                             })
                     },
                 );

@@ -506,6 +506,8 @@ impl HostShared {
                         HostLocation::VerifyProposalReports,
                         RuntimeErrorCode::InvalidRequest,
                     )
+                    // Workflow #378 A4: the receipt's outcome names the report.
+                    .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
                     .with_native_detail(format!("artifact_id={artifact_id}")),
                 ));
             }
@@ -719,12 +721,15 @@ impl HostShared {
             // Workflow #375 R5b: an evidence frame that cannot be read (deleted by hand, say)
             // refuses the request; it never stops the Runtime.
             if read_projected_verified(self.artifacts.root(), reference).is_err() {
+                let artifact_id = artifact_id_text(reference)?;
                 return Err(RuntimeHostError::request(
                     HostCode::StrategicEvidenceUnavailable,
                     HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 )
-                .with_native_detail(format!("artifact_id={}", artifact_id_text(reference)?)));
+                // Workflow #378 A4: the receipt's outcome names the evidence frame.
+                .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
+                .with_native_detail(format!("artifact_id={artifact_id}")));
             }
             pointers.push(strategic_evidence_pointer(reference)?);
         }
@@ -769,6 +774,8 @@ impl HostShared {
                     HostLocation::ReadStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 )
+                // Workflow #378 A4: the receipt's outcome names the stored report.
+                .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
                 .with_native_detail(format!("artifact_id={artifact_id}")));
             };
             if stored != bytes {

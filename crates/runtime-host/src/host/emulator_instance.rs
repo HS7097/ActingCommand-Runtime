@@ -109,8 +109,9 @@ const STOP_RESULT_TOKENS: [&str; 18] = [
 fn stop_result_token(result: &str) -> Option<StopResultToken> {
     STOP_RESULT_TOKENS
         .iter()
-        .find(|token| **token == result)
-        .map(|token| StopResultToken(*token))
+        .copied()
+        .find(|token| *token == result)
+        .map(StopResultToken)
 }
 
 /// A Stop's process check as a token of the catalog vocabulary `device_process_presence`.

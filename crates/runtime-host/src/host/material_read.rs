@@ -285,6 +285,16 @@ impl HostShared {
                         ContractLocation::ReadRuntimeMaterial,
                         RuntimeErrorCode::InvalidRequest,
                     )
+                    // Workflow #378 A4: the receipt's outcome names the artifact and its event.
+                    .with_outcome_values(|outcome| {
+                        outcome
+                            .artifact_id(crate::failure_identity::identifier_text(
+                                &request.artifact_id,
+                            ))
+                            .event_id(crate::failure_identity::identifier_text(
+                                &request.event.event_id,
+                            ))
+                    })
                     .with_native_detail(format!(
                         "artifact_id={} event_id={}",
                         crate::failure_identity::identifier_text(&request.artifact_id),
