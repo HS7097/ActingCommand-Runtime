@@ -890,13 +890,6 @@ pub(super) struct RuntimeContainedTask<'a> {
     geometry_rechecked: bool,
     input_step_action_id: Option<ActionId>,
     post_input_action_id: Option<ActionId>,
-    /// #398 R1 §5.2 (RD-3i): when the last input completed; the next capture's floor. Unlike
-    /// `post_input_action_id` it outlives the step, because the first frame after an input may
-    /// be the next step's.
-    pending_input_floor: Option<Instant>,
-    /// #398 R1 §5.2 (RD-3i): the stream sequence of the frame delivered last (none for a
-    /// snapshot backend); a capture without a new input must deliver a newer frame.
-    last_frame_sequence: Option<u64>,
     last_capture_input_action_id: Option<ActionId>,
     /// Backend acquisition span of the last successful capture, consumed by its `CaptureCompleted` trace.
     last_capture_acquire_us: Option<u64>,
@@ -2877,15 +2870,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     RequestFailure::poison_without_terminal(runtime_identifier_error())
                 })?;
             let input_action_id = self.post_input_action_id.take();
-            // #398 R1 §5.2 (RD-3i): after an input the frame must be newer than its completion;
-            // otherwise newer than the frame delivered last.
-            let floor = match (self.pending_input_floor.take(), self.last_frame_sequence) {
-                (None, None) => None,
-                (after, after_sequence) => Some(actingcommand_device::CaptureFloor {
-                    after,
-                    after_sequence,
-                }),
-            };
             let links = RuntimeRunLinks::new(self.task_id, self.run_id)
                 .apply(self.host.events.request_links(
                     self.request,
@@ -2941,7 +2925,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 .capture_frame_retained_with_geometry_session_and_registration_guard(
                     self.instance_alias,
                     Some(*frame_id.transport()),
-                    floor,
+                    None,
                     registration,
                     memory,
                 );
@@ -3082,7 +3066,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         self.last_frame_captured_at = Some(frame.captured_at);
                         self.last_capture_input_action_id = input_action_id;
                         self.last_capture_acquire_us = frame.capture_acquire_us();
-                        self.last_frame_sequence = frame.stream.map(|stamp| stamp.sequence);
                         if self.configuration_records > 0 && !self.configuration_capture_recorded {
                             let selection = frame.selection.as_ref().map(|selection| {
                                 EffectiveCaptureSelection {
@@ -3368,7 +3351,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             self.ensure_active()?;
             if let RuntimeResult::InputCommitted { action_id } = success.result {
                 self.post_input_action_id = Some(action_id);
-                self.pending_input_floor = Some(Instant::now());
                 self.diagnostic_physical = Some(action_id);
                 if self.configuration_records > 0 && !self.configuration_input_recorded {
                     self.record_configuration(
@@ -5601,8 +5583,6 @@ impl HostShared {
             geometry_rechecked: false,
             input_step_action_id: None,
             post_input_action_id: None,
-            pending_input_floor: None,
-            last_frame_sequence: None,
             last_capture_input_action_id: None,
             last_capture_acquire_us: None,
             expected_stability_declaration,
