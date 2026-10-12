@@ -142,6 +142,11 @@ actingcommand_contract::outcome_codes! {
         PolicyDriverWakeMissing => "policy_driver_wake_missing": error,
         PolicyRecomputeTriggerMissing => "policy_recompute_trigger_missing": error,
         PolicyDriverTimeOverflow => "policy_driver_time_overflow": error,
+        // Workflow #397: the policy monitor's own requests to its Runtime.
+        PolicyMonitorRequestRetried => "policy_monitor_request_retried": warning,
+        PolicyMonitorRetriesExhausted => "policy_monitor_retries_exhausted": error,
+        PolicyMonitorRuntimeIdentityChanged => "policy_monitor_runtime_identity_changed": error,
+        PolicyMonitorConfigInvalid => "policy_monitor_config_invalid": error,
     }
 }
 

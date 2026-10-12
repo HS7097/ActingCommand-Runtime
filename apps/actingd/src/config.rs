@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::codes::ActingdCode;
+use crate::monitor_retry::{self, PolicyMonitorSettings};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::resource_declaration::{
@@ -556,6 +557,74 @@ struct PolicyConfigFile {
     // revision in distribution/windows/component-interfaces.json when older readers refuse this.
     #[serde(default)]
     catalog_transition: Option<CatalogTransitionConfigFile>,
+    /// Workflow #397: the policy monitor's connection to its Runtime and its retry of a
+    /// transient request failure; absent means every default.
+    // Interface anchor `actingd-config` revision 5 (contracts/component-interfaces.md): an
+    // earlier Runtime refuses a file that names it, because `policy` denies unknown fields.
+    #[serde(default)]
+    monitor: Option<PolicyMonitorConfigFile>,
+}
+
+/// `policy.monitor` (Workflow #397). Each field is optional; an absent one is its default
+/// (`monitor_retry::DEFAULT_*`), and an absent `retry_backoff_max_ms` is at least
+/// `retry_backoff_ms`.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyMonitorConfigFile {
+    #[serde(default)]
+    io_timeout_ms: Option<u64>,
+    #[serde(default)]
+    retry_limit: Option<u16>,
+    #[serde(default)]
+    retry_backoff_ms: Option<u64>,
+    #[serde(default)]
+    retry_backoff_max_ms: Option<u64>,
+}
+
+/// Workflow #397: the bounds of `policy.monitor`. The I/O timeout stays inside the runtime
+/// client's own bound (60 s); a wait between two retries is at most 10 min.
+const MIN_POLICY_MONITOR_IO_TIMEOUT_MS: u64 = 1_000;
+const MAX_POLICY_MONITOR_IO_TIMEOUT_MS: u64 = 60_000;
+const MAX_POLICY_MONITOR_RETRY_LIMIT: u16 = 100;
+const MAX_POLICY_MONITOR_BACKOFF_MS: u64 = 600_000;
+
+impl PolicyMonitorConfigFile {
+    /// The effective settings and which of them the file named; a value outside its bounds is
+    /// `policy_monitor_config_invalid`.
+    fn parameters(&self) -> Result<manifest::PolicyMonitorParameters, Code> {
+        let io_timeout_ms = self
+            .io_timeout_ms
+            .unwrap_or(monitor_retry::DEFAULT_IO_TIMEOUT_MS);
+        let retry_limit = self
+            .retry_limit
+            .unwrap_or(monitor_retry::DEFAULT_RETRY_LIMIT);
+        let retry_backoff_ms = self
+            .retry_backoff_ms
+            .unwrap_or(monitor_retry::DEFAULT_RETRY_BACKOFF_MS);
+        let retry_backoff_max_ms = self
+            .retry_backoff_max_ms
+            .unwrap_or(monitor_retry::DEFAULT_RETRY_BACKOFF_MAX_MS.max(retry_backoff_ms));
+        if !(MIN_POLICY_MONITOR_IO_TIMEOUT_MS..=MAX_POLICY_MONITOR_IO_TIMEOUT_MS)
+            .contains(&io_timeout_ms)
+            || retry_limit > MAX_POLICY_MONITOR_RETRY_LIMIT
+            || !(1..=MAX_POLICY_MONITOR_BACKOFF_MS).contains(&retry_backoff_ms)
+            || !(retry_backoff_ms..=MAX_POLICY_MONITOR_BACKOFF_MS).contains(&retry_backoff_max_ms)
+        {
+            return Err(ActingdCode::PolicyMonitorConfigInvalid.code());
+        }
+        Ok(manifest::PolicyMonitorParameters {
+            settings: PolicyMonitorSettings {
+                io_timeout: Duration::from_millis(io_timeout_ms),
+                retry_limit,
+                retry_backoff: Duration::from_millis(retry_backoff_ms),
+                retry_backoff_max: Duration::from_millis(retry_backoff_max_ms),
+            },
+            io_timeout_explicit: self.io_timeout_ms.is_some(),
+            retry_limit_explicit: self.retry_limit.is_some(),
+            retry_backoff_explicit: self.retry_backoff_ms.is_some(),
+            retry_backoff_max_explicit: self.retry_backoff_max_ms.is_some(),
+        })
+    }
 }
 
 /// `policy.catalog_transition` (Workflow #361 A): `kind` is `replace`, and the transition is
@@ -735,6 +804,9 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) provider: ConfiguredProvider,
     pub(super) policy: Option<PolicyBootstrap>,
+    /// Workflow #397: `policy.monitor`, resolved; every default without a `policy` section,
+    /// where no policy monitor runs.
+    pub(super) policy_monitor: PolicyMonitorSettings,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
@@ -1240,6 +1312,7 @@ impl ActingdConfigFile {
             catalog_transition: policy
                 .as_ref()
                 .and_then(|policy| policy.catalog_transition.as_ref()),
+            policy_monitor: policy.as_ref().map(|policy| policy.monitor),
             vision_provider_configured: provider.vision.is_some(),
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
@@ -1250,6 +1323,10 @@ impl ActingdConfigFile {
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
+        let policy_monitor = policy
+            .as_ref()
+            .map(|policy| policy.monitor.settings)
+            .unwrap_or_default();
         let policy = if let Some(policy) = policy {
             // Workflow #369 E3 (#670 ruling 1): a restart closes a scheduled dispatch whose run
             // was cut before its first task event; the host tells them apart by these refs.
@@ -1273,6 +1350,7 @@ impl ActingdConfigFile {
             host,
             provider,
             policy,
+            policy_monitor,
             manifest,
             resource_packages,
             ignored_env_overrides,
@@ -1328,6 +1406,8 @@ struct PolicyAssembly {
     catalog_transition: Option<CatalogTransitionRequest>,
     scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
     scheduled_instance_scopes: Vec<(String, String)>,
+    /// Workflow #397: `policy.monitor`, resolved.
+    monitor: manifest::PolicyMonitorParameters,
 }
 
 impl PolicyConfigFile {
@@ -1407,6 +1487,7 @@ impl PolicyConfigFile {
             .as_ref()
             .map(CatalogTransitionConfigFile::request)
             .transpose()?;
+        let monitor = self.monitor.unwrap_or_default().parameters()?;
         let scheduled_instance_scopes = compiled
             .catalog()
             .tasks
@@ -1433,6 +1514,7 @@ impl PolicyConfigFile {
             catalog_transition,
             scheduled_tasks,
             scheduled_instance_scopes,
+            monitor,
         })
     }
 }

@@ -8,6 +8,7 @@ mod check_config;
 mod codes;
 mod config;
 mod ledger_maintenance;
+mod monitor_retry;
 mod owner_unlock;
 mod suspended;
 
@@ -19,12 +20,15 @@ mod c4_support;
 // Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
+#[cfg(test)]
+mod gate_397;
 // Test-only: Workflow #378 A2a, registered refusal codes and the env-override warning.
 #[cfg(test)]
 mod gate_a2a;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Category, Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
     MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
@@ -42,6 +46,9 @@ use actingcommand_runtime_host::{
 };
 use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
+use monitor_retry::{
+    MonitorRequestFailure, MonitorRetries, MonitorRetryStep, PolicyMonitorSettings, RuntimeIdentity,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::error::Error;
@@ -55,9 +62,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const POLICY_EVENT_WAIT_MS: u64 = 250;
-// v0.11.4 flaky-tests report B1: the client default. With `wait_ms = 0` the host answers at
-// once; the budget only matters while a ledger writer stall delays the reply.
-const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {
@@ -122,6 +126,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host,
         provider,
         policy,
+        policy_monitor,
         resource_packages,
         adb_requirement,
         ..
@@ -188,7 +193,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host.runtime_info().port()
     );
     match (policy, initial_policy_cycle) {
-        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
+        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle, policy_monitor),
         (None, None) => monitor(host),
         _ => {
             let mut error = ActingdError::process(ActingdCode::PolicyBootstrapStateInvalid);
@@ -558,19 +563,19 @@ fn monitor_policy(
     host: RuntimeHost,
     policy: PolicyBootstrap,
     initial_cycle: PolicyCycleExecution,
+    monitor: PolicyMonitorSettings,
 ) -> Result<(), ActingdError> {
     let host = Arc::new(host);
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
+    // Workflow #397: the monitor's connection reaches this Runtime only.
+    let runtime = RuntimeIdentity::of(host.runtime_info());
     let setup = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
-        let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
-                .with_io_timeout(POLICY_CLIENT_IO_TIMEOUT),
-        )
-        .map_err(ActingdError::client)?;
+        let client = connect_policy_monitor(&policy, monitor).map_err(ActingdError::client)?;
+        check_policy_monitor_runtime(&client, runtime)?;
         let initial_page = client
             .query_event_page(
                 EventQuery::default(),
@@ -594,7 +599,7 @@ fn monitor_policy(
             .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSpawnFailed))?;
         Ok(Some((client, cursor, driver)))
     })();
-    let (client, mut cursor, driver) = match setup {
+    let (mut client, mut cursor, driver) = match setup {
         Ok(Some(setup)) => setup,
         Ok(None) => return close_policy_host(host),
         Err(error) => {
@@ -614,6 +619,10 @@ fn monitor_policy(
 
     let mut waiting_for_install = false;
     let mut refusals = PolicySubscriptionRefusals::default();
+    // Workflow #397: the transient failures of the monitor's own requests in a row, and when the
+    // next attempt, on a fresh connection, is due.
+    let mut retries = MonitorRetries::new(monitor);
+    let mut reconnect_at: Option<Instant> = None;
     let monitor_result = loop {
         match host.fatal_error() {
             Ok(Some(error)) => break Err(ActingdError::runtime(error)),
@@ -649,6 +658,35 @@ fn monitor_policy(
             }
             Err(error) => break Err(ActingdError::runtime(error)),
         }
+        // Workflow #397: a retry waits here in poll-sized steps, so the checks above keep their
+        // pace; once due, the request goes out again on a fresh connection, the latched one
+        // being dropped.
+        if let Some(due) = reconnect_at {
+            let now = Instant::now();
+            if now < due {
+                thread::sleep(
+                    due.saturating_duration_since(now)
+                        .min(Duration::from_millis(POLICY_EVENT_WAIT_MS)),
+                );
+                continue;
+            }
+            reconnect_at = None;
+            match connect_policy_monitor(&policy, monitor) {
+                Ok(fresh) => {
+                    if let Err(error) = check_policy_monitor_runtime(&fresh, runtime) {
+                        break Err(error);
+                    }
+                    client = fresh;
+                }
+                Err(error) => match retry_policy_monitor_request(&mut retries, runtime, error) {
+                    Ok(due) => {
+                        reconnect_at = Some(due);
+                        continue;
+                    }
+                    Err(error) => break Err(error),
+                },
+            }
+        }
         let request = match RuntimeSubscriptionRequest::new(
             EventQuery::default(),
             ProjectionProfile::Concise,
@@ -666,6 +704,7 @@ fn monitor_policy(
         let batch = match client.subscribe_events(request) {
             Ok(batch) => {
                 refusals.succeeded();
+                retries.succeeded();
                 batch
             }
             Err(error) => {
@@ -695,8 +734,17 @@ fn monitor_policy(
                         thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
                         continue;
                     }
+                    // Workflow #397: a transient I/O failure of this request is retried on a
+                    // fresh connection up to the configured bound; any other failure ends the
+                    // monitor as before.
                     PolicySubscriptionFailureAction::Fail => {
-                        break Err(ActingdError::client(error));
+                        match retry_policy_monitor_request(&mut retries, runtime, error) {
+                            Ok(due) => {
+                                reconnect_at = Some(due);
+                                continue;
+                            }
+                            Err(error) => break Err(error),
+                        }
                     }
                 }
             }
@@ -800,6 +848,74 @@ fn is_admission_refusal(code: Code, projection: Option<&RuntimeErrorProjection>)
 /// lines, a failed stdout write does not stop the daemon.
 fn report_policy_monitor(state: &str) {
     let _ = writeln!(std::io::stdout().lock(), "actingd policy_monitor {state}");
+}
+
+/// Workflow #397: the policy monitor's connection to its Runtime, with its configured I/O
+/// timeout (`policy.monitor.io_timeout_ms`).
+fn connect_policy_monitor(
+    policy: &PolicyBootstrap,
+    monitor: PolicyMonitorSettings,
+) -> Result<RuntimeClient, RuntimeClientError> {
+    RuntimeClient::connect(
+        RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
+            .with_io_timeout(monitor.io_timeout),
+    )
+}
+
+/// Workflow #397: the monitor's connection must reach the Runtime this daemon hosts; another
+/// owner epoch or process ends the monitor (`policy_monitor_runtime_identity_changed`).
+fn check_policy_monitor_runtime(
+    client: &RuntimeClient,
+    runtime: RuntimeIdentity,
+) -> Result<(), ActingdError> {
+    if RuntimeIdentity::of(client.runtime_info()) == runtime {
+        Ok(())
+    } else {
+        Err(ActingdError::process(
+            ActingdCode::PolicyMonitorRuntimeIdentityChanged,
+        ))
+    }
+}
+
+/// Workflow #397: the monitor's answer to a failed request of its own. A transient I/O failure
+/// under the bound reports its warning and returns when to send the request again, on a fresh
+/// connection; past the bound it reports the give-up and ends the monitor with the request's
+/// failure, as every other failure does at once.
+fn retry_policy_monitor_request(
+    retries: &mut MonitorRetries,
+    runtime: RuntimeIdentity,
+    error: RuntimeClientError,
+) -> Result<Instant, ActingdError> {
+    match retries.failed(&MonitorRequestFailure::of(&error), runtime) {
+        MonitorRetryStep::Retry { warning, backoff } => {
+            report_policy_monitor_outcome(&warning);
+            Ok(Instant::now() + backoff)
+        }
+        MonitorRetryStep::GiveUp { outcome } => {
+            report_policy_monitor_outcome(&outcome);
+            Err(ActingdError::client(error))
+        }
+        MonitorRetryStep::Fail => Err(ActingdError::client(error)),
+    }
+}
+
+/// Workflow #397: one daemon outcome of the policy monitor (#378 spec section 9): its developer
+/// line and its `OUTCOME actingd:` envelope on stderr, in one write. Like the monitor's stdout
+/// lines, a failed write does not stop the daemon.
+fn report_policy_monitor_outcome(outcome: &Outcome) {
+    let level = match outcome.category() {
+        Category::Success | Category::Info => "INFO",
+        Category::Warning => "WARN",
+        Category::Error => "ERROR",
+        Category::Fatal => "FATAL",
+    };
+    let lines = match serde_json::to_string(&outcome.envelope(Detail::Full)) {
+        Ok(envelope) => format!("{level} actingd: {outcome}\nOUTCOME actingd: {envelope}\n"),
+        Err(_) => format!(
+            "{level} actingd: {outcome}\nWARN actingd: the outcome envelope could not be encoded\n"
+        ),
+    };
+    let _ = std::io::stderr().lock().write_all(lines.as_bytes());
 }
 
 fn finish_policy_closeout(

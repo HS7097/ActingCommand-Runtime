@@ -7,6 +7,7 @@
 //! the host records it as the two `config.*` runtime facts.
 
 use crate::codes::ActingdCode;
+use crate::monitor_retry::PolicyMonitorSettings;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSubsystem, DeviceDiagnosticMode, FactScalar,
@@ -50,12 +51,25 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) policy_configured: bool,
     /// The configured `policy.catalog_transition` (Workflow #361 A), reported only when set.
     pub(super) catalog_transition: Option<&'a CatalogTransitionRequest>,
+    /// `policy.monitor` (Workflow #397), reported with an assembled `policy` section.
+    pub(super) policy_monitor: Option<PolicyMonitorParameters>,
     pub(super) vision_provider_configured: bool,
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
     /// Every configured instance in declaration order (Workflow #318 cfg3).
     pub(super) instances: &'a [InstanceParameters],
+}
+
+/// The effective `policy.monitor` settings (Workflow #397) and which of them the file named.
+/// They are actingd's own, not the host's, so they are reported as `assemble` resolved them.
+#[derive(Clone, Copy)]
+pub(super) struct PolicyMonitorParameters {
+    pub(super) settings: PolicyMonitorSettings,
+    pub(super) io_timeout_explicit: bool,
+    pub(super) retry_limit_explicit: bool,
+    pub(super) retry_backoff_explicit: bool,
+    pub(super) retry_backoff_max_explicit: bool,
 }
 
 /// What the file named for one instance's manifest keys; the values are read back from
@@ -249,6 +263,31 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
                 "policy.catalog_transition.expected_active_catalog_hash",
                 FactScalar::String(transition.expected_active_catalog_hash().to_owned()),
             ),
+        ]);
+    }
+    if let Some(monitor) = inputs.policy_monitor {
+        let settings = monitor.settings;
+        parameters.extend([
+            ConfigParameter {
+                key: "policy.monitor.io_timeout_ms".to_owned(),
+                value: duration_ms(settings.io_timeout)?,
+                source: explicit_or_default(monitor.io_timeout_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_limit".to_owned(),
+                value: FactScalar::Integer(i64::from(settings.retry_limit)),
+                source: explicit_or_default(monitor.retry_limit_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_backoff_ms".to_owned(),
+                value: duration_ms(settings.retry_backoff)?,
+                source: explicit_or_default(monitor.retry_backoff_explicit),
+            },
+            ConfigParameter {
+                key: "policy.monitor.retry_backoff_max_ms".to_owned(),
+                value: duration_ms(settings.retry_backoff_max)?,
+                source: explicit_or_default(monitor.retry_backoff_max_explicit),
+            },
         ]);
     }
     if let Some(mumu_root) = inputs.mumu_root {
