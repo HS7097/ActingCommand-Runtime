@@ -39,7 +39,9 @@ pub enum UnprovenReason {
     LegacyJournal,
     /// No journal epoch for the owner, or one whose records support no positive close.
     ProofMissing,
-    /// A v2 epoch that ends in a normal exit record and never recorded `ConfirmedClosed`.
+    /// Released by process exit: a consistent v2 epoch that never recorded `ConfirmedClosed`
+    /// and either ends in a normal exit record or whose last record still declares `InUse` or
+    /// `Unconfirmed` after OwnerGuard found its process gone.
     ProcessExitOnly,
 }
 
