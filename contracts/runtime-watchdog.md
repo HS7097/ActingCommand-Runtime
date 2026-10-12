@@ -108,6 +108,36 @@ FATAL, so it stays `formal_close`. A held start whose shutdown was accepted ends
 `install_startup_shut_down`, a formal stop that row 5′ holds, never restarts. A
 process probe that fails is `start_failed` with `process_probe_failed`.
 
+### Upgrade-state close (Workflow #389 U-4; not before v0.12.x)
+
+The installer's upgrade state (`runtime-interface.md`, section Upgrade state) closes
+the Runtime for an upgrade, not as a stop. Its close is the one formal close the
+watchdog brings back:
+
+- The Runtime that accepts its own close in the upgrade state writes a marker on its
+  owner-journal close record (an optional field of the owner record, named in
+  `owner-journal.md`; the schema number does not change). A RequestShutdown close
+  never carries it.
+- A maintenance owner (`ledger-maintenance`) whose preceding record is a marked close
+  copies the marker onto its own close, so the installer's cold ledger verification
+  after the upgrade state does not hide it. The marker is used up when a
+  non-maintenance Runtime owner starts; that owner's own close does not carry it.
+- U-4 adds one row after rows 5, 5′ and 6′ and before row 6 (its number is U-4's):
+  **J inactive and its close carries the upgrade-state marker → a start is
+  considered: rows 7a-7f.** So a held installer (row 7a, `installer_busy`), a changed
+  selection (7a′) and the budget (7c, 7e) still apply; otherwise the selected
+  generation starts.
+- A held new Runtime has its own owner, so rows 2 and 2′ match first and the new row no
+  longer does; a held start that times out is row 5; a new Runtime that exits with
+  another FATAL after its release is row 5′.
+- The installer holds `install\writer.lock` in every flow that closes the Runtime and
+  starts it again, from before the close until after the start, so the new row never
+  starts a Runtime the installer is still working on.
+- It works only where the task is registered (`install`); acsetup never registers it,
+  and on a machine without it the Runtime stays stopped as before. The watchdog still
+  only reads `owner.lock`; the marker is written by the Runtime and the maintenance
+  owner that copies it.
+
 **Formal starts.** A live owner is the watchdog's own when a start record names its
 epoch, or when a start whose outcome is still open (`pending`, `start_timeout`)
 spawned it: its recorded start lies in `[at − 2 s, at + 180 s]`. Every other live

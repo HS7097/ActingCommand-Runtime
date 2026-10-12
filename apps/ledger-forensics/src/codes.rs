@@ -8,10 +8,10 @@
 actingcommand_contract::outcome_codes! {
     /// actingledger's own codes: its command line and output.
     pub enum ActingledgerCode {
-        LedgerViewSourceIncomplete => "ledger_view_source_incomplete": error,
-        OutputFailed => "output_failed": error,
-        StabilityExportIncomplete => "stability_export_incomplete": error,
-        TaskEvidenceExportIncomplete => "task_evidence_export_incomplete": error,
+        LedgerViewSourceIncomplete => "ledger_view_source_incomplete": error / none,
+        OutputFailed => "output_failed": error / none,
+        StabilityExportIncomplete => "stability_export_incomplete": error / none,
+        TaskEvidenceExportIncomplete => "task_evidence_export_incomplete": error / none,
     }
 }
 

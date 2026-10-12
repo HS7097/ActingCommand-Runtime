@@ -300,8 +300,9 @@ coverage = "Y"
 tests = [
     "actingcommand-outcome-guard::guard::g9_merged_catalog_is_current_and_keeps_released_entries",
     "actingcommand-outcome-guard::guard::g9_reports_a_stale_merged_file_and_a_changed_settled_entry",
+    "actingcommand-outcome-guard::guard::gate_c5_g1b_every_code_has_a_ladder_class_and_a_settled_class_stays",
 ]
-incident = []
+incident = ["#387 D1a"]
 
 # Outcome guard G2-G5, G7, G8
 [[gate]]

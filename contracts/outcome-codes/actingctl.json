@@ -3,6 +3,7 @@
   "codes": {
     "actingctl_usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "actingctl_package_resolution_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "actingctl_fact_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "actingctl_output_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "resource_targets_file_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "task_offset_scope_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "clock_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "config_facts_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "shutdown_wait_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "shutdown_wait_journal_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "arguments_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "tier_not_enabled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -161,6 +173,7 @@
     },
     "output_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -174,6 +187,7 @@
     },
     "job_capacity_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -187,6 +201,7 @@
     },
     "job_start_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -200,6 +215,7 @@
     },
     "call_budget_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -213,6 +229,7 @@
     },
     "handle_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -226,6 +243,7 @@
     },
     "since_out_of_range": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -239,6 +257,7 @@
     },
     "errors_query_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -252,6 +271,7 @@
     },
     "cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -265,6 +285,7 @@
     },
     "cursor_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -278,6 +299,7 @@
     },
     "instance_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -291,6 +313,7 @@
     },
     "install_build_manifest_unreadable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -304,6 +327,7 @@
     },
     "install_state_root_unresolved": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -317,6 +341,7 @@
     },
     "install_process_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -330,6 +355,7 @@
     },
     "install_process_state_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -343,6 +369,7 @@
     },
     "install_root_unresolved": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -356,6 +383,7 @@
     },
     "material_ref_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -369,6 +397,7 @@
     },
     "material_ref_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -382,6 +411,7 @@
     },
     "material_query_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -395,6 +425,7 @@
     },
     "material_not_text": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -408,6 +439,7 @@
     },
     "material_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -421,6 +453,7 @@
     },
     "material_export_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -434,6 +467,7 @@
     },
     "run_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -447,6 +481,7 @@
     },
     "resource_targets_document_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -460,6 +495,7 @@
     },
     "lab_tool_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -473,6 +509,7 @@
     },
     "lab_process_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -486,6 +523,7 @@
     },
     "lab_process_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -499,6 +537,7 @@
     },
     "answer_exported": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -512,6 +551,7 @@
     },
     "client_action_without_req_id": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -525,6 +565,7 @@
     },
     "client_action_not_recorded": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -538,6 +579,7 @@
     },
     "binding_requires_unavailable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -551,6 +593,7 @@
     },
     "preflight_failed": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -564,6 +607,7 @@
     },
     "check_config_unavailable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -577,6 +621,7 @@
     },
     "check_config_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -590,6 +635,7 @@
     },
     "suspended_report_reader_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -603,6 +649,7 @@
     },
     "suspended_report_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -616,6 +663,7 @@
     },
     "suspended_report_io_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -629,6 +677,7 @@
     },
     "suspended_report_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -642,6 +691,7 @@
     },
     "suspended_report_state_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -655,6 +705,7 @@
     },
     "suspended_report_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -668,6 +719,7 @@
     },
     "mcp_workers_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -681,6 +733,7 @@
     },
     "mcp_tool_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -694,6 +747,7 @@
     },
     "watchdog_alive": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -707,6 +761,7 @@
     },
     "watchdog_formal_close": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -720,6 +775,7 @@
     },
     "watchdog_grace": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -733,6 +789,7 @@
     },
     "watchdog_installer_busy": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -746,6 +803,7 @@
     },
     "watchdog_never_started": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -759,6 +817,7 @@
     },
     "watchdog_owner_lock_held": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -772,6 +831,7 @@
     },
     "watchdog_run_in_progress": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -785,6 +845,7 @@
     },
     "watchdog_runtime_process_present": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -798,6 +859,7 @@
     },
     "watchdog_selection_changed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -811,6 +873,7 @@
     },
     "watchdog_started_runtime": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -824,6 +887,7 @@
     },
     "watchdog_misconfigured": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -837,6 +901,7 @@
     },
     "watchdog_start_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -850,6 +915,7 @@
     },
     "watchdog_owner_retained_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -863,6 +929,7 @@
     },
     "watchdog_runtime_process_without_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -876,6 +943,7 @@
     },
     "watchdog_budget_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -889,6 +957,7 @@
     },
     "watchdog_fatal_hold": {
       "category": "fatal",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -902,6 +971,7 @@
     },
     "watchdog_formal_start_observed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -915,6 +985,7 @@
     },
     "watchdog_installed": {
       "category": "success",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -928,6 +999,7 @@
     },
     "watchdog_uninstalled": {
       "category": "success",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -941,6 +1013,7 @@
     },
     "watchdog_state_reset": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -954,6 +1027,7 @@
     },
     "watchdog_config_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -967,6 +1041,7 @@
     },
     "watchdog_directory_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -980,6 +1055,7 @@
     },
     "watchdog_journal_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -993,6 +1069,7 @@
     },
     "watchdog_journal_unrecognised": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1006,6 +1083,7 @@
     },
     "watchdog_launcher_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1019,6 +1097,7 @@
     },
     "watchdog_layout_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1032,6 +1111,7 @@
     },
     "watchdog_log_directory_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1045,6 +1125,7 @@
     },
     "watchdog_log_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1058,6 +1139,7 @@
     },
     "watchdog_log_unwritable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1071,6 +1153,7 @@
     },
     "watchdog_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1084,6 +1167,7 @@
     },
     "watchdog_root_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1097,6 +1181,7 @@
     },
     "watchdog_run_lock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1110,6 +1195,7 @@
     },
     "watchdog_state_root_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1123,6 +1209,7 @@
     },
     "watchdog_state_unreadable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1136,6 +1223,7 @@
     },
     "watchdog_state_unwritable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1149,6 +1237,7 @@
     },
     "watchdog_task_delete_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1162,6 +1251,7 @@
     },
     "watchdog_task_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1175,6 +1265,7 @@
     },
     "watchdog_task_query_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1188,6 +1279,7 @@
     },
     "watchdog_task_register_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1201,6 +1293,7 @@
     },
     "watchdog_user_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1214,6 +1307,7 @@
     },
     "watchdog_wmi_path_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1227,6 +1321,7 @@
     },
     "watchdog_writer_lock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1240,6 +1335,7 @@
     },
     "entry_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1253,6 +1349,7 @@
     },
     "log_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1266,6 +1363,7 @@
     },
     "spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1279,6 +1377,7 @@
     },
     "wmi_start_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1292,6 +1391,7 @@
     },
     "exited_during_startup": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1305,6 +1405,7 @@
     },
     "start_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1318,6 +1419,7 @@
     },
     "process_probe_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1329,8 +1431,43 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "lab_tool_option_disabled": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "lab_option": "required",
+        "mcp_blocker": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve was called for a Lab option tool whose option is not installed: a tool that tools/list did not list, or one whose option was switched off after the session listed it (each call checks the options again). No actinglab child process starts. lab_option names the option; mcp_blocker is installer_lab_option.",
+      "common_causes": "The Lab option was not ticked in the installer, or was removed while an agent session was open.",
+      "handling": "Tick the option on the installer's Lab page. The tool list changes from the next MCP session."
+    },
+    "mcp_tier_retired": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve was started with the retired --tier argument. MCP has no tiers from #389 U-3 on: the server starts as usual with every general tool and the tools of the installed Lab options, and reports this once on stderr and in the tools/list warnings.",
+      "common_causes": "A harness configuration written before #389 U-3.",
+      "handling": "Remove --tier from the harness configuration; actingctl mcp-config prints the current form."
+    },
     "start_runtime_already_running": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1346,6 +1483,7 @@
     },
     "start_wait_idle_expired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
