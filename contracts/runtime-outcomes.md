@@ -113,12 +113,35 @@ Between Runtime modules outcomes always travel full.
 - **`vocabularies`**: `{description, tokens: {token: {description, category?}}, source?, review?}`.
   `source` `{file, enum}` names the Rust enum the tokens must equal; every `event_type` token has
   a category.
-- **Code entry**: `category`, `owner`, `layer`, `uncertain`, `values` (`key: required|optional`),
-  `review` (`pending`|`settled`), `status` (`active`|`retired`), `since`, `description`,
-  `common_causes`, `handling` (`TBD` while pending), and `retired_in`, `replaced_by` once retired.
-  A location entry has `owner`, `layer`, `review`, `status`, `since`, `description`.
+- **Code entry**: `category`, `ladder_class`, `owner`, `layer`, `uncertain`, `values`
+  (`key: required|optional`), `review` (`pending`|`settled`), `status` (`active`|`retired`),
+  `since`, `description`, `common_causes`, `handling` (`TBD` while pending), and `retired_in`,
+  `replaced_by` once retired. A location entry has `owner`, `layer`, `review`, `status`, `since`,
+  `description`.
+- **`ladder_class`** (Workflow #387 D1a): how the recovery ladder's trigger matching reads the
+  code. Every code entry, retired ones included, names exactly one token of the vocabulary
+  `ladder_class`; a `stability_warning` code is of category `warning` or `error`. The class does
+  not decide whether a code starts the ladder; the ladder's configuration does, by class or by
+  code. Once settled, the class never changes (G9). The class is the first row, in this order,
+  whose rule the code meets:
+
+  | # | `ladder_class` | Rule |
+  |---|---|---|
+  | 1 | `planned_stop` | a person, a rule or the pack's design stopped the run on purpose |
+  | 2 | `budget_or_permission` | the work lacked time, samples, attempts, quota or permission |
+  | 3 | `declaration_error` | a pack, a binding or a configuration the work uses is itself wrong or incompatible; decided without looking at the screen, the same on every run |
+  | 4 | `pack_logic_mismatch` | the screen or the flow differs from what the pack declares; known only by looking at the screen |
+  | 5 | `environment_fault` | a device, a backend, ADB, the emulator or the vision provider could not open or failed, and the work ended because of it |
+  | 6 | `stability_warning` | a device, connection, capture or input anomaly on one instance that the Runtime retried or survived (category `warning` or `error`) |
+  | 7 | `none` | a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error |
+
+  Rows 1-6 describe how work on an instance (a run, its preparation, its device) ended or
+  degraded. A code of a process start or a command line, a client or MCP call, the Runtime's own
+  configuration or a refused contract value is row 7, whatever its words; a pack, binding or
+  configuration that a run uses and finds wrong is row 3. Rows 3 and 4 part at the screen: a
+  condition decided from the declarations alone is row 3, one that needs the screen is row 4.
 - **Release snapshot**: `{schema_version: "actingcommand.outcome-codes.release.v1", release,
-  codes: {name: {category, review, status, values: {key: {type, required}}}},
+  codes: {name: {category, ladder_class, review, status, values: {key: {type, required}}}},
   locations: {name: {review, status}}}`.
 
 ### Regenerating the merged file
@@ -148,7 +171,7 @@ scanned. An unparsable registry macro fails G1.
 
 | Check | Fails on | On since |
 |---|---|---|
-| G1 | a registry entry (`outcome_codes!`, `outcome_locations!`) missing from the fragments, or of another owner or category, or retired; an active fragment entry with no registry entry; a spelling registered twice | A1 |
+| G1 | a registry entry (`outcome_codes!`, `outcome_locations!`) missing from the fragments, or of another owner, category or ladder class, or retired; an active fragment entry with no registry entry; a spelling registered twice | A1; ladder class #387 D1a |
 | G2 | a string-typed field or parameter named `code`, `*_code`, `reason`, `*_reason`, `failure`, `operation`, `*_operation`, `stage`, `*_stage`, `boundary`; a `Result` whose error is a string; a getter `code`, `*_code`, `reason`, `*_reason`, `key`, `operation`, `stage` returning a string. A tuple, array or slice holding a string type counts. A non-test `include!` is reported too, since the guard cannot see the included source | A2a-A2e, member by member |
 | G3 | a `json!` key `code`, `*_code`, `reason`, `*_reason`, `category`, `operation`, `*_operation`, `stage`, `*_stage`, `boundary` | A2a-A2e |
 | G4 | `From<String>`/`FromStr`/a string constructor for `Code`, `Location`, `CodeStr`, or a registry constructor, outside the outcome module | A2a-A2e |
@@ -156,8 +179,12 @@ scanned. An unparsable registry macro fails G1.
 | G6 | persisted prose fields in contract types | A3 |
 | G7 | `outcome_keys!` differs from the catalog `keys`; a vocabulary enum (`outcome_vocabulary!` or a `source` enum) differs from its catalog vocabulary | A1 |
 | G8 | an entry since 0.12.0 that breaks `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` (3-64 bytes); a prefix outside its owners; a reserved prefix | A1 |
-| G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, key types, required set); a released retired entry active again | A1 |
+| G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again | A1; ladder class #387 D1a |
 | G10 | a settled entry without text; a pending entry at the v0.12.1 release; a release tag without a snapshot | A8 |
+
+Loading the catalog, which every check does first, refuses a code entry without a
+`ladder_class`, with a class that is not a token of the vocabulary `ladder_class`, or a
+`stability_warning` code of another category than `warning` or `error` (#387 D1a).
 
 The G2-G5 allow list (`ALLOW_LIST` in the guard) starts with every workspace member, one reason
 each; each A2 part removes the members it converts. Standing entries, kept after B6: wire
@@ -177,11 +204,13 @@ the slice that removes it.
 ## Rust API (`actingcommand_contract::outcome`)
 
 - One registry per owning crate, in `src/codes.rs`:
-  `outcome_codes! { pub enum HostCode { InstanceDiscoveryUnavailable => "instance_discovery_unavailable": error } }`
+  `outcome_codes! { pub enum HostCode { InstanceDiscoveryUnavailable => "instance_discovery_unavailable": error / environment_fault } }`
+  (category, then the ladder class after `/`)
   and `outcome_locations! { pub enum HostLocation { DiscoverInstances => "discover_instances" } }`.
-  They generate `ALL`, `as_str`, `category`/`location` and `From` into `Code` or `Location`,
-  which nothing else can build. `outcome_vocabulary!` declares a vocabulary enum. Attributes
-  on the enum and its variants, serde attributes included, pass through unchanged.
+  They generate `ALL`, `as_str`, `category` and `ladder_class` (a `LadderClass`) or `location`,
+  and `From` into `Code` or `Location`, which nothing else can build. `outcome_vocabulary!`
+  declares a vocabulary enum. Attributes on the enum and its variants, serde attributes included,
+  pass through unchanged.
 - `Outcome::new(code)` with one typed setter per key (`.path(p)`, `.stage(location)`,
   `.io_kind(kind)`, …), `.caused_by(link)`, `.link(relation, link)`, `Outcome::from_io_error`,
   and `.envelope(Detail::Codes | Detail::Full)`. A vocabulary key accepts only tokens of its

@@ -12,6 +12,6 @@ actingcommand_contract::outcome_codes! {
         /// folders below `<state root>\kept` to look for it there: a listing failed, or `kept`
         /// itself is a reparse point, which is never followed (keys `entry`, `io_kind`,
         /// `os_error`). The read fails; the lookup map of the previous walk stays.
-        ArtifactKeptWalkFailed => "artifact_kept_walk_failed": error,
+        ArtifactKeptWalkFailed => "artifact_kept_walk_failed": error / none,
     }
 }

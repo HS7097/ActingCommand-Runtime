@@ -332,4 +332,6 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // Workflow #387 D1a: a code's ladder class, as a value.
+    ladder_class: vocab(ladder_class),
 }

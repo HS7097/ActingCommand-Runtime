@@ -13,15 +13,15 @@ actingcommand_contract::outcome_codes! {
         /// candidate is deferred with no wake, until the facts, the catalog or the
         /// configuration change (keys `instance_id`, `fact_key`, `unknown_reason`; optional
         /// `reader_problem`).
-        FactRefreshUnbound => "fact_refresh_unbound": warning,
+        FactRefreshUnbound => "fact_refresh_unbound": warning / none,
         /// Warning. A candidate's selection document read an input that no reading can
         /// supply (an instruction key, pack data, a fixed field or a lookup that covers no
         /// value) and found it unknown: the candidate is deferred with no wake, until the facts
         /// or the catalog change (keys `instance_id`, `rule_id`, `unknown_reason`).
-        SelectionInputUnknown => "selection_input_unknown": warning,
+        SelectionInputUnknown => "selection_input_unknown": warning / none,
         /// Warning. A scheduling-layer selection document declares a `drop_candidate` or a
         /// substitute clause, which the scheduling layer does not apply (keys `rule_id`,
         /// `unknown_clause`).
-        SelectionUnknownClauseIgnored => "selection_unknown_clause_ignored": warning,
+        SelectionUnknownClauseIgnored => "selection_unknown_clause_ignored": warning / declaration_error,
     }
 }

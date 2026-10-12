@@ -9,8 +9,8 @@
 actingcommand_contract::outcome_codes! {
     /// Why the model listing of a vision root cannot be used.
     pub enum VisionListingCode {
-        VisionRootUnavailable => "vision_root_unavailable": error,
-        VisionModelsEmpty => "vision_models_empty": error,
-        VisionModelFolderInvalid => "vision_model_folder_invalid": error,
+        VisionRootUnavailable => "vision_root_unavailable": error / none,
+        VisionModelsEmpty => "vision_models_empty": error / none,
+        VisionModelFolderInvalid => "vision_model_folder_invalid": error / none,
     }
 }

@@ -45,6 +45,21 @@ crate::outcome_vocabulary! {
 }
 
 crate::outcome_vocabulary! {
+    /// How the recovery ladder's trigger matching reads a code (vocabulary `ladder_class`,
+    /// Workflow #387 model v1.2 §3.2). Every catalog code names exactly one: the first row of the
+    /// decision table, in this order, that the code meets.
+    pub enum LadderClass: "ladder_class" {
+        PlannedStop => "planned_stop",
+        BudgetOrPermission => "budget_or_permission",
+        DeclarationError => "declaration_error",
+        PackLogicMismatch => "pack_logic_mismatch",
+        EnvironmentFault => "environment_fault",
+        StabilityWarning => "stability_warning",
+        NotApplicable => "none",
+    }
+}
+
+crate::outcome_vocabulary! {
     /// The third party whose text `raw_text` carries (vocabulary `raw_source`).
     pub enum RawSource: "raw_source" {
         Os => "os",

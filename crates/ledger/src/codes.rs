@@ -10,7 +10,7 @@ actingcommand_contract::outcome_codes! {
     pub(crate) enum LedgerCode {
         /// Error. A query on a selected ledger read (`GlobalLedger::open_selected`) named no
         /// event type, a type the read did not select, or a view (no keys).
-        SelectionQueryUnsupported => "ledger_selection_query_unsupported": error,
+        SelectionQueryUnsupported => "ledger_selection_query_unsupported": error / none,
     }
 }
 
