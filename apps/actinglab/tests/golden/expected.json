@@ -4012,18 +4012,24 @@
           ],
           "receipt": {
             "correlation_id": "<CORRELATION_ID>",
+            "outcome": {
+              "category": "success",
+              "code": "request_run_contained_task_completed",
+              "schema_version": "actingcommand.outcome.v1",
+              "values": {}
+            },
             "request_id": "<REQUEST_ID>",
             "result": {
               "executed_steps": 0,
               "final_page": "arknights/home",
               "kind": "contained_task_completed",
-              "outcome": "success",
               "response_deadline_monotonic_ms": "<TIME>",
               "run_id": "<RUN_ID>",
               "task_id": "<TASK_ID>",
-              "task_request_id": "<REQUEST_ID>"
+              "task_request_id": "<REQUEST_ID>",
+              "task_result": "success"
             },
-            "schema_version": "actingcommand.runtime.receipt.v1",
+            "schema_version": "actingcommand.runtime.receipt.v2",
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
