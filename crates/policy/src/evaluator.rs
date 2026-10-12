@@ -15,7 +15,7 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codes::PolicyCode;
+use crate::codes::{PolicyCode, SchedulingRulePolicyCode};
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
@@ -1296,8 +1296,10 @@ const MAX_DECISION_RECORD_CANDIDATES: usize = 8;
 const TRUNCATED_DETAIL_BYTES: usize = 1_010;
 const TRUNCATION_MARK: &str = "…[truncated]";
 
-/// Appends the dispatch decision record after `ranked` on every selected chain (Workflow #308
-/// RT-S1c) and keeps each selected decision's reasons equal to its chain: `rank_breakdown`,
+/// Closes the round's explanations. First every decision left without a reason is settled with
+/// `decision_reason_missing` (Workflow #386 SR-6a), so no record below names `none`. Then the
+/// dispatch decision record is appended after `ranked` on every selected chain (Workflow #308
+/// RT-S1c), and each selected decision's reasons are kept equal to its chain: `rank_breakdown`,
 /// `decision_record`, then `candidate_not_selected:<task>` for at most eight related
 /// candidates. A chain without room for the first two appends nothing and says so in `ranked`.
 /// No other decision gains a reason.
@@ -1307,6 +1309,7 @@ fn append_decision_records(
     selected: &[(usize, usize)],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
 ) -> PolicyEvaluationResult<()> {
+    settle_decisions_left_without_reason(work);
     for &(chain_index, work_index) in selected {
         let length = reason_chains
             .get(chain_index)
@@ -1347,6 +1350,33 @@ fn append_decision_records(
         work[work_index].reasons.clone_from(chain);
     }
     Ok(())
+}
+
+/// Workflow #386 SR-6a (scheduling model v1.4.2 §8.2 item 2): every decision that is not
+/// selected carries at least one reason, its last one being why it does not run. A path that left
+/// one without any reason is a programming error. The decision gets `decision_reason_missing`
+/// (error; `task_id`, `instance_id`) and stays unselected; an eligible one is deferred. The round
+/// goes on, and the gap is visible in the decision and in every dispatch decision record that
+/// lists it.
+fn settle_decisions_left_without_reason(work: &mut [TaskWork]) {
+    for entry in work.iter_mut() {
+        if entry.state == SchedulingDecisionState::Selected || !entry.reasons.is_empty() {
+            continue;
+        }
+        // Only `TaskWork::blocked_without_instance` builds a decision without an instance, and
+        // always with its reason.
+        let Some(instance_id) = entry.instance_id.as_deref() else {
+            continue;
+        };
+        let detail = format!("task_id={} instance_id={instance_id}", entry.task_id);
+        entry.reasons.push(reason(
+            SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
+            detail,
+        ));
+        if entry.state == SchedulingDecisionState::Eligible {
+            entry.state = SchedulingDecisionState::Deferred;
+        }
+    }
 }
 
 /// A work entry's rank and rank record, when it reached the ranking.
@@ -1456,12 +1486,14 @@ fn decision_record(
     Ok(reasons)
 }
 
-/// Every path that leaves a candidate unselected ends with the reason that settled it.
+/// Every path that leaves a candidate unselected ends with the reason that settled it, and a
+/// decision left without one has been given `decision_reason_missing` before any record names it
+/// (`settle_decisions_left_without_reason`), so `why` is never `none` (Workflow #386 SR-6a).
 fn last_reason_code(entry: &TaskWork) -> &str {
-    entry
-        .reasons
-        .last()
-        .map_or("none", |reason| reason.code.as_str())
+    entry.reasons.last().map_or(
+        SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
+        |reason| reason.code.as_str(),
+    )
 }
 
 /// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`. Under an
