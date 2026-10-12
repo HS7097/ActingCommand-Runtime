@@ -683,6 +683,51 @@ mod tests {
         assert!(matches!(journal, Journal::Unrecognised { .. }));
     }
 
+    /// Workflow #389 TU-44 (unified interface model v2.2.3, section 8.2; section 3.6): the
+    /// watchdog reads a close that carries the upgrade-state marker as usual, as the last
+    /// record and as a checkpoint's `last_record`, with the owner record schema still v2.
+    #[test]
+    fn tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual() {
+        const STARTED: &str = r#"{"schema_version":"actingcommand.runtime-owner.v2","revision":3,"owner_epoch":"epoch_three","pid":12,"started_at_unix_ms":400,"active":true,"active_instances":[],"closed_at_unix_ms":null,"resource_disposition":"none"}"#;
+        const CLOSED: &str = r#"{"schema_version":"actingcommand.runtime-owner.v2","revision":4,"owner_epoch":"epoch_three","pid":12,"started_at_unix_ms":400,"active":false,"active_instances":[],"closed_at_unix_ms":500,"resource_disposition":"none"}"#;
+        const MARKED: &str = r#"{"schema_version":"actingcommand.runtime-owner.v2","revision":4,"owner_epoch":"epoch_three","pid":12,"started_at_unix_ms":400,"active":false,"active_instances":[],"closed_at_unix_ms":500,"resource_disposition":"none","closed_by":"upgrade_state"}"#;
+        const NEXT: &str = r#"{"schema_version":"actingcommand.runtime-owner.v2","revision":5,"owner_epoch":"epoch_four","pid":13,"started_at_unix_ms":600,"active":true,"active_instances":[],"closed_at_unix_ms":null,"resource_disposition":"none"}"#;
+        let checkpoint = |last_record: &str| {
+            format!(
+                r#"{{"schema_version":"actingcommand.runtime-owner-checkpoint.v1","predecessor_bytes":1,"predecessor_sha256":"{}","last_record":{last_record},"epochs":[],"prefixes":[]}}"#,
+                "0".repeat(64)
+            )
+        };
+        let closed = OwnerRecord {
+            schema_version: "actingcommand.runtime-owner.v2".to_owned(),
+            owner_epoch: "epoch_three".to_owned(),
+            pid: 12,
+            started_at_unix_ms: 400,
+            active: false,
+            closed_at_unix_ms: Some(500),
+            resource_disposition: Some("none".to_owned()),
+        };
+
+        // The upgrade state's close is the last record.
+        let marked = format!("{STARTED}\n{MARKED}\n");
+        let unmarked = format!("{STARTED}\n{CLOSED}\n");
+        let journal = parse_journal(marked.as_bytes(), 5);
+        assert_eq!(record(&journal), &closed);
+        assert_eq!(journal, parse_journal(unmarked.as_bytes(), 5));
+        assert_eq!(owner_blocks(marked.as_bytes()), Ok(vec![closed.clone()]));
+
+        // The next owner folded it into its checkpoint's `last_record`.
+        let marked = format!("{}\n{NEXT}\n", checkpoint(MARKED));
+        let unmarked = format!("{}\n{NEXT}\n", checkpoint(CLOSED));
+        let owners = owner_blocks(marked.as_bytes()).expect("owners of a folded journal");
+        assert_eq!(owners.first(), Some(&closed));
+        assert_eq!(
+            Ok(owners),
+            owner_blocks(unmarked.as_bytes()),
+            "the marker changes nothing the watchdog reads"
+        );
+    }
+
     #[test]
     fn fatal_lines_skip_a_lost_start_race_and_survive_a_multi_line_detail() {
         assert_eq!(

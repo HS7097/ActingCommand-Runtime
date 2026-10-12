@@ -160,8 +160,9 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::fatal_lines_skip_a_lost_start_race_and_survive_a_multi_line_detail",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::processes_count_under_the_root_or_without_a_path",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::verbatim_paths_become_plain",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual",
 ]
-incident = []
+incident = ["#389 U-1"]
 
 # Watchdog state, log and task
 [[gate]]
