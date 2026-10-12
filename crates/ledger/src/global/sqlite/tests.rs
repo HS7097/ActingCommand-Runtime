@@ -376,12 +376,12 @@ fn a_format_1_ledger_is_refused_and_a_new_ledger_is_format_2() {
 
     let formal_root = TempDir::new().expect("formal root");
     let formal = database(formal_root.path());
-    initialize_formal_empty(&*formal).expect("initialize a formal ledger");
-    assert_eq!(format(&*formal), 2);
-    assert!(has_schema(&*formal).expect("format 2 schema"));
-    mark_format_1(&*formal);
+    initialize_formal_empty(&formal).expect("initialize a formal ledger");
+    assert_eq!(format(&formal), 2);
+    assert!(has_schema(&formal).expect("format 2 schema"));
+    mark_format_1(&formal);
     assert_refused(
-        has_schema(&*formal).err().expect("format 1 schema refused"),
+        has_schema(&formal).expect_err("format 1 schema refused"),
         "schema",
     );
 
@@ -392,20 +392,19 @@ fn a_format_1_ledger_is_refused_and_a_new_ledger_is_format_2() {
             .expect("writer");
     ledger.append(draft(1)).expect("first");
     ledger.close().expect("close");
-    mark_format_1(&*database);
+    mark_format_1(&database);
     assert_refused(
         GlobalLedger::open_sqlite_candidate(config(root.path(), "format"), Arc::clone(&database))
-            .err()
-            .expect("format 1 open refused"),
+            .expect_err("format 1 open refused"),
         "open",
     );
     assert_refused(
-        read_snapshot(&*database, None)
+        read_snapshot(&database, None)
             .err()
             .expect("format 1 read refused"),
         "read",
     );
-    assert_eq!(format(&*database), 1, "the refusal writes nothing");
+    assert_eq!(format(&database), 1, "the refusal writes nothing");
 }
 
 #[test]

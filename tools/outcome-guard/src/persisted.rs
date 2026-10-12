@@ -37,7 +37,7 @@ pub const PERSISTED_ROOTS: &[&str] = &[
 ];
 
 /// One member of a serde type.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Member {
     /// `Type.member` or `Enum::Variant.member`; a tuple member is named by its index.
     pub item: String,
@@ -47,7 +47,7 @@ pub struct Member {
 }
 
 /// One serde type a file defines.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SerdeType {
     pub path: String,
     pub name: String,

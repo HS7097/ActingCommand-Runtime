@@ -563,7 +563,12 @@ impl HostShared {
             ),
             _ => (false, false),
         };
-        if error.diagnostics().native_detail().is_none()
+        // Ledger revision 3: the device message of a failure without a fixed summary was the
+        // primary detail's message before; the failure's outcome now carries it as a foreign
+        // link, so like the detail it needs no lifecycle fact of its own.
+        let native_detail_recorded = error.diagnostics().native_detail().is_none()
+            || (primary_detail_recorded && error.diagnostics().native_detail_is_device_message());
+        if native_detail_recorded
             && error.lifecycle.capacity.is_none()
             && (error.diagnostic_detail().is_none() || primary_detail_recorded)
             && (error.cleanup_cause().is_none() || cleanup_cause_recorded)

@@ -2056,6 +2056,13 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         .iter()
         .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
         .expect("failed policy execution");
+    // Ledger revision 3: the policy execution record carries no outcome (its failure identity
+    // stays `error_code`), so its severity is its event type's category, info.
+    assert_eq!(
+        execution.severity,
+        EventSeverity::Info,
+        "the recoverable policy execution records its event type's category"
+    );
     let ProjectionPayload::Full(payload) = &execution.payload else {
         panic!("failed forensic execution payload")
     };

@@ -142,6 +142,10 @@ pub struct ExecutionFailureContext {
     adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
+    /// The native detail is the device message that the failure's own diagnostic detail
+    /// carried before ledger revision 3 (a device failure without a fixed summary). The
+    /// failure record's outcome holds it, so it needs no extra lifecycle record.
+    native_detail_is_device_message: bool,
     causes: Vec<ExecutionLifecycleCause>,
     resources: Vec<ExecutionResourceContribution>,
     close_recording: bool,
@@ -178,6 +182,12 @@ impl ExecutionFailureContext {
         self.native_detail.as_deref()
     }
 
+    /// Whether the native detail is the device message of a failure without a fixed summary,
+    /// which the failure record's own outcome carries (see the field).
+    pub const fn native_detail_is_device_message(&self) -> bool {
+        self.native_detail_is_device_message
+    }
+
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -203,6 +213,7 @@ impl ExecutionFailureContext {
 
     pub fn with_native_detail(mut self, detail: LifecycleNativeDetail) -> Self {
         self.native_detail = Some(Box::new(detail));
+        self.native_detail_is_device_message = false;
         self
     }
 
@@ -475,6 +486,7 @@ impl ExecutionKernelError {
                     .collect(),
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
+                native_detail_is_device_message: error.diagnostic_message().is_none(),
                 causes,
                 resources: error
                     .resource_contributions()

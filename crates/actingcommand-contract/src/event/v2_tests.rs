@@ -3305,8 +3305,10 @@ fn revision_3_records_carry_their_outcome_and_round_trip() {
             .expect("round-tripped record validates");
         assert_eq!(round_trip, *sanitized.payload());
         let public = serde_json::to_string(&round_trip.public_projection()).expect("public");
+        // Codes mode drops the foreign text but keeps the vocabulary token
+        // `raw_text_sensitivity` (model section 4.3), so the member itself is checked.
         assert!(
-            !public.contains("raw_text"),
+            !public.contains("\"raw_text\""),
             "{event_type:?} public raw text"
         );
     }

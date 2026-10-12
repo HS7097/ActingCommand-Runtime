@@ -1595,8 +1595,10 @@ pub struct DiagnosticOutcomePayload {
     outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<DiagnosticDetailRecord>,
+    // Boxed like the former `cleanup_cause`: inline it would make this payload the one large
+    // variant of every family enum that holds it (clippy `large_enum_variant`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    cleanup_detail: Option<DiagnosticDetailRecord>,
+    cleanup_detail: Option<Box<DiagnosticDetailRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5115,8 +5117,8 @@ impl DiagnosticOutcomePayload {
         self.detail.as_ref()
     }
 
-    pub const fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
-        self.cleanup_detail.as_ref()
+    pub fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.cleanup_detail.as_deref()
     }
 
     /// The failure this record reports (ledger revision 3).
@@ -5446,7 +5448,7 @@ impl PayloadDetail for DiagnosticOutcomePayload {
     }
 
     fn cleanup_detail(&self) -> Option<&DiagnosticDetailRecord> {
-        self.cleanup_detail.as_ref()
+        self.cleanup_detail.as_deref()
     }
 
     fn outcome(&self) -> Option<&Outcome> {
@@ -6203,7 +6205,7 @@ impl PolicyExecutionDraft {
             task_id: self.data.task_id,
             instance_id: self.data.instance_id,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
-            outcome: self.data.outcome,
+            policy_result: self.data.outcome,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7558,7 +7560,7 @@ impl DiagnosticOutcomeDraft {
             Some(cause) => {
                 let (link, detail) = cause.sanitize()?;
                 outcome = outcome.link(CauseRelation::Cleanup, link);
-                detail
+                detail.map(Box::new)
             }
             None => None,
         };

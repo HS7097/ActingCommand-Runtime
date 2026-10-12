@@ -1698,8 +1698,6 @@ impl HostShared {
     }
 }
 
-/// The outcome of a rung's failure reason (ledger revision 3): the code the reason relays,
-/// with the instance and the ladder's lease when the reason is that the ladder lost its key.
 /// The outcome of a failed rung (ledger revision 3): its reason's outcome; a holding
 /// interruption (review L6) is `recovery_ladder_interrupted` (warning) caused by it, so a rung
 /// an interruption ended records no error point, as an interrupted climb does not (review L-7).

@@ -233,6 +233,18 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
+        "crates/artifact-store/src/error.rs",
+        "RetainedCause.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a store failure's retained cause keeps the store error's code and operation as raised (the ArtifactStoreError.code and ArtifactStoreError.operation bridges); ledger revision 3 (A3) types them only where the failure is recorded (RetainedCause::recorded); they take Code and Location with the store error once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "RetainedCause.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a store failure's retained cause keeps the store error's code and operation as raised (the ArtifactStoreError.code and ArtifactStoreError.operation bridges); ledger revision 3 (A3) types them only where the failure is recorded (RetainedCause::recorded); they take Code and Location with the store error once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
         "crates/artifact-store/src/frame_store.rs",
         "RecognitionState::Failed.reason",
         &[Check::G2],

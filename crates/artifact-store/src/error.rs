@@ -21,7 +21,7 @@ pub struct ArtifactStoreError {
     code: &'static str,
     operation: &'static str,
     detail: String,
-    secondary: Vec<ArtifactFailureCause>,
+    secondary: Vec<RetainedCause>,
     omitted_secondary_count: u64,
     fatal: bool,
     raw_os_error: Option<i32>,
@@ -228,24 +228,11 @@ impl ArtifactStoreError {
         self
     }
 
-    /// This failure as one cause of a recorded artifact failure (ledger revision 3, Workflow #378
-    /// A3): its registered code and location. A relayed spelling the catalog does not list is
-    /// never dropped: the cause is the store's `artifact_publish_failed` at `store_artifact`, and
-    /// the unlisted spellings lead its native text.
-    fn primary_cause(&self) -> ArtifactFailureCause {
-        let (code, operation, text) =
-            match Code::relayed(self.code).zip(Location::relayed(self.operation)) {
-                Some((code, operation)) => (code, operation, self.detail.clone()),
-                None => (
-                    StoreCode::ArtifactPublishFailed.code(),
-                    StoreLocation::StoreArtifact.location(),
-                    format!("{} during {}: {}", self.code, self.operation, self.detail),
-                ),
-            };
-        let (text, truncated) = bounded_text(&text, 1024);
-        ArtifactFailureCause {
-            code,
-            operation,
+    fn primary_cause(&self) -> RetainedCause {
+        let (text, truncated) = bounded_text(&self.detail, 1024);
+        RetainedCause {
+            code: self.code,
+            operation: self.operation,
             native_detail: LifecycleNativeDetail::new(text, truncated),
             raw_os_error: self.raw_os_error,
         }
@@ -259,8 +246,8 @@ impl ArtifactStoreError {
         ArtifactFailureDraft {
             artifact_id,
             stage,
-            primary: self.primary_cause(),
-            secondary: self.secondary.clone(),
+            primary: self.primary_cause().recorded(),
+            secondary: self.secondary.iter().map(RetainedCause::recorded).collect(),
             omitted_secondary_count: self.omitted_secondary_count,
             capacity: self.capacity.as_deref().cloned(),
         }
@@ -299,6 +286,53 @@ impl ArtifactStoreError {
         }
         let (text, clipped) = bounded_text(&text, 1024);
         LifecycleNativeDetail::new(text, truncated || clipped)
+    }
+}
+
+/// One cause a store failure keeps, with the code and operation spellings it was raised with:
+/// they stay strings while the runtime host relays its own codes (Workflow #378, slice A2b), so
+/// the error's text names them as raised. The cause becomes typed only when the failure is
+/// recorded ([`RetainedCause::recorded`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetainedCause {
+    code: &'static str,
+    operation: &'static str,
+    native_detail: LifecycleNativeDetail,
+    raw_os_error: Option<i32>,
+}
+
+impl RetainedCause {
+    /// This cause as one step of a recorded artifact failure (ledger revision 3, Workflow #378
+    /// A3): its registered code and location. A relayed spelling the catalog does not list is
+    /// never dropped: the step is the store's `artifact_publish_failed` at `store_artifact`, and
+    /// the unlisted spellings lead its native text.
+    fn recorded(&self) -> ArtifactFailureCause {
+        match Code::relayed(self.code).zip(Location::relayed(self.operation)) {
+            Some((code, operation)) => ArtifactFailureCause {
+                code,
+                operation,
+                native_detail: self.native_detail.clone(),
+                raw_os_error: self.raw_os_error,
+            },
+            None => {
+                let text = format!(
+                    "{} during {}: {}",
+                    self.code,
+                    self.operation,
+                    self.native_detail.text()
+                );
+                let (text, clipped) = bounded_text(&text, 1024);
+                ArtifactFailureCause {
+                    code: StoreCode::ArtifactPublishFailed.code(),
+                    operation: StoreLocation::StoreArtifact.location(),
+                    native_detail: LifecycleNativeDetail::new(
+                        text,
+                        clipped || self.native_detail.truncated(),
+                    ),
+                    raw_os_error: self.raw_os_error,
+                }
+            }
+        }
     }
 }
 

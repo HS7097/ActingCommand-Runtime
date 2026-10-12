@@ -6002,7 +6002,7 @@ impl HostShared {
                     },
                     Some(terminal(&event)),
                 );
-                failure.task_failure = scheduled.then(|| TaskFailureEvidence {
+                failure.task_failure = scheduled.then_some(TaskFailureEvidence {
                     outcome: task_outcome,
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime

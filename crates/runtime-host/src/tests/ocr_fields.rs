@@ -397,11 +397,15 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             if mode == 8 {
                 let artifact = serde_json::to_string(&binding.artifact.artifact_id).unwrap();
                 let expected = format!("no eviction recorded through head {source_head}");
+                // Ledger revision 3 (#378 A3): the failed read's native text is `raw_text` on a
+                // foreign link of the lifecycle failure's outcome.
                 assert!(
-                    native
-                        .iter()
-                        .any(|text| text.contains(&artifact) && text.contains(&expected)),
-                    "{native:?}"
+                    failures.iter().any(|outcome| {
+                        outcome_raw_texts(outcome)
+                            .iter()
+                            .any(|text| text.contains(&artifact) && text.contains(&expected))
+                    }),
+                    "{failures:?}"
                 );
             }
         }
