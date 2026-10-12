@@ -21,9 +21,11 @@ use crate::catalog_plan::{
     CatalogApprovalPlan, CatalogLineage, CatalogTransitionPlanKind, CatalogTransitionRequest,
     decide_catalog_transition, plan_catalog_approvals,
 };
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::SharedCode;
 use std::time::Duration;
 
-const OPERATION: &str = "preview_policy_catalog";
+const OPERATION: HostLocation = HostLocation::PreviewPolicyCatalog;
 /// How long the preview may spend reading the ledger. Review P4: well under the 90 s that
 /// `acsetup` gives `check-config`, so a slow read ends as the reader's own typed refusal
 /// (`ledger_read_budget_exceeded`) and not as the caller's kill.
@@ -139,14 +141,14 @@ pub fn preview_policy_catalog_transition(
         .map(|sources| {
             compile_catalog(sources)
                 .map(|compiled| generation_from(&compiled, sources))
-                .map_err(|_| request("catalog_compile_failed", OPERATION))
+                .map_err(|_| request(HostCode::CatalogCompileFailed, OPERATION))
         })
         .transpose()?;
     phases.compile_ms = elapsed_ms(started);
     let state_root_present = preview
         .state_root
         .try_exists()
-        .map_err(|_| fatal("state_root_inspect_failed", OPERATION))?;
+        .map_err(|_| fatal(SharedCode::StateRootInspectFailed, OPERATION))?;
     let snapshot = if state_root_present {
         read_state(preview.state_root, &mut phases)?
     } else {
@@ -194,7 +196,7 @@ fn read_state(
         if state_root
             .join(material)
             .try_exists()
-            .map_err(|_| fatal("state_root_inspect_failed", OPERATION))?
+            .map_err(|_| fatal(SharedCode::StateRootInspectFailed, OPERATION))?
         {
             fresh = false;
         }
@@ -210,7 +212,7 @@ fn read_state(
     )
     .map_err(|error| catalog_ledger_error(&error))?;
     if !ledger.is_complete() {
-        return Err(fatal("policy_state_ledger_incomplete", OPERATION));
+        return Err(fatal(HostCode::PolicyStateLedgerIncomplete, OPERATION));
     }
     phases.ledger_ms = elapsed_ms(reading);
     let projecting = Instant::now();
@@ -218,8 +220,8 @@ fn read_state(
         actingcommand_runtime_database::RuntimeDatabase::open_existing_unchecked(state_root)
             .map_err(|error| {
                 RuntimeHostError::fatal(
-                    error.code().as_str(),
-                    error.operation().as_str(),
+                    error.code(),
+                    error.operation(),
                     RuntimeErrorCode::LedgerFailure,
                 )
                 .with_native_detail(format!("{error:?}"))
@@ -233,9 +235,9 @@ fn read_state(
     if store
         .legacy_active_pointer
         .try_exists()
-        .map_err(|_| fatal("state_root_inspect_failed", OPERATION))?
+        .map_err(|_| fatal(SharedCode::StateRootInspectFailed, OPERATION))?
     {
-        return Err(fatal("catalog_legacy_pointer_pending", OPERATION));
+        return Err(fatal(HostCode::CatalogLegacyPointerPending, OPERATION));
     }
     let events = catalog_projection_events(ledger.head_sequence(), |query| {
         ledger
@@ -250,14 +252,17 @@ fn read_state(
             if loaded.generation.catalog_id() != id
                 || loaded.generation.catalog_version() != version
             {
-                return Err(fatal("catalog_projection_identity_mismatch", OPERATION));
+                return Err(fatal(
+                    HostCode::CatalogProjectionIdentityMismatch,
+                    OPERATION,
+                ));
             }
             Some(loaded.generation.clone())
         }
     };
     let pointer = store.load_active()?.map(|catalog| catalog.generation);
     if pointer != projected {
-        return Err(fatal("catalog_active_source_mismatch", OPERATION));
+        return Err(fatal(HostCode::CatalogActiveSourceMismatch, OPERATION));
     }
     phases.projection_ms = elapsed_ms(projecting);
     let approving = Instant::now();

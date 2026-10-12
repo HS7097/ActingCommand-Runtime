@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::HostLocation;
 use crate::events::RuntimeEvents;
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
@@ -49,8 +50,8 @@ impl ProviderStartup<'_> {
             .map(|_| ())
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "ledger_failure",
-                    "append_provider_startup",
+                    RuntimeErrorCode::LedgerFailure,
+                    HostLocation::AppendProviderStartup,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })
@@ -67,9 +68,11 @@ impl ProviderStartup<'_> {
             backend,
             ProviderStartupObservation::Failed { stage, failure },
         ) {
-            Ok(()) => {
-                RuntimeHostError::fatal(code, "assemble_provider", RuntimeErrorCode::RuntimeFatal)
-            }
+            Ok(()) => RuntimeHostError::relayed_fatal(
+                code,
+                HostLocation::AssembleProvider.as_str(),
+                RuntimeErrorCode::RuntimeFatal,
+            ),
             Err(error) => error,
         }
     }

@@ -8,6 +8,8 @@
 
 use super::facts::{FactPublication, FactPublicationPurpose};
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::{
     ActiveResourceTargets, FactObservation, FactTtlPolicy, FactTtlSource, MAX_FACT_TTL_MS,
     MIN_FACT_TTL_MS, RESOURCE_TARGETS_FACT_KEY, ResourceTargetView, ResourceTargetsApplied,
@@ -18,7 +20,7 @@ use actingcommand_policy::{
     active_resource_targets, check_resource_targets, parse_resource_targets, targetable_resources,
 };
 
-const RESOURCE_TARGETS_OPERATION: &str = "apply_resource_targets";
+const RESOURCE_TARGETS_OPERATION: ContractLocation = ContractLocation::ApplyResourceTargets;
 const RESOURCE_TARGETS_DETECTOR: &str = "runtime.resource-targets";
 const RESOURCE_TARGETS_FACT_SCHEMA: &str = "fact.v1";
 
@@ -53,11 +55,17 @@ impl HostShared {
         let (checked, checked_catalog_hash, conditions_at_position) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
-                "apply_resource_targets_outcome_state",
+                HostLocation::ApplyResourceTargetsOutcomeState,
             )?;
-            let mut policy = lock(self.policy()?, "apply_resource_targets_outcome_keys")?;
+            let mut policy = lock(
+                self.policy()?,
+                HostLocation::ApplyResourceTargetsOutcomeKeys,
+            )?;
             let outcome_keys = policy.outcome_key_snapshot()?;
-            let _fact_gate = lock(&self.fact_write_gate, "apply_resource_targets_facts")?;
+            let _fact_gate = lock(
+                &self.fact_write_gate,
+                HostLocation::ApplyResourceTargetsFacts,
+            )?;
             let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
                 &mut policy,
                 RESOURCE_TARGETS_OPERATION,
@@ -156,7 +164,7 @@ impl HostShared {
     }
 }
 
-const RESOURCE_TARGET_VIEW_OPERATION: &str = "resource_target_view";
+const RESOURCE_TARGET_VIEW_OPERATION: ContractLocation = ContractLocation::ResourceTargetView;
 
 impl HostShared {
     /// `ResourceTargetView` (Workflow #338 R5), read-only. The clock is sampled before any
@@ -185,11 +193,11 @@ impl HostShared {
         };
         let _outcome_gate = lock(
             &self.policy_outcome_gate,
-            "resource_target_view_outcome_state",
+            HostLocation::ResourceTargetViewOutcomeState,
         )?;
-        let mut policy = lock(self.policy()?, "resource_target_view_outcome_keys")?;
+        let mut policy = lock(self.policy()?, HostLocation::ResourceTargetViewOutcomeKeys)?;
         let outcome_keys = policy.outcome_key_snapshot()?;
-        let _fact_gate = lock(&self.fact_write_gate, "resource_target_view_facts")?;
+        let _fact_gate = lock(&self.fact_write_gate, HostLocation::ResourceTargetViewFacts)?;
         let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
             &mut policy,
             RESOURCE_TARGET_VIEW_OPERATION,
@@ -202,7 +210,7 @@ impl HostShared {
             .find(|instance| instance.instance_id == instance_alias)
             .ok_or_else(|| {
                 RuntimeHostError::request(
-                    "resource_target_view_instance_unconfigured",
+                    HostCode::ResourceTargetViewInstanceUnconfigured,
                     RESOURCE_TARGET_VIEW_OPERATION,
                     RuntimeErrorCode::InstanceUnknown,
                 )
@@ -220,7 +228,7 @@ impl HostShared {
             StoredResourceTargets::None => None,
             StoredResourceTargets::Unreadable { code } => {
                 return Err(RuntimeHostError::request(
-                    "resource_target_view_policy_unreadable",
+                    HostCode::ResourceTargetViewPolicyUnreadable,
                     RESOURCE_TARGET_VIEW_OPERATION,
                     RuntimeErrorCode::LedgerFailure,
                 )
@@ -230,7 +238,7 @@ impl HostShared {
                 let scope = FactScope::Instance {
                     instance_id: instance.instance_id.clone(),
                 };
-                let store = lock(&self.facts, "resource_target_view_active_policy")?;
+                let store = lock(&self.facts, HostLocation::ResourceTargetViewActivePolicy)?;
                 let (_, version, event_id) = store
                     .active_revision(&scope, RESOURCE_TARGETS_FACT_KEY)
                     .filter(|(record, _, _)| {
@@ -239,7 +247,7 @@ impl HostShared {
                     })
                     .ok_or_else(|| {
                         RuntimeHostError::request(
-                            "resource_target_view_policy_inconsistent",
+                            HostCode::ResourceTargetViewPolicyInconsistent,
                             RESOURCE_TARGET_VIEW_OPERATION,
                             RuntimeErrorCode::LedgerFailure,
                         )
@@ -277,7 +285,7 @@ impl HostShared {
         };
         view.validate().map_err(|_| {
             RuntimeHostError::request(
-                "resource_target_view_invalid",
+                HostCode::ResourceTargetViewInvalid,
                 RESOURCE_TARGET_VIEW_OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             )
@@ -295,14 +303,14 @@ impl HostShared {
 fn resource_target_view_error(error: ResourceTargetsError) -> RuntimeHostError {
     match error {
         ResourceTargetsError::Evaluation(error) => RuntimeHostError::request(
-            "policy_evaluation_rejected",
+            HostCode::PolicyEvaluationRejected,
             RESOURCE_TARGET_VIEW_OPERATION,
             RuntimeErrorCode::InvalidRequest,
         )
         .with_native_detail(error.to_string()),
         ResourceTargetsError::Rejected(_) | ResourceTargetsError::Internal(_) => {
             RuntimeHostError::request(
-                "resource_target_view_internal",
+                HostCode::ResourceTargetViewInternal,
                 RESOURCE_TARGET_VIEW_OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             )
@@ -316,13 +324,13 @@ fn resource_targets_error(error: ResourceTargetsError) -> RuntimeHostError {
             RuntimeHostError::resource_targets_rejected(*rejection)
         }
         ResourceTargetsError::Evaluation(error) => RuntimeHostError::request(
-            "policy_evaluation_rejected",
+            HostCode::PolicyEvaluationRejected,
             RESOURCE_TARGETS_OPERATION,
             RuntimeErrorCode::InvalidRequest,
         )
         .with_native_detail(error.to_string()),
         ResourceTargetsError::Internal(code) => RuntimeHostError::fatal(
-            code.as_str(),
+            code,
             RESOURCE_TARGETS_OPERATION,
             RuntimeErrorCode::RuntimeFatal,
         ),
@@ -331,7 +339,7 @@ fn resource_targets_error(error: ResourceTargetsError) -> RuntimeHostError {
 
 fn record_invalid() -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "resource_targets_record_invalid",
+        HostCode::ResourceTargetsRecordInvalid,
         RESOURCE_TARGETS_OPERATION,
         RuntimeErrorCode::RuntimeFatal,
     )

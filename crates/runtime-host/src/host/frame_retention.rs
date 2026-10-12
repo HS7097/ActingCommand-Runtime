@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::HostLocation;
 use actingcommand_artifact_store::{
     ArtifactStore, ArtifactStoreError, ArtifactStoreResult, FrameFileOutcome, KEPT_DIRECTORY,
     KeptMoves, move_frame_file, remove_frame_file, try_artifact_delete_guard,
 };
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
     ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput, DiagnosticCode,
@@ -27,8 +30,9 @@ use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
 pub(super) fn capture_frame_store_config() -> actingcommand_artifact_store::FrameStoreConfig {
     actingcommand_artifact_store::FrameStoreConfig::default().with_memory_source(
         actingcommand_artifact_store::MemorySampleSource::live(|| {
-            let sample = actingcommand_host_metrics::sample_physical_memory()
-                .map_err(|code| ArtifactStoreError::fatal(code, "sample_capture_memory", code))?;
+            let sample = actingcommand_host_metrics::sample_physical_memory().map_err(|code| {
+                ArtifactStoreError::fatal(code.as_str(), "sample_capture_memory", code.as_str())
+            })?;
             Ok(actingcommand_artifact_store::MemorySample {
                 total_bytes: sample.total_bytes,
                 available_bytes: sample.available_bytes,
@@ -55,7 +59,7 @@ pub(super) fn spill_root(
     let canonical = serde_json::to_vec(identity).map_err(|error| {
         ArtifactStoreError::fatal(
             "frame_spill_identity_invalid",
-            "open_capture_pipeline",
+            ContractLocation::OpenCapturePipeline.as_str(),
             error.to_string(),
         )
     })?;
@@ -74,7 +78,9 @@ impl super::HostShared {
                 Ok(retention) => retention,
                 Err(std::sync::TryLockError::WouldBlock) => return Ok(true),
                 Err(std::sync::TryLockError::Poisoned(_)) => {
-                    return Err(super::lock_poison_error("maintain_frame_retention"));
+                    return Err(super::lock_poison_error(
+                        HostLocation::MaintainFrameRetention,
+                    ));
                 }
             };
             let Some(retention) = retention.as_mut() else {
@@ -130,7 +136,7 @@ impl super::HostShared {
                     "frame_retention",
                     warning.stage(),
                     "artifact_store",
-                    "maintain_frame_retention",
+                    HostLocation::MaintainFrameRetention.as_str(),
                     warning.message(),
                     Sensitivity::Internal,
                 ),
@@ -150,7 +156,7 @@ pub(super) fn pin_published_frames(
     reason: ArtifactPinReason,
 ) -> ArtifactStoreResult<()> {
     if verified.event_type() != EventType::ArtifactVerified {
-        return Err(pin_failure("artifact_pin_source_not_verified"));
+        return Err(pin_failure(HostCode::ArtifactPinSourceNotVerified.as_str()));
     }
     let links = verified.links();
     for artifact in verified
@@ -163,13 +169,13 @@ pub(super) fn pin_published_frames(
             owner_epoch,
             instance_id: *links
                 .instance_id()
-                .ok_or_else(|| pin_failure("artifact_pin_instance_missing"))?,
+                .ok_or_else(|| pin_failure(HostCode::ArtifactPinInstanceMissing.as_str()))?,
             request_id: *links
                 .request_id()
-                .ok_or_else(|| pin_failure("artifact_pin_request_missing"))?,
+                .ok_or_else(|| pin_failure(HostCode::ArtifactPinRequestMissing.as_str()))?,
             correlation_id: *links
                 .correlation_id()
-                .ok_or_else(|| pin_failure("artifact_pin_correlation_missing"))?,
+                .ok_or_else(|| pin_failure(HostCode::ArtifactPinCorrelationMissing.as_str()))?,
             run_id: links.run_id().copied(),
             lease_id: links.lease_id().copied(),
             policy_version: FRAME_RETENTION_POLICY_VERSION,
@@ -626,7 +632,7 @@ impl FrameRetention {
         let mut recovery = EvictionRecovery::default();
         loop {
             if Instant::now() >= deadline {
-                return Err(failure("artifact_eviction_recovery_deadline"));
+                return Err(failure(HostCode::ArtifactEvictionRecoveryDeadline));
             }
             // Each round starts from the remaining original intents.
             recovery.after = None;
@@ -635,7 +641,7 @@ impl FrameRetention {
                 return Ok(());
             }
             if round.completed == 0 {
-                return Err(failure("artifact_eviction_recovery_deferred"));
+                return Err(failure(HostCode::ArtifactEvictionRecoveryDeferred));
             }
         }
     }
@@ -666,7 +672,7 @@ impl EvictionRecovery {
             .retention_candidates(self.after, self.policy)
             .map_err(ledger_failure)?;
         if candidates.references.len() > RETENTION_ROUND_OBJECTS {
-            return Err(failure("artifact_retention_candidate_bound_exceeded"));
+            return Err(failure(HostCode::ArtifactRetentionCandidateBoundExceeded));
         }
         let mut round = RecoveryRound {
             recovering: candidates.recovery_pending,
@@ -710,7 +716,7 @@ impl EvictionRecovery {
                         .map_err(ledger_failure)?;
                     removed_bytes = removed_bytes
                         .checked_add(reference.byte_count)
-                        .ok_or_else(|| failure("artifact_retention_byte_count_overflow"))?;
+                        .ok_or_else(|| failure(HostCode::ArtifactRetentionByteCountOverflow))?;
                     round.completed += 1;
                 }
             }
@@ -720,16 +726,16 @@ impl EvictionRecovery {
     }
 }
 
-fn failure(code: &'static str) -> RuntimeHostError {
+fn failure(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "maintain_frame_retention",
+        HostLocation::MaintainFrameRetention,
         RuntimeErrorCode::LedgerFailure,
     )
 }
 
 fn ledger_failure(error: GlobalLedgerError) -> RuntimeHostError {
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         error.code(),
         error.operation(),
         RuntimeErrorCode::LedgerFailure,

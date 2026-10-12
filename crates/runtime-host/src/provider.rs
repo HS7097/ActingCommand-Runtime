@@ -3,7 +3,10 @@
 #[cfg(feature = "fixture-backends")]
 mod fixtures;
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
@@ -157,9 +160,9 @@ impl DiscoverySpec {
                         | NemuResolutionReason::ProviderVersionUnparseable
                 )
             ) {
-                "mumu_manager_version_unsupported"
+                HostCode::MumuManagerVersionUnsupported.as_str()
             } else {
-                "instance_discovery_unavailable"
+                SharedCode::InstanceDiscoveryUnavailable.as_str()
             };
             Box::new(InstanceDiscoveryFailure { code, error })
         })
@@ -200,15 +203,15 @@ impl ExecutionBackendRegistration {
             CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
         ) {
             return Err(RuntimeHostError::fatal(
-                "execution_backend_selection_not_explicit",
-                "build_execution_backend_registry",
+                HostCode::ExecutionBackendSelectionNotExplicit,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
         if input.target.resolved_serial() != capture.target.resolved_serial() {
             return Err(RuntimeHostError::fatal(
-                "execution_backend_target_mismatch",
-                "build_execution_backend_registry",
+                HostCode::ExecutionBackendTargetMismatch,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -216,16 +219,16 @@ impl ExecutionBackendRegistration {
             && capture.requested != CaptureBackendChoice::NemuIpc
         {
             return Err(RuntimeHostError::fatal(
-                "nemu_input_requires_paired_capture",
-                "build_execution_backend_registry",
+                HostCode::NemuInputRequiresPairedCapture,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
         let milliseconds = |duration: Duration| {
             u64::try_from(duration.as_millis()).map_err(|_| {
                 RuntimeHostError::fatal(
-                    "execution_configuration_timeout_overflow",
-                    "build_execution_backend_registry",
+                    HostCode::ExecutionConfigurationTimeoutOverflow,
+                    HostLocation::BuildExecutionBackendRegistry,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })
@@ -287,15 +290,15 @@ impl ExecutionBackendRegistration {
             || self.capture.requested != CaptureBackendChoice::NemuIpc
         {
             return Err(RuntimeHostError::fatal(
-                "nemu_app_index_requires_paired_input",
-                "build_execution_backend_registry",
+                SharedCode::NemuAppIndexRequiresPairedInput,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
         NemuApplicationTarget::new(&self.application_id, app_index).map_err(|error| {
             RuntimeHostError::fatal(
-                "nemu_application_identity_invalid",
-                "build_execution_backend_registry",
+                HostCode::NemuApplicationIdentityInvalid,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             )
             .with_native_detail(error.to_string())
@@ -343,7 +346,8 @@ struct EntryEndpoint {
 
 impl EntryEndpoint {
     /// The typed refusal of every session-opening path while the port is unknown.
-    fn require_bound(&self, operation: &'static str) -> DeviceResult<()> {
+    fn require_bound(&self, operation: impl Into<Location>) -> DeviceResult<()> {
+        let operation: Location = operation.into();
         if self.state.is_pending() {
             return Err(DeviceError::fatal(
                 "adb endpoint pending: the discovered instance was stopped and has reported no ADB port; start it through emulator control first",
@@ -351,7 +355,7 @@ impl EntryEndpoint {
             .with_diagnostic(DeviceErrorCategory::Protocol, "adb.endpoint_pending")
             .with_diagnostic_context(
                 "execution_backend_registry",
-                operation,
+                operation.as_str(),
                 DeviceErrorSensitivity::Sensitive,
             ));
         }
@@ -451,7 +455,7 @@ impl ExecutionBackendEntry {
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn InputBackend>>> {
         let input = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("open_input")?;
+            endpoint.require_bound(HostLocation::OpenInput)?;
             endpoint.input.clone()
         };
         let requested = input.requested;
@@ -482,7 +486,7 @@ impl ExecutionBackendEntry {
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         let capture = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("open_capture")?;
+            endpoint.require_bound(HostLocation::OpenCapture)?;
             endpoint.capture.clone()
         };
         let mut report = actingcommand_contract::BackendOpenReport::unobserved(
@@ -517,7 +521,7 @@ impl ExecutionBackendEntry {
             if endpoint.input.requested != TouchBackendChoice::NemuIpc {
                 return Ok(None);
             }
-            endpoint.require_bound("open_nemu_session")?;
+            endpoint.require_bound(HostLocation::OpenNemuSession)?;
             (endpoint.input.clone(), endpoint.capture.clone())
         };
         let application = NemuApplicationTarget::new(
@@ -559,7 +563,7 @@ impl ExecutionBackendEntry {
     ) -> DeviceResult<()> {
         let application_target = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("control_application")?;
+            endpoint.require_bound(HostLocation::ControlApplication)?;
             endpoint.application_target.clone()
         };
         let serial = application_target.resolved_serial();
@@ -587,7 +591,7 @@ impl ExecutionBackendEntry {
     fn probe_adb_baseline(&self) -> DeviceResult<()> {
         let application_target = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("probe_adb_baseline")?;
+            endpoint.require_bound(HostLocation::ProbeAdbBaseline)?;
             endpoint.application_target.clone()
         };
         Adb::new(self.application_adb.clone())
@@ -602,7 +606,7 @@ impl ExecutionBackendEntry {
     ) -> DeviceResult<()> {
         let application_target = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("probe_adb_baseline")?;
+            endpoint.require_bound(HostLocation::ProbeAdbBaseline)?;
             endpoint.application_target.clone()
         };
         Adb::new(self.application_adb.clone())
@@ -622,7 +626,7 @@ impl ExecutionBackendEntry {
     fn observe_foreground_application(&self) -> DeviceResult<ForegroundApplicationObservation> {
         let application_target = {
             let endpoint = self.endpoint();
-            endpoint.require_bound("observe_foreground_application")?;
+            endpoint.require_bound(ContractLocation::ObserveForegroundApplication)?;
             endpoint.application_target.clone()
         };
         let serial = application_target.resolved_serial();
@@ -657,8 +661,8 @@ impl ExecutionBackendRegistry {
         }
         if registry.entries.is_empty() {
             return Err(RuntimeHostError::fatal(
-                "empty_execution_backend_registry",
-                "build_execution_backend_registry",
+                HostCode::EmptyExecutionBackendRegistry,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -706,15 +710,15 @@ impl ExecutionBackendRegistry {
             && registration.nemu_app_index.is_none()
         {
             return Err(RuntimeHostError::fatal(
-                "nemu_app_index_missing",
-                "build_execution_backend_registry",
+                HostCode::NemuAppIndexMissing,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
         if self.entries.contains_key(&alias) {
             return Err(RuntimeHostError::fatal(
-                "duplicate_instance_alias",
-                "build_execution_backend_registry",
+                HostCode::DuplicateInstanceAlias,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -724,8 +728,8 @@ impl ExecutionBackendRegistry {
             .any(|entry| entry.instance_id() == instance_id)
         {
             return Err(RuntimeHostError::fatal(
-                "duplicate_instance_id",
-                "build_execution_backend_registry",
+                HostCode::DuplicateInstanceId,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -764,8 +768,8 @@ fn capability_profile(
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
     let invalid = |_| {
         RuntimeHostError::fatal(
-            "execution_capability_profile_invalid",
-            "build_execution_backend_registry",
+            HostCode::ExecutionCapabilityProfileInvalid,
+            HostLocation::BuildExecutionBackendRegistry,
             RuntimeErrorCode::RuntimeFatal,
         )
     };
@@ -854,8 +858,8 @@ fn merge_capability_profile(
     EmulatorCapabilityProfile::new(provider.provider_id(), provider.version().clone(), evidence)
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "execution_capability_profile_merge_invalid",
-                "build_execution_backend_registry",
+                HostCode::ExecutionCapabilityProfileMergeInvalid,
+                HostLocation::BuildExecutionBackendRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })
@@ -982,7 +986,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                     .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                     .with_diagnostic_context(
                         "execution_backend_registry",
-                        "control_instance",
+                        ContractLocation::ControlInstance.as_str(),
                         DeviceErrorSensitivity::Sensitive,
                     ),
                 0,
@@ -1027,7 +1031,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                 .with_diagnostic_context(
                     "execution_backend_registry",
-                    "read_instance_state",
+                    ContractLocation::ReadInstanceState.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 )
         };
@@ -1071,7 +1075,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                 .with_diagnostic_context(
                     "execution_backend_registry",
-                    "rebind_discovered_endpoint",
+                    ContractLocation::RebindDiscoveredEndpoint.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 )
         };
@@ -1128,7 +1132,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
     ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
         let Some(discovery) = &self.discovery else {
             return Err(Box::new(InstanceDiscoveryFailure {
-                code: "instance_discovery_unavailable",
+                code: SharedCode::InstanceDiscoveryUnavailable.as_str(),
                 error: DeviceError::fatal("instance discovery unsupported by this provider")
                     .with_diagnostic(
                         DeviceErrorCategory::Protocol,
@@ -1136,7 +1140,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                     )
                     .with_diagnostic_context(
                         "execution_backend_registry",
-                        "discover_instances",
+                        ContractLocation::DiscoverInstances.as_str(),
                         DeviceErrorSensitivity::Sensitive,
                     ),
             }));
@@ -1314,8 +1318,8 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
 fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
     if actingcommand_contract::validate_instance_alias(alias).is_err() {
         return Err(RuntimeHostError::fatal(
-            "invalid_instance_alias",
-            "build_execution_backend_registry",
+            SharedCode::InvalidInstanceAlias,
+            HostLocation::BuildExecutionBackendRegistry,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }
@@ -1328,8 +1332,8 @@ fn validate_application_id(application_id: &str) -> RuntimeHostResult<()> {
         || application_id.chars().any(char::is_control)
     {
         return Err(RuntimeHostError::fatal(
-            "invalid_application_identity",
-            "build_execution_backend_registry",
+            HostCode::InvalidApplicationIdentity,
+            HostLocation::BuildExecutionBackendRegistry,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     CleanupCauseDraft, DiagnosticDetailDraft, InstanceId, ResourceQuiescence, RuntimeErrorCode,
     RuntimeErrorProjection,
 };
-use actingcommand_execution_kernel::{ExecutionFailureContext, ExecutionKernelError};
+use actingcommand_execution_kernel::{
+    ExecutionFailureContext, ExecutionKernelCode, ExecutionKernelError,
+};
 use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
 use std::error::Error;
@@ -45,10 +50,52 @@ pub(crate) enum PpocrFailureSource {
 
 #[derive(Clone)]
 pub struct RuntimeHostError {
-    code: &'static str,
-    operation: &'static str,
+    code: HostErrorCode,
+    operation: HostErrorOperation,
     projection: Box<RuntimeErrorProjection>,
     pub(crate) lifecycle: Box<RuntimeHostFailureContext>,
+}
+
+/// The code a [`RuntimeHostError`] carries: a registered code, or the spelling of a code that
+/// it relays from an error type whose owner has not typed its codes yet (Workflow #378 A2b).
+#[derive(Clone, Copy)]
+enum HostErrorCode {
+    Registered(Code),
+    /// A code of the store, state, execution or policy crates (or of another error that relays
+    /// one), carried as its spelling until A2c and A2d type those crates' codes.
+    Relayed {
+        relayed_code: &'static str,
+    },
+}
+
+impl HostErrorCode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Registered(code) => code.as_str(),
+            Self::Relayed { relayed_code } => relayed_code,
+        }
+    }
+}
+
+/// The operation a [`RuntimeHostError`] names: a registered location, or the spelling of an
+/// operation that it relays together with a relayed code (Workflow #378 A2b).
+#[derive(Clone, Copy)]
+enum HostErrorOperation {
+    Registered(Location),
+    /// An operation of the store, state, execution or policy crates, carried as its spelling
+    /// until A2c and A2d type those crates' locations.
+    Relayed {
+        relayed_operation: &'static str,
+    },
+}
+
+impl HostErrorOperation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Registered(operation) => operation.as_str(),
+            Self::Relayed { relayed_operation } => relayed_operation,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -87,8 +134,8 @@ pub(crate) struct RuntimeHostFailureContext {
 
 impl PartialEq for RuntimeHostError {
     fn eq(&self, other: &Self) -> bool {
-        self.code == other.code
-            && self.operation == other.operation
+        self.code() == other.code()
+            && self.operation() == other.operation()
             && self.projection == other.projection
             && self.lifecycle.complete_failure == other.lifecycle.complete_failure
             && self.lifecycle.failure_stage == other.lifecycle.failure_stage
@@ -118,8 +165,8 @@ impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
         // Workflow #355 D12: keep the policy code and message so the lifecycle record names
         // the failing fact or overflow.
         Self::request(
-            "policy_evaluation_rejected",
-            "evaluate_policy_cycle",
+            HostCode::PolicyEvaluationRejected,
+            HostLocation::EvaluatePolicyCycle,
             RuntimeErrorCode::InvalidRequest,
         )
         .with_native_detail(format!("{}: {}", error.code(), error.message()))
@@ -239,8 +286,8 @@ impl RuntimeHostError {
             .as_deref()
             .cloned()
             .unwrap_or(actingcommand_contract::PolicyDispatchRejection {
-                code: self.code.to_owned(),
-                operation: self.operation.to_owned(),
+                code: self.code().to_owned(),
+                operation: self.operation().to_owned(),
                 fatal: self.is_fatal(),
                 budget: None,
                 next_eligible_unix_ms: None,
@@ -263,13 +310,13 @@ impl RuntimeHostError {
 
     fn artifact_as(error: actingcommand_artifact_store::ArtifactStoreError, fatal: bool) -> Self {
         let mut result = if fatal {
-            Self::fatal(
+            Self::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::RuntimeFatal,
             )
         } else {
-            Self::request(
+            Self::relayed_request(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::InvalidRequest,
@@ -280,12 +327,16 @@ impl RuntimeHostError {
         result.lifecycle.raw_os_error = error.raw_os_error();
         result
     }
+    /// The code's spelling: a registered code, or one the error relays (A2c and A2d type the
+    /// relayed ones, then this returns a [`Code`]).
     pub const fn code(&self) -> &'static str {
-        self.code
+        self.code.as_str()
     }
 
+    /// The operation's spelling: a registered location, or one the error relays (A2c and A2d
+    /// type the relayed ones, then this returns a [`Location`]).
     pub const fn operation(&self) -> &'static str {
-        self.operation
+        self.operation.as_str()
     }
 
     pub const fn is_fatal(&self) -> bool {
@@ -323,8 +374,8 @@ impl RuntimeHostError {
         rejection: actingcommand_contract::ResourceTargetsRejection,
     ) -> Self {
         let mut error = Self::request(
-            "resource_targets_rejected",
-            "apply_resource_targets",
+            HostCode::ResourceTargetsRejected,
+            ContractLocation::ApplyResourceTargets,
             RuntimeErrorCode::InvalidRequest,
         );
         error.lifecycle.resource_targets_rejection = Some(Box::new(rejection));
@@ -350,34 +401,86 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn fatal(
-        code: &'static str,
-        operation: &'static str,
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
         runtime_code: RuntimeErrorCode,
     ) -> Self {
-        Self {
+        Self::with_projection(
             code,
             operation,
-            projection: Box::new(RuntimeErrorProjection::new(runtime_code, true)),
-            lifecycle: Box::default(),
-        }
+            RuntimeErrorProjection::new(runtime_code, true),
+        )
     }
 
     pub(crate) fn request(
-        code: &'static str,
-        operation: &'static str,
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
         runtime_code: RuntimeErrorCode,
     ) -> Self {
-        Self {
+        Self::with_projection(
             code,
             operation,
-            projection: Box::new(RuntimeErrorProjection::new(runtime_code, false)),
-            lifecycle: Box::default(),
-        }
+            RuntimeErrorProjection::new(runtime_code, false),
+        )
     }
 
     pub(crate) fn with_projection(
-        code: &'static str,
-        operation: &'static str,
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
+        projection: RuntimeErrorProjection,
+    ) -> Self {
+        Self::build(
+            HostErrorCode::Registered(code.into()),
+            HostErrorOperation::Registered(operation.into()),
+            projection,
+        )
+    }
+
+    /// A fatal error that relays the code and operation of another owner's error as spellings
+    /// (the store, state, execution and policy crates; A2c and A2d type them and remove it).
+    pub(crate) fn relayed_fatal(
+        relayed_code: &'static str,
+        relayed_operation: &'static str,
+        runtime_code: RuntimeErrorCode,
+    ) -> Self {
+        Self::relayed_with_projection(
+            relayed_code,
+            relayed_operation,
+            RuntimeErrorProjection::new(runtime_code, true),
+        )
+    }
+
+    /// A request error that relays the code and operation of another owner's error as spellings
+    /// (the store, state, execution and policy crates; A2c and A2d type them and remove it).
+    pub(crate) fn relayed_request(
+        relayed_code: &'static str,
+        relayed_operation: &'static str,
+        runtime_code: RuntimeErrorCode,
+    ) -> Self {
+        Self::relayed_with_projection(
+            relayed_code,
+            relayed_operation,
+            RuntimeErrorProjection::new(runtime_code, false),
+        )
+    }
+
+    /// An error with the given projection that relays the code and operation of another owner's
+    /// error as spellings (A2c and A2d type them and remove this bridge).
+    pub(crate) fn relayed_with_projection(
+        relayed_code: &'static str,
+        relayed_operation: &'static str,
+        projection: RuntimeErrorProjection,
+    ) -> Self {
+        Self::build(
+            HostErrorCode::Relayed { relayed_code },
+            HostErrorOperation::Relayed { relayed_operation },
+            projection,
+        )
+    }
+
+    fn build(
+        code: HostErrorCode,
+        operation: HostErrorOperation,
         projection: RuntimeErrorProjection,
     ) -> Self {
         Self {
@@ -388,36 +491,64 @@ impl RuntimeHostError {
         }
     }
 
-    pub(crate) fn scheduler(operation: &'static str, error: &SchedulerError) -> Self {
+    pub(crate) fn scheduler(operation: impl Into<Location>, error: &SchedulerError) -> Self {
         Self::with_projection(error.code(), operation, error.projection())
     }
 
-    pub(crate) fn execution(operation: &'static str, error: &ExecutionKernelError) -> Self {
-        let runtime_code = match error.code().as_str() {
-            "frame_workspace_unavailable" => RuntimeErrorCode::InvalidRequest,
-            "input_backend_open_failed" => RuntimeErrorCode::BackendOpenFailed,
-            "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
-            "capture_backend_open_failed"
-            | "capture_frame_invalid"
-            | "capture_backend_operation_failed"
-            | "execution_session_close_pending"
-            | "capture_geometry_kernel_busy"
-            | "capture_geometry_kernel_closed"
-            | "capture_geometry_session_missing"
-            | "capture_geometry_session_changed"
-            | "capture_geometry_queue_full"
-            | "capture_geometry_deadline_elapsed"
-            | "capture_geometry_session_busy"
-            | "capture_geometry_session_closed"
-            | "capture_geometry_read_failed" => RuntimeErrorCode::CaptureFailed,
-            "monitor_observation_unavailable" | "monitor_observation_failed" => {
+    pub(crate) fn execution(operation: impl Into<Location>, error: &ExecutionKernelError) -> Self {
+        let kernel_code = error.code().as_str();
+        let runtime_code = match kernel_code {
+            _ if spelled(kernel_code, &[SharedCode::FrameWorkspaceUnavailable.code()]) => {
+                RuntimeErrorCode::InvalidRequest
+            }
+            _ if spelled(
+                kernel_code,
+                &[DeviceSelfCheckFailure::InputBackendOpenFailed.code()],
+            ) =>
+            {
+                RuntimeErrorCode::BackendOpenFailed
+            }
+            _ if spelled(
+                kernel_code,
+                &[SharedCode::InputBackendOperationFailed.code()],
+            ) =>
+            {
+                RuntimeErrorCode::BackendOperationFailed
+            }
+            _ if spelled(
+                kernel_code,
+                &[
+                    DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+                    SharedCode::CaptureFrameInvalid.code(),
+                    SharedCode::CaptureBackendOperationFailed.code(),
+                    ExecutionKernelCode::ExecutionSessionClosePending.code(),
+                    ExecutionKernelCode::CaptureGeometryKernelBusy.code(),
+                    ExecutionKernelCode::CaptureGeometryKernelClosed.code(),
+                    ExecutionKernelCode::CaptureGeometrySessionMissing.code(),
+                    ExecutionKernelCode::CaptureGeometrySessionChanged.code(),
+                    ExecutionKernelCode::CaptureGeometryQueueFull.code(),
+                    ExecutionKernelCode::CaptureGeometryDeadlineElapsed.code(),
+                    ExecutionKernelCode::CaptureGeometrySessionBusy.code(),
+                    ExecutionKernelCode::CaptureGeometrySessionClosed.code(),
+                    ExecutionKernelCode::CaptureGeometryReadFailed.code(),
+                ],
+            ) =>
+            {
+                RuntimeErrorCode::CaptureFailed
+            }
+            _ if spelled(
+                kernel_code,
+                &[ExecutionKernelCode::MonitorObservationUnavailable.code()],
+            ) =>
+            {
                 RuntimeErrorCode::RecognitionFailed
             }
+            "monitor_observation_failed" => RuntimeErrorCode::RecognitionFailed,
             _ => RuntimeErrorCode::RuntimeFatal,
         };
         let runtime_error = Self {
-            code: error.code().as_str(),
-            operation,
+            code: HostErrorCode::Registered(error.code()),
+            operation: HostErrorOperation::Registered(operation.into()),
             projection: Box::new(RuntimeErrorProjection::new(runtime_code, error.is_fatal())),
             lifecycle: Box::new(RuntimeHostFailureContext {
                 diagnostics: error.failure_context().clone(),
@@ -434,8 +565,8 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn readonly_capture(error: &ExecutionKernelError) -> Self {
-        let mut result = Self::execution("execute_capture_backend", error);
-        if error.code().as_str() == "capture_frame_invalid"
+        let mut result = Self::execution(HostLocation::ExecuteCaptureBackend, error);
+        if error.code() == SharedCode::CaptureFrameInvalid.code()
             && error.secondary_code().is_none()
             && error.lifecycle_causes().is_empty()
             && error.cleanup_cause().is_none()
@@ -450,7 +581,7 @@ impl RuntimeHostError {
     /// A contained task's first capture lost to an unreachable ADB baseline (#316-P4): the
     /// kernel code stays, projected as a nonfatal `CaptureFailed`.
     pub(crate) fn adb_unreachable_capture(
-        operation: &'static str,
+        operation: impl Into<Location>,
         error: &ExecutionKernelError,
     ) -> Self {
         let mut result = Self::execution(operation, error);
@@ -465,7 +596,7 @@ impl RuntimeHostError {
     /// while the ADB baseline answers (Workflow #191 H): the idle session went stale. The kernel
     /// code stays, projected as a nonfatal `CaptureFailed`; an unconfirmed close stays fatal.
     pub(crate) fn reused_session_capture(
-        operation: &'static str,
+        operation: impl Into<Location>,
         error: &ExecutionKernelError,
     ) -> Self {
         let mut result = Self::execution(operation, error);
@@ -478,13 +609,13 @@ impl RuntimeHostError {
 
     pub(crate) fn state(error: &RuntimeStateError) -> Self {
         if error.is_fatal() {
-            Self::fatal(
+            Self::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::RuntimeFatal,
             )
         } else {
-            Self::request(
+            Self::relayed_request(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::InvalidRequest,
@@ -507,10 +638,11 @@ impl RuntimeHostError {
     /// on it, in the developer line and as `key=value` tokens in its native detail (the lifecycle
     /// failure's detail), until A2 makes it a `caused_by` link.
     pub(crate) fn with_latched_cause(mut self, cause: &Self) -> Self {
-        self.lifecycle.latched_cause = Some((cause.code, cause.operation));
+        self.lifecycle.latched_cause = Some((cause.code(), cause.operation()));
         self.with_native_detail(format!(
             "cause={} cause_operation={}",
-            cause.code, cause.operation
+            cause.code(),
+            cause.operation()
         ))
     }
 
@@ -533,15 +665,18 @@ impl RuntimeHostError {
         if self.lifecycle.capacity.is_none() {
             self.lifecycle.capacity = other.lifecycle.capacity.clone();
         }
-        if self.code == other.code
-            && self.operation == other.operation
+        if self.code() == other.code()
+            && self.operation() == other.operation()
             && self.diagnostics().native_detail() == other.diagnostics().native_detail()
         {
             return self;
         }
         let mut text = format!(
             "primary {} during {}; {relation} {} during {}",
-            self.code, self.operation, other.code, other.operation
+            self.code(),
+            self.operation(),
+            other.code(),
+            other.operation()
         );
         let details = [
             self.diagnostics().native_detail(),
@@ -573,8 +708,8 @@ impl fmt::Debug for RuntimeHostError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeHostError")
-            .field("code", &self.code)
-            .field("operation", &self.operation)
+            .field("code", &self.code())
+            .field("operation", &self.operation())
             .field("fatal", &self.is_fatal())
             .field(
                 "incomplete_device_diagnostic_summary",
@@ -591,7 +726,8 @@ impl fmt::Display for RuntimeHostError {
         write!(
             formatter,
             "runtime host error {} during {}",
-            self.code, self.operation
+            self.code(),
+            self.operation()
         )?;
         if let Some((code, operation)) = self.lifecycle.latched_cause {
             write!(formatter, " cause={code} cause_operation={operation}")?;
@@ -611,6 +747,12 @@ impl fmt::Display for RuntimeHostError {
 
 impl Error for RuntimeHostError {}
 
+/// Whether a code received as a spelling (one an error relays) is one of the given registered
+/// codes. The relayed spellings become [`Code`]s when A2c and A2d type their owners' codes.
+pub(crate) fn spelled(spelling: &str, codes: &[Code]) -> bool {
+    codes.iter().any(|code| code.as_str() == spelling)
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct FatalState {
     inner: Arc<Mutex<Option<RuntimeHostError>>>,
@@ -621,15 +763,15 @@ impl FatalState {
     pub(crate) fn mark(&self, error: RuntimeHostError) -> RuntimeHostResult<()> {
         if !error.is_fatal() {
             return Err(RuntimeHostError::fatal(
-                "nonfatal_error_marked_fatal",
-                "mark_runtime_fatal",
+                HostCode::NonfatalErrorMarkedFatal,
+                HostLocation::MarkRuntimeFatal,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
         let mut current = self.inner.lock().map_err(|_| {
             RuntimeHostError::fatal(
-                "fatal_state_poisoned",
-                "mark_runtime_fatal",
+                HostCode::FatalStatePoisoned,
+                HostLocation::MarkRuntimeFatal,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -643,8 +785,8 @@ impl FatalState {
     pub(crate) fn current(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
         self.inner.lock().map(|value| value.clone()).map_err(|_| {
             RuntimeHostError::fatal(
-                "fatal_state_poisoned",
-                "read_runtime_fatal",
+                HostCode::FatalStatePoisoned,
+                HostLocation::ReadRuntimeFatal,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })

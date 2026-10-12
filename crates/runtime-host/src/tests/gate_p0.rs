@@ -174,7 +174,7 @@ fn gate_p0_t02_suspended_urgent_dispatch_defers_without_deadline_failure() {
     else {
         panic!("Suspended defers the dispatch");
     };
-    assert_eq!(reason, "performance_contention_dispatch_deferred");
+    assert_eq!(reason.as_str(), "performance_contention_dispatch_deferred");
     assert_ne!(
         deadline_disposition,
         Some(PerformanceDeadlineDisposition::CapacityFailure)
@@ -297,7 +297,7 @@ impl HostSampler for NoHostSample {
         _owned_processes: &BTreeMap<u32, String>,
         _top_process_count: usize,
         _thresholds: ProcessLoadThresholds,
-    ) -> Result<HostSample, &'static str> {
+    ) -> Result<HostSample, actingcommand_contract::outcome::Code> {
         unreachable!("the gate takes no host sample")
     }
 }

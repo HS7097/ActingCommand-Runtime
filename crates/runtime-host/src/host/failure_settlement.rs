@@ -13,6 +13,7 @@
 use super::contained_task::prepare_contained_task;
 use super::policy_outcome::policy_dispatch_intent;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, RERUN_ONLY_BACKEND_FAILURES, SuspensionLiftView,
     encode_failure_base, failure_accumulates, failure_detail_fingerprint, failure_key,
@@ -72,8 +73,11 @@ impl HostShared {
         &self,
         decision_id: &str,
     ) -> Result<(), RequestFailure> {
-        lock(&self.scheduled_resolutions, "register_scheduled_resolution")?
-            .insert(decision_id.to_owned(), ScheduledResolution::default());
+        lock(
+            &self.scheduled_resolutions,
+            HostLocation::RegisterScheduledResolution,
+        )?
+        .insert(decision_id.to_owned(), ScheduledResolution::default());
         Ok(())
     }
 
@@ -106,16 +110,23 @@ impl HostShared {
             layers,
             resolved: chain.is_ok(),
         };
-        lock(&self.scheduled_resolutions, "record_scheduled_resolution")?
-            .entry(decision_id.to_owned())
-            .or_default()
-            .main = Some(main);
+        lock(
+            &self.scheduled_resolutions,
+            HostLocation::RecordScheduledResolution,
+        )?
+        .entry(decision_id.to_owned())
+        .or_default()
+        .main = Some(main);
         Ok((prepared, chain?))
     }
 
     /// Drops a decision's resolution once its execution record is written.
     pub(super) fn forget_scheduled_resolution(&self, decision_id: &str) -> RuntimeHostResult<()> {
-        lock(&self.scheduled_resolutions, "forget_scheduled_resolution")?.remove(decision_id);
+        lock(
+            &self.scheduled_resolutions,
+            HostLocation::ForgetScheduledResolution,
+        )?
+        .remove(decision_id);
         Ok(())
     }
 
@@ -148,7 +159,7 @@ impl HostShared {
         };
         let decision_id = context.decision_id();
         let (recorded, previous) = {
-            let policy = lock(self.policy()?, "read_policy_failure_identity")?;
+            let policy = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?;
             (
                 policy.recorded_execution(decision_id).cloned(),
                 policy
@@ -160,16 +171,19 @@ impl HostShared {
         if let Some(recorded) = recorded {
             return recorded_failure_input(recorded, code, class);
         }
-        let resolution = lock(&self.scheduled_resolutions, "read_scheduled_resolution")?
-            .get(decision_id)
-            .cloned();
+        let resolution = lock(
+            &self.scheduled_resolutions,
+            HostLocation::ReadScheduledResolution,
+        )?
+        .get(decision_id)
+        .cloned();
         let Some(resolution) = resolution else {
             // An internal miss keeps the original code and says so.
             self.record_scheduled_policy_diagnostic(
                 context,
                 &RuntimeHostError::request(
-                    "policy_failure_identity_unavailable",
-                    "build_failure_identity",
+                    HostCode::PolicyFailureIdentityUnavailable,
+                    HostLocation::BuildFailureIdentity,
                     RuntimeErrorCode::RuntimeUnavailable,
                 )
                 .with_native_detail(format!("decision_id={decision_id}")),
@@ -190,7 +204,7 @@ impl HostShared {
         let query = |query: EventQuery| {
             self.ledger
                 .query(query)
-                .map_err(|_| ledger_error("read_failure_identity_rows"))
+                .map_err(|_| ledger_error(HostLocation::ReadFailureIdentityRows))
         };
         let (rows, scope, operation) = if main.resolved {
             let rows = failure_rows(context.run_id(), query)?;
@@ -272,8 +286,8 @@ impl HostShared {
                     self.record_scheduled_policy_diagnostic(
                         context,
                         &RuntimeHostError::request(
-                            "policy_failure_frame_compare_unavailable",
-                            "compare_failure_frames",
+                            HostCode::PolicyFailureFrameCompareUnavailable,
+                            HostLocation::CompareFailureFrames,
                             RuntimeErrorCode::RecognitionFailed,
                         )
                         .with_native_detail(format!(
@@ -301,12 +315,12 @@ impl HostShared {
         let through = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("compare_failure_frames"))?;
+            .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))?;
         let previous_run = policy_dispatch_intent(
             &self.ledger,
             previous_decision,
             through,
-            "compare_failure_frames",
+            HostLocation::CompareFailureFrames,
         )?
         .links()
         .run_id()
@@ -315,7 +329,7 @@ impl HostShared {
             Some(run_id) => locate_error_frame(run_id, |query: EventQuery| {
                 self.ledger
                     .query(query)
-                    .map_err(|_| ledger_error("compare_failure_frames"))
+                    .map_err(|_| ledger_error(HostLocation::CompareFailureFrames))
             })?,
             None => None,
         };
@@ -414,8 +428,8 @@ fn recorded_failure_input(
     };
     if !consistent {
         return Err(RuntimeHostError::fatal(
-            "policy_execution_identity_conflict",
-            "replay_policy_failure_identity",
+            HostCode::PolicyExecutionIdentityConflict,
+            HostLocation::ReplayPolicyFailureIdentity,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }

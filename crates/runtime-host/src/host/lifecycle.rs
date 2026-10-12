@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::HostLocation;
 
 impl RuntimeLifecycleFailureStage {
     pub(super) const fn as_str(self) -> &'static str {
@@ -45,7 +46,7 @@ impl HostShared {
             RuntimePayloadDraft::lifecycle_observed(self.owner_epoch, phase, AuditInput::new()),
         )
         .map(|event| *event.event_id())
-        .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))
+        .map_err(|_| ledger_error(HostLocation::AppendRuntimeLifecycleObserved))
     }
 
     pub(super) fn append_stdio_close_observations(
@@ -58,11 +59,11 @@ impl HostShared {
             return Ok(());
         }
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error("append_vendor_stdio_close"));
+            return Err(ledger_error(HostLocation::AppendVendorStdioClose));
         }
-        let gate = lock(&self.fact_write_gate, "append_vendor_stdio_close")?;
+        let gate = lock(&self.fact_write_gate, HostLocation::AppendVendorStdioClose)?;
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error("append_vendor_stdio_close"));
+            return Err(ledger_error(HostLocation::AppendVendorStdioClose));
         }
         let mut persisted = Vec::new();
         for observation in observations {
@@ -94,7 +95,7 @@ impl HostShared {
                 )
                 .map_err(|_| {
                     self.lifecycle_append_failed.store(true, Ordering::Release);
-                    ledger_error("append_vendor_stdio_close")
+                    ledger_error(HostLocation::AppendVendorStdioClose)
                 })?;
             persisted.push((observation, event));
         }
@@ -207,7 +208,7 @@ impl HostShared {
             return Ok(());
         }
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error("append_runtime_lifecycle_failure"));
+            return Err(ledger_error(HostLocation::AppendRuntimeLifecycleFailure));
         }
         if let Some(error) = host_error
             && error.projection().code == RuntimeErrorCode::LedgerFailure
@@ -238,8 +239,8 @@ impl HostShared {
                 message: _,
             } => (
                 "runtime_client",
-                code,
-                Some(operation),
+                code.as_str(),
+                Some(operation.as_str()),
                 Some(fatal),
                 runtime_code,
             ),
@@ -255,8 +256,11 @@ impl HostShared {
             "entered_event_id": entered_event_id,
             "decision_id": decision_id,
         }))
-        .map_err(|_| ledger_error("encode_runtime_lifecycle_failure"))?;
-        let gate = lock(&self.fact_write_gate, "append_runtime_lifecycle_failure")?;
+        .map_err(|_| ledger_error(HostLocation::EncodeRuntimeLifecycleFailure))?;
+        let gate = lock(
+            &self.fact_write_gate,
+            HostLocation::AppendRuntimeLifecycleFailure,
+        )?;
         let mut persisted = Vec::new();
         let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>,
                         reference: Option<EventId>,
@@ -351,7 +355,7 @@ impl HostShared {
                 )
                 .map_err(|_| {
                     self.lifecycle_append_failed.store(true, Ordering::Release);
-                    ledger_error("append_runtime_lifecycle_failure")
+                    ledger_error(HostLocation::AppendRuntimeLifecycleFailure)
                 })?;
             let id = *event.event_id();
             persisted.push(event);
@@ -592,7 +596,7 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )
-        .map_err(|_| ledger_error("append_runtime_connection_failure"))
+        .map_err(|_| ledger_error(HostLocation::AppendRuntimeConnectionFailure))
         .and_then(|event| self.record_required_failure(error, &event, context.links.clone()))
     }
 }
@@ -621,7 +625,7 @@ pub(super) fn append_runtime_start_event(
     ledger
         .append(draft)
         .map(|_| ())
-        .map_err(|_| ledger_error("append_runtime_start"))
+        .map_err(|_| ledger_error(HostLocation::AppendRuntimeStart))
 }
 
 /// The `runtime.instance_bound` payload of one registered instance: a pending discovery
@@ -673,7 +677,7 @@ pub(super) fn append_instance_binding_events(
         let draft = events.sanitize(draft)?;
         ledger
             .append(draft)
-            .map_err(|_| ledger_error("append_runtime_instance_bound"))?;
+            .map_err(|_| ledger_error(HostLocation::AppendRuntimeInstanceBound))?;
     }
     Ok(())
 }

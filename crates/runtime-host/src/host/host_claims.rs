@@ -22,6 +22,7 @@ use super::recovery_ladder::PendingRecoveryLadder;
 use super::startup_package::PendingStartupPackage;
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 
@@ -72,11 +73,14 @@ pub(super) struct InstanceWorkers {
 /// W-2: creates one worker per registered instance. It runs at host start, before the
 /// daemon-start preparation, so a preparation's ladder already has a worker.
 pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
-    let instances = lock(&shared.registered_instances, "list_worker_instances")?
-        .values()
-        .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
-        .collect::<Vec<_>>();
-    let mut workers = lock(&shared.instance_workers, "spawn_instance_workers")?;
+    let instances = lock(
+        &shared.registered_instances,
+        HostLocation::ListWorkerInstances,
+    )?
+    .values()
+    .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+    .collect::<Vec<_>>();
+    let mut workers = lock(&shared.instance_workers, HostLocation::SpawnInstanceWorkers)?;
     for (instance_id, instance_alias) in instances {
         let (sender, receiver) = mpsc::channel();
         let worker_shared = Arc::clone(shared);
@@ -85,8 +89,8 @@ pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostRes
             .spawn(move || instance_worker_loop(&worker_shared, &receiver))
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "instance_worker_spawn_failed",
-                    "start_runtime_host",
+                    HostCode::InstanceWorkerSpawnFailed,
+                    HostLocation::StartRuntimeHost,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -117,8 +121,8 @@ fn instance_worker_loop(
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
-                        HostCode::RuntimeRestartRequired.as_str(),
-                        "run_instance_worker",
+                        HostCode::RuntimeRestartRequired,
+                        HostLocation::RunInstanceWorker,
                         RuntimeErrorCode::RuntimeFatal,
                     );
                     shared.fatal.mark(error.clone())?;
@@ -219,7 +223,7 @@ impl HostShared {
                     category,
                     RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
                     "runtime_host",
-                    "run_instance_worker",
+                    HostLocation::RunInstanceWorker.as_str(),
                     format!(
                         "code={} thread={} boundary=instance_worker raw_source=panic raw_text={}",
                         actingcommand_contract::codes::ContractCode::PanicCaught.as_str(),
@@ -242,7 +246,7 @@ impl HostShared {
         work: HostClaimWork,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
-        let workers = lock(&self.instance_workers, "post_host_claim")?;
+        let workers = lock(&self.instance_workers, HostLocation::PostHostClaim)?;
         let posted = workers
             .senders
             .get(&instance_id)
@@ -251,8 +255,8 @@ impl HostShared {
             return Ok(());
         }
         Err(RuntimeHostError::fatal(
-            "instance_worker_unavailable",
-            "post_host_claim",
+            HostCode::InstanceWorkerUnavailable,
+            HostLocation::PostHostClaim,
             RuntimeErrorCode::RuntimeFatal,
         ))
     }
@@ -269,10 +273,11 @@ impl HostShared {
         let request_id = request.request_id();
         let connection_id = claim.connection_id;
         let instance_id = self.resolve_instance(claim.instance_alias)?.instance_id();
-        lock(&self.host_claim_work, "register_host_claim_work")?.insert(request_id, work);
+        lock(&self.host_claim_work, HostLocation::RegisterHostClaimWork)?.insert(request_id, work);
         match self.request_host_claim(claim) {
             Ok(super::lease::HostClaimAdmission::Granted(token)) => {
-                let work = lock(&self.host_claim_work, "take_host_claim_work")?.remove(&request_id);
+                let work = lock(&self.host_claim_work, HostLocation::TakeHostClaimWork)?
+                    .remove(&request_id);
                 if let Some(work) = work {
                     self.post_host_claim(
                         instance_id,
@@ -289,7 +294,7 @@ impl HostShared {
             }
             Ok(super::lease::HostClaimAdmission::Queued { .. }) => Ok(()),
             Err(failure) => {
-                lock(&self.host_claim_work, "forget_host_claim_work")?.remove(&request_id);
+                lock(&self.host_claim_work, HostLocation::ForgetHostClaimWork)?.remove(&request_id);
                 Err(failure)
             }
         }
@@ -299,13 +304,13 @@ impl HostShared {
     /// senders ends every worker after its current payload, and each thread is joined.
     pub(super) fn join_instance_workers(&self) -> RuntimeHostResult<()> {
         let threads = {
-            let mut workers = lock(&self.instance_workers, "stop_instance_workers")?;
+            let mut workers = lock(&self.instance_workers, HostLocation::StopInstanceWorkers)?;
             workers.senders.clear();
             std::mem::take(&mut workers.threads)
         };
         let mut failure = None;
         for thread in threads {
-            if let Err(error) = join_runtime_thread(Some(thread), "join_instance_worker")
+            if let Err(error) = join_runtime_thread(Some(thread), HostLocation::JoinInstanceWorker)
                 && failure.is_none()
             {
                 failure = Some(error);
@@ -321,9 +326,9 @@ impl HostShared {
         let order_lock = self
             .queue_order_lock(instance_id)
             .map_err(|failure| *failure.error)?;
-        let _order = lock(&order_lock, "lock_instance_queue_order")?;
+        let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         let now = self.monotonic_ms()?;
-        Ok(lock(&self.scheduler, "read_host_key")?
+        Ok(lock(&self.scheduler, HostLocation::ReadHostKey)?
             .active_lease(instance_id)
             .is_some_and(|lease| {
                 let token = lease.token();
@@ -341,7 +346,7 @@ impl HostShared {
         key: &mut HostKey,
         lease_ttl_ms: u64,
     ) -> Result<(), RequestFailure> {
-        let reserve = lock(&self.scheduler, "read_host_key_ttl_bound")?
+        let reserve = lock(&self.scheduler, HostLocation::ReadHostKeyTtlBound)?
             .config()
             .maximum_client_heartbeat_interval_ms;
         let lease_ttl_ms = lease_ttl_ms
@@ -360,8 +365,8 @@ impl HostShared {
         }
         let validated = key.request.validate().map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "host_key_request_invalid",
-                "renew_host_key",
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::RenewHostKey,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -373,7 +378,7 @@ impl HostShared {
     /// Releases `key` once when it is still its instance's lease, which hands the key on. A
     /// key that is already gone (a run released it, it lapsed) is left as it is.
     pub(super) fn release_host_key(&self, key: &HostKey) -> RuntimeHostResult<()> {
-        let current = lock(&self.scheduler, "read_host_key_release")?
+        let current = lock(&self.scheduler, HostLocation::ReadHostKeyRelease)?
             .active_lease(key.token.instance_id())
             .filter(|lease| {
                 lease.token().lease_id() == key.token.lease_id()
@@ -386,8 +391,8 @@ impl HostShared {
         };
         let validated = key.request.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "host_key_request_invalid",
-                "release_host_key",
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::ReleaseHostKey,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;

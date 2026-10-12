@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::RuntimeErrorCode;
+use actingcommand_contract::codes::SharedCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +40,8 @@ impl RuntimeClock for SystemRuntimeClock {
     fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
         let monotonic_ms = u64::try_from(self.started.elapsed().as_millis()).map_err(|_| {
             RuntimeHostError::fatal(
-                "monotonic_clock_overflow",
-                "read_runtime_clock",
+                HostCode::MonotonicClockOverflow,
+                HostLocation::ReadRuntimeClock,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -55,16 +57,16 @@ pub(crate) fn unix_ms_now() -> RuntimeHostResult<u64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "system_clock_invalid",
-                "read_system_clock",
+                SharedCode::SystemClockInvalid,
+                HostLocation::ReadSystemClock,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?
         .as_millis();
     u64::try_from(value).map_err(|_| {
         RuntimeHostError::fatal(
-            "system_clock_overflow",
-            "read_system_clock",
+            HostCode::SystemClockOverflow,
+            HostLocation::ReadSystemClock,
             RuntimeErrorCode::RuntimeFatal,
         )
     })

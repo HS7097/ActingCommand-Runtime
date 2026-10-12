@@ -1292,7 +1292,7 @@ fn a_start_while_capacity_refuses_records_the_refusal_and_leaves_no_queued_entry
             _owned_processes: &BTreeMap<u32, String>,
             _top_process_count: usize,
             _thresholds: ProcessLoadThresholds,
-        ) -> Result<HostSample, &'static str> {
+        ) -> Result<HostSample, actingcommand_contract::outcome::Code> {
             panic!("capacity-only specification does not enable performance counters")
         }
     }

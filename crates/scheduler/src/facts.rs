@@ -10,6 +10,7 @@
 //! after that snapshot. Anything not appended is gone with the process, by
 //! design (iron rule 13).
 
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     InstanceId, MAX_RUNTIME_FACTS, RUNTIME_FACT_SCHEMA_VERSION, RuntimeFactInvalidation,
     RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
@@ -34,7 +35,7 @@ pub enum RuntimeFactChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeFactError {
     /// The record failed contract validation.
-    Invalid { code: &'static str },
+    Invalid { code: Code },
     /// The store already holds a newer observation for the key and scope.
     Stale { existing_observed_at_unix_ms: u64 },
     /// [`MAX_RUNTIME_FACTS`] live records are already held.
@@ -85,9 +86,7 @@ impl RuntimeFactStore {
     ) -> Result<RuntimeFactChange, RuntimeFactError> {
         record
             .validate()
-            .map_err(|error| RuntimeFactError::Invalid {
-                code: error.code().as_str(),
-            })?;
+            .map_err(|error| RuntimeFactError::Invalid { code: error.code() })?;
         let key = (record.scope.clone(), record.key.clone());
         match self.active.get(&key) {
             Some(existing) if *existing == record => Ok(RuntimeFactChange::Unchanged),
@@ -202,9 +201,7 @@ impl RuntimeFactStore {
     pub fn replay(&mut self, snapshot: &RuntimeFactSnapshot) -> Result<usize, RuntimeFactError> {
         snapshot
             .validate()
-            .map_err(|error| RuntimeFactError::Invalid {
-                code: error.code().as_str(),
-            })?;
+            .map_err(|error| RuntimeFactError::Invalid { code: error.code() })?;
         self.active.clear();
         for record in &snapshot.records {
             self.active

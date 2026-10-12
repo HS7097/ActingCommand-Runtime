@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use crate::error::spelled;
+use actingcommand_contract::codes::SharedCode;
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -40,7 +43,10 @@ impl HostShared {
             EventAction::MonitorConfigure,
             None,
         )?;
-        let mut registry = lock(self.monitor_registry()?, "configure_monitor_registry")?;
+        let mut registry = lock(
+            self.monitor_registry()?,
+            HostLocation::ConfigureMonitorRegistry,
+        )?;
         let update = match registry.prepare_configure(
             instance_alias,
             policy,
@@ -78,7 +84,7 @@ impl HostShared {
             EventAction::MonitorClear,
             None,
         )?;
-        let mut registry = lock(self.monitor_registry()?, "clear_monitor_registry")?;
+        let mut registry = lock(self.monitor_registry()?, HostLocation::ClearMonitorRegistry)?;
         let update = match registry.prepare_clear(instance_alias) {
             Ok(update) => update,
             Err(error) => {
@@ -132,8 +138,8 @@ impl HostShared {
         else {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "monitor_committed_state_missing",
-                    "commit_monitor_update",
+                    HostCode::MonitorCommittedStateMissing,
+                    HostLocation::CommitMonitorUpdate,
                     RuntimeErrorCode::LedgerFailure,
                 ),
             ));
@@ -173,11 +179,11 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(instance.instance_id())
             .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
             return Err(RuntimeHostError::fatal(
-                "fixture_monitor_scope_forbidden",
-                "run_monitor_probe",
+                HostCode::FixtureMonitorScopeForbidden,
+                HostLocation::RunMonitorProbe,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -187,8 +193,8 @@ impl HostShared {
             .issue_monitor_probe(instance.instance_id())
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "monitor_probe_id_issue_failed",
-                    "run_monitor_probe",
+                    HostCode::MonitorProbeIdIssueFailed,
+                    HostLocation::RunMonitorProbe,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -239,8 +245,8 @@ impl HostShared {
 
         let frame_id = links.frame_id().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "monitor_frame_identity_missing",
-                "run_monitor_capture",
+                HostCode::MonitorFrameIdentityMissing,
+                HostLocation::RunMonitorCapture,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -276,7 +282,7 @@ impl HostShared {
                 )?;
                 let error =
                     self.finish_capture_failure_while_guarded(error, links.clone(), &admission)?;
-                let error = RuntimeHostError::execution("run_monitor_capture", &error);
+                let error = RuntimeHostError::execution(HostLocation::RunMonitorCapture, &error);
                 if self.retain_unconfirmed_resources(&error, links.clone())? {
                     return Err(error);
                 }
@@ -303,8 +309,8 @@ impl HostShared {
                 RuntimeHostError::artifact(ArtifactStoreError::incoming_frame(error))
             } else {
                 RuntimeHostError::request(
-                    "capture_frame_invalid",
-                    "run_monitor_capture",
+                    SharedCode::CaptureFrameInvalid,
+                    HostLocation::RunMonitorCapture,
                     RuntimeErrorCode::CaptureFailed,
                 )
             };
@@ -392,7 +398,8 @@ impl HostShared {
         ) {
             Ok(observation) => observation,
             Err(error) => {
-                let error = RuntimeHostError::execution("classify_monitor_observation", &error);
+                let error =
+                    RuntimeHostError::execution(HostLocation::ClassifyMonitorObservation, &error);
                 return self.finish_monitor_failure(
                     probe,
                     &links,
@@ -405,8 +412,8 @@ impl HostShared {
         let decision =
             decide_monitor(probe.policy.decision_policy(), &observation).map_err(|_| {
                 RuntimeHostError::fatal(
-                    "monitor_decision_invalid",
-                    "run_monitor_probe",
+                    HostCode::MonitorDecisionInvalid,
+                    HostLocation::RunMonitorProbe,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -425,7 +432,7 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        let mut registry = lock(self.monitor_registry()?, "complete_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, HostLocation::CompleteMonitorProbe)?;
         let update = registry.prepare_completion(
             probe,
             started_at_unix_ms,
@@ -447,8 +454,8 @@ impl HostShared {
             .with_runtime_state(update.fact)
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "monitor_state_invalid",
-                    "complete_monitor_probe",
+                    HostCode::MonitorStateInvalid,
+                    HostLocation::CompleteMonitorProbe,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?,
@@ -470,7 +477,7 @@ impl HostShared {
         started_at_unix_ms: u64,
         error: RuntimeHostError,
     ) -> RuntimeHostResult<()> {
-        let mut registry = lock(self.monitor_registry()?, "refuse_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, HostLocation::RefuseMonitorProbe)?;
         let update = registry.prepare_failure(
             probe,
             started_at_unix_ms,
@@ -491,8 +498,8 @@ impl HostShared {
             .with_runtime_state(update.fact)
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "monitor_state_invalid",
-                    "refuse_monitor_probe",
+                    HostCode::MonitorStateInvalid,
+                    HostLocation::RefuseMonitorProbe,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?,
@@ -547,13 +554,13 @@ impl HostShared {
         instance_id: InstanceId,
     ) -> RuntimeHostResult<MonitorRecoveryAdmission> {
         let now = self.monotonic_ms()?;
-        let scheduler = lock(&self.scheduler, "coordinate_monitor_recovery")?;
+        let scheduler = lock(&self.scheduler, HostLocation::CoordinateMonitorRecovery)?;
         if let Some(active) = scheduler.active_lease(instance_id) {
             let token = active.token();
             if token.owner_epoch() != self.owner_epoch || token.instance_id() != instance_id {
                 return Err(RuntimeHostError::fatal(
-                    "monitor_recovery_fencing_state_invalid",
-                    "coordinate_monitor_recovery",
+                    HostCode::MonitorRecoveryFencingStateInvalid,
+                    HostLocation::CoordinateMonitorRecovery,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -602,9 +609,12 @@ impl HostShared {
             let payload = CapturePayloadDraft::failed_with_causes(
                 EventAction::CaptureObserve,
                 diagnostic,
-                if matches!(
+                if spelled(
                     error.code(),
-                    "capture_frame_invalid" | "frame_workspace_unavailable"
+                    &[
+                        SharedCode::CaptureFrameInvalid.code(),
+                        SharedCode::FrameWorkspaceUnavailable.code(),
+                    ],
                 ) {
                     EffectDisposition::Indeterminate
                 } else {
@@ -637,7 +647,7 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        let mut registry = lock(self.monitor_registry()?, "fail_monitor_probe")?;
+        let mut registry = lock(self.monitor_registry()?, HostLocation::FailMonitorProbe)?;
         let update =
             registry.prepare_failure(probe, started_at_unix_ms, unix_ms_now()?, runtime_code)?;
         let failed = self.append_event_raw(
@@ -658,8 +668,8 @@ impl HostShared {
             .with_runtime_state(update.fact)
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "monitor_state_invalid",
-                    "fail_monitor_probe",
+                    HostCode::MonitorStateInvalid,
+                    HostLocation::FailMonitorProbe,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?,
@@ -671,12 +681,14 @@ impl HostShared {
         }
         if error.code() == "monitor_observation_invalid"
             || (error.is_fatal()
-                && matches!(
+                && spelled(
                     error.code(),
-                    "frame_workspace_unavailable"
-                        | "frame_memory_owner_missing_or_mismatched"
-                        | "frame_memory_accounting_invalid"
-                        | "frame_memory_budget_source_failed"
+                    &[
+                        SharedCode::FrameWorkspaceUnavailable.code(),
+                        SharedCode::FrameMemoryOwnerMissingOrMismatched.code(),
+                        SharedCode::FrameMemoryAccountingInvalid.code(),
+                        SharedCode::FrameMemoryBudgetSourceFailed.code(),
+                    ],
                 ))
         {
             return Err(error);
@@ -687,28 +699,30 @@ impl HostShared {
     fn monitor_instance(&self, instance_alias: &str) -> RuntimeHostResult<RegisteredInstance> {
         // The identity check runs under the registry lock so an endpoint rebinding is never
         // observed half-applied.
-        let registry = lock(&self.registered_instances, "resolve_monitor_instance")?;
+        let registry = lock(
+            &self.registered_instances,
+            HostLocation::ResolveMonitorInstance,
+        )?;
         let registered = registry
             .values()
             .find(|instance| instance.instance_alias == instance_alias)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "monitor_instance_unknown",
-                    "resolve_monitor_instance",
+                    HostCode::MonitorInstanceUnknown,
+                    HostLocation::ResolveMonitorInstance,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
-        let resolved = self
-            .execution()?
-            .resolve(instance_alias)
-            .map_err(|error| RuntimeHostError::execution("resolve_monitor_instance", &error))?;
+        let resolved = self.execution()?.resolve(instance_alias).map_err(|error| {
+            RuntimeHostError::execution(HostLocation::ResolveMonitorInstance, &error)
+        })?;
         if resolved.instance_id() != registered.instance_id
             || resolved.audit_endpoint() != registered.audit_endpoint
             || resolved.provenance() != registered.provenance
         {
             return Err(RuntimeHostError::fatal(
-                "runtime_instance_identity_mismatch",
-                "resolve_monitor_instance",
+                HostCode::RuntimeInstanceIdentityMismatch,
+                HostLocation::ResolveMonitorInstance,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -719,7 +733,7 @@ impl HostShared {
 pub(super) fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     while !shared.fatal.is_shutdown_requested() {
         let now_unix_ms = unix_ms_now()?;
-        let due = lock(shared.monitor_registry()?, "read_due_monitors")?
+        let due = lock(shared.monitor_registry()?, HostLocation::ReadDueMonitors)?
             .due(now_unix_ms, MAX_MONITOR_PROBES_PER_TICK)?;
         for probe in due {
             if shared.fatal.is_shutdown_requested() {

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::RuntimeErrorCode;
+use actingcommand_contract::outcome::Code;
 use serde::Serialize;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -28,14 +30,14 @@ pub(crate) fn read_frame(
     }
     let length = u32::from_be_bytes(header) as usize;
     if length == 0 || length > maximum_frame_bytes {
-        return Err(protocol_error("runtime_frame_length_invalid"));
+        return Err(protocol_error(HostCode::RuntimeFrameLengthInvalid));
     }
     let mut body = vec![0_u8; length];
     if !matches!(
         read_exact_state(stream, &mut body, false)?,
         ExactRead::Complete
     ) {
-        return Err(protocol_error("runtime_frame_truncated"));
+        return Err(protocol_error(HostCode::RuntimeFrameTruncated));
     }
     Ok(FrameRead::Data(body))
 }
@@ -64,7 +66,7 @@ pub(crate) fn wait_frame_start(
 ) -> RuntimeHostResult<FrameStart> {
     stream
         .set_nonblocking(true)
-        .map_err(|_| protocol_error("runtime_socket_mode_failed"))?;
+        .map_err(|_| protocol_error(HostCode::RuntimeSocketModeFailed))?;
     let idle_since = Instant::now();
     let mut delay = IDLE_POLL_MIN;
     loop {
@@ -83,12 +85,12 @@ pub(crate) fn wait_frame_start(
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return Err(protocol_error("runtime_frame_read_failed")),
+            Err(_) => return Err(protocol_error(HostCode::RuntimeFrameReadFailed)),
         }
     }
     stream
         .set_nonblocking(false)
-        .map_err(|_| protocol_error("runtime_socket_mode_failed"))?;
+        .map_err(|_| protocol_error(HostCode::RuntimeSocketModeFailed))?;
     Ok(FrameStart::Ready)
 }
 
@@ -99,7 +101,7 @@ pub(crate) fn read_started_frame(
     maximum_frame_bytes: usize,
 ) -> RuntimeHostResult<FrameRead> {
     match read_frame(stream, maximum_frame_bytes)? {
-        FrameRead::Idle => Err(protocol_error("runtime_frame_timeout")),
+        FrameRead::Idle => Err(protocol_error(HostCode::RuntimeFrameTimeout)),
         read => Ok(read),
     }
 }
@@ -109,8 +111,8 @@ pub(crate) fn write_frame<T: Serialize>(
     value: &T,
     maximum_frame_bytes: usize,
 ) -> RuntimeHostResult<()> {
-    let body =
-        serde_json::to_vec(value).map_err(|_| protocol_error("runtime_frame_encode_failed"))?;
+    let body = serde_json::to_vec(value)
+        .map_err(|_| protocol_error(HostCode::RuntimeFrameEncodeFailed))?;
     write_encoded_frame(stream, &body, maximum_frame_bytes)
 }
 
@@ -120,7 +122,7 @@ pub(crate) fn write_encoded_frame(
     maximum_frame_bytes: usize,
 ) -> RuntimeHostResult<()> {
     if body.is_empty() || body.len() > maximum_frame_bytes || body.len() > u32::MAX as usize {
-        return Err(protocol_error("runtime_frame_length_invalid"));
+        return Err(protocol_error(HostCode::RuntimeFrameLengthInvalid));
     }
     let mut frame = Vec::with_capacity(body.len() + 4);
     frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -128,7 +130,7 @@ pub(crate) fn write_encoded_frame(
     stream
         .write_all(&frame)
         .and_then(|()| stream.flush())
-        .map_err(|_| protocol_error("runtime_frame_write_failed"))
+        .map_err(|_| protocol_error(HostCode::RuntimeFrameWriteFailed))
 }
 
 enum ExactRead {
@@ -146,7 +148,7 @@ fn read_exact_state(
     while offset < buffer.len() {
         match stream.read(&mut buffer[offset..]) {
             Ok(0) if offset == 0 => return Ok(ExactRead::Closed),
-            Ok(0) => return Err(protocol_error("runtime_frame_truncated")),
+            Ok(0) => return Err(protocol_error(HostCode::RuntimeFrameTruncated)),
             Ok(read) => offset += read,
             Err(error)
                 if matches!(
@@ -163,14 +165,18 @@ fn read_exact_state(
                     io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                 ) =>
             {
-                return Err(protocol_error("runtime_frame_timeout"));
+                return Err(protocol_error(HostCode::RuntimeFrameTimeout));
             }
-            Err(_) => return Err(protocol_error("runtime_frame_read_failed")),
+            Err(_) => return Err(protocol_error(HostCode::RuntimeFrameReadFailed)),
         }
     }
     Ok(ExactRead::Complete)
 }
 
-fn protocol_error(code: &'static str) -> RuntimeHostError {
-    RuntimeHostError::request(code, "runtime_local_ipc", RuntimeErrorCode::ProtocolInvalid)
+fn protocol_error(code: impl Into<Code>) -> RuntimeHostError {
+    RuntimeHostError::request(
+        code,
+        HostLocation::RuntimeLocalIpc,
+        RuntimeErrorCode::ProtocolInvalid,
+    )
 }

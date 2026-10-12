@@ -2,7 +2,10 @@
 
 //! Ledger evidence adapter for predictive maintenance assessments.
 
+use crate::codes::HostCode;
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     EventPayload, EventQuery, FactPayload, FactScope, PolicyPayload, RuntimeErrorCode,
 };
@@ -69,7 +72,7 @@ impl MaintenanceLedgerQuery {
             )
             || self.trend_policy.validate().is_err()
         {
-            return Err(request("maintenance_ledger_query_invalid"));
+            return Err(request(HostCode::MaintenanceLedgerQueryInvalid));
         }
         Ok(())
     }
@@ -131,9 +134,9 @@ pub(crate) fn collect_maintenance_evidence(
     query.validate()?;
     let latest_ledger_position = ledger
         .latest_sequence()
-        .map_err(|_| fatal("maintenance_ledger_position_query_failed"))?;
+        .map_err(|_| fatal(HostCode::MaintenanceLedgerPositionQueryFailed))?;
     if query.as_of_ledger_position() > latest_ledger_position {
-        return Err(request("maintenance_ledger_position_invalid"));
+        return Err(request(HostCode::MaintenanceLedgerPositionInvalid));
     }
     let window_start = query
         .as_of_unix_ms
@@ -143,7 +146,7 @@ pub(crate) fn collect_maintenance_evidence(
             to_sequence: Some(query.as_of_ledger_position()),
             ..EventQuery::default()
         })
-        .map_err(|_| fatal("maintenance_ledger_query_failed"))?;
+        .map_err(|_| fatal(HostCode::MaintenanceLedgerQueryFailed))?;
     let mut durations = Vec::new();
     // Each confidence sample keeps the source snapshot it was published under, so that a
     // persisted invalidation of that snapshot removes it (Workflow #317 item G).
@@ -170,7 +173,7 @@ pub(crate) fn collect_maintenance_evidence(
                     duration_ms,
                 });
                 if durations.len() > MAX_MAINTENANCE_SAMPLES {
-                    return Err(request("maintenance_evidence_capacity_exceeded"));
+                    return Err(request(HostCode::MaintenanceEvidenceCapacityExceeded));
                 }
             }
             EventPayload::Fact(FactPayload::Published(payload)) => {
@@ -189,7 +192,7 @@ pub(crate) fn collect_maintenance_evidence(
                         },
                     ));
                     if confidences.len() > MAX_MAINTENANCE_SAMPLES {
-                        return Err(request("maintenance_evidence_capacity_exceeded"));
+                        return Err(request(HostCode::MaintenanceEvidenceCapacityExceeded));
                     }
                 }
             }
@@ -219,18 +222,18 @@ pub(crate) fn collect_maintenance_evidence(
     })
 }
 
-fn request(code: &'static str) -> RuntimeHostError {
+fn request(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "assess_predictive_maintenance",
+        ContractLocation::AssessPredictiveMaintenance,
         RuntimeErrorCode::InvalidRequest,
     )
 }
 
-fn fatal(code: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "assess_predictive_maintenance",
+        ContractLocation::AssessPredictiveMaintenance,
         RuntimeErrorCode::RuntimeFatal,
     )
 }

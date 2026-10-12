@@ -101,13 +101,21 @@ fn planning_work_error(
 pub(crate) fn planning_transaction_error(error: GlobalLedgerError) -> RuntimeHostError {
     if let Some(work) = error.rolled_back_work() {
         let mapped = if work.fatal {
-            RuntimeHostError::fatal(work.code, work.operation, RuntimeErrorCode::RuntimeFatal)
+            RuntimeHostError::relayed_fatal(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::RuntimeFatal,
+            )
         } else {
-            RuntimeHostError::request(work.code, work.operation, RuntimeErrorCode::InvalidRequest)
+            RuntimeHostError::relayed_request(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::InvalidRequest,
+            )
         };
         return mapped.with_native_detail(format!("rollback=confirmed; {}", work.detail));
     }
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         error.code(),
         error.operation(),
         RuntimeErrorCode::LedgerFailure,

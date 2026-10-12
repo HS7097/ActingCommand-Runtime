@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
 use crate::events::RuntimeEvents;
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::{RuntimeClock, RuntimeHostError};
 use actingcommand_artifact_store::{ArtifactStore, ArtifactStoreError};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     AuditInput, EventActor, EventSeverity, EventSource, LedgerPayloadDraft, OriginModule,
     ProjectedArtifactReference,
@@ -183,8 +186,8 @@ fn validate_request(request: &LedgerMaintenanceRequest) -> Result<()> {
             && request.operation != LedgerMaintenanceOperation::Restore
     {
         return Err(failure(
-            "maintenance_arguments_invalid",
-            "validate_ledger_maintenance",
+            HostCode::MaintenanceArgumentsInvalid,
+            HostLocation::ValidateLedgerMaintenance,
         ));
     }
     Ok(())
@@ -218,8 +221,8 @@ fn run_locked(
     let ledger = maintenance.status(&database)?;
     if ledger == LedgerStorageStatus::Candidate {
         return Err(failure(
-            "candidate_requires_explicit_disposition",
-            "maintain_runtime_ledger",
+            HostCode::CandidateRequiresExplicitDisposition,
+            HostLocation::MaintainRuntimeLedger,
         ));
     }
     match request.operation {
@@ -228,8 +231,8 @@ fn run_locked(
                 let source = maintenance.source()?;
                 if !source.artifact_evictions().is_empty() {
                     return Err(failure(
-                        HostCode::MaintenanceArtifactMaterialUnavailable.as_str(),
-                        "verify_complete_artifact_material",
+                        HostCode::MaintenanceArtifactMaterialUnavailable,
+                        HostLocation::VerifyCompleteArtifactMaterial,
                     ));
                 }
             } else {
@@ -261,8 +264,12 @@ fn run_locked(
                 destination,
                 &material,
                 &maintenance.locked_material()?,
-                serde_json::to_value(&binding)
-                    .map_err(|_| failure("backup_binding_invalid", "encode_backup_binding"))?,
+                serde_json::to_value(&binding).map_err(|_| {
+                    failure(
+                        HostCode::BackupBindingInvalid,
+                        HostLocation::EncodeBackupBinding,
+                    )
+                })?,
                 request.limits,
                 deadline,
             )?;
@@ -280,8 +287,8 @@ fn run_locked(
                 || binding.source.as_ref() != Some(source.identity())
             {
                 return Err(failure(
-                    "migration_backup_source_mismatch",
-                    "import_segment_ledger",
+                    HostCode::MigrationBackupSourceMismatch,
+                    ContractLocation::ImportSegmentLedger,
                 ));
             }
             let record = source.migration_record(&backup.backup_id, &binding.state_sha256)?;
@@ -295,8 +302,8 @@ fn run_locked(
                 LedgerStorageStatus::Missing if state_sha256 == binding.state_sha256 => {}
                 _ => {
                     return Err(failure(
-                        "migration_current_state_conflict",
-                        "import_segment_ledger",
+                        HostCode::MigrationCurrentStateConflict,
+                        ContractLocation::ImportSegmentLedger,
                     ));
                 }
             }
@@ -388,8 +395,8 @@ fn require_settled_retention(events: &[actingcommand_ledger::PersistedEvent]) ->
         .len();
     if pending > 0 {
         let mut error = failure(
-            HostCode::MaintenanceArtifactMaterialUnavailable.as_str(),
-            "verify_complete_artifact_material",
+            HostCode::MaintenanceArtifactMaterialUnavailable,
+            HostLocation::VerifyCompleteArtifactMaterial,
         );
         error.cause = format!("pending_evictions={pending}");
         return Err(error);
@@ -455,12 +462,22 @@ fn verify_backup_binding(
 ) -> Result<BackupBinding> {
     let verified = database.verify_backup(backup_root, limits, deadline)?;
     if verified != *backup {
-        return Err(failure("backup_changed", "verify_backup_binding"));
+        return Err(failure(
+            HostCode::BackupChanged,
+            HostLocation::VerifyBackupBinding,
+        ));
     }
-    let expected: BackupBinding = serde_json::from_value(backup.binding.clone())
-        .map_err(|_| failure("backup_binding_invalid", "decode_backup_binding"))?;
+    let expected: BackupBinding = serde_json::from_value(backup.binding.clone()).map_err(|_| {
+        failure(
+            HostCode::BackupBindingInvalid,
+            HostLocation::DecodeBackupBinding,
+        )
+    })?;
     if expected.artifact_material_included {
-        return Err(failure("backup_binding_invalid", "verify_backup_binding"));
+        return Err(failure(
+            HostCode::BackupBindingInvalid,
+            HostLocation::VerifyBackupBinding,
+        ));
     }
     let archived_database = Arc::new(RuntimeDatabase::open_existing(backup_root, true)?);
     let state = RuntimeStateStore::from_database(Arc::clone(&archived_database))?;
@@ -471,8 +488,8 @@ fn verify_backup_binding(
         let actual = binding(&archived_database, &archived, ledger, state_sha256)?;
         if actual != expected {
             return Err(failure(
-                "backup_projection_mismatch",
-                "verify_backup_binding",
+                HostCode::BackupProjectionMismatch,
+                HostLocation::VerifyBackupBinding,
             ));
         }
         Ok(actual)
@@ -501,15 +518,18 @@ fn restore(
     let expected = verify_backup_binding(database, backup_root, &backup, request.limits, deadline)?;
     if current_state != expected.state_sha256 {
         return Err(failure(
-            "restore_state_has_advanced",
-            "admit_database_restore",
+            HostCode::RestoreStateHasAdvanced,
+            HostLocation::AdmitDatabaseRestore,
         ));
     }
     match (&expected.ledger, &current) {
         (LedgerStorageStatus::Missing, LedgerStorageStatus::Missing) => {
             let source = maintenance.source()?;
             if expected.source.as_ref() != Some(source.identity()) {
-                return Err(failure("restore_source_changed", "admit_database_restore"));
+                return Err(failure(
+                    HostCode::RestoreSourceChanged,
+                    HostLocation::AdmitDatabaseRestore,
+                ));
             }
         }
         (
@@ -528,15 +548,18 @@ fn restore(
         (expected, actual) if expected == actual => {}
         _ => {
             return Err(failure(
-                "restore_would_discard_new_events",
-                "admit_database_restore",
+                HostCode::RestoreWouldDiscardNewEvents,
+                HostLocation::AdmitDatabaseRestore,
             ));
         }
     }
     if target.exists() {
-        return Err(failure("restore_target_exists", "admit_database_restore"));
+        return Err(failure(
+            HostCode::RestoreTargetExists,
+            HostLocation::AdmitDatabaseRestore,
+        ));
     }
-    std::fs::create_dir(target).map_err(|error| io("create_restore_target", &error))?;
+    std::fs::create_dir(target).map_err(|error| io(HostLocation::CreateRestoreTarget, &error))?;
     let OwnerStartup {
         guard: mut target_owner,
         ..
@@ -577,8 +600,8 @@ fn restore(
                 .checked_add(reference.byte_count)
                 .ok_or_else(|| {
                     failure(
-                        "restore_artifact_size_overflow",
-                        "restore_artifact_material",
+                        HostCode::RestoreArtifactSizeOverflow,
+                        HostLocation::RestoreArtifactMaterial,
                     )
                 })?;
             attempted += 1;
@@ -597,7 +620,10 @@ fn restore(
         let restored_db = Arc::new(RuntimeDatabase::open_existing(target, true)?);
         let restored_state = RuntimeStateStore::from_database(Arc::clone(&restored_db))?;
         if restored_state.maintenance_digest(request.limits, deadline)? != expected.state_sha256 {
-            return Err(failure("restored_state_mismatch", "verify_restored_root"));
+            return Err(failure(
+                HostCode::RestoredStateMismatch,
+                HostLocation::VerifyRestoredRoot,
+            ));
         }
         let restored = LedgerMaintenance::acquire(target, false, request.limits, deadline)?;
         let verified = (|| {
@@ -610,8 +636,8 @@ fn restore(
             )?;
             if actual != expected {
                 return Err(failure(
-                    "restored_projection_mismatch",
-                    "verify_restored_root",
+                    HostCode::RestoredProjectionMismatch,
+                    HostLocation::VerifyRestoredRoot,
                 ));
             }
             let mut restored_receipt = receipt("restored", actual.ledger, Some(&backup));
@@ -642,20 +668,26 @@ fn receipt(
     }
 }
 fn required(path: &Option<PathBuf>) -> Result<&Path> {
-    path.as_deref()
-        .ok_or_else(|| failure("maintenance_path_missing", "validate_ledger_maintenance"))
+    path.as_deref().ok_or_else(|| {
+        failure(
+            HostCode::MaintenancePathMissing,
+            HostLocation::ValidateLedgerMaintenance,
+        )
+    })
 }
-fn failure(code: &str, operation: &str) -> LedgerMaintenanceFailure {
+fn failure(code: impl Into<Code>, operation: impl Into<Location>) -> LedgerMaintenanceFailure {
+    let code: Code = code.into();
+    let operation: Location = operation.into();
     LedgerMaintenanceFailure {
-        code: code.into(),
-        operation: operation.into(),
+        code: code.as_str().into(),
+        operation: operation.as_str().into(),
         cause: format!("{code} during {operation}"),
         cleanup: Vec::new(),
         warnings: Vec::new(),
     }
 }
-fn io(operation: &str, error: &std::io::Error) -> LedgerMaintenanceFailure {
-    let mut result = failure("maintenance_io_failed", operation);
+fn io(operation: impl Into<Location>, error: &std::io::Error) -> LedgerMaintenanceFailure {
+    let mut result = failure(HostCode::MaintenanceIoFailed, operation);
     result.cause.push_str(&format!(
         ": kind={:?};os={:?}",
         error.kind(),

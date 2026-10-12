@@ -9,6 +9,8 @@
 
 use super::policy_dispatch::SchedulingPauseTable;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     InstancePauseStage, InstancePauseState, OwnerEpoch, SchedulingPauseReason, SchedulingPauseState,
 };
@@ -39,7 +41,7 @@ impl PauseOrigin {
 /// `restored_from_owner_epoch`.
 pub(super) fn pause_row(
     instance_alias: Option<&str>,
-    pause_reason: &str,
+    pause_reason: &actingcommand_contract::SchedulingPauseReason,
     since_unix_ms: u64,
     origin: &PauseOrigin,
 ) -> BTreeMap<String, FactScalar> {
@@ -52,7 +54,7 @@ pub(super) fn pause_row(
         ("scope".to_owned(), FactScalar::String(scope.to_owned())),
         (
             "pause_reason".to_owned(),
-            FactScalar::String(pause_reason.to_owned()),
+            FactScalar::String(pause_reason.as_str().to_owned()),
         ),
         (
             "since_unix_ms".to_owned(),
@@ -82,17 +84,17 @@ fn epoch_text(owner_epoch: OwnerEpoch) -> RuntimeHostResult<String> {
     match serde_json::to_value(owner_epoch) {
         Ok(serde_json::Value::String(text)) => Ok(text),
         _ => Err(RuntimeHostError::fatal(
-            "scheduling_pause_epoch_encode_failed",
-            "persist_scheduling_pause",
+            HostCode::SchedulingPauseEpochEncodeFailed,
+            HostLocation::PersistSchedulingPause,
             RuntimeErrorCode::RuntimeFatal,
         )),
     }
 }
 
-fn restore_invalid(code: &'static str) -> RuntimeHostError {
+fn restore_invalid(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "restore_scheduling_pauses",
+        HostLocation::RestoreSchedulingPauses,
         RuntimeErrorCode::RuntimeFatal,
     )
 }
@@ -100,7 +102,7 @@ fn restore_invalid(code: &'static str) -> RuntimeHostError {
 fn row_text<'a>(row: &'a BTreeMap<String, FactScalar>, field: &str) -> RuntimeHostResult<&'a str> {
     match row.get(field) {
         Some(FactScalar::String(value)) => Ok(value),
-        _ => Err(restore_invalid("scheduling_pause_fact_invalid")),
+        _ => Err(restore_invalid(HostCode::SchedulingPauseFactInvalid)),
     }
 }
 
@@ -113,14 +115,17 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let rows = table.persisted_rows()?;
         let now = self.clock.sample()?.unix_ms;
-        let previous = lock(&self.runtime_facts, "read_scheduling_pause_fact_clock")?
-            .get(&RuntimeFactScope::Runtime, SCHEDULING_PAUSE_FACT_KEY)
-            .map(|record| record.observed_at_unix_ms);
+        let previous = lock(
+            &self.runtime_facts,
+            HostLocation::ReadSchedulingPauseFactClock,
+        )?
+        .get(&RuntimeFactScope::Runtime, SCHEDULING_PAUSE_FACT_KEY)
+        .map(|record| record.observed_at_unix_ms);
         let observed_at_unix_ms = match previous {
             Some(previous) => now.max(previous.checked_add(1).ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "scheduling_pause_fact_clock_overflow",
-                    "persist_scheduling_pause",
+                    HostCode::SchedulingPauseFactClockOverflow,
+                    HostLocation::PersistSchedulingPause,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?),
@@ -150,8 +155,8 @@ impl HostShared {
             } else {
                 RequestFailure::request(
                     RuntimeHostError::request(
-                        "scheduling_pause_persist_failed",
-                        "persist_scheduling_pause",
+                        HostCode::SchedulingPausePersistFailed,
+                        HostLocation::PersistSchedulingPause,
                         RuntimeErrorCode::LedgerFailure,
                     )
                     .with_native_detail(format!("{error:?}")),
@@ -168,13 +173,14 @@ impl HostShared {
     pub(super) fn hold_instance_pause_at_start(
         &self,
         instance_alias: &str,
-        pause_reason: &str,
+        pause_reason: Code,
     ) -> RuntimeHostResult<()> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
-            "hold_start_instance_pause",
+            HostLocation::HoldStartInstancePause,
         )?;
-        let mut prospective = lock(&self.scheduling_pause, "hold_start_instance_pause")?.clone();
+        let mut prospective =
+            lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)?.clone();
         let since_unix_ms = self.clock.sample()?.unix_ms;
         if !prospective.hold_instance_at_start(
             instance_alias,
@@ -185,7 +191,7 @@ impl HostShared {
             return Ok(());
         }
         self.record_scheduling_pauses(&prospective)?;
-        *lock(&self.scheduling_pause, "hold_start_instance_pause")? = prospective;
+        *lock(&self.scheduling_pause, HostLocation::HoldStartInstancePause)? = prospective;
         Ok(())
     }
 
@@ -194,14 +200,21 @@ impl HostShared {
     pub(super) fn lift_failed_instance_pause(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
-            "persist_failed_instance_pause",
+            HostLocation::PersistFailedInstancePause,
         )?;
-        let mut prospective = lock(&self.scheduling_pause, "lift_failed_instance_pause")?.clone();
+        let mut prospective = lock(
+            &self.scheduling_pause,
+            HostLocation::LiftFailedInstancePause,
+        )?
+        .clone();
         prospective.lift_instance(instance_alias)?;
         let recorded = self.record_scheduling_pauses(&prospective);
-        lock(&self.scheduling_pause, "lift_failed_instance_pause")
-            .and_then(|mut table| table.lift_instance(instance_alias))
-            .and(recorded)
+        lock(
+            &self.scheduling_pause,
+            HostLocation::LiftFailedInstancePause,
+        )
+        .and_then(|mut table| table.lift_instance(instance_alias))
+        .and(recorded)
     }
 
     /// Restores the persisted pauses at start, before any instance is prepared, and returns
@@ -221,10 +234,10 @@ impl HostShared {
     ) -> RuntimeHostResult<Vec<String>> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
-            "restore_scheduling_pauses",
+            HostLocation::RestoreSchedulingPauses,
         )?;
         let previous = previous_owner_epoch.map(epoch_text).transpose()?;
-        let recorded = lock(&self.runtime_facts, "read_scheduling_pause_fact")?
+        let recorded = lock(&self.runtime_facts, HostLocation::ReadSchedulingPauseFact)?
             .get(&RuntimeFactScope::Runtime, SCHEDULING_PAUSE_FACT_KEY)
             .cloned();
         if held {
@@ -235,38 +248,55 @@ impl HostShared {
                 },
                 restored_from_owner_epoch: previous,
             };
-            let mut table = lock(&self.scheduling_pause, "read_install_restored_pauses")?.clone();
+            let mut table = lock(
+                &self.scheduling_pause,
+                HostLocation::ReadInstallRestoredPauses,
+            )?
+            .clone();
             table.adopt_origins(&origin);
             if recorded.is_some() || table.holds_pauses() {
                 self.record_scheduling_pauses(&table)?;
             }
-            lock(&self.scheduling_pause, "adopt_install_pause_origins")?.adopt_origins(&origin);
+            lock(
+                &self.scheduling_pause,
+                HostLocation::AdoptInstallPauseOrigins,
+            )?
+            .adopt_origins(&origin);
             return Ok(Vec::new());
         }
         let Some(recorded) = recorded else {
             return Ok(Vec::new());
         };
         if recorded.source != OriginModule::Runtime {
-            return Err(restore_invalid("scheduling_pause_fact_invalid"));
+            return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
         }
         let ContractFactValue::RecordList(rows) = &recorded.value else {
-            return Err(restore_invalid("scheduling_pause_fact_invalid"));
+            return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
         };
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        let registered = lock(&self.registered_instances, "read_scheduling_pause_scopes")?
-            .values()
-            .map(|instance| instance.instance_alias.clone())
-            .collect::<BTreeSet<_>>();
-        let mut table = lock(&self.scheduling_pause, "read_scheduling_pause_table")?.clone();
+        let registered = lock(
+            &self.registered_instances,
+            HostLocation::ReadSchedulingPauseScopes,
+        )?
+        .values()
+        .map(|instance| instance.instance_alias.clone())
+        .collect::<BTreeSet<_>>();
+        let mut table = lock(
+            &self.scheduling_pause,
+            HostLocation::ReadSchedulingPauseTable,
+        )?
+        .clone();
         let mut lines = Vec::with_capacity(rows.len());
         for row in rows {
             let pause_reason = SchedulingPauseReason::new(row_text(row, "pause_reason")?)
-                .map_err(|_| restore_invalid("scheduling_pause_fact_invalid"))?;
+                .map_err(|_| restore_invalid(HostCode::SchedulingPauseFactInvalid))?;
             let since_unix_ms = match row.get("since_unix_ms") {
                 Some(FactScalar::TimestampMs(value)) => *value,
-                _ => return Err(restore_invalid("scheduling_pause_fact_invalid")),
+                _ => {
+                    return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
+                }
             };
             let origin = PauseOrigin {
                 set_in_owner_epoch: row_text(row, "set_in_owner_epoch")?.to_owned(),
@@ -275,7 +305,7 @@ impl HostShared {
             match row_text(row, "scope")? {
                 "global" => {
                     if table.holds_global() {
-                        return Err(restore_invalid("scheduling_pause_fact_invalid"));
+                        return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
                     }
                     let state = SchedulingPauseState {
                         revision: 1,
@@ -284,7 +314,7 @@ impl HostShared {
                     };
                     state
                         .validate()
-                        .map_err(|_| restore_invalid("scheduling_pause_fact_invalid"))?;
+                        .map_err(|_| restore_invalid(HostCode::SchedulingPauseFactInvalid))?;
                     table.set_global(state, origin);
                     lines.push(format!(
                         "scheduling_pause_restored scope=global since={since_unix_ms}"
@@ -299,7 +329,7 @@ impl HostShared {
                         continue;
                     }
                     if table.holds_instance(alias) {
-                        return Err(restore_invalid("scheduling_pause_fact_invalid"));
+                        return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
                     }
                     let state = InstancePauseState {
                         revision: 1,
@@ -309,17 +339,22 @@ impl HostShared {
                     };
                     state
                         .validate()
-                        .map_err(|_| restore_invalid("scheduling_pause_fact_invalid"))?;
+                        .map_err(|_| restore_invalid(HostCode::SchedulingPauseFactInvalid))?;
                     table.set_instance(alias, state, origin);
                     lines.push(format!(
                         "scheduling_pause_restored scope=instance:{alias} since={since_unix_ms}"
                     ));
                 }
-                _ => return Err(restore_invalid("scheduling_pause_fact_invalid")),
+                _ => {
+                    return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));
+                }
             }
         }
         self.record_scheduling_pauses(&table)?;
-        *lock(&self.scheduling_pause, "restore_scheduling_pauses")? = table;
+        *lock(
+            &self.scheduling_pause,
+            HostLocation::RestoreSchedulingPauses,
+        )? = table;
         Ok(lines)
     }
 }

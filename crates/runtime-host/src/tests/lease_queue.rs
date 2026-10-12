@@ -1182,7 +1182,7 @@ fn stopped_instance_claims_skip_the_endpoint_and_capacity_checks_other_kinds_kee
             _owned_processes: &BTreeMap<u32, String>,
             _top_process_count: usize,
             _thresholds: ProcessLoadThresholds,
-        ) -> Result<HostSample, &'static str> {
+        ) -> Result<HostSample, actingcommand_contract::outcome::Code> {
             panic!("capacity-only specification does not enable performance counters")
         }
     }

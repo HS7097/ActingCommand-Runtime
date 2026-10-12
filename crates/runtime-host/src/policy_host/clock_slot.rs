@@ -399,7 +399,7 @@ impl Preview<'_> {
         // refusal because the window closed, which is its consequence.
         let blocking = match kind {
             SlotRecord::Deferred => Some(SlotRecord::Refused),
-            SlotRecord::Refused if gate.code == "policy_activity_window_closed" => {
+            SlotRecord::Refused if gate.code == HostCode::PolicyActivityWindowClosed.as_str() => {
                 Some(SlotRecord::Deferred)
             }
             SlotRecord::Refused | SlotRecord::Owed => None,

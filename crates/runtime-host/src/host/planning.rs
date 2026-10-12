@@ -3,6 +3,9 @@
 use super::agent_control::append_agent_wake;
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
+use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
+use actingcommand_contract::outcome::Location;
 
 /// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
 /// The first read after start reads every verified event; each later read starts after the
@@ -18,9 +21,10 @@ impl HostShared {
     /// verified reference with its event sequence, in ledger order.
     fn read_verified_artifacts<T>(
         &self,
-        operation: &'static str,
+        operation: impl Into<Location>,
         read: impl FnOnce(&[(u64, ProjectedArtifactReference)]) -> T,
     ) -> RuntimeHostResult<T> {
+        let operation: Location = operation.into();
         let mut index = lock(&self.verified_artifacts, operation)?;
         let events = self
             .ledger
@@ -48,23 +52,26 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let mut committed_signal = None;
         let result: RuntimeHostResult<()> = (|| {
-            let mut policy = lock(self.policy()?, "record_policy_planning_signal")?;
+            let mut policy = lock(self.policy()?, HostLocation::RecordPolicyPlanningSignal)?;
             policy.validate_planning_signal(&signal)?;
             if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
                 return if existing == signal {
                     Ok(())
                 } else {
                     Err(RuntimeHostError::fatal(
-                        "policy_planning_signal_identity_conflict",
-                        "record_policy_planning_signal",
+                        SharedCode::PolicyPlanningSignalIdentityConflict,
+                        HostLocation::RecordPolicyPlanningSignal,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 };
             }
             let (work, staged_quota) = policy.prepare_planning_signal(&signal)?;
-            let fact_gate = lock(&self.fact_write_gate, "append_planning_transaction")?;
+            let fact_gate = lock(
+                &self.fact_write_gate,
+                HostLocation::AppendPlanningTransaction,
+            )?;
             if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                return Err(ledger_error("append_planning_transaction"));
+                return Err(ledger_error(HostLocation::AppendPlanningTransaction));
             }
             let links = self.events.system_links()?;
             let draft = self.events.draft(
@@ -111,19 +118,22 @@ impl HostShared {
                 }
                 _ => return Ok(()),
             };
-            let instance_id = lock(&self.registered_instances, "resolve_agent_wake_instance")?
-                .values()
-                .find(|instance| instance.instance_alias == signal.instance_id)
-                .map(|instance| instance.instance_id)
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "agent_wake_instance_unknown",
-                        "record_policy_planning_signal",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
-            let _gate = lock(&self.agent_write_gate, "record_agent_wake")?;
-            let mut agent = lock(&self.agent_dispatcher, "record_agent_wake")?;
+            let instance_id = lock(
+                &self.registered_instances,
+                HostLocation::ResolveAgentWakeInstance,
+            )?
+            .values()
+            .find(|instance| instance.instance_alias == signal.instance_id)
+            .map(|instance| instance.instance_id)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::AgentWakeInstanceUnknown,
+                    HostLocation::RecordPolicyPlanningSignal,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let _gate = lock(&self.agent_write_gate, HostLocation::RecordAgentWake)?;
+            let mut agent = lock(&self.agent_dispatcher, HostLocation::RecordAgentWake)?;
             if !agent.has_wake_for_trigger(persisted.event_id()) {
                 append_agent_wake(
                     &mut agent,
@@ -174,7 +184,7 @@ impl HostShared {
         let report: StrategicReport = decode_planning_document(
             report,
             RuntimePlanningDocumentKind::StrategicReport,
-            "prepare_strategic_report",
+            ContractLocation::PrepareStrategicReport,
         )?;
         let links = validated.event_links(None, None, None);
         let entered = self
@@ -212,22 +222,22 @@ impl HostShared {
         let facts: EvaluationFacts = decode_planning_document(
             request.facts(),
             RuntimePlanningDocumentKind::EvaluationFacts,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )?;
         let resources: EvaluationResources = decode_planning_document(
             request.resources(),
             RuntimePlanningDocumentKind::EvaluationResources,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )?;
         let time: EvaluationTime = decode_planning_document(
             request.time(),
             RuntimePlanningDocumentKind::EvaluationTime,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )?;
         let config: ForwardProjectionConfig = decode_planning_document(
             request.config(),
             RuntimePlanningDocumentKind::ForwardProjectionConfig,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )?;
         let links = validated.event_links(None, None, None);
         let entered = self
@@ -240,7 +250,7 @@ impl HostShared {
             let projection = encode_planning_document(
                 RuntimePlanningDocumentKind::ForwardProjection,
                 &projection,
-                "project_policy_forward",
+                ContractLocation::ProjectPolicyForward,
             )
             .map_err(planning_request_failure)?;
             Ok(OperationSuccess {
@@ -290,7 +300,7 @@ impl HostShared {
         let trend_policy: MaintenanceTrendPolicy = decode_planning_document(
             query.trend_policy(),
             RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
-            "assess_predictive_maintenance",
+            ContractLocation::AssessPredictiveMaintenance,
         )?;
         let query = MaintenanceLedgerQuery::new(
             query.instance_id(),
@@ -308,7 +318,7 @@ impl HostShared {
         let assessment = encode_planning_document(
             RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
             &assessment,
-            "assess_predictive_maintenance",
+            ContractLocation::AssessPredictiveMaintenance,
         )
         .map_err(planning_request_failure)?;
         Ok(OperationSuccess {
@@ -326,18 +336,18 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         self.verify_proposal_reports(proposal)?;
         let prepared = {
-            let policy = lock(self.policy()?, "compile_proposal")?;
+            let policy = lock(self.policy()?, ContractLocation::CompileProposal)?;
             let generation = policy.active_generation().ok_or_else(|| {
                 proposal_request_failure(RuntimeHostError::request(
-                    "proposal_base_catalog_unavailable",
-                    "compile_proposal",
+                    HostCode::ProposalBaseCatalogUnavailable,
+                    ContractLocation::CompileProposal,
                     RuntimeErrorCode::InvalidRequest,
                 ))
             })?;
             let sources = policy.active_sources().ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "proposal_base_sources_unavailable",
-                    "compile_proposal",
+                    HostCode::ProposalBaseSourcesUnavailable,
+                    ContractLocation::CompileProposal,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -356,11 +366,11 @@ impl HostShared {
         &self,
         proposal: &CatalogProposal,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let _gate = lock(&self.proposal_write_gate, "promote_proposal")
+        let _gate = lock(&self.proposal_write_gate, ContractLocation::PromoteProposal)
             .map_err(RequestFailure::poison_without_terminal)?;
         self.verify_proposal_reports(proposal)?;
         let (prepared, current) = {
-            let policy = lock(self.policy()?, "prepare_proposal_promotion")?;
+            let policy = lock(self.policy()?, HostLocation::PrepareProposalPromotion)?;
             let base = policy
                 .load_generation(proposal.base_catalog_hash())
                 .map_err(proposal_request_failure)?;
@@ -371,15 +381,15 @@ impl HostShared {
         let (preview, sources) = prepared.into_ready().map_err(proposal_request_failure)?;
         let target_hash = preview.target_catalog_hash().ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "proposal_target_hash_missing",
-                "promote_proposal",
+                HostCode::ProposalTargetHashMissing,
+                ContractLocation::PromoteProposal,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
         let current = current.ok_or_else(|| {
             proposal_request_failure(RuntimeHostError::request(
-                "proposal_active_catalog_unavailable",
-                "promote_proposal",
+                HostCode::ProposalActiveCatalogUnavailable,
+                ContractLocation::PromoteProposal,
                 RuntimeErrorCode::InvalidRequest,
             ))
         })?;
@@ -387,14 +397,17 @@ impl HostShared {
             && current.catalog_hash() != target_hash
         {
             return Err(proposal_request_failure(RuntimeHostError::request(
-                "proposal_active_catalog_changed",
-                "promote_proposal",
+                HostCode::ProposalActiveCatalogChanged,
+                ContractLocation::PromoteProposal,
                 RuntimeErrorCode::InvalidRequest,
             )));
         }
         let approvals = {
-            let _approval_gate = lock(&self.governance_write_gate, "recover_proposal_approvals")
-                .map_err(RequestFailure::poison_without_terminal)?;
+            let _approval_gate = lock(
+                &self.governance_write_gate,
+                HostLocation::RecoverProposalApprovals,
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
             ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
                 .map_err(RequestFailure::poison_without_terminal)?
         };
@@ -405,8 +418,8 @@ impl HostShared {
         );
         if approval_fact_ids.is_empty() {
             return Err(proposal_request_failure(RuntimeHostError::request(
-                "proposal_approval_missing",
-                "promote_proposal",
+                HostCode::ProposalApprovalMissing,
+                ContractLocation::PromoteProposal,
                 RuntimeErrorCode::InvalidRequest,
             )));
         }
@@ -417,8 +430,8 @@ impl HostShared {
             );
             if template_approvals.is_empty() {
                 return Err(proposal_request_failure(RuntimeHostError::request(
-                    "proposal_template_approval_missing",
-                    "promote_proposal",
+                    HostCode::ProposalTemplateApprovalMissing,
+                    ContractLocation::PromoteProposal,
                     RuntimeErrorCode::InvalidRequest,
                 )));
             }
@@ -428,16 +441,16 @@ impl HostShared {
             ProposalPromotion::new(preview.clone(), approval_fact_ids.into_iter().collect())
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                        "proposal_promotion_invalid",
-                        "promote_proposal",
+                        HostCode::ProposalPromotionInvalid,
+                        ContractLocation::PromoteProposal,
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
         let authorization =
             CatalogPromotionAuthorization::new(proposal, &promotion).map_err(|_| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "proposal_authorization_invalid",
-                    "promote_proposal",
+                    HostCode::ProposalAuthorizationInvalid,
+                    ContractLocation::PromoteProposal,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -450,8 +463,8 @@ impl HostShared {
             {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "proposal_activation_mismatch",
-                        "promote_proposal",
+                        HostCode::ProposalActivationMismatch,
+                        ContractLocation::PromoteProposal,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
@@ -466,7 +479,7 @@ impl HostShared {
 
     fn verify_proposal_reports(&self, proposal: &CatalogProposal) -> Result<(), RequestFailure> {
         let verified = self
-            .read_verified_artifacts("verify_proposal_reports", |verified| {
+            .read_verified_artifacts(HostLocation::VerifyProposalReports, |verified| {
                 proposal
                     .report_refs()
                     .iter()
@@ -477,8 +490,8 @@ impl HostShared {
         for (reference, verified) in proposal.report_refs().iter().zip(verified) {
             if !verified {
                 return Err(proposal_request_failure(RuntimeHostError::request(
-                    "proposal_report_unverified",
-                    "verify_proposal_reports",
+                    HostCode::ProposalReportUnverified,
+                    HostLocation::VerifyProposalReports,
                     RuntimeErrorCode::InvalidRequest,
                 )));
             }
@@ -489,8 +502,8 @@ impl HostShared {
                     artifact_id_text(reference).map_err(RequestFailure::poison_without_terminal)?;
                 return Err(proposal_request_failure(
                     RuntimeHostError::request(
-                        HostCode::ProposalReportUnavailable.as_str(),
-                        "verify_proposal_reports",
+                        HostCode::ProposalReportUnavailable,
+                        HostLocation::VerifyProposalReports,
                         RuntimeErrorCode::InvalidRequest,
                     )
                     .with_native_detail(format!("artifact_id={artifact_id}")),
@@ -518,11 +531,14 @@ impl HostShared {
         ) -> RuntimeHostResult<T>,
     ) -> RuntimeHostResult<T> {
         let result = (|| {
-            let _gate = lock(&self.proposal_write_gate, "prepare_strategic_report")?;
+            let _gate = lock(
+                &self.proposal_write_gate,
+                ContractLocation::PrepareStrategicReport,
+            )?;
             report.validate().map_err(|_| {
                 RuntimeHostError::request(
-                    "strategic_report_invalid",
-                    "prepare_strategic_report",
+                    SharedCode::StrategicReportInvalid,
+                    ContractLocation::PrepareStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
@@ -530,31 +546,31 @@ impl HostShared {
             let (facts, resources) = {
                 let _outcome_gate = lock(
                     &self.policy_outcome_gate,
-                    "snapshot_strategic_outcome_state",
+                    HostLocation::SnapshotStrategicOutcomeState,
                 )?;
-                let mut policy = lock(self.policy()?, "read_strategic_outcome_keys")?;
+                let mut policy = lock(self.policy()?, HostLocation::ReadStrategicOutcomeKeys)?;
                 let outcome_keys = policy.outcome_key_snapshot()?;
-                let _fact_gate = lock(&self.fact_write_gate, "project_strategic_facts")?;
+                let _fact_gate = lock(&self.fact_write_gate, HostLocation::ProjectStrategicFacts)?;
                 self.project_authoritative_policy_inputs_under_gate(
                     &mut policy,
-                    "prepare_strategic_report",
+                    ContractLocation::PrepareStrategicReport,
                     &outcome_keys,
                     Some(report.as_of_ledger_position()),
                 )?
             };
             if report.as_of_ledger_position() > facts.ledger_position {
                 return Err(RuntimeHostError::request(
-                    "strategic_report_position_unavailable",
-                    "prepare_strategic_report",
+                    HostCode::StrategicReportPositionUnavailable,
+                    ContractLocation::PrepareStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 ));
             }
-            let loaded = lock(self.policy()?, "prepare_strategic_report")?
+            let loaded = lock(self.policy()?, ContractLocation::PrepareStrategicReport)?
                 .active_loaded()
                 .ok_or_else(|| {
                     RuntimeHostError::request(
-                        "strategic_catalog_unavailable",
-                        "prepare_strategic_report",
+                        HostCode::StrategicCatalogUnavailable,
+                        ContractLocation::PrepareStrategicReport,
                         RuntimeErrorCode::InvalidRequest,
                     )
                 })?;
@@ -562,8 +578,8 @@ impl HostShared {
                 project_strategic_report(loaded.compiled(), report, &facts, &resources).map_err(
                     |error| {
                         RuntimeHostError::request(
-                            error.code().as_str(),
-                            "prepare_strategic_report",
+                            error.code(),
+                            ContractLocation::PrepareStrategicReport,
                             RuntimeErrorCode::InvalidRequest,
                         )
                     },
@@ -571,12 +587,12 @@ impl HostShared {
             let projection_document = encode_planning_document(
                 RuntimePlanningDocumentKind::StrategicProjection,
                 &projection,
-                "prepare_strategic_report",
+                ContractLocation::PrepareStrategicReport,
             )?;
             let bytes = report.canonical_bytes().map_err(|_| {
                 RuntimeHostError::fatal(
-                    "strategic_report_encode_failed",
-                    "prepare_strategic_report",
+                    HostCode::StrategicReportEncodeFailed,
+                    ContractLocation::PrepareStrategicReport,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -599,7 +615,9 @@ impl HostShared {
                 preparation.proposal().cloned(),
                 preparation.preview().cloned(),
             )
-            .map_err(|error| planning_result_contract_error(error, "prepare_strategic_report"))?;
+            .map_err(|error| {
+                planning_result_contract_error(error, ContractLocation::PrepareStrategicReport)
+            })?;
             let output = finalize(&preparation, transport_plan)?;
             if let Some(prepared_artifact) = prepared_artifact {
                 self.commit_strategic_report(prepared_artifact, &bytes, preparation.report())?;
@@ -647,8 +665,8 @@ impl HostShared {
                 serde_json::to_vec(&(report.report_id(), goal_id, instance_id, kind.as_str()))
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "strategic_signal_identity_encode_failed",
-                            "prepare_strategic_report",
+                            HostCode::StrategicSignalIdentityEncodeFailed,
+                            ContractLocation::PrepareStrategicReport,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })?;
@@ -671,7 +689,7 @@ impl HostShared {
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<()> {
         let verified_sequences =
-            self.read_verified_artifacts("verify_strategic_evidence", |verified| {
+            self.read_verified_artifacts(HostLocation::VerifyStrategicEvidence, |verified| {
                 evidence
                     .iter()
                     .map(|reference| proposal_report_verified_sequence(verified, reference))
@@ -681,8 +699,8 @@ impl HostShared {
         for (reference, verified_sequence) in evidence.iter().zip(verified_sequences) {
             reference.validate().map_err(|_| {
                 RuntimeHostError::request(
-                    "strategic_evidence_invalid",
-                    "verify_strategic_evidence",
+                    HostCode::StrategicEvidenceInvalid,
+                    HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
@@ -693,8 +711,8 @@ impl HostShared {
                     .is_some_and(|sequence| sequence > report.as_of_ledger_position())
             {
                 return Err(RuntimeHostError::request(
-                    "strategic_evidence_unverified",
-                    "verify_strategic_evidence",
+                    HostCode::StrategicEvidenceUnverified,
+                    HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 ));
             }
@@ -702,8 +720,8 @@ impl HostShared {
             // refuses the request; it never stops the Runtime.
             if read_projected_verified(self.artifacts.root(), reference).is_err() {
                 return Err(RuntimeHostError::request(
-                    HostCode::StrategicEvidenceUnavailable.as_str(),
-                    "verify_strategic_evidence",
+                    HostCode::StrategicEvidenceUnavailable,
+                    HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 )
                 .with_native_detail(format!("artifact_id={}", artifact_id_text(reference)?)));
@@ -713,8 +731,8 @@ impl HostShared {
         pointers.sort();
         if pointers != report.evidence() {
             return Err(RuntimeHostError::request(
-                "strategic_evidence_mismatch",
-                "verify_strategic_evidence",
+                HostCode::StrategicEvidenceMismatch,
+                HostLocation::VerifyStrategicEvidence,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
@@ -726,15 +744,17 @@ impl HostShared {
         bytes: &[u8],
     ) -> RuntimeHostResult<(ProjectedArtifactReference, Option<PreparedArtifact>)> {
         let sha256 = format!("sha256:{:x}", Sha256::digest(bytes));
-        let matching = self.read_verified_artifacts("find_strategic_report", |verified| {
-            verified
-                .iter()
-                .filter(|(_, reference)| {
-                    reference.kind() == ArtifactKind::StrategyReport && reference.sha256() == sha256
-                })
-                .map(|(_, reference)| reference.clone())
-                .collect::<Vec<_>>()
-        })?;
+        let matching =
+            self.read_verified_artifacts(HostLocation::FindStrategicReport, |verified| {
+                verified
+                    .iter()
+                    .filter(|(_, reference)| {
+                        reference.kind() == ArtifactKind::StrategyReport
+                            && reference.sha256() == sha256
+                    })
+                    .map(|(_, reference)| reference.clone())
+                    .collect::<Vec<_>>()
+            })?;
         let mut existing = Vec::new();
         for reference in matching {
             existing.push((artifact_id_text(&reference)?, reference));
@@ -745,16 +765,16 @@ impl HostShared {
             // refuses the request; it never stops the Runtime.
             let Ok(stored) = read_projected_verified(self.artifacts.root(), &reference) else {
                 return Err(RuntimeHostError::request(
-                    HostCode::ProposalReportUnavailable.as_str(),
-                    "read_strategic_report",
+                    HostCode::ProposalReportUnavailable,
+                    HostLocation::ReadStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 )
                 .with_native_detail(format!("artifact_id={artifact_id}")));
             };
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(
-                    "strategic_report_identity_conflict",
-                    "read_strategic_report",
+                    HostCode::StrategicReportIdentityConflict,
+                    HostLocation::ReadStrategicReport,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -798,8 +818,8 @@ impl HostShared {
         let actual = stored.reference().project(true);
         if &actual != expected {
             return Err(RuntimeHostError::fatal(
-                "strategic_report_identity_conflict",
-                "store_strategic_report",
+                HostCode::StrategicReportIdentityConflict,
+                HostLocation::StoreStrategicReport,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -842,15 +862,16 @@ impl HostShared {
 fn decode_planning_document<T>(
     document: &RuntimePlanningDocument,
     kind: RuntimePlanningDocumentKind,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> Result<T, RequestFailure>
 where
     T: serde::de::DeserializeOwned,
 {
+    let operation: Location = operation.into();
     document.decode(kind).map_err(|_| {
         RequestFailure::request(
             RuntimeHostError::request(
-                "planning_document_invalid",
+                HostCode::PlanningDocumentInvalid,
                 operation,
                 RuntimeErrorCode::InvalidRequest,
             ),
@@ -863,29 +884,29 @@ where
 fn encode_planning_document<T>(
     kind: RuntimePlanningDocumentKind,
     value: &T,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<RuntimePlanningDocument>
 where
     T: serde::Serialize,
 {
+    let operation: Location = operation.into();
     RuntimePlanningDocument::encode(kind, value)
         .map_err(|error| planning_result_contract_error(error, operation))
 }
 
 fn planning_result_contract_error(
     error: RuntimeContractError,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostError {
-    match error.code().as_str() {
-        "planning_document_size_invalid" | "planning_response_size_invalid" => {
-            RuntimeHostError::request(
-                error.code().as_str(),
-                operation,
-                RuntimeErrorCode::InvalidRequest,
-            )
+    let operation: Location = operation.into();
+    match error.code() {
+        code if code == RuntimeContractCode::PlanningDocumentSizeInvalid.code()
+            || code == RuntimeContractCode::PlanningResponseSizeInvalid.code() =>
+        {
+            RuntimeHostError::request(error.code(), operation, RuntimeErrorCode::InvalidRequest)
         }
         _ => RuntimeHostError::fatal(
-            "planning_result_encode_failed",
+            SharedCode::PlanningResultEncodeFailed,
             operation,
             RuntimeErrorCode::RuntimeFatal,
         ),
@@ -939,8 +960,8 @@ fn artifact_id_text(reference: &ProjectedArtifactReference) -> RuntimeHostResult
         .and_then(|value| value.as_str().map(str::to_owned))
         .ok_or_else(|| {
             RuntimeHostError::fatal(
-                "artifact_identity_encode_failed",
-                "prepare_strategic_report",
+                HostCode::ArtifactIdentityEncodeFailed,
+                ContractLocation::PrepareStrategicReport,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })

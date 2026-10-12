@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::HostLocation;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     MAX_TASK_DIAGNOSTIC_RECORD_BYTES, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA_V2,
     TaskDiagnosticArtifactData, TaskDiagnosticColorData, TaskDiagnosticColorDigestData,
@@ -50,7 +52,8 @@ impl Write for RecordWriter {
 
 fn failure(error: impl std::fmt::Display) -> RequestFailure {
     RequestFailure::poison_without_terminal(
-        artifact_store_error("task_diagnostic_failed").with_native_detail(error.to_string()),
+        artifact_store_error(HostLocation::TaskDiagnosticFailed)
+            .with_native_detail(error.to_string()),
     )
 }
 
@@ -360,7 +363,7 @@ impl RuntimeContainedTask<'_> {
         };
         let primary = original_error.map(|error| {
             ppocr_diagnostic::task_ppocr_failure(
-                "contained_task_recognition_failed",
+                SharedCode::ContainedTaskRecognitionFailed,
                 error.to_string(),
                 &reports,
             )
@@ -535,7 +538,7 @@ impl RuntimeContainedTask<'_> {
             .map(|error| {
                 ppocr_diagnostic::attach_ppocr_source(
                     ppocr_diagnostic::task_ppocr_failure(
-                        "contained_task_guard_evaluation_failed",
+                        SharedCode::ContainedTaskGuardEvaluationFailed,
                         error.to_string(),
                         &reports,
                     ),
@@ -750,7 +753,7 @@ impl RuntimeContainedTask<'_> {
         let primary = result.as_ref().err().map(|error| {
             ppocr_diagnostic::attach_ppocr_source(
                 ppocr_diagnostic::task_ppocr_failure(
-                    "contained_task_post_admission_ocr_failed",
+                    SharedCode::ContainedTaskPostAdmissionOcrFailed,
                     error.to_string(),
                     reports,
                 ),

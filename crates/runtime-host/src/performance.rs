@@ -2,8 +2,12 @@
 
 //! Bounded Runtime performance monitoring and failure-context projection.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::performance_control::PerformanceControlObservation;
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ActionId, AuditInput, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
     PerformanceCapacitySample, PerformanceContext, PerformanceControlEventData,
@@ -128,8 +132,8 @@ impl PerformanceMonitorConfig {
                 .any(|(pid, label)| !valid_process_label(*pid, label))
         {
             return Err(performance_fatal(
-                "performance_config_invalid",
-                "validate_performance_config",
+                HostCode::PerformanceConfigInvalid,
+                HostLocation::ValidatePerformanceConfig,
             ));
         }
         self.thresholds.validate()
@@ -190,8 +194,8 @@ impl PerformanceThresholds {
             || self.stutter_frame_gap_ms == 0
         {
             return Err(performance_fatal(
-                "performance_threshold_invalid",
-                "validate_performance_config",
+                HostCode::PerformanceThresholdInvalid,
+                HostLocation::ValidatePerformanceConfig,
             ));
         }
         Ok(())
@@ -287,8 +291,8 @@ impl PipelinePerformanceSignal {
                 && self.capture_acquire_us.is_none())
         {
             return Err(performance_fatal(
-                "performance_pipeline_signal_invalid",
-                "record_performance_pipeline_signal",
+                HostCode::PerformancePipelineSignalInvalid,
+                HostLocation::RecordPerformancePipelineSignal,
             ));
         }
         Ok(())
@@ -364,7 +368,7 @@ pub(crate) struct RawSystemSample {
     pub(crate) unavailable_metrics: Vec<PerformanceMetric>,
 }
 
-pub(crate) fn system_performance_sampler() -> Result<Box<dyn HostSampler>, &'static str> {
+pub(crate) fn system_performance_sampler() -> Result<Box<dyn HostSampler>, Code> {
     actingcommand_host_metrics::system_sampler()
 }
 
@@ -494,7 +498,7 @@ pub(crate) struct PerformanceMonitor {
     capacity: Option<capacity::CapacityMonitor>,
     config: Option<PerformanceMonitorConfig>,
     sampler: Option<Box<dyn HostSampler>>,
-    sampler_start_error: Option<&'static str>,
+    sampler_start_error: Option<Code>,
     system_samples: VecDeque<RawSystemSample>,
     pipeline_samples: VecDeque<PipelinePerformanceSignal>,
     active_pressures: BTreeMap<PerformancePressureKind, ActivePressure>,
@@ -550,7 +554,7 @@ impl PerformanceMonitor {
 
     pub(crate) fn enabled(
         mut config: PerformanceMonitorConfig,
-        sampler: Result<Box<dyn HostSampler>, &'static str>,
+        sampler: Result<Box<dyn HostSampler>, Code>,
     ) -> RuntimeHostResult<Self> {
         config
             .owned_processes
@@ -604,8 +608,8 @@ impl PerformanceMonitor {
             if let PerformanceSemanticEvent::Summary(data) = event {
                 let sample = ledger.sample_commit_statistics().map_err(|_| {
                     RuntimeHostError::fatal(
-                        "ledger_failure",
-                        "sample_performance_ledger",
+                        RuntimeErrorCode::LedgerFailure,
+                        HostLocation::SamplePerformanceLedger,
                         RuntimeErrorCode::LedgerFailure,
                     )
                 })?;
@@ -639,8 +643,8 @@ impl PerformanceMonitor {
         }
         let Some(config) = self.config.clone() else {
             return Err(performance_fatal(
-                "performance_monitor_disabled",
-                "sample_performance_monitor",
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::SamplePerformanceMonitor,
             ));
         };
         let sample = if let Some(error) = self.sampler_start_error.take() {
@@ -656,13 +660,13 @@ impl PerformanceMonitor {
                 },
             )
         } else {
-            Err("performance_sampler_unavailable")
+            Err(HostCode::PerformanceSamplerUnavailable.code())
         };
         match sample {
             Ok(sample) => self.ingest_system_sample(raw_system_sample(sample)),
             Err(code) => self.ingest_monitor_failure(
                 observed_at_unix_ms,
-                code,
+                code.as_str(),
                 host_metrics(),
                 MonitorFailureDomain::Sampler,
             ),
@@ -676,14 +680,14 @@ impl PerformanceMonitor {
         signal.validate()?;
         let Some(config) = self.config.as_ref() else {
             return Err(performance_fatal(
-                "performance_monitor_disabled",
-                "record_performance_pipeline_signal",
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::RecordPerformancePipelineSignal,
             ));
         };
         if self.pipeline_stopped {
             return Err(performance_fatal(
-                "performance_monitor_unavailable",
-                "record_performance_pipeline_signal",
+                HostCode::PerformanceMonitorUnavailable,
+                HostLocation::RecordPerformancePipelineSignal,
             ));
         }
         if self
@@ -692,8 +696,8 @@ impl PerformanceMonitor {
             .is_some_and(|previous| previous.observed_at_unix_ms > signal.observed_at_unix_ms)
         {
             return Err(performance_fatal(
-                "performance_pipeline_time_invalid",
-                "record_performance_pipeline_signal",
+                HostCode::PerformancePipelineTimeInvalid,
+                HostLocation::RecordPerformancePipelineSignal,
             ));
         }
         let mut events = Vec::new();
@@ -707,8 +711,8 @@ impl PerformanceMonitor {
                     observed_at_unix_ms: signal.observed_at_unix_ms,
                     frame_gap_ms: signal.frame_gap_ms.ok_or_else(|| {
                         performance_fatal(
-                            "performance_frame_gap_missing",
-                            "record_performance_pipeline_signal",
+                            HostCode::PerformanceFrameGapMissing,
+                            HostLocation::RecordPerformancePipelineSignal,
                         )
                     })?,
                     capture_latency_ms: signal.capture_latency_ms,
@@ -740,8 +744,8 @@ impl PerformanceMonitor {
             .as_ref()
             .ok_or_else(|| {
                 performance_fatal(
-                    "performance_monitor_disabled",
-                    "observe_performance_pipeline_event",
+                    HostCode::PerformanceMonitorDisabled,
+                    HostLocation::ObservePerformancePipelineEvent,
                 )
             })?
             .max_pipeline_samples;
@@ -776,8 +780,8 @@ impl PerformanceMonitor {
                     .transpose()?;
                 if self.last_capture_completed.len() > maximum {
                     return Err(performance_fatal(
-                        "performance_instance_tracking_exhausted",
-                        "observe_performance_pipeline_event",
+                        HostCode::PerformanceInstanceTrackingExhausted,
+                        HostLocation::ObservePerformancePipelineEvent,
                     ));
                 }
                 let mut signal = PipelinePerformanceSignal::observed(
@@ -828,8 +832,8 @@ impl PerformanceMonitor {
                 validate_pending_instance(&pending, &observation.instance_id)?;
                 if pending.frame_id != Some(frame_id) {
                     return Err(performance_fatal(
-                        "performance_pipeline_identity_conflict",
-                        "observe_performance_pipeline_event",
+                        HostCode::PerformancePipelineIdentityConflict,
+                        HostLocation::ObservePerformancePipelineEvent,
                     ));
                 }
                 let recognition_latency_ms =
@@ -923,8 +927,8 @@ impl PerformanceMonitor {
     ) -> RuntimeHostResult<PerformanceContext> {
         if instance_id.is_empty() || window_end_unix_ms == 0 {
             return Err(performance_fatal(
-                "performance_context_query_invalid",
-                "read_performance_context",
+                HostCode::PerformanceContextQueryInvalid,
+                HostLocation::ReadPerformanceContext,
             ));
         }
         self.context_for(Some(instance_id), window_end_unix_ms)
@@ -1008,8 +1012,8 @@ impl PerformanceMonitor {
             health,
             sample_count: u32::try_from(samples.len()).map_err(|_| {
                 performance_fatal(
-                    "performance_sample_count_overflow",
-                    "read_performance_context",
+                    HostCode::PerformanceSampleCountOverflow,
+                    HostLocation::ReadPerformanceContext,
                 )
             })?,
             unavailable_metrics,
@@ -1055,7 +1059,10 @@ impl PerformanceMonitor {
             related_event_ids,
         };
         context.validate().map_err(|_| {
-            performance_fatal("performance_context_invalid", "read_performance_context")
+            performance_fatal(
+                HostCode::PerformanceContextInvalid,
+                HostLocation::ReadPerformanceContext,
+            )
         })?;
         Ok(context)
     }
@@ -1066,11 +1073,12 @@ impl PerformanceMonitor {
     ) -> RuntimeHostResult<Option<PerformanceControlObservation>> {
         if observed_at_unix_ms == 0 {
             return Err(performance_fatal(
-                "performance_control_time_invalid",
-                "read_performance_control_observation",
+                HostCode::PerformanceControlTimeInvalid,
+                HostLocation::ReadPerformanceControlObservation,
             ));
         }
-        let freshness_ms = self.control_freshness_ms("read_performance_control_observation")?;
+        let freshness_ms =
+            self.control_freshness_ms(HostLocation::ReadPerformanceControlObservation)?;
         if self
             .system_samples
             .back()
@@ -1081,8 +1089,8 @@ impl PerformanceMonitor {
                 .is_some_and(|sample| sample.observed_at_unix_ms > observed_at_unix_ms)
         {
             return Err(performance_fatal(
-                "performance_control_sample_time_invalid",
-                "read_performance_control_observation",
+                HostCode::PerformanceControlSampleTimeInvalid,
+                HostLocation::ReadPerformanceControlObservation,
             ));
         }
         let last_sample = self.last_control_sample_unix_ms;
@@ -1143,8 +1151,8 @@ impl PerformanceMonitor {
             .max()
             .ok_or_else(|| {
                 performance_fatal(
-                    "performance_control_sample_missing",
-                    "read_performance_control_observation",
+                    HostCode::PerformanceControlSampleMissing,
+                    HostLocation::ReadPerformanceControlObservation,
                 )
             })?;
         self.last_control_sample_unix_ms = Some(source_sample_unix_ms);
@@ -1161,7 +1169,7 @@ impl PerformanceMonitor {
     /// True when no pipeline sample lies within the control freshness window before `now`: the
     /// Runtime drove no measured device work there.
     pub(crate) fn pipeline_quiet(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
-        let freshness_ms = self.control_freshness_ms("read_performance_pipeline_quiet")?;
+        let freshness_ms = self.control_freshness_ms(HostLocation::ReadPerformancePipelineQuiet)?;
         // The ring is in time order (an out-of-order sample is refused), so `back` is newest.
         Ok(self.pipeline_samples.back().is_none_or(|sample| {
             observed_at_unix_ms.saturating_sub(sample.observed_at_unix_ms) > freshness_ms
@@ -1169,14 +1177,17 @@ impl PerformanceMonitor {
     }
 
     /// The control freshness window: twice the sample interval.
-    fn control_freshness_ms(&self, operation: &'static str) -> RuntimeHostResult<u64> {
+    fn control_freshness_ms(&self, operation: impl Into<Location>) -> RuntimeHostResult<u64> {
+        let operation: Location = operation.into();
         let config = self
             .config
             .as_ref()
-            .ok_or_else(|| performance_fatal("performance_monitor_disabled", operation))?;
+            .ok_or_else(|| performance_fatal(HostCode::PerformanceMonitorDisabled, operation))?;
         duration_ms(config.sample_interval)?
             .checked_mul(2)
-            .ok_or_else(|| performance_fatal("performance_control_duration_overflow", operation))
+            .ok_or_else(|| {
+                performance_fatal(HostCode::PerformanceControlDurationOverflow, operation)
+            })
     }
 
     pub(crate) fn record_event_reference(
@@ -1251,8 +1262,8 @@ impl PerformanceMonitor {
     ) -> RuntimeHostResult<()> {
         let config = self.config.as_ref().ok_or_else(|| {
             performance_fatal(
-                "performance_monitor_disabled",
-                "record_performance_event_reference",
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::RecordPerformanceEventReference,
             )
         })?;
         self.event_references.push_back(TimedEventReference {
@@ -1270,7 +1281,10 @@ impl PerformanceMonitor {
         sample: RawSystemSample,
     ) -> RuntimeHostResult<PerformanceTick> {
         let config = self.config.clone().ok_or_else(|| {
-            performance_fatal("performance_monitor_disabled", "ingest_performance_sample")
+            performance_fatal(
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::IngestPerformanceSample,
+            )
         })?;
         validate_raw_sample(&sample, &config)?;
         if self
@@ -1279,8 +1293,8 @@ impl PerformanceMonitor {
             .is_some_and(|previous| previous.observed_at_unix_ms >= sample.observed_at_unix_ms)
         {
             return Err(performance_fatal(
-                "performance_sample_time_invalid",
-                "ingest_performance_sample",
+                SharedCode::PerformanceSampleTimeInvalid,
+                HostLocation::IngestPerformanceSample,
             ));
         }
         let previous_health = self.health;
@@ -1400,8 +1414,8 @@ impl PerformanceMonitor {
     ) -> RuntimeHostResult<PerformanceTick> {
         let config = self.config.as_ref().ok_or_else(|| {
             performance_fatal(
-                "performance_monitor_disabled",
-                "record_performance_monitor_failure",
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::RecordPerformanceMonitorFailure,
             )
         })?;
         if observed_at_unix_ms == 0
@@ -1415,8 +1429,8 @@ impl PerformanceMonitor {
                 != unavailable_metrics.len()
         {
             return Err(performance_fatal(
-                "performance_monitor_failure_invalid",
-                "record_performance_monitor_failure",
+                HostCode::PerformanceMonitorFailureInvalid,
+                HostLocation::RecordPerformanceMonitorFailure,
             ));
         }
         let consecutive_failures = match domain {
@@ -1463,8 +1477,8 @@ impl PerformanceMonitor {
     ) -> RuntimeHostResult<Vec<PerformanceSemanticEvent>> {
         let config = self.config.as_ref().ok_or_else(|| {
             performance_fatal(
-                "performance_monitor_disabled",
-                "update_performance_pressures",
+                HostCode::PerformanceMonitorDisabled,
+                HostLocation::UpdatePerformancePressures,
             )
         })?;
         let measurements = pressure_measurements(sample)?;
@@ -1554,8 +1568,8 @@ impl PerformanceMonitor {
 fn next_streak_sample(samples: u16) -> RuntimeHostResult<u16> {
     samples.checked_add(1).ok_or_else(|| {
         performance_fatal(
-            "performance_pressure_streak_overflow",
-            "update_performance_pressures",
+            HostCode::PerformancePressureStreakOverflow,
+            HostLocation::UpdatePerformancePressures,
         )
     })
 }
@@ -1565,8 +1579,8 @@ fn validate_pipeline_observation(observation: &PipelineEventObservation) -> Runt
         || observation.observed_at_unix_ms == 0
     {
         return Err(performance_fatal(
-            "performance_pipeline_observation_invalid",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineObservationInvalid,
+            HostLocation::ObservePerformancePipelineEvent,
         ));
     }
     Ok(())
@@ -1583,8 +1597,8 @@ fn sample_health(sample: &RawSystemSample) -> PerformanceMonitorHealth {
 fn required_frame_id(observation: &PipelineEventObservation) -> RuntimeHostResult<FrameId> {
     observation.frame_id.ok_or_else(|| {
         performance_fatal(
-            "performance_pipeline_frame_missing",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineFrameMissing,
+            HostLocation::ObservePerformancePipelineEvent,
         )
     })
 }
@@ -1594,8 +1608,8 @@ fn required_recognition_id(
 ) -> RuntimeHostResult<RecognitionId> {
     observation.recognition_id.ok_or_else(|| {
         performance_fatal(
-            "performance_pipeline_recognition_missing",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineRecognitionMissing,
+            HostLocation::ObservePerformancePipelineEvent,
         )
     })
 }
@@ -1603,8 +1617,8 @@ fn required_recognition_id(
 fn required_action_id(observation: &PipelineEventObservation) -> RuntimeHostResult<ActionId> {
     observation.action_id.ok_or_else(|| {
         performance_fatal(
-            "performance_pipeline_action_missing",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineActionMissing,
+            HostLocation::ObservePerformancePipelineEvent,
         )
     })
 }
@@ -1617,14 +1631,14 @@ fn insert_pending<K: Ord + Copy>(
 ) -> RuntimeHostResult<()> {
     if pending.contains_key(&key) {
         return Err(performance_fatal(
-            "performance_pipeline_identity_reused",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineIdentityReused,
+            HostLocation::ObservePerformancePipelineEvent,
         ));
     }
     if pending.len() >= maximum {
         return Err(performance_fatal(
-            "performance_pipeline_tracking_exhausted",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineTrackingExhausted,
+            HostLocation::ObservePerformancePipelineEvent,
         ));
     }
     pending.insert(key, value);
@@ -1637,8 +1651,8 @@ fn take_pending<K: Ord>(
 ) -> RuntimeHostResult<PendingPipelineMeasurement> {
     pending.remove(key).ok_or_else(|| {
         performance_fatal(
-            "performance_pipeline_start_missing",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineStartMissing,
+            HostLocation::ObservePerformancePipelineEvent,
         )
     })
 }
@@ -1649,8 +1663,8 @@ fn validate_pending_instance(
 ) -> RuntimeHostResult<()> {
     if pending.instance_id != instance_id {
         return Err(performance_fatal(
-            "performance_pipeline_identity_conflict",
-            "observe_performance_pipeline_event",
+            HostCode::PerformancePipelineIdentityConflict,
+            HostLocation::ObservePerformancePipelineEvent,
         ));
     }
     Ok(())
@@ -1661,8 +1675,8 @@ fn elapsed_ms(started_at_unix_ms: u64, observed_at_unix_ms: u64) -> RuntimeHostR
         .checked_sub(started_at_unix_ms)
         .ok_or_else(|| {
             performance_fatal(
-                "performance_pipeline_time_invalid",
-                "observe_performance_pipeline_event",
+                HostCode::PerformancePipelineTimeInvalid,
+                HostLocation::ObservePerformancePipelineEvent,
             )
         })
 }
@@ -1733,8 +1747,8 @@ fn pressure_measurements(
     if !sample.third_party_high_load.is_empty() {
         let process_count = u16::try_from(sample.third_party_high_load.len()).map_err(|_| {
             performance_fatal(
-                "performance_process_count_overflow",
-                "measure_performance_pressure",
+                SharedCode::PerformanceProcessCountOverflow,
+                HostLocation::MeasurePerformancePressure,
             )
         })?;
         let peak_cpu_basis_points = sample
@@ -1744,8 +1758,8 @@ fn pressure_measurements(
             .max()
             .ok_or_else(|| {
                 performance_fatal(
-                    "performance_process_sample_missing",
-                    "measure_performance_pressure",
+                    HostCode::PerformanceProcessSampleMissing,
+                    HostLocation::MeasurePerformancePressure,
                 )
             })?;
         let peak_io_bytes_per_second = sample
@@ -1755,8 +1769,8 @@ fn pressure_measurements(
             .max()
             .ok_or_else(|| {
                 performance_fatal(
-                    "performance_process_sample_missing",
-                    "measure_performance_pressure",
+                    HostCode::PerformanceProcessSampleMissing,
+                    HostLocation::MeasurePerformancePressure,
                 )
             })?;
         values.insert(
@@ -2026,8 +2040,8 @@ fn validate_raw_sample(
             })
     {
         return Err(performance_fatal(
-            "performance_sample_invalid",
-            "ingest_performance_sample",
+            HostCode::PerformanceSampleInvalid,
+            HostLocation::IngestPerformanceSample,
         ));
     }
     Ok(())
@@ -2162,8 +2176,8 @@ fn percentile_95<T: Ord + Copy>(values: &mut [T]) -> Option<T> {
 fn duration_ms(duration: Duration) -> RuntimeHostResult<u64> {
     u64::try_from(duration.as_millis()).map_err(|_| {
         performance_fatal(
-            "performance_duration_overflow",
-            "convert_performance_duration",
+            HostCode::PerformanceDurationOverflow,
+            HostLocation::ConvertPerformanceDuration,
         )
     })
 }
@@ -2191,8 +2205,8 @@ pub(crate) fn rejected_event_code(code: &str, event_type: EventType) -> RuntimeH
         .and_then(|value| value.as_str().map(str::to_owned))
         .ok_or_else(|| {
             performance_fatal(
-                "performance_event_type_encode_failed",
-                "record_performance_monitor_failure",
+                HostCode::PerformanceEventTypeEncodeFailed,
+                HostLocation::RecordPerformanceMonitorFailure,
             )
         })?;
     Ok(format!("{code}.{event_type}"))
@@ -2237,7 +2251,7 @@ fn pipeline_metrics() -> Vec<PerformanceMetric> {
     ]
 }
 
-fn performance_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn performance_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
@@ -2318,9 +2332,10 @@ fn ledger_commit_window(
 mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
+    use actingcommand_host_metrics::HostMetricsCode;
 
     struct SequenceSampler {
-        samples: VecDeque<Result<HostSample, &'static str>>,
+        samples: VecDeque<Result<HostSample, Code>>,
     }
 
     impl HostSampler for SequenceSampler {
@@ -2330,7 +2345,7 @@ mod tests {
             _owned_processes: &BTreeMap<u32, String>,
             _top_process_count: usize,
             _thresholds: ProcessLoadThresholds,
-        ) -> Result<HostSample, &'static str> {
+        ) -> Result<HostSample, Code> {
             self.samples
                 .pop_front()
                 .expect("test sampler sequence is complete")
@@ -2361,7 +2376,7 @@ mod tests {
         }
     }
 
-    fn monitor(samples: Vec<Result<HostSample, &'static str>>) -> PerformanceMonitor {
+    fn monitor(samples: Vec<Result<HostSample, Code>>) -> PerformanceMonitor {
         PerformanceMonitor::enabled(
             PerformanceMonitorConfig::default(),
             Ok(Box::new(SequenceSampler {
@@ -2924,8 +2939,8 @@ mod tests {
     fn sampler_failures_do_not_relabel_old_control_evidence_as_fresh() {
         let mut monitor = monitor(vec![
             Ok(sample(1_000, 4_000)),
-            Err("performance_counter_failed"),
-            Err("performance_counter_failed"),
+            Err(HostMetricsCode::PerformanceSystemTimesFailed.code()),
+            Err(HostMetricsCode::PerformanceSystemTimesFailed.code()),
         ]);
         monitor.tick(1_000).expect("host sample");
         monitor
@@ -3197,9 +3212,9 @@ mod tests {
     #[test]
     fn repeated_sampler_failure_degrades_then_stops_bounded_sampling() {
         let mut monitor = monitor(vec![
-            Err("performance_counter_failed"),
-            Err("performance_counter_failed"),
-            Err("performance_counter_failed"),
+            Err(HostMetricsCode::PerformanceSystemTimesFailed.code()),
+            Err(HostMetricsCode::PerformanceSystemTimesFailed.code()),
+            Err(HostMetricsCode::PerformanceSystemTimesFailed.code()),
         ]);
         let first = monitor.tick(1_000).expect("first");
         let second = monitor.tick(3_000).expect("second");

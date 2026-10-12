@@ -24,17 +24,21 @@
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, prepare_contained_task};
 use super::failure_settlement::ResolvedLayer;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use crate::error::spelled;
+use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
 pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
 use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
-const ADMISSION_FAILED: &str = "contained_task_prerequisite_admission_failed";
-pub(super) const INCOMPATIBLE: &str = "contained_task_prerequisite_incompatible";
-const STEP_LIMIT: &str = "contained_task_prerequisite_step_limit";
-const FINAL_PAGE_MISSING: &str = "contained_task_prerequisite_final_page_missing";
-const RESOLVE_OPERATION: &str = "resolve_prerequisite_chain";
+const ADMISSION_FAILED: HostCode = HostCode::ContainedTaskPrerequisiteAdmissionFailed;
+pub(super) const INCOMPATIBLE: &str = SharedCode::ContainedTaskPrerequisiteIncompatible.as_str();
+const STEP_LIMIT: &str = SharedCode::ContainedTaskPrerequisiteStepLimit.as_str();
+const FINAL_PAGE_MISSING: &str = HostCode::ContainedTaskPrerequisiteFinalPageMissing.as_str();
+const RESOLVE_OPERATION: HostLocation = HostLocation::ResolvePrerequisiteChain;
 
-fn prerequisite_refusal(code: &'static str, detail: String) -> RequestFailure {
+fn prerequisite_refusal(code: impl Into<Code>, detail: String) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(code, RESOLVE_OPERATION, RuntimeErrorCode::PackageInvalid)
             .with_native_detail(detail),
@@ -86,7 +90,7 @@ pub(super) fn configured_return_home_incompatibility(
 
 /// Workflow #336 L2d: the ladder's refusal of a configured return-home package, before any lease.
 pub(super) fn configured_return_home_refusal(detail: String) -> RequestFailure {
-    prerequisite_refusal(INCOMPATIBLE, detail)
+    prerequisite_refusal(SharedCode::ContainedTaskPrerequisiteIncompatible, detail)
 }
 
 impl HostShared {
@@ -126,8 +130,8 @@ impl HostShared {
             .map(Some)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "return_home_package_unbound",
-                    "resolve_return_home_package",
+                    SharedCode::ReturnHomePackageUnbound,
+                    HostLocation::ResolveReturnHomePackage,
                     RuntimeErrorCode::RuntimeFatal,
                 )
                 .with_native_detail(format!("package_id={package_id}"))
@@ -169,9 +173,15 @@ impl HostShared {
         let deadline = material_deadline()?;
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
         let pure_refusal = |error: actingcommand_execution_kernel::ContainedTaskError| {
-            prerequisite_refusal(
-                error.code().as_str(),
-                error.detail().unwrap_or("").to_owned(),
+            RequestFailure::request(
+                RuntimeHostError::relayed_request(
+                    error.code().as_str(),
+                    RESOLVE_OPERATION.as_str(),
+                    RuntimeErrorCode::PackageInvalid,
+                )
+                .with_native_detail(error.detail().unwrap_or("").to_owned()),
+                RuntimeReceiptState::Denied,
+                None,
             )
         };
         while let Some(link) = next {
@@ -260,7 +270,9 @@ fn gate_layer(
     let required_page = package
         .linear_entry_page()
         .map(str::to_owned)
-        .ok_or_else(|| ContainedTaskRunError::task("contained_task_state_invalid"))?;
+        .ok_or_else(|| {
+            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+        })?;
     let initial = package
         .recognize_linear_entry(runtime)
         .map_err(|error| fail_recognition(runtime, gate, layer == 0, error))?;
@@ -424,14 +436,17 @@ fn close_open(
 ) -> ContainedTaskRunError<RequestFailure> {
     match error {
         ContainedTaskRunError::Task(error)
-            if matches!(
+            if spelled(
                 error.code().as_str(),
-                "contained_task_recognition_failed" | "contained_task_page_unknown"
+                &[
+                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                    SharedCode::ContainedTaskPageUnknown.code(),
+                ],
             ) =>
         {
-            let mut primary = RuntimeHostError::request(
+            let mut primary = RuntimeHostError::relayed_request(
                 error.code().as_str(),
-                "run_contained_task",
+                ContractLocation::RunContainedTask.as_str(),
                 RuntimeErrorCode::BackendOperationFailed,
             );
             if let Some(detail) = error.detail() {
@@ -452,9 +467,12 @@ fn close_open(
         ContainedTaskRunError::NonfatalOperation(failure)
             if !failure.poison_runtime
                 && !failure.error.is_fatal()
-                && matches!(
+                && spelled(
                     failure.error.code(),
-                    "input_backend_operation_failed" | "input_backend_open_failed"
+                    &[
+                        SharedCode::InputBackendOperationFailed.code(),
+                        DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
+                    ],
                 ) =>
         {
             match runtime.record_geometry_triggered_prerequisite_failure(open, &failure.error) {

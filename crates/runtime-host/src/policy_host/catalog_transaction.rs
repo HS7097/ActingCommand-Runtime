@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::catalog_plan::CatalogLineage;
+use crate::codes::{HostCode, HostLocation};
 use crate::events::RuntimeEvents;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     AuditInput, EventActor, EventSeverity, EventSource, OriginModule, StateMigrationData,
     StatePayload, StatePayloadDraft,
@@ -15,7 +17,7 @@ use actingcommand_runtime_state::PreparedCatalogState;
 pub(super) type ActiveIdentity = (String, u64, String);
 
 pub(crate) fn catalog_ledger_error(error: &GlobalLedgerError) -> RuntimeHostError {
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         error.code(),
         error.operation(),
         RuntimeErrorCode::LedgerFailure,
@@ -83,8 +85,8 @@ impl LedgerTransactionWork for CatalogTransaction {
             }
         ) {
             return Err(work_error(request(
-                "catalog_active_generation_changed",
-                "switch_active_catalog",
+                HostCode::CatalogActiveGenerationChanged,
+                HostLocation::SwitchActiveCatalog,
             )));
         }
         let state = self.state.as_ref().map_err(Clone::clone)?;
@@ -120,8 +122,8 @@ impl LedgerTransactionWork for CatalogTransaction {
         };
         if !matches {
             return Err(work_error(fatal(
-                "catalog_transaction_fact_mismatch",
-                "commit_catalog_state",
+                HostCode::CatalogTransactionFactMismatch,
+                HostLocation::CommitCatalogState,
             )));
         }
         state.apply(transaction).map_err(|error| {
@@ -146,7 +148,10 @@ impl CatalogStore {
                 .map(|value| value.generation.catalog_hash())
                 != previous
             {
-                return Err(request("state_document_changed", "write_state_document"));
+                return Err(request(
+                    SharedCode::StateDocumentChanged,
+                    ContractLocation::WriteStateDocument,
+                ));
             }
             let document = self
                 .state
@@ -156,8 +161,12 @@ impl CatalogStore {
                 schema_version: CATALOG_STATE_SCHEMA.to_owned(),
                 generation: catalog.generation.clone(),
             };
-            let bytes = serde_json::to_vec(&pointer)
-                .map_err(|_| fatal("catalog_pointer_encode_failed", "switch_active_catalog"))?;
+            let bytes = serde_json::to_vec(&pointer).map_err(|_| {
+                fatal(
+                    HostCode::CatalogPointerEncodeFailed,
+                    HostLocation::SwitchActiveCatalog,
+                )
+            })?;
             self.state
                 .prepare_catalog_write(
                     CATALOG_STATE_SCHEMA,
@@ -186,23 +195,31 @@ impl CatalogStore {
             return Ok(());
         }
         let bytes = read_bounded(&self.legacy_active_pointer, MAX_POINTER_BYTES)?;
-        let pointer: CatalogPointer = serde_json::from_slice(&bytes)
-            .map_err(|_| fatal("catalog_pointer_invalid", "migrate_active_catalog"))?;
+        let pointer: CatalogPointer = serde_json::from_slice(&bytes).map_err(|_| {
+            fatal(
+                HostCode::CatalogPointerInvalid,
+                HostLocation::MigrateActiveCatalog,
+            )
+        })?;
         if pointer.schema_version != CATALOG_STATE_SCHEMA {
             return Err(fatal(
-                "catalog_pointer_version_unsupported",
-                "migrate_active_catalog",
+                HostCode::CatalogPointerVersionUnsupported,
+                HostLocation::MigrateActiveCatalog,
             ));
         }
         let loaded = self.load_generation(&pointer.generation.catalog_hash)?;
         if loaded.generation != pointer.generation {
             return Err(fatal(
-                "catalog_pointer_generation_mismatch",
-                "migrate_active_catalog",
+                HostCode::CatalogPointerGenerationMismatch,
+                HostLocation::MigrateActiveCatalog,
             ));
         }
-        let canonical = serde_json::to_vec(&pointer)
-            .map_err(|_| fatal("catalog_pointer_encode_failed", "migrate_active_catalog"))?;
+        let canonical = serde_json::to_vec(&pointer).map_err(|_| {
+            fatal(
+                HostCode::CatalogPointerEncodeFailed,
+                HostLocation::MigrateActiveCatalog,
+            )
+        })?;
         let latest = ledger
             .latest_sequence()
             .map_err(|error| catalog_ledger_error(&error))?;
@@ -212,8 +229,8 @@ impl CatalogStore {
             .is_some_and(|active| active.generation != pointer.generation)
         {
             return Err(fatal(
-                "catalog_migration_source_conflict",
-                "migrate_active_catalog",
+                HostCode::CatalogMigrationSourceConflict,
+                HostLocation::MigrateActiveCatalog,
             ));
         }
         let prepared = self
@@ -226,7 +243,12 @@ impl CatalogStore {
             .map_err(|error| RuntimeHostError::state(&error))?;
         let migration = prepared
             .migration()
-            .ok_or_else(|| fatal("catalog_migration_missing", "migrate_active_catalog"))?
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::CatalogMigrationMissing,
+                    HostLocation::MigrateActiveCatalog,
+                )
+            })?
             .clone();
         let recorded = ledger
             .query(EventQuery {
@@ -241,8 +263,8 @@ impl CatalogStore {
             {
                 if data.migration() != &migration {
                     return Err(fatal(
-                        "catalog_migration_source_conflict",
-                        "migrate_active_catalog",
+                        HostCode::CatalogMigrationSourceConflict,
+                        HostLocation::MigrateActiveCatalog,
                     ));
                 }
                 matching += 1;
@@ -250,8 +272,8 @@ impl CatalogStore {
         }
         if matching > 1 {
             return Err(fatal(
-                "catalog_migration_source_conflict",
-                "migrate_active_catalog",
+                HostCode::CatalogMigrationSourceConflict,
+                HostLocation::MigrateActiveCatalog,
             ));
         }
         if matching == 0 {
@@ -273,7 +295,7 @@ impl CatalogStore {
                     }),
                 )
                 .map_err(|error| match error.rolled_back_work() {
-                    Some(work) => RuntimeHostError::fatal(
+                    Some(work) => RuntimeHostError::relayed_fatal(
                         work.code,
                         work.operation,
                         RuntimeErrorCode::RuntimeFatal,
@@ -288,18 +310,21 @@ impl CatalogStore {
             .map_err(|error| RuntimeHostError::state(&error))?;
         if document.payload() != canonical {
             return Err(fatal(
-                "catalog_migration_source_conflict",
-                "migrate_active_catalog",
+                HostCode::CatalogMigrationSourceConflict,
+                HostLocation::MigrateActiveCatalog,
             ));
         }
         // Verify the current chain before retiring the original file. A committed migration
         // may already have later transitions; its historical document remains the source.
         self.load_verified_active(ledger)?;
         fs::remove_file(&self.legacy_active_pointer).map_err(|error| {
-            fatal("catalog_pointer_cleanup_failed", "migrate_active_catalog")
-                .with_native_detail(error.to_string())
+            fatal(
+                HostCode::CatalogPointerCleanupFailed,
+                HostLocation::MigrateActiveCatalog,
+            )
+            .with_native_detail(error.to_string())
         })?;
-        sync_directory(&self.root, "migrate_active_catalog")
+        sync_directory(&self.root, HostLocation::MigrateActiveCatalog)
     }
 
     /// The active generation the ledger projects, checked against the state pointer, and every
@@ -317,8 +342,8 @@ impl CatalogStore {
             != source.as_ref().map(|value| &value.generation)
         {
             return Err(fatal(
-                "catalog_active_source_mismatch",
-                "load_active_catalog",
+                HostCode::CatalogActiveSourceMismatch,
+                HostLocation::LoadActiveCatalog,
             ));
         }
         Ok((actual, lineage))
@@ -350,8 +375,8 @@ impl CatalogStore {
         let loaded = self.load_generation(&hash)?;
         if loaded.generation.catalog_id() != id || loaded.generation.catalog_version() != version {
             return Err(fatal(
-                "catalog_projection_identity_mismatch",
-                "project_policy_catalog",
+                HostCode::CatalogProjectionIdentityMismatch,
+                HostLocation::ProjectPolicyCatalog,
             ));
         }
         Ok((Some(LoadedCatalog::clone(&loaded)), lineage))
@@ -385,27 +410,32 @@ impl CatalogStore {
                     || data.to_schema_version() != CATALOG_STATE_SCHEMA
                 {
                     return Err(fatal(
-                        "catalog_migration_source_conflict",
-                        "project_policy_catalog",
+                        HostCode::CatalogMigrationSourceConflict,
+                        HostLocation::ProjectPolicyCatalog,
                     ));
                 }
                 let document = self
                     .state
                     .catalog_migration_document(data)
                     .map_err(|error| RuntimeHostError::state(&error))?;
-                let pointer: CatalogPointer = serde_json::from_slice(document.payload())
-                    .map_err(|_| fatal("catalog_pointer_invalid", "project_policy_catalog"))?;
+                let pointer: CatalogPointer =
+                    serde_json::from_slice(document.payload()).map_err(|_| {
+                        fatal(
+                            HostCode::CatalogPointerInvalid,
+                            HostLocation::ProjectPolicyCatalog,
+                        )
+                    })?;
                 if pointer.schema_version != CATALOG_STATE_SCHEMA {
                     return Err(fatal(
-                        "catalog_pointer_version_unsupported",
-                        "project_policy_catalog",
+                        HostCode::CatalogPointerVersionUnsupported,
+                        HostLocation::ProjectPolicyCatalog,
                     ));
                 }
                 let loaded = self.load_generation(&pointer.generation.catalog_hash)?;
                 if loaded.generation != pointer.generation {
                     return Err(fatal(
-                        "catalog_pointer_generation_mismatch",
-                        "project_policy_catalog",
+                        HostCode::CatalogPointerGenerationMismatch,
+                        HostLocation::ProjectPolicyCatalog,
                     ));
                 }
                 if current.as_ref().is_some_and(|(id, version, hash)| {
@@ -414,8 +444,8 @@ impl CatalogStore {
                         || hash != pointer.generation.catalog_hash()
                 }) {
                     return Err(fatal(
-                        "catalog_migration_source_conflict",
-                        "project_policy_catalog",
+                        HostCode::CatalogMigrationSourceConflict,
+                        HostLocation::ProjectPolicyCatalog,
                     ));
                 }
                 lineage.record(
@@ -433,7 +463,10 @@ impl CatalogStore {
             let (payload, success) = match event.payload() {
                 EventPayload::Catalog(CatalogPayload::TransitionIntent(payload)) => {
                     let action_id = event.links().action_id().ok_or_else(|| {
-                        fatal("catalog_intent_identity_missing", "project_policy_catalog")
+                        fatal(
+                            HostCode::CatalogIntentIdentityMissing,
+                            HostLocation::ProjectPolicyCatalog,
+                        )
                     })?;
                     if event.origin().source() != EventSource::Runtime
                         || event.origin().module() != OriginModule::Policy
@@ -441,8 +474,8 @@ impl CatalogStore {
                         || intents.insert(action_id, (event, payload)).is_some()
                     {
                         return Err(fatal(
-                            "catalog_intent_source_conflict",
-                            "project_policy_catalog",
+                            HostCode::CatalogIntentSourceConflict,
+                            HostLocation::ProjectPolicyCatalog,
                         ));
                     }
                     continue;
@@ -456,11 +489,17 @@ impl CatalogStore {
                 _ => continue,
             };
             let action_id = event.links().action_id().ok_or_else(|| {
-                fatal("catalog_outcome_identity_missing", "project_policy_catalog")
+                fatal(
+                    HostCode::CatalogOutcomeIdentityMissing,
+                    HostLocation::ProjectPolicyCatalog,
+                )
             })?;
-            let (intent_event, intent) = intents
-                .remove(action_id)
-                .ok_or_else(|| fatal("catalog_outcome_intent_missing", "project_policy_catalog"))?;
+            let (intent_event, intent) = intents.remove(action_id).ok_or_else(|| {
+                fatal(
+                    HostCode::CatalogOutcomeIntentMissing,
+                    HostLocation::ProjectPolicyCatalog,
+                )
+            })?;
             if event.origin() != intent_event.origin()
                 || event.links() != intent_event.links()
                 || event.payload().action() != intent_event.payload().action()
@@ -471,8 +510,8 @@ impl CatalogStore {
                 || payload.promotion() != intent.promotion()
             {
                 return Err(fatal(
-                    "catalog_outcome_source_conflict",
-                    "project_policy_catalog",
+                    HostCode::CatalogOutcomeSourceConflict,
+                    HostLocation::ProjectPolicyCatalog,
                 ));
             }
             if !success {
@@ -480,8 +519,8 @@ impl CatalogStore {
             }
             if payload.previous_catalog_hash() != current.as_ref().map(|value| value.2.as_str()) {
                 return Err(fatal(
-                    "catalog_previous_source_mismatch",
-                    "project_policy_catalog",
+                    HostCode::CatalogPreviousSourceMismatch,
+                    HostLocation::ProjectPolicyCatalog,
                 ));
             }
             if let Some((id, version, hash)) = &current {
@@ -496,14 +535,14 @@ impl CatalogStore {
                 };
                 if !accepted {
                     return Err(fatal(
-                        "catalog_generation_source_conflict",
-                        "project_policy_catalog",
+                        HostCode::CatalogGenerationSourceConflict,
+                        HostLocation::ProjectPolicyCatalog,
                     ));
                 }
             } else if event.event_type() != EventType::CatalogActivated {
                 return Err(fatal(
-                    "catalog_rollback_source_missing",
-                    "project_policy_catalog",
+                    HostCode::CatalogRollbackSourceMissing,
+                    HostLocation::ProjectPolicyCatalog,
                 ));
             }
             lineage.record(

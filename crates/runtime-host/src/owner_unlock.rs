@@ -2,9 +2,11 @@
 
 //! Offline `actingd unlock-owner` (`contracts/actingd-unlock-owner.md`).
 
+use crate::codes::HostLocation;
 use crate::events::RuntimeEvents;
 use crate::owner::{OwnerUnlock, unlock_retained_owner};
 use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, EventActor, EventSeverity, EventSource, OriginModule,
     OwnerEpoch, OwnerResourceDisposition, OwnerUnlockActor, RuntimeErrorCode,
@@ -73,8 +75,8 @@ fn record(
         LedgerMaintenance::acquire(root, false, limits, deadline).map_err(ledger_error)?;
     if !maintenance.formal_ready(&database).map_err(ledger_error)? {
         return Err(RuntimeHostError::fatal(
-            "ledger_migration_required",
-            "select_runtime_storage",
+            SharedCode::LedgerMigrationRequired,
+            HostLocation::SelectRuntimeStorage,
             RuntimeErrorCode::LedgerFailure,
         ));
     }
@@ -115,7 +117,7 @@ fn record(
 }
 
 fn ledger_error(error: GlobalLedgerError) -> RuntimeHostError {
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         error.code(),
         error.operation(),
         RuntimeErrorCode::LedgerFailure,
@@ -125,8 +127,8 @@ fn ledger_error(error: GlobalLedgerError) -> RuntimeHostError {
 
 fn database_error(error: RuntimeDatabaseError) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        error.code().as_str(),
-        error.operation().as_str(),
+        error.code(),
+        error.operation(),
         RuntimeErrorCode::LedgerFailure,
     )
     .with_native_detail(format!("{error:?}"))

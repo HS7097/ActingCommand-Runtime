@@ -13,6 +13,7 @@
 //! accumulates). The identity prefix is everything before `~f`.
 
 use crate::ProcedureManifest;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ApplicationPayload, ArtifactKind, ContainedTaskRecoveryBinding, EventAction, EventPayload,
     EventQuery, EventType, PackageRef, RunId, TaskEntryTargetDisposition, TaskPayload,
@@ -64,8 +65,8 @@ const PREPARE_ACCUMULATING_PREFIX: &str = "contained_task_prerequisite_";
 /// R25-2: the adb backend failures of a `linear_steps` task that are rerun only when the run
 /// was not poisoned.
 pub(crate) const RERUN_ONLY_BACKEND_FAILURES: &[&str] = &[
-    "application_backend_operation_failed",
-    "input_backend_operation_failed",
+    SharedCode::ApplicationBackendOperationFailed.as_str(),
+    SharedCode::InputBackendOperationFailed.as_str(),
 ];
 
 /// Lowercase hex SHA-256 of `bytes`.

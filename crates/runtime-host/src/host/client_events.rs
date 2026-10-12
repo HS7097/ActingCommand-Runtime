@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode, SharedCode};
 
 impl HostShared {
     pub(super) fn release_lab_pin(
@@ -22,18 +24,18 @@ impl HostShared {
             .map_err(|error| {
                 if error.is_fatal() {
                     RequestFailure::poison_without_terminal(
-                        RuntimeHostError::fatal(
+                        RuntimeHostError::relayed_fatal(
                             error.code(),
-                            "release_lab_pin",
+                            ContractLocation::ReleaseLabPin.as_str(),
                             RuntimeErrorCode::LedgerFailure,
                         )
                         .with_native_detail(error.to_string()),
                     )
                 } else {
                     RequestFailure::request(
-                        RuntimeHostError::request(
+                        RuntimeHostError::relayed_request(
                             error.code(),
-                            "release_lab_pin",
+                            ContractLocation::ReleaseLabPin.as_str(),
                             RuntimeErrorCode::InvalidRequest,
                         ),
                         RuntimeReceiptState::Denied,
@@ -90,14 +92,14 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         event: &RuntimeDebugEvent,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let context = lock(&self.debug_runs, "read_runtime_debug_event_context")?
+        let context = lock(&self.debug_runs, HostLocation::ReadRuntimeDebugEventContext)?
             .get(&validated.correlation_id())
             .cloned();
         if event.operation() == RuntimeDebugOperation::LabRun && context.is_none() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "runtime_debug_context_missing",
-                    "record_runtime_debug_event",
+                    HostCode::RuntimeDebugContextMissing,
+                    ContractLocation::RecordRuntimeDebugEvent,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
@@ -175,8 +177,8 @@ impl HostShared {
             (_, RuntimeDebugPhase::Progress) => {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(
-                        "runtime_debug_event_invalid",
-                        "record_runtime_debug_event",
+                        SharedCode::RuntimeDebugEventInvalid,
+                        ContractLocation::RecordRuntimeDebugEvent,
                         RuntimeErrorCode::InvalidRequest,
                     ),
                     RuntimeReceiptState::Denied,
@@ -191,13 +193,14 @@ impl HostShared {
                 _ => None,
             };
             if let Some(outcome) = outcome {
-                let mut debug_runs = lock(&self.debug_runs, "update_runtime_debug_run_outcome")?;
+                let mut debug_runs =
+                    lock(&self.debug_runs, HostLocation::UpdateRuntimeDebugRunOutcome)?;
                 let context = debug_runs
                     .get_mut(&validated.correlation_id())
                     .ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                            "runtime_debug_context_missing_after_terminal",
-                            "record_runtime_debug_event",
+                            HostCode::RuntimeDebugContextMissingAfterTerminal,
+                            ContractLocation::RecordRuntimeDebugEvent,
                             RuntimeErrorCode::RuntimeFatal,
                         ))
                     })?;
@@ -219,22 +222,25 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         action: &ClientActionRecord,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let _gate = lock(&self.governance_write_gate, "record_client_action")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let _gate = lock(
+            &self.governance_write_gate,
+            ContractLocation::RecordClientAction,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         if let Some(existing) = self.client_fact_replay(request, EventType::ClientAction)? {
             let EventPayload::Client(ClientPayload::Action(payload)) = existing.payload() else {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "client_action_replay_payload_mismatch",
-                        "record_client_action",
+                        HostCode::ClientActionReplayPayloadMismatch,
+                        ContractLocation::RecordClientAction,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
             };
             if payload.record() != action {
                 return Err(client_fact_conflict(
-                    "client_action_replay_conflict",
-                    "record_client_action",
+                    HostCode::ClientActionReplayConflict,
+                    ContractLocation::RecordClientAction,
                 ));
             }
             return Ok(OperationSuccess {
@@ -273,7 +279,9 @@ impl HostShared {
                 request_id: Some(request.request_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| RequestFailure::poison(ledger_error("query_client_fact_replay"), None))?;
+            .map_err(|_| {
+                RequestFailure::poison(ledger_error(HostLocation::QueryClientFactReplay), None)
+            })?;
         if events.len() > 1 {
             if events.iter().all(|event| {
                 event.event_type() == event_type
@@ -281,15 +289,15 @@ impl HostShared {
             }) {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "client_fact_replay_ambiguous",
-                        "query_client_fact_replay",
+                        HostCode::ClientFactReplayAmbiguous,
+                        HostLocation::QueryClientFactReplay,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
             }
             return Err(client_fact_conflict(
-                "client_fact_request_id_conflict",
-                "query_client_fact_replay",
+                HostCode::ClientFactRequestIdConflict,
+                HostLocation::QueryClientFactReplay,
             ));
         }
         let Some(event) = events.pop() else {
@@ -302,28 +310,31 @@ impl HostShared {
             || event.links().correlation_id() != Some(&request.correlation_id())
         {
             return Err(client_fact_conflict(
-                "client_fact_replay_origin_conflict",
-                "query_client_fact_replay",
+                HostCode::ClientFactReplayOriginConflict,
+                HostLocation::QueryClientFactReplay,
             ));
         }
         Ok(Some(event))
     }
 
     fn registered_instance_id(&self, instance_alias: &str) -> Result<InstanceId, RequestFailure> {
-        lock(&self.registered_instances, "resolve_client_action_instance")?
-            .values()
-            .find(|instance| instance.instance_alias == instance_alias)
-            .map(RegisteredInstance::instance_id)
-            .ok_or_else(|| {
-                RequestFailure::request(
-                    RuntimeHostError::request(
-                        "instance_unknown",
-                        "resolve_client_action_instance",
-                        RuntimeErrorCode::InstanceUnknown,
-                    ),
-                    RuntimeReceiptState::Denied,
-                    None,
-                )
-            })
+        lock(
+            &self.registered_instances,
+            HostLocation::ResolveClientActionInstance,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(RegisteredInstance::instance_id)
+        .ok_or_else(|| {
+            RequestFailure::request(
+                RuntimeHostError::request(
+                    RuntimeErrorCode::InstanceUnknown,
+                    HostLocation::ResolveClientActionInstance,
+                    RuntimeErrorCode::InstanceUnknown,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            )
+        })
     }
 }
