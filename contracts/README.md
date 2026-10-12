@@ -85,10 +85,18 @@ existing byte-vector read interfaces retain their behavior.
 Each formal contained task records its effective configuration before entry
 preflight as `actingcommand.runtime.effective-task-configuration.v1` in a
 GlobalLedger-linked DiagnosticJson artifact. Registered device configurations
-retain their requested backends, configured ADB and serial, resolved target,
-timeouts and explicit MuMu path inputs. Providers without a registered device
-configuration carry an explicit absent device observation; task timing remains
-recorded. The production registry supplies its parsed configuration directly.
+retain their requested backends, configured ADB, the configured serial's label,
+resolved target, timeouts and explicit MuMu path inputs. Providers without a
+registered device configuration carry an explicit absent device observation;
+task timing remains recorded. The production registry supplies its parsed
+configuration directly.
+
+Device serials (Workflow #398 RD-1a): a target is named by its label, never by a
+device serial. A target addressed by `HOST:PORT` keeps `HOST:PORT`; a target
+addressed by an adb serial is `handset:<alias>`. The serial members of the
+effective configuration (`configured_serial`, `resolved_serial`,
+`selected_serial`, the input selection's `serial`) and the capture geometry's ADB
+source carry the label.
 
 The task interpreter and the record share the same effective timing view:
 task/control timeout declarations, control/default task and step budgets,
@@ -98,10 +106,11 @@ deadline are separate; Host remaining time is measured at the stated monotonic
 observation time. Recording does not move any timer's start or polling boundary.
 
 The first successful capture adds the same Frame producer's selected backend,
-resolved ADB/serial and resolved MuMu installation root, ADB path, capture DLL
-path and installation source. Ordinary Frame constructors leave the selection
-unobserved. The first InputCommitted adds the successful input backend's name
-and selected serial through the existing session and critical-action return.
+resolved ADB and target label and resolved MuMu installation root, ADB path,
+capture DLL path and installation source. Ordinary Frame constructors leave the
+selection unobserved. The first InputCommitted adds the successful input
+backend's name and selected target label through the existing session and
+critical-action return.
 Configured values do not substitute for these actual observations. A bound
 entry recovery records its own timing and package identity when used. The task
 emits at most four configuration artifacts, each at most 1 MiB; encoding, size

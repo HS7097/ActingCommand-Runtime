@@ -238,12 +238,9 @@ impl ExecutionBackendRegistration {
             capture_backend: capture.requested.as_str().to_owned(),
             input_adb: input.adb_config.adb_path.clone(),
             capture_adb: capture.adb_config.adb_path.clone(),
-            configured_serial: input
-                .target
-                .serial
-                .as_ref()
-                .map(|serial| serial.adb_arg().to_owned()),
-            resolved_serial: input.target.adb_arg(),
+            // Workflow #398 RD-1a (L1): the record names the target by its label.
+            configured_serial: input.target.configured_label(),
+            resolved_serial: input.target.label(),
             input_command_timeout_ms: milliseconds(input.adb_config.command_timeout)?,
             capture_command_timeout_ms: milliseconds(capture.adb_config.command_timeout)?,
             capture_timeout_ms: milliseconds(capture.capture_timeout)?,
@@ -376,7 +373,7 @@ impl EntryEndpoint {
             target.host = host.to_owned();
             target.port = port;
         }
-        self.audit_endpoint = self.application_target.adb_arg();
+        self.audit_endpoint = self.application_target.label();
         self.configuration.resolved_serial = self.audit_endpoint.clone();
     }
 }
@@ -409,7 +406,8 @@ impl ExecutionBackendEntry {
         };
         let mut endpoint = EntryEndpoint {
             state,
-            audit_endpoint: application_target.adb_arg(),
+            // Workflow #398 RD-1a: the audit endpoint names the target by its label.
+            audit_endpoint: application_target.label(),
             application_target,
             input: registration.input,
             capture: registration.capture,

@@ -37,9 +37,9 @@
       "type": "integer",
       "description": "An emulator instance index."
     },
-    "adb_serial": {
-      "type": "name",
-      "description": "An adb device serial (host:port or a device name)."
+    "device_label": {
+      "type": "token",
+      "description": "The label of an adb target: HOST:PORT for an emulator, handset:<alias> for a device addressed by its serial. Never the serial itself (Workflow #398)."
     },
     "path": {
       "type": "path",
@@ -157,6 +157,10 @@
     "raw_text_sensitivity": {
       "type": "vocab:sensitivity",
       "description": "How sensitive raw_text is; readers redact by it."
+    },
+    "raw_text_redacted": {
+      "type": "boolean",
+      "description": "Every device serial the Runtime holds a binding for was replaced in raw_text by its token [device:<label>] (Workflow #398); the only edit of foreign text."
     },
     "os_error": {
       "type": "integer",

@@ -469,7 +469,8 @@ pub struct CaptureSelectionContext {
 
 impl CaptureSelectionContext {
     /// The selection of a capture backend opened from `configured` (the target before
-    /// preparation, with its configured ADB) and `prepared` (what preparation resolved).
+    /// preparation, with its configured ADB) and `prepared` (what preparation resolved). The
+    /// targets are recorded by their labels, never a serial (Workflow #398 RD-1a, L1).
     pub(crate) fn opened(
         configured_adb: String,
         configured: &DeviceTarget,
@@ -478,12 +479,9 @@ impl CaptureSelectionContext {
         Self {
             requested: prepared.requested,
             configured_adb,
-            configured_serial: configured
-                .serial
-                .as_ref()
-                .map(|serial| serial.adb_arg().to_owned()),
+            configured_serial: configured.configured_label(),
             resolved_adb: prepared.adb_config.adb_path.clone(),
-            selected_serial: prepared.target.adb_arg(),
+            selected_serial: prepared.target.label(),
             mumu: prepared.resolved_mumu.clone(),
             nemu_frame: None,
         }
@@ -1279,6 +1277,7 @@ fn build_capture_backend(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CaptureProbeCacheKey {
+    /// The target's label (Workflow #398 RD-1a: never the serial).
     serial: String,
     adb_path: String,
     backend: CaptureBackendName,
@@ -1287,7 +1286,7 @@ struct CaptureProbeCacheKey {
 impl CaptureProbeCacheKey {
     fn new(config: &CaptureBackendConfig, backend: CaptureBackendName) -> Self {
         Self {
-            serial: config.target.adb_arg(),
+            serial: config.target.label(),
             adb_path: config.adb_config.adb_path.clone(),
             backend,
         }
@@ -1537,6 +1536,7 @@ impl CaptureBackend for ScreencapBackend {
         read_adb_capture_geometry(
             &Adb::new(self.adb_config.clone()),
             &self.target.adb_arg(),
+            &self.target.label(),
             CaptureBackendName::AdbScreencap,
             deadline,
         )
@@ -1710,6 +1710,7 @@ impl CaptureBackend for DroidcastRawBackend {
         read_adb_capture_geometry(
             &Adb::new(self.adb_config.clone()),
             &self.serial,
+            &self.target.label(),
             CaptureBackendName::DroidcastRaw,
             deadline,
         )
@@ -1757,7 +1758,7 @@ impl CaptureBackend for DroidcastRawBackend {
         frame.geometry = CaptureGeometryObservation::Observed(CaptureGeometry {
             backend: CaptureBackendName::DroidcastRaw,
             source: CaptureGeometrySource::AdbDefaultDisplay {
-                serial: self.serial.clone(),
+                serial: self.target.label(),
                 wm_extent: geometry_extent(natural_width, natural_height)?,
                 wm_size_kind: size_kind,
             },
@@ -1936,7 +1937,8 @@ impl NemuIpcBackend {
             .ok_or_else(|| {
                 with_nemu_capture_resolution_detail(
                     DeviceError::fatal(format!(
-                        "Nemu IPC unavailable: cannot derive MuMu instance id from serial {serial}"
+                        "Nemu IPC unavailable: cannot derive MuMu instance id from serial {}",
+                        target.label()
                     ))
                     .with_nemu_resolution_context_if_absent(
                         NemuResolutionContext::new(NemuResolutionReason::TargetIdentityUnavailable),
@@ -3347,9 +3349,12 @@ fn observed_rotation(
     }
 }
 
+/// `serial` is the adb argument; the recorded source names the target by `label` (Workflow #398
+/// RD-1a: geometry records never carry a serial).
 fn read_adb_capture_geometry(
     adb: &Adb,
     serial: &str,
+    label: &str,
     backend: CaptureBackendName,
     deadline: Instant,
 ) -> DeviceResult<CaptureGeometryObservation> {
@@ -3366,7 +3371,7 @@ fn read_adb_capture_geometry(
     Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
         backend,
         source: CaptureGeometrySource::AdbDefaultDisplay {
-            serial: serial.to_string(),
+            serial: label.to_owned(),
             wm_extent: geometry_extent(width, height)?,
             wm_size_kind,
         },

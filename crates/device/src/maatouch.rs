@@ -209,6 +209,8 @@ pub struct HandshakeInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
+    /// The target's label (`HOST:PORT`, or `handset:<alias>` for a serial), never the serial
+    /// itself (Workflow #398 RD-1a).
     pub serial: String,
     pub state: String,
     pub screen_size: String,
@@ -281,8 +283,13 @@ impl MaaTouchBackend {
 
         self.input_parameters = None;
         let adb = Adb::new(self.adb_config.clone());
-        let device = verify_device(&adb, &self.serial, self.target.connect)
-            .map_err(DeviceError::without_input_parameters)?;
+        let device = verify_device(
+            &adb,
+            &self.serial,
+            &self.target.label(),
+            self.target.connect,
+        )
+        .map_err(DeviceError::without_input_parameters)?;
         self.install(&adb)?;
         self.start()?;
         Ok(device)
@@ -929,16 +936,23 @@ fn require_file(path: &PathBuf) -> DeviceResult<()> {
     Ok(())
 }
 
-fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult<DeviceInfo> {
+/// `serial` is the adb argument; `label` is what the error text and `DeviceInfo` show
+/// (Workflow #398 RD-1a).
+fn verify_device(
+    adb: &Adb,
+    serial: &str,
+    label: &str,
+    connect_allowed: bool,
+) -> DeviceResult<DeviceInfo> {
     let state = adb.ensure_device(serial, connect_allowed).map_err(|err| {
         if err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
             return err;
         }
-        unavailable_device_error(serial, &err, adb.run(&["devices", "-l"]))
+        unavailable_device_error(label, &err, adb.run(&["devices", "-l"]))
     })?;
     if state != "device" {
         return Err(DeviceError::transient(format!(
-            "target device {serial} is not in device state: {state:?}"
+            "target device {label} is not in device state: {state:?}"
         )));
     }
 
@@ -946,24 +960,47 @@ fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult
         DeviceError::transient(format!("failed to query target device screen size: {err}"))
     })?;
     Ok(DeviceInfo {
-        serial: serial.to_string(),
+        serial: label.to_owned(),
         state,
         screen_size,
     })
 }
 
-/// The error of a target adb does not answer for, with what `adb devices -l` reported.
+/// The error of a target adb does not answer for, with how many devices `adb devices -l`
+/// listed in each state. Workflow #398 RD-1a (L3): never the listing itself, which names every
+/// device the shared adb server sees, other instances' devices included.
 pub(crate) fn unavailable_device_error(
-    target: &str,
+    label: &str,
     err: &DeviceError,
     listing: DeviceResult<CommandOutput>,
 ) -> DeviceError {
     let devices = listing
-        .map(|out| out.stdout)
+        .map(|out| device_listing_summary(&out.stdout))
         .unwrap_or_else(|list_err| format!("adb devices -l also failed: {list_err}"));
     DeviceError::transient(format!(
-        "target device {target} is not available: {err}\nadb devices -l:\n{devices}"
+        "target device {label} is not available: {err}\nadb devices -l: {devices}"
     ))
+}
+
+/// `listed=<n> states=[<state>=<count> ...]` for an `adb devices -l` listing: the header and the
+/// server's `*` notices are not devices; the state is the word after the serial.
+fn device_listing_summary(listing: &str) -> String {
+    let mut states = std::collections::BTreeMap::<&str, usize>::new();
+    for line in listing.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with("List of devices") || line.starts_with('*') {
+            continue;
+        }
+        if let Some(state) = line.split_whitespace().nth(1) {
+            *states.entry(state).or_default() += 1;
+        }
+    }
+    let listed = states.values().sum::<usize>();
+    let states = states
+        .iter()
+        .map(|(state, count)| format!("{state}={count}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("listed={listed} states=[{states}]")
 }
 
 fn spawn_stderr_reader(

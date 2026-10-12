@@ -1207,7 +1207,7 @@ impl AdbShellInputBackend {
         });
         self.close_result = None;
         Ok(DeviceInfo {
-            serial: self.serial.clone(),
+            serial: self.target.label(),
             state,
             screen_size,
         })

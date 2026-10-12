@@ -39,7 +39,17 @@ pub struct AdbRecoveryText {
     pub truncated: bool,
 }
 impl AdbRecoveryText {
+    /// Workflow #398 RD-1a (rule 4): kept text names a bound serial only by its label token.
     pub(crate) fn new(text: &str) -> Self {
+        Self::bounded(&crate::device_serial::redact_bound_serials(text))
+    }
+
+    /// Workflow #398 RD-1a (rule 5): a bound serial is recorded as its label.
+    pub(crate) fn endpoint(serial: &str) -> Self {
+        Self::new(&crate::device_serial::bound_label(serial).unwrap_or_else(|| serial.to_owned()))
+    }
+
+    fn bounded(text: &str) -> Self {
         let mut end = text.len().min(MAX_ADB_RECOVERY_TEXT_BYTES);
         while !text.is_char_boundary(end) {
             end -= 1;
@@ -157,7 +167,8 @@ pub(crate) fn command_evidence(
         stdout_lossy_decode: output.stdout_lossy_decode,
         stderr_lossy_decode: output.stderr_lossy_decode,
         state,
-        raw_text_redacted: false,
+        raw_text_redacted: crate::device_serial::names_bound_serial(&output.stdout)
+            || crate::device_serial::names_bound_serial(&output.stderr),
     }
 }
 
@@ -346,7 +357,7 @@ pub(crate) fn ensure_input_device_with_commands(
         && recovery_error.is_none()
         && cleanup_failure.is_none();
     let report = AdbTargetRecovery {
-        endpoint: AdbRecoveryText::new(serial),
+        endpoint: AdbRecoveryText::endpoint(serial),
         initial_error,
         path,
         budget_ms: budget.as_millis().min(u128::from(u64::MAX)) as u64,

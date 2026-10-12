@@ -2395,7 +2395,10 @@ mod tests {
             let native = lifecycle.native_detail().expect("native cause");
             assert!(!native.truncated());
             assert!(native.text().contains("failed to spawn adb"));
-            assert!(native.text().contains(endpoint));
+            // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
+            // reaches the native cause only as its label token.
+            assert!(!native.text().contains(endpoint));
+            assert!(native.text().contains("[device:handset:neutral.device]"));
             if !capture {
                 assert!(native.text().contains("child_operation=ensure_device"));
             }
