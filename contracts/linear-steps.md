@@ -125,8 +125,8 @@ through every observation, sample and backend call. Optional settling retains it
 extension from the first skip-target observation. Guard evaluation uses the deadline fixed at
 the dispatched step's start. Captures, backend evaluations and sample waits consume these
 budgets and retain their typed records and timing. Sample exhaustion, expired budgets,
-cancellation, changed geometry or lost permission end the observation before any following
-input. Undeclared paths retain their single-frame behavior.
+cancellation or changed geometry end the observation before any following input. Undeclared
+paths retain their single-frame behavior.
 
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.

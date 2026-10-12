@@ -10,10 +10,10 @@ actingcommand_contract::outcome_codes! {
     /// refused, where no shared code has the meaning.
     pub enum SelectionPolicyCode {
         // Integer arithmetic and the canonical integer range.
-        ArithmeticOverflow => "arithmetic_overflow": error,
-        FloatRejected => "float_rejected": error,
-        IntegerOutOfRange => "integer_out_of_range": error,
+        ArithmeticOverflow => "arithmetic_overflow": error / none,
+        FloatRejected => "float_rejected": error / none,
+        IntegerOutOfRange => "integer_out_of_range": error / none,
         // The offline evaluation shell's input files.
-        ReadFailed => "read_failed": error,
+        ReadFailed => "read_failed": error / none,
     }
 }

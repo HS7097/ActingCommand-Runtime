@@ -3,6 +3,7 @@
   "codes": {
     "config_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "config_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "config_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "config_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "install_provider_retired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "maintenance_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "governance_capability_retired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "vision_provider_manifest_retired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "bind_host_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "bind_host_not_loopback": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "mumu_root_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "invalid_pressure_samples": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "stuck_recovery_cooldown_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "instance_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "device_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "governance_allowed_clients_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "vision_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "vision_root_in_program_slot": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "vision_runtime_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "catalog_transition_kind_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "catalog_transition_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "startup_package_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -302,6 +325,7 @@
     },
     "startup_package_digest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -315,6 +339,7 @@
     },
     "startup_package_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -328,6 +353,7 @@
     },
     "resource_package_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -341,6 +367,7 @@
     },
     "resource_package_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "prerequisite_packages_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "prerequisite_package_id_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "prerequisite_package_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "prerequisite_package_not_regular": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "prerequisite_package_container_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "prerequisite_package_digest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -432,6 +465,7 @@
     },
     "prerequisite_package_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "prerequisite_package_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "return_home_packages_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "return_home_package_key_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "return_home_package_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "procedure_manifest_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "procedure_task_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -523,6 +563,7 @@
     },
     "procedure_manifest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -536,6 +577,7 @@
     },
     "procedure_binding_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "procedure_binding_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "procedure_package_path_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -575,6 +619,7 @@
     },
     "procedure_package_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -588,6 +633,7 @@
     },
     "procedure_package_not_regular": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -601,6 +647,7 @@
     },
     "procedure_package_container_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -614,6 +661,7 @@
     },
     "procedure_task_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -627,6 +675,7 @@
     },
     "policy_catalog_approval_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -640,6 +689,7 @@
     },
     "policy_catalog_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -653,6 +703,7 @@
     },
     "policy_catalog_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -666,6 +717,7 @@
     },
     "policy_catalog_document_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -679,6 +731,7 @@
     },
     "policy_catalog_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -692,6 +745,7 @@
     },
     "policy_instance_set_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -705,6 +759,7 @@
     },
     "policy_instance_host_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -718,6 +773,7 @@
     },
     "scheduled_execution_binding_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -731,6 +787,7 @@
     },
     "scheduled_execution_instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -744,6 +801,7 @@
     },
     "scheduled_execution_backend_mode_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -757,6 +815,7 @@
     },
     "scheduled_execution_backend_mode_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -770,6 +829,7 @@
     },
     "instance_binding_key_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -783,6 +843,7 @@
     },
     "application_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -796,6 +857,7 @@
     },
     "touch_backend_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -809,6 +871,7 @@
     },
     "capture_backend_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -822,6 +885,7 @@
     },
     "touch_backend_must_be_explicit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -835,6 +899,7 @@
     },
     "capture_backend_must_be_explicit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -848,6 +913,7 @@
     },
     "nemu_app_index_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -861,6 +927,7 @@
     },
     "nemu_paired_input_configuration_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -874,6 +941,7 @@
     },
     "instance_registration_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -887,6 +955,7 @@
     },
     "fixture_device_fields_forbidden": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -900,6 +969,7 @@
     },
     "fixture_backend_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -913,6 +983,7 @@
     },
     "fixture_backend_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -926,6 +997,7 @@
     },
     "fixture_frame_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -939,6 +1011,7 @@
     },
     "fixture_resident_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -952,6 +1025,7 @@
     },
     "fixture_frame_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -965,6 +1039,7 @@
     },
     "timeout_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -978,6 +1053,7 @@
     },
     "config_manifest_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -991,6 +1067,7 @@
     },
     "config_manifest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1004,6 +1081,7 @@
     },
     "config_manifest_value_out_of_range": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1017,6 +1095,7 @@
     },
     "env_override_ignored": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1032,6 +1111,7 @@
     },
     "adb_install_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1045,6 +1125,7 @@
     },
     "adb_install_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1058,6 +1139,7 @@
     },
     "emulator_capability_admission_refused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1071,6 +1153,7 @@
     },
     "instance_discovery_no_match": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1084,6 +1167,7 @@
     },
     "instance_discovery_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1097,6 +1181,7 @@
     },
     "instance_discovery_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1110,6 +1195,7 @@
     },
     "vision_provider_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1123,6 +1209,7 @@
     },
     "vision_provider_path_encoding_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1136,6 +1223,7 @@
     },
     "adb_path_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1149,6 +1237,7 @@
     },
     "host_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1162,6 +1251,7 @@
     },
     "port_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1175,6 +1265,7 @@
     },
     "port_unverifiable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1188,6 +1279,7 @@
     },
     "adb_path_encoding_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1201,6 +1293,7 @@
     },
     "path_encoding_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1214,6 +1307,7 @@
     },
     "check_config_usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1227,6 +1321,7 @@
     },
     "check_config_option_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1240,6 +1335,7 @@
     },
     "check_config_config_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1253,6 +1349,7 @@
     },
     "check_config_report_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1266,6 +1363,7 @@
     },
     "maintenance_usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1279,6 +1377,7 @@
     },
     "maintenance_operation_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1292,6 +1391,7 @@
     },
     "maintenance_option_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1305,6 +1405,7 @@
     },
     "maintenance_config_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1318,6 +1419,7 @@
     },
     "maintenance_receipt_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1331,6 +1433,7 @@
     },
     "ledger_maintenance_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1344,6 +1447,7 @@
     },
     "unlock_owner_usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1357,6 +1461,7 @@
     },
     "unlock_owner_option_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1370,6 +1475,7 @@
     },
     "unlock_owner_config_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1383,6 +1489,7 @@
     },
     "unlock_owner_actor_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1396,6 +1503,7 @@
     },
     "unlock_owner_actor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1409,6 +1517,7 @@
     },
     "unlock_owner_report_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1422,6 +1531,7 @@
     },
     "suspended_usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1435,6 +1545,7 @@
     },
     "suspended_option_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1448,6 +1559,7 @@
     },
     "suspended_config_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1461,6 +1573,7 @@
     },
     "suspended_report_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1474,6 +1587,7 @@
     },
     "install_held_input_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1487,6 +1601,7 @@
     },
     "usage_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1500,6 +1615,7 @@
     },
     "policy_bootstrap_state_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1513,6 +1629,7 @@
     },
     "policy_catalog_plan_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1526,6 +1643,7 @@
     },
     "policy_pending_dispatch_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1539,6 +1657,7 @@
     },
     "policy_pending_dispatch_without_evaluation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1552,6 +1671,7 @@
     },
     "policy_cycle_yield_report_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1565,6 +1685,7 @@
     },
     "policy_recompute_wake_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1578,6 +1699,7 @@
     },
     "policy_recompute_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1591,6 +1713,7 @@
     },
     "policy_recompute_wake_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1604,6 +1727,7 @@
     },
     "policy_subscription_cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1617,6 +1741,7 @@
     },
     "policy_driver_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1630,6 +1755,7 @@
     },
     "policy_driver_stopped": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1643,6 +1769,7 @@
     },
     "policy_subscription_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1656,6 +1783,7 @@
     },
     "policy_driver_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1669,6 +1797,7 @@
     },
     "policy_driver_reference_leaked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1682,6 +1811,7 @@
     },
     "policy_driver_signal_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1695,6 +1825,7 @@
     },
     "policy_driver_wake_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1708,6 +1839,7 @@
     },
     "policy_recompute_trigger_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1721,6 +1853,7 @@
     },
     "policy_driver_time_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1734,6 +1867,7 @@
     },
     "policy_monitor_request_retried": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1754,6 +1888,7 @@
     },
     "policy_monitor_retries_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1773,6 +1908,7 @@
     },
     "policy_monitor_runtime_identity_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
@@ -1786,6 +1922,7 @@
     },
     "policy_monitor_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
@@ -1799,6 +1936,7 @@
     },
     "device_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
