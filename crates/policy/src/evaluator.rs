@@ -7000,6 +7000,66 @@ pub(crate) mod tests {
         }
     }
 
+    /// P-1 G10 (Workflow #386 SR-6a; model-sched-rules.md v1.4.2 §8.2 item 2): the close of a
+    /// round in which one path left a decision without any reason, the programming error the
+    /// evaluator guards against. `fixture.observe` was selected on `fixture-instance-a`;
+    /// `fixture.observe-secondary` reached the close of the round on the same instance without a
+    /// reason. No catalog or input reaches this state through `evaluate`, so the round is built
+    /// here and closed by the evaluator's own `append_decision_records`.
+    pub(crate) fn round_with_a_decision_left_without_a_reason()
+    -> PolicyEvaluationResult<(Vec<TaskDecision>, Vec<DecisionReasonChain>)> {
+        let rank = TaskRank {
+            priority: 100,
+            aging_ms: 0,
+            strategic_weight_milli: 1_000,
+            urgency_milli: 0,
+            load_cost_milli: 300,
+            contention_penalty: 0,
+            total_score: 101_000_000,
+            effective_milli: 0,
+        };
+        let mut selected = TaskWork::new(
+            "fixture.observe".to_owned(),
+            "fixture-instance-a".to_owned(),
+        );
+        selected.eligibility = EligibilityState::True;
+        selected.state = SchedulingDecisionState::Selected;
+        selected.reasons = vec![
+            reason("eligible", "trigger passed and feedback stop did not fire"),
+            reason(
+                PolicyCode::PlacementSelected.as_str(),
+                "instance 'fixture-instance-a' satisfies scope, capability, affinity, and host budget",
+            ),
+            reason("ranked", "deterministic total score 101000000"),
+        ];
+        selected.record = Some(RankRecord {
+            base_total: rank.total_score,
+            stage: None,
+            resources: None,
+            promoted: false,
+            affinity: false,
+            tie_breaker: 1,
+        });
+        selected.rank = Some(rank);
+        let mut reason_chains = vec![DecisionReasonChain {
+            id: "reason:fixture-round".to_owned(),
+            decision_id: "decision:fixture-round".to_owned(),
+            reasons: selected.reasons.clone(),
+        }];
+        let mut work = vec![
+            selected,
+            TaskWork::new(
+                "fixture.observe-secondary".to_owned(),
+                "fixture-instance-a".to_owned(),
+            ),
+        ];
+        append_decision_records(&mut work, &mut reason_chains, &[(0, 0)], &BTreeMap::new())?;
+        Ok((
+            work.into_iter().map(TaskDecision::from).collect(),
+            reason_chains,
+        ))
+    }
+
     pub(crate) fn decision_for<'a>(
         evaluation: &'a PolicyEvaluation,
         task_id: &str,
