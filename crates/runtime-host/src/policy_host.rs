@@ -1957,6 +1957,10 @@ impl PolicyHost {
         // latest completion without one means the current catalog references an outcome the
         // pair has not produced yet: the pair has no usable outcome (the evaluator reads it as
         // `outcome_missing`) until the task completes under a referencing catalog.
+        // Workflow #400: the same holds for a latest completion whose outcome key the current
+        // catalog no longer lists for the task. That key is known only from the authoritative
+        // outcome, so the run stays in `completed_runs` and the projection
+        // (`project_authoritative_policy_inputs_with_gaps_under_gate`) leaves the pair out.
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
         for (sequence, dispatch) in self
             .seen_dispatches

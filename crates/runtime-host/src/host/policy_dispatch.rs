@@ -1016,14 +1016,21 @@ impl HostShared {
                 )
             })?;
             let identity = outcome.identity();
-            if !completed_run_matches_outcome(expected_run, outcome)
-                || !expected_keys.contains(outcome.disposition().outcome_key())
-            {
+            if !completed_run_matches_outcome(expected_run, outcome) {
                 return Err(RuntimeHostError::request(
                     SharedCode::OutcomeProjectionNotReady,
                     operation,
                     RuntimeErrorCode::RuntimeUnavailable,
                 ));
+            }
+            // Workflow #400: the pair's latest outcome carries a key the active catalog no longer
+            // lists for its task (a later catalog changed the task's outcome keys). Like a latest
+            // completion without a run identity (#399), the pair has no usable outcome: it
+            // projects nothing, so the evaluator reads the keys it references as
+            // `outcome_missing` until the task completes under this catalog. Other pairs and
+            // instances project as before.
+            if !expected_keys.contains(outcome.disposition().outcome_key()) {
+                continue;
             }
             if !base_facts
                 .instances
