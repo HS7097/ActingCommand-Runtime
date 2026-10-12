@@ -3,6 +3,7 @@
   "codes": {
     "package_open_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "package_metadata_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "package_size_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "package_deadline": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "content_directory_name_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "content_directory_locator_not_absolute": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "content_directory_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "content_directory_link_or_type": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "content_directory_not_directory": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "content_directory_read_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "content_directory_open_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "content_directory_path_encoding": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "content_directory_depth_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "content_directory_entry_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "content_directory_path_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "content_directory_case_collision": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "content_directory_size_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "content_directory_lfs_pointer": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "content_directory_deadline": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "content_container_unsupported": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "content_container_size_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "content_zip_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "content_zip_entry_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -302,6 +325,7 @@
     },
     "content_json_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -315,6 +339,7 @@
     },
     "content_json_duplicate_path": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -328,6 +353,7 @@
     },
     "content_json_file_not_string": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -341,6 +367,7 @@
     },
     "source_tree_loader_retired": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "source_tree_deadline": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "source_operation_path_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "source_operation_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "source_entry_operation_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "source_conversion_metadata_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "source_conversion_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -432,6 +465,7 @@
     },
     "source_locale_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "source_game_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "source_server_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "source_locale_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "source_resources_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "source_compiled_entry_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "source_compiled_size_limit": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -523,6 +563,7 @@
     },
     "source_contains_derived_output": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -536,6 +577,7 @@
     },
     "ocr_fields_target_missing_or_duplicate": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "ocr_fields_dictionary_hash_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "ocr_mode_schema_mismatch": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,
@@ -575,6 +619,7 @@
     },
     "ocr_fields_outcome_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "pack-containment",
       "layer": "kernel",
       "uncertain": false,

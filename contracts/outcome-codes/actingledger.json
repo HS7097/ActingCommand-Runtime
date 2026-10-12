@@ -3,6 +3,7 @@
   "codes": {
     "ledger_view_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingledger",
       "layer": "process",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "output_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingledger",
       "layer": "process",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "stability_export_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingledger",
       "layer": "process",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "task_evidence_export_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingledger",
       "layer": "process",
       "uncertain": false,

@@ -3,6 +3,7 @@
   "codes": {
     "vision_root_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "vision-ffi",
       "layer": "vision",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "vision_models_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "vision-ffi",
       "layer": "vision",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "vision_model_folder_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "vision-ffi",
       "layer": "vision",
       "uncertain": false,
