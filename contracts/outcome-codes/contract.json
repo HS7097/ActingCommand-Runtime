@@ -203,6 +203,21 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "outcome_relay_unregistered": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_code": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code arrived as its spelling (relayed by a crate whose channel is not typed yet, received from a client, or read back from a record) and the embedded catalog does not list it; raw_code keeps the spelling when it is a token.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_busy": {
       "category": "error",
       "owner": "contract",
@@ -342,7 +357,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required"
+        "lease_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -357,7 +372,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required"
+        "lease_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1620,7 +1635,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "timeout_ms": "required",
+        "timeout_ms": "optional",
         "holder_kind": "optional",
         "queue_position": "optional"
       },

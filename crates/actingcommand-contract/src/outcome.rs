@@ -895,10 +895,38 @@ pub enum Detail {
 
 /// One result: a code with its category, typed values and nested links. The fields sit
 /// behind one box, so a `Result<_, Outcome>` (or a module error holding one) stays small.
-/// Equality ignores whether the outcome was received from another process.
-#[derive(Debug, Clone)]
+/// Equality ignores whether the outcome was received from another process. `Debug` shows every
+/// value except foreign text (`raw_text`), which records may hold at a sensitivity above the
+/// developer log's.
+#[derive(Clone)]
 pub struct Outcome {
     inner: Box<OutcomeInner>,
+}
+
+impl fmt::Debug for Outcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let values = self
+            .inner
+            .values
+            .iter()
+            .map(|(key, value)| {
+                let shown = if key == RAW_TEXT_KEY {
+                    JsonValue::String("<redacted>".to_owned())
+                } else {
+                    value.clone()
+                };
+                (key.as_str(), shown)
+            })
+            .collect::<Vec<_>>();
+        formatter
+            .debug_struct("Outcome")
+            .field("code", &self.inner.code)
+            .field("category", &self.inner.category)
+            .field("values", &values)
+            .field("causes", &self.inner.causes)
+            .field("causes_total", &self.inner.causes_total)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -910,6 +938,10 @@ struct OutcomeInner {
     causes_total: Option<u64>,
     /// Deserialised from another process: relayed unchanged, never checked as an emission.
     received: bool,
+    /// Built from a spelling another crate still relays as text (the A2-R bridge, Workflow #378
+    /// A3): the relay carries the code alone, so the code's required values are not checked
+    /// on this node until the channel is typed. Everything else is.
+    relayed: bool,
 }
 
 impl PartialEq for Outcome {
@@ -973,6 +1005,7 @@ impl Outcome {
             causes: Vec::new(),
             causes_total: None,
             received: false,
+            relayed: false,
         })
     }
 
@@ -1095,6 +1128,7 @@ impl Outcome {
                 causes: Vec::new(),
                 causes_total: None,
                 received: false,
+                relayed: true,
             }),
             None => {
                 let outcome = Self::new(ContractCode::OutcomeRelayUnregistered);
@@ -1109,7 +1143,7 @@ impl Outcome {
 
     /// The highest `raw_text_sensitivity` anywhere in the outcome; foreign text without a
     /// declared sensitivity counts as `sensitive`. `None` when no node carries `raw_text`.
-    pub fn raw_text_sensitivity(&self) -> Option<crate::Sensitivity> {
+    pub fn foreign_text_sensitivity(&self) -> Option<crate::Sensitivity> {
         let own = self.inner.values.get(RAW_TEXT_KEY).map(|_| {
             match self
                 .inner
@@ -1126,7 +1160,7 @@ impl Outcome {
         self.inner
             .causes
             .iter()
-            .filter_map(|link| link.outcome.raw_text_sensitivity())
+            .filter_map(|link| link.outcome.foreign_text_sensitivity())
             .chain(own)
             .max()
     }
@@ -1157,6 +1191,7 @@ impl Outcome {
                     .collect(),
                 causes_total: outcome.inner.causes_total,
                 received: true,
+                relayed: false,
             })
         }
         project(self)
@@ -1466,6 +1501,7 @@ fn received_links(links: Vec<WireLink>) -> Vec<Link> {
                 causes: received_links(link.causes),
                 causes_total: None,
                 received: true,
+                relayed: false,
             }),
         })
         .collect()
@@ -1510,6 +1546,7 @@ impl<'de> Deserialize<'de> for OutcomeEnvelope {
                 causes: received_links(wire.causes),
                 causes_total: wire.causes_total,
                 received: true,
+                relayed: false,
             }),
             detail,
         })
@@ -1541,6 +1578,7 @@ impl<'de> Deserialize<'de> for Outcome {
             causes: received_links(wire.causes),
             causes_total: wire.causes_total,
             received: true,
+            relayed: false,
         }))
     }
 }
@@ -1632,6 +1670,7 @@ fn rebuilt(
         causes,
         causes_total: outcome.inner.causes_total,
         received: outcome.inner.received,
+        relayed: outcome.inner.relayed,
     })
 }
 

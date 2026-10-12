@@ -210,8 +210,10 @@ pub(super) fn validate_recovery_ladder_phase(
         RuntimeLifecyclePhase::RecoveryLadderFinished {
             ladder_result,
             rungs_tried,
+            outcome,
         } if usize::from(*rungs_tried) > RecoveryRung::LADDER.len()
-            || (*ladder_result != RecoveryLadderOutcome::Exhausted && *rungs_tried == 0) =>
+            || (*ladder_result != RecoveryLadderOutcome::Exhausted && *rungs_tried == 0)
+            || (*ladder_result == RecoveryLadderOutcome::Exhausted) != outcome.is_some() =>
         {
             return Err(invalid());
         }

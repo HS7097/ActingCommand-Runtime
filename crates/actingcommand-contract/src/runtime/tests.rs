@@ -202,44 +202,38 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         recovered: false,
         dropped_count: 0,
     };
-    let detail = DiagnosticDetailDraft::new(
-        "native",
-        "runtime.lifecycle.close",
-        "maatouch",
-        "close",
-        "original primary detail",
-        Sensitivity::Sensitive,
-    );
-    let lifecycle = RuntimeLifecycleFailureDraft::new(
-        epoch,
-        "runtime.lifecycle.session_close",
-        "runtime_host",
-        "input_backend_close_failed",
-    )
-    .with_operation(Some("close_execution_kernel"))
-    .with_resource_dispositions(Some(groups.clone()))
-    .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
-    .with_instance_id(Some(instance))
-    .with_entered_event_id(Some(entered))
-    .with_adb_recovery(Some(recovery.clone()))
-    .with_primary_detail(Some(detail.clone()))
-    .with_cleanup_cause(Some(CleanupCauseDraft::new(
-        "input_backend_close_failed",
-        CleanupCauseSeverity::Fatal,
-        Some(detail.clone()),
-    )))
-    .with_cause(Some(
-        LifecycleCauseDraft::new(
-            LifecycleFailurePhase::Reset,
-            "maatouch",
-            "input_backend_close_failed",
-            CleanupCauseSeverity::Transient,
-        )
-        .with_native_detail(LifecycleNativeDetail::new(
-            "stderr C:\\private\\native.log\nreset failed",
-            false,
-        )),
-    ));
+    // Ledger revision 3 (Workflow #378 A3): the failure is the payload's outcome, with its
+    // `operation` and `stage`; the cause and the cleanup are its links, and native text rides
+    // on foreign links. The record keeps the typed context.
+    let detail =
+        DiagnosticDetailDraft::new("native", "runtime.lifecycle.close", "maatouch", "close");
+    let failure = crate::outcome::Outcome::new(RuntimeErrorCode::BackendOperationFailed)
+        .operation(crate::codes::ContractLocation::ControlInstance)
+        .stage(crate::codes::ContractLocation::OpenCapturePipeline);
+    let lifecycle = RuntimeLifecycleFailureDraft::new(epoch, "runtime_host", failure.clone())
+        .with_resource_dispositions(Some(groups.clone()))
+        .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
+        .with_instance_id(Some(instance))
+        .with_entered_event_id(Some(entered))
+        .with_adb_recovery(Some(recovery.clone()))
+        .with_primary_detail(Some(detail.clone()))
+        .with_cleanup_cause(Some(CleanupCauseDraft::new(
+            RuntimeErrorCode::BackendOpenFailed,
+            CleanupCauseSeverity::Fatal,
+            Some(detail.clone()),
+        )))
+        .with_cause(Some(
+            LifecycleCauseDraft::new(
+                LifecycleFailurePhase::Reset,
+                "maatouch",
+                RuntimeErrorCode::CaptureFailed,
+                CleanupCauseSeverity::Transient,
+            )
+            .with_native_detail(LifecycleNativeDetail::new(
+                "stderr C:\\private\\native.log\nreset failed",
+                false,
+            )),
+        ));
     let sanitize = |lifecycle| {
         EventDraft::new(
             ids.mint_event_id().expect("event"),
@@ -259,8 +253,6 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
                     "runtime.lifecycle.session_close",
                     "runtime_host",
                     "close_execution_kernel",
-                    "lifecycle failure",
-                    Sensitivity::Internal,
                 ),
                 lifecycle,
                 AuditInput::new(),
@@ -284,22 +276,59 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     assert_eq!(record.owner_epoch(), epoch);
     assert_eq!(record.instance_id(), Some(instance));
     assert_eq!(record.entered_event_id(), Some(entered));
+    assert_eq!(record.source(), "runtime_host");
+    assert_eq!(record.runtime_code(), Some(RuntimeErrorCode::RuntimeFatal));
     assert_eq!(
-        record.cause().expect("cause").severity(),
-        CleanupCauseSeverity::Transient
+        record.cause().expect("cause").phase(),
+        LifecycleFailurePhase::Reset
+    );
+    assert_eq!(record.cleanup_detail(), record.primary_detail());
+    let failure_record = outcome.outcome();
+    assert_eq!(
+        failure_record.code(),
+        &RuntimeErrorCode::BackendOperationFailed.code()
+    );
+    assert_eq!(
+        failure_record.value("operation"),
+        Some(&serde_json::json!("control_instance"))
+    );
+    assert_eq!(
+        failure_record.value("stage"),
+        Some(&serde_json::json!("open_capture_pipeline"))
+    );
+    let [cause, cleanup] = failure_record.causes() else {
+        panic!("a cause link and a cleanup link")
+    };
+    assert_eq!(cause.relation().as_str(), "caused_by");
+    assert_eq!(
+        cause.outcome().code(),
+        &RuntimeErrorCode::CaptureFailed.code()
+    );
+    let [native] = cause.outcome().causes() else {
+        panic!("the cause's native text")
+    };
+    assert_eq!(
+        native.outcome().value("raw_text"),
+        Some(&serde_json::json!(
+            "stderr C:\\private\\native.log\nreset failed"
+        ))
+    );
+    assert_eq!(cleanup.relation().as_str(), "cleanup");
+    assert_eq!(
+        cleanup.outcome().code(),
+        &RuntimeErrorCode::BackendOpenFailed.code()
     );
     let full =
         serde_json::to_string(&ProjectionPayload::Full(Box::new(restored.clone()))).expect("full");
     let public = serde_json::to_string(&restored.public_projection()).expect("public");
     assert!(full.contains("private"));
-    assert!(full.contains("original primary detail"));
     assert!(!public.contains("private"));
-    assert!(!public.contains("original primary detail"));
     assert!(full.contains("preserved device offline"));
     assert!(!public.contains("preserved device offline"));
     assert!(!public.contains("private-endpoint"));
     assert!(public.contains("reset"));
-    assert!(public.contains("close_execution_kernel"));
+    assert!(public.contains("control_instance"));
+    assert!(public.contains("backend_operation_failed"));
     assert!(public.contains("resource_dispositions"));
     assert!(public.contains("operation_resources"));
     for invalid in [Vec::new(), vec![groups[0], groups[0]], vec![groups[0]; 3]] {
@@ -348,7 +377,6 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
             .is_err()
         );
     }
-    assert!(sanitize(lifecycle.clone().with_operation(Some("invalid operation"))).is_err());
     let old = EventDraft::new(
         ids.mint_event_id().expect("old event"),
         1,
@@ -362,6 +390,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         RuntimePayloadDraft::failed(
             crate::DiagnosticCode::RuntimeDiagnostic,
             EffectDisposition::Indeterminate,
+            failure,
             detail,
             AuditInput::new(),
         )
@@ -424,17 +453,16 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     };
     let lifecycle = RuntimeLifecycleFailureDraft::new(
         epoch,
-        "runtime.lifecycle.resource_close",
         "execution_kernel",
-        "resource_close_unconfirmed",
+        crate::outcome::Outcome::new(RuntimeErrorCode::BackendOperationFailed),
     )
-    .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
+    .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
     .with_instance_id(Some(instance))
     .with_cause(Some(
         LifecycleCauseDraft::new(
             LifecycleFailurePhase::ResourceClose,
             "nemu_ipc",
-            "resource_close_unconfirmed",
+            RuntimeErrorCode::BackendOperationFailed,
             CleanupCauseSeverity::Fatal,
         )
         .with_native_detail(crate::LifecycleNativeDetail::new(
@@ -475,8 +503,6 @@ fn resource_quiescence_causes_roundtrip_and_project() {
                 "runtime.lifecycle.resource_close",
                 "execution_kernel",
                 "close_resources",
-                "resource close unconfirmed",
-                Sensitivity::Internal,
             ),
             lifecycle,
             AuditInput::new(),
@@ -512,7 +538,22 @@ fn resource_quiescence_causes_roundtrip_and_project() {
     );
     assert_eq!(cause.observation_count(), Some(3));
     assert_eq!(cause.dropped_count(), Some(0));
-    assert!(cause.last_native_detail().is_some());
+    let [cause_link] = outcome.outcome().causes() else {
+        panic!("the cause link")
+    };
+    let [first, last] = cause_link.outcome().causes() else {
+        panic!("the cause's first and last native text")
+    };
+    assert_eq!(first.relation().as_str(), "caused_by");
+    assert_eq!(
+        first.outcome().value("raw_text"),
+        Some(&serde_json::json!("first close detail"))
+    );
+    assert_eq!(last.relation().as_str(), "related");
+    assert_eq!(
+        last.outcome().value("raw_text"),
+        Some(&serde_json::json!("last close detail"))
+    );
     assert_eq!(cause.vendor_stdio(), Some(&stdio));
     assert_eq!(draft.sensitivity(), Sensitivity::Sensitive);
 
@@ -2729,13 +2770,12 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             RuntimePayloadDraft::failed(
                 crate::DiagnosticCode::RuntimeProtocolInvalid,
                 EffectDisposition::Indeterminate,
+                crate::outcome::Outcome::new(RuntimeErrorCode::ProtocolInvalid),
                 crate::DiagnosticDetailDraft::new(
                     "runtime_connection",
                     "runtime.ipc.receipt_write",
                     "local_ipc",
                     "runtime_local_ipc",
-                    "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true",
-                    crate::Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             )
@@ -2790,10 +2830,9 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
             assert_eq!(detail.backend(), "local_ipc");
             assert_eq!(detail.operation(), "runtime_local_ipc");
-            assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
             assert_eq!(
-                detail.message(),
-                "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true"
+                outcome.outcome().code(),
+                &RuntimeErrorCode::ProtocolInvalid.code()
             );
             let stored = serde_json::to_value(draft.payload()).expect("runtime failure JSON");
             let restored: crate::EventPayload =
@@ -2803,7 +2842,7 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
                 .expect("runtime failure public projection");
             assert!(public.contains("runtime.failed"));
             assert!(!public.contains("runtime_connection"));
-            assert!(!public.contains(detail.message()));
+            assert!(public.contains("protocol_invalid"));
         }
     }
 

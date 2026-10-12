@@ -2103,6 +2103,11 @@ impl ResourceAuthoringEvent {
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
+        if let Some(code) = &self.failure_code {
+            crate::event::validate_resource_authoring_failure_token(code).map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidResourceAuthoringEvent)
+            })?;
+        }
         let outcome = self.outcome();
         crate::validate_resource_authoring_fields(
             self.phase,

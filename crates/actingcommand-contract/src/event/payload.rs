@@ -700,12 +700,14 @@ pub enum CleanupCauseSeverity {
 }
 
 /// A failed cleanup that accompanied a failure. Ledger revision 3 records it as the failure
-/// outcome's `cleanup` link, and its diagnostic detail as the record's `cleanup_detail`.
+/// outcome's `cleanup` link (with the cleanup's native text as its foreign link), and its
+/// diagnostic detail as the record's `cleanup_detail`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupCauseDraft {
     code: Code,
     severity: CleanupCauseSeverity,
     detail: Option<DiagnosticDetailDraft>,
+    native_detail: Option<LifecycleNativeDetail>,
 }
 
 impl CleanupCauseDraft {
@@ -718,7 +720,14 @@ impl CleanupCauseDraft {
             code: code.into(),
             severity,
             detail,
+            native_detail: None,
         }
+    }
+
+    /// The cleanup's own native text (a backend's output), carried as a foreign link.
+    pub fn with_native_detail(mut self, detail: Option<LifecycleNativeDetail>) -> Self {
+        self.native_detail = detail;
+        self
     }
 
     pub const fn code(&self) -> Code {
@@ -733,12 +742,20 @@ impl CleanupCauseDraft {
         self.detail.as_ref()
     }
 
-    /// The cleanup's own outcome, attached as the failure's `cleanup` link.
+    /// The cleanup's own outcome, attached as the failure's `cleanup` link: its code, with its
+    /// native text as a `foreign_other_error` link.
     pub fn outcome(&self) -> Outcome {
-        Outcome::new(self.code)
+        let outcome = Outcome::new(self.code);
+        match &self.native_detail {
+            Some(native) => outcome.caused_by(native.outcome()),
+            None => outcome,
+        }
     }
 
     fn sanitize(self) -> Result<(Outcome, Option<DiagnosticDetailRecord>), SanitizationError> {
+        if let Some(native) = &self.native_detail {
+            native.validate()?;
+        }
         let outcome = self.outcome();
         let detail = self
             .detail
@@ -918,6 +935,13 @@ impl LifecycleNativeDetail {
             truncated,
             declared_sensitivity: Sensitivity::Sensitive,
         }
+    }
+
+    /// Keeps a sensitivity its source declared above `sensitive` (a `secret` device text);
+    /// native text is never recorded below `sensitive`.
+    pub fn with_declared_sensitivity(mut self, sensitivity: Sensitivity) -> Self {
+        self.declared_sensitivity = sensitivity.max(Sensitivity::Sensitive);
+        self
     }
 
     pub fn text(&self) -> &str {
@@ -1775,9 +1799,14 @@ pub enum RuntimeLifecyclePhase {
         stop: crate::TerminalEvent,
     },
     /// The ladder ended; `rungs_tried` counts the rungs that were executed (not skipped).
+    /// An `exhausted` climb carries why as its `outcome` (ledger revision 3): its category is
+    /// the record's severity, so a climb its rungs failed on their own ends at `error` and one
+    /// a holding interruption ended ends at `warning` (review L6, #666).
     RecoveryLadderFinished {
         ladder_result: RecoveryLadderOutcome,
         rungs_tried: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
     },
     /// A trigger inside the cool-down window, or while a ladder runs, started nothing.
     RecoveryLadderSuppressed {
@@ -1814,10 +1843,11 @@ pub struct RuntimeLifecyclePayload {
 
 impl RuntimeLifecyclePayload {
     /// The outcome the phase carries (ledger revision 3): why a recovery rung failed or was
-    /// skipped, or why an instance preparation failed.
+    /// skipped, why a recovery ladder ended exhausted, or why an instance preparation failed.
     pub fn outcome(&self) -> Option<&Outcome> {
         match &self.phase {
             RuntimeLifecyclePhase::RecoveryRungFinished { outcome, .. }
+            | RuntimeLifecyclePhase::RecoveryLadderFinished { outcome, .. }
             | RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. } => {
                 outcome.as_ref()
             }
@@ -2633,6 +2663,193 @@ pub struct PolicyFailureRecord {
     pub sensitive: bool,
     #[serde(default = "legacy_performance_context")]
     pub perf_context: Box<PerformanceContext>,
+}
+
+/// Whether a failed scheduled run is `Severe` for the policy (Workflow #378 A3, model section
+/// 8.1). Before ledger revision 3 the class was read from the task terminal's severity
+/// (`fatal`); a severity is now its record's category, so the class comes from this list of
+/// the codes whose task terminals the Runtime recorded `fatal` at the model's pin, never from
+/// the category. B4 reviews the list with the policy.
+pub fn is_severe_policy_failure(code: &crate::outcome::CodeStr) -> bool {
+    severe_policy_failure_codes().contains(&code.as_str())
+}
+
+/// The spellings of [`is_severe_policy_failure`]: the codes the runtime host and the execution
+/// kernel build only as fatal errors (`RuntimeHostError::fatal`, `relayed_fatal`,
+/// `ExecutionKernelError::fatal`) and never as request or device-severity errors, in spelling
+/// order. A code whose fatality the pin decided per error (a device error's severity, a store
+/// error's flag) is not listed, so its failure stays `Recoverable`. Other owners' codes, as a
+/// list B4 reviews.
+fn severe_policy_failure_codes() -> &'static [&'static str] {
+    &[
+        "action_id_issue_failed",
+        "agent_wake_instance_unknown",
+        "agent_wake_issue_failed",
+        "agent_wake_source_invalid",
+        "agent_wake_trigger_invalid",
+        "application_foreground_unknown",
+        "application_lifecycle_action_id_missing",
+        "application_lifecycle_durable_state_inconsistent",
+        "application_lifecycle_result_invalid",
+        "application_resource_close_required",
+        "approval_replay_payload_mismatch",
+        "backend_selfcheck_fact_overflow",
+        "backend_selfcheck_instance_missing",
+        "backend_selfcheck_instance_unregistered",
+        "capture_backend_missing",
+        "capture_sequence_result_invalid",
+        "capture_sequence_terminal_missing",
+        "catalog_failure_fact_undurable",
+        "catalog_migration_source_missing",
+        "catalog_plan_generation_mismatch",
+        "client_action_replay_payload_mismatch",
+        "client_fact_replay_ambiguous",
+        "connection_preparation_cooldown_overflow",
+        "contained_task_recovery_identity_invalid",
+        "duplicate_emulator_capability_requirement",
+        "duplicate_instance_alias",
+        "duplicate_instance_id",
+        "empty_execution_backend_registry",
+        "emulator_capability_probe_failed",
+        "emulator_capability_unavailable",
+        "event_fingerprinter_failed",
+        "event_id_issue_failed",
+        "event_issuer_failed",
+        "evidence_export_terminal_missing",
+        "evidence_output_path_invalid",
+        "execution_backend_provenance_mismatch",
+        "execution_backend_selection_not_explicit",
+        "execution_backend_target_mismatch",
+        "execution_capability_profile_invalid",
+        "execution_capability_profile_merge_invalid",
+        "execution_configuration_timeout_overflow",
+        "execution_endpoint_rebind_session_open",
+        "execution_instance_identity_mismatch",
+        "execution_instance_unknown",
+        "execution_kernel_closed",
+        "execution_kernel_state_poisoned",
+        "execution_session_close_in_progress",
+        "execution_session_closed",
+        "execution_session_generation_exhausted",
+        "execution_session_panicked",
+        "execution_session_response_lost",
+        "execution_session_spawn_failed",
+        "execution_session_state_poisoned",
+        "execution_session_unavailable",
+        "fact_publication_sequence_missing",
+        "fatal_state_poisoned",
+        "fenced_step_not_reclaimed",
+        "fixture_capture_outside_simulation_scope",
+        "fixture_monitor_scope_forbidden",
+        "governance_connection_state_conflict",
+        "input_backend_missing",
+        "input_execution_plan_invalid",
+        "input_frame_capture_mismatch",
+        "input_frame_not_committed",
+        "input_frame_session_missing",
+        "instance_worker_spawn_failed",
+        "invalid_application_identity",
+        "invalid_emulator_capability_requirement_count",
+        "invalid_instance_alias",
+        "ledger_failure",
+        "ledger_migration_required",
+        "maintenance_evidence_timestamp_missing",
+        "material_read_reference_changed",
+        "material_read_verification_mismatch",
+        "monitor_committed_state_missing",
+        "monitor_decision_invalid",
+        "monitor_frame_identity_missing",
+        "monitor_instance_unknown",
+        "monitor_ledger_failure",
+        "monitor_observation_invalid",
+        "monitor_observation_unavailable",
+        "monitor_probe_id_issue_failed",
+        "monitor_recovery_fencing_state_invalid",
+        "monitor_state_invalid",
+        "monotonic_clock_overflow",
+        "nemu_app_index_missing",
+        "nemu_app_index_requires_paired_input",
+        "nemu_application_identity_invalid",
+        "nemu_close_instance_missing",
+        "nemu_input_deadline_overflow",
+        "nemu_input_fencing_required",
+        "nemu_input_frame_source_missing",
+        "nemu_input_requires_paired_capture",
+        "nemu_input_task_deadline_missing",
+        "nonfatal_error_marked_fatal",
+        "owner_epoch_issue_failed",
+        "owner_file_missing",
+        "owner_file_open_failed",
+        "owner_lock_failed",
+        "owner_record_encode_failed",
+        "owner_resource_unconfirmed",
+        "owner_revision_overflow",
+        "owner_seek_failed",
+        "owner_sync_failed",
+        "owner_unlock_failed",
+        "owner_write_failed",
+        "performance_pipeline_instance_missing",
+        "performance_pipeline_instance_unknown",
+        "policy_execution_identity_conflict",
+        "policy_instance_seed_encode_failed",
+        "policy_instance_seed_identity_conflict",
+        "policy_planning_signal_identity_conflict",
+        "policy_settlement_fact_overflow",
+        "policy_settlement_instance_unknown",
+        "ppocr_diagnostic_invalid",
+        "ppocr_diagnostic_verified_event_missing",
+        "ppocr_diagnostic_write_failed",
+        "ppocr_original_error_encode_failed",
+        "preparation_deadline_exceeded",
+        "project_decision_count_overflow",
+        "project_decision_page_missing",
+        "project_interface_count_overflow",
+        "project_snapshot_position_mismatch",
+        "proposal_activation_mismatch",
+        "proposal_authorization_invalid",
+        "proposal_base_sources_unavailable",
+        "proposal_promotion_invalid",
+        "proposal_target_hash_missing",
+        "readonly_capability_issue_failed",
+        "readonly_observation_invalid",
+        "recovery_readiness_adb_unconfirmed",
+        "release_failure_fact_undurable",
+        "resource_close_instance_missing",
+        "resource_targets_record_invalid",
+        "return_home_package_unbound",
+        "run_id_issue_failed",
+        "runtime_component_already_prepared",
+        "runtime_component_not_prepared",
+        "runtime_debug_context_missing_after_terminal",
+        "runtime_fact_replay_failed",
+        "runtime_fact_store_desync",
+        "runtime_instance_identity_mismatch",
+        "runtime_instance_registry_incomplete",
+        "runtime_restart_required",
+        "runtime_status_projection_invalid",
+        "runtime_status_queue_count_overflow",
+        "runtime_task_terminal_missing",
+        "safe_reset_action_id_missing",
+        "safe_reset_durable_state_inconsistent",
+        "safe_reset_input_result_invalid",
+        "scheduling_pause_epoch_encode_failed",
+        "scheduling_pause_fact_clock_overflow",
+        "scheduling_pause_origin_missing",
+        "scheduling_pause_state_invalid",
+        "scheduling_pause_state_lost",
+        "startup_package_claim_request_invalid",
+        "startup_package_instance_unknown",
+        "startup_package_requires_physical_instance",
+        "strategic_report_encode_failed",
+        "strategic_report_identity_conflict",
+        "strategic_signal_identity_encode_failed",
+        "stuck_recovery_instance_unknown",
+        "synthetic_request_invalid",
+        "system_clock_invalid",
+        "system_clock_overflow",
+        "task_id_issue_failed",
+        "unknown_emulator_capability",
+    ]
 }
 
 impl PolicyFailureRecord {
@@ -6340,6 +6557,13 @@ pub(crate) fn validate_resource_authoring_fields(
         (_, None) => {}
     }
     Ok(())
+}
+
+/// A client's resource authoring failure code, before the Runtime records it as an outcome.
+pub(crate) fn validate_resource_authoring_failure_token(
+    value: &str,
+) -> Result<(), SanitizationError> {
+    validate_resource_authoring_token(value, 128, "failure_code")
 }
 
 fn validate_resource_authoring_token(
@@ -10592,7 +10816,7 @@ impl EventPayload {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         // Foreign text rides on the outcome's links with its declared sensitivity.
-        if let Some(foreign) = self.outcome().and_then(Outcome::raw_text_sensitivity) {
+        if let Some(foreign) = self.outcome().and_then(Outcome::foreign_text_sensitivity) {
             sensitivity = sensitivity.max(foreign);
         }
         if matches!(

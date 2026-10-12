@@ -218,7 +218,11 @@ fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckF
             });
         }
         for (key, presence) in &entry.values {
-            if *presence == Presence::Required && !outcome.inner.values.contains_key(key) {
+            // A relayed spelling carries no values (the A2-R bridge); its other checks stay.
+            if *presence == Presence::Required
+                && !outcome.inner.relayed
+                && !outcome.inner.values.contains_key(key)
+            {
                 failures.push(CheckFailure::RequiredKeyMissing {
                     outcome: outcome.inner.code.clone(),
                     key: key.clone(),

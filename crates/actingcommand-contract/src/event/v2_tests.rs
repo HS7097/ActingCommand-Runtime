@@ -1,4 +1,6 @@
 use super::*;
+use crate::codes::ContractCode;
+use crate::outcome::{CodeStr, Outcome};
 use crate::{
     AgentCapabilityContract, AgentResponseDisposition, AgentSessionBudget, AgentSessionEventData,
     AgentSessionResponse, AgentSessionStatus, AgentWakeData, AgentWakeKind, AgentWakeTrigger,
@@ -16,6 +18,11 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
+
+/// A code as a client sends it (a `CodeStr` is built only by deserialising).
+fn received_code(spelling: &str) -> CodeStr {
+    serde_json::from_value(serde_json::Value::String(spelling.to_owned())).expect("a received code")
+}
 
 struct SpyFingerprinter {
     seen: Mutex<Vec<(SecretField, String)>>,
@@ -138,7 +145,6 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         reason_chain_id: "reason:fixture-a".to_owned(),
         reasons: vec![PolicyReasonRecord {
             code: "eligible".to_owned(),
-            detail: "neutral fixture is eligible".to_owned(),
         }],
         catalog_hash: format!("sha256:{}", "b".repeat(64)),
         catalog_version: 1,
@@ -273,7 +279,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let retry_response = AgentSessionResponse::new(
         agent_session.session_id(),
         AgentResponseDisposition::RetryableFailure,
-        "transient_failure",
+        received_code("transient_failure"),
         1_752_147_204_000,
     )
     .expect("agent retry response");
@@ -283,7 +289,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let completed_response = AgentSessionResponse::new(
         agent_session.session_id(),
         AgentResponseDisposition::Completed,
-        "completed",
+        received_code("completed"),
         1_752_147_205_000,
     )
     .expect("agent completed response");
@@ -293,7 +299,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let human_response = AgentSessionResponse::new(
         agent_session.session_id(),
         AgentResponseDisposition::NeedsHuman,
-        "human_required",
+        received_code("human_required"),
         1_752_147_206_000,
     )
     .expect("agent human response");
@@ -450,7 +456,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             PerformanceMonitorStateEventData {
                 observed_at_unix_ms: 1_752_147_201_000,
                 health: PerformanceMonitorHealth::Degraded,
-                failure_code: Some("performance_counter_failed".to_owned()),
+                outcome: Some(Outcome::relayed("performance_counter_failed")),
                 consecutive_failures: 1,
                 terminal: false,
                 unavailable_metrics: vec![PerformanceMetric::Gpu],
@@ -462,7 +468,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             PerformanceMonitorStateEventData {
                 observed_at_unix_ms: 1_752_147_202_000,
                 health: PerformanceMonitorHealth::Healthy,
-                failure_code: None,
+                outcome: None,
                 consecutive_failures: 0,
                 terminal: false,
                 unavailable_metrics: Vec::new(),
@@ -517,9 +523,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             policy_data.clone(),
             EffectDisposition::NotPerformed,
             PolicyDispatchRejection {
-                code: "policy_budget_exhausted".to_owned(),
-                operation: "reserve_policy_budget".to_owned(),
-                fatal: false,
+                outcome: Outcome::relayed("policy_budget_exhausted"),
                 budget: Some(PolicyBudgetDenial {
                     dimension: PolicyBudgetDimension::TaskDaily,
                     used: 1,
@@ -740,7 +744,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             "resource-root",
             "b".repeat(64),
             vec!["operations/task-a/task.json".to_string()],
-            Some("authoring_validation_failed".to_string()),
+            Some(Outcome::relayed("authoring_validation_failed")),
             input(),
         )
         .into(),
@@ -1000,11 +1004,16 @@ fn input_intent_execution_plan_is_bounded_and_backward_compatible() {
 
 #[test]
 fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
+    // Ledger revision 3 (Workflow #378 A3): the detail keeps only where the failure arose; the
+    // failure is the payload's outcome, and native text rides on its foreign link with the
+    // text's declared sensitivity.
     let failed = |detail| {
         InputPayloadDraft::failed_with_detail(
             EventAction::InputTap,
             DiagnosticCode::InputFailed,
             EffectDisposition::NotPerformed,
+            Outcome::new(DiagnosticCode::InputFailed.code())
+                .caused_by(LifecycleNativeDetail::new("bounded native failure", false).outcome()),
             detail,
             AuditInput::new(),
         )
@@ -1015,8 +1024,6 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         "device_registry.input.operation",
         "adb_shell_input",
         "tap",
-        "bounded native failure",
-        Sensitivity::Sensitive,
     );
     let sanitized = sanitize(failed(detail), 92);
 
@@ -1029,8 +1036,21 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     assert_eq!(detail.stage(), "device_registry.input.operation");
     assert_eq!(detail.backend(), "adb_shell_input");
     assert_eq!(detail.operation(), "tap");
-    assert_eq!(detail.message(), "bounded native failure");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+    assert_eq!(
+        outcome.outcome().code(),
+        &DiagnosticCode::InputFailed.code()
+    );
+    let [native] = outcome.outcome().causes() else {
+        panic!("one native link")
+    };
+    assert_eq!(
+        native.outcome().code(),
+        &ContractCode::ForeignOtherError.code()
+    );
+    assert_eq!(
+        native.outcome().value("raw_text"),
+        Some(&serde_json::json!("bounded native failure"))
+    );
 
     let stored = serde_json::to_value(sanitized.payload()).expect("detail payload JSON");
     assert_eq!(
@@ -1040,11 +1060,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
             "stage": "device_registry.input.operation",
             "backend": "adb_shell_input",
             "operation": "tap",
-            "message": "bounded native failure",
-            "declared_sensitivity": "sensitive",
         })
     );
-    assert!(stored["payload"]["data"]["detail"].get("module").is_none());
+    assert!(stored["payload"]["data"]["detail"].get("message").is_none());
     let public = serde_json::to_string(&sanitized.payload().public_projection())
         .expect("public detail projection");
     assert!(!public.contains("bounded native failure"));
@@ -1062,23 +1080,20 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     let old_json = serde_json::to_value(old.payload()).expect("old failure JSON");
     assert!(old_json["payload"]["data"].get("detail").is_none());
     let old_round_trip: EventPayload =
-        serde_json::from_value(old_json).expect("old failure remains readable");
+        serde_json::from_value(old_json).expect("failure without detail remains readable");
     let EventPayload::Input(InputPayload::Failed(old_outcome)) = old_round_trip else {
-        panic!("old typed input failure")
+        panic!("typed input failure without detail")
     };
     assert!(old_outcome.detail().is_none());
 
     let exact_token = "a".repeat(256);
     let exact_stage = format!("{}.b", "a".repeat(254));
-    let exact_message = "é".repeat(512);
     sanitize(
         failed(DiagnosticDetailDraft::new(
             exact_token.clone(),
             exact_stage,
             exact_token.clone(),
             exact_token,
-            exact_message,
-            Sensitivity::Internal,
         )),
         94,
     );
@@ -1090,122 +1105,18 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         );
     };
     for detail in [
-        DiagnosticDetailDraft::new(
-            "",
-            "device.input",
-            "adb",
-            "tap",
-            "failure",
-            Sensitivity::Internal,
-        ),
-        DiagnosticDetailDraft::new(
-            "Native",
-            "device.input",
-            "adb",
-            "tap",
-            "failure",
-            Sensitivity::Internal,
-        ),
-        DiagnosticDetailDraft::new(
-            "native",
-            "device.input",
-            "a".repeat(257),
-            "tap",
-            "failure",
-            Sensitivity::Internal,
-        ),
+        DiagnosticDetailDraft::new("", "device.input", "adb", "tap"),
+        DiagnosticDetailDraft::new("Native", "device.input", "adb", "tap"),
+        DiagnosticDetailDraft::new("native", "device.input", "a".repeat(257), "tap"),
     ] {
         assert_rejected(detail, "invalid_diagnostic_detail_token");
     }
-    for stage in ["device", "device..input", "Device.input", "a.b.c.d.e"] {
+    for stage in ["device..input", "Device.input", "a.b.c.d.e"] {
         assert_rejected(
-            DiagnosticDetailDraft::new(
-                "native",
-                stage,
-                "adb",
-                "tap",
-                "failure",
-                Sensitivity::Internal,
-            ),
+            DiagnosticDetailDraft::new("native", stage, "adb", "tap"),
             "invalid_diagnostic_detail_stage",
         );
     }
-    for message in ["", "line\nbreak"] {
-        assert_rejected(
-            DiagnosticDetailDraft::new(
-                "native",
-                "device.input",
-                "adb",
-                "tap",
-                message,
-                Sensitivity::Internal,
-            ),
-            "invalid_diagnostic_detail_message",
-        );
-    }
-    assert_rejected(
-        DiagnosticDetailDraft::new(
-            "native",
-            "device.input",
-            "adb",
-            "tap",
-            "é".repeat(513),
-            Sensitivity::Internal,
-        ),
-        "invalid_diagnostic_detail_message",
-    );
-    for message in [
-        r"failed at C:\private\device.log",
-        r"failed at \\server\share\device.log",
-        "failed at /var/log/device.log",
-        "device endpoint 127.0.0.1:16416",
-        "authorization: bearer-secret",
-    ] {
-        assert_rejected(
-            DiagnosticDetailDraft::new(
-                "native",
-                "device.input",
-                "adb",
-                "tap",
-                message,
-                Sensitivity::Sensitive,
-            ),
-            "unsafe_diagnostic_detail_message",
-        );
-    }
-    assert_rejected(
-        DiagnosticDetailDraft::new(
-            "native",
-            "device.input",
-            "adb",
-            "tap",
-            "failure",
-            Sensitivity::Public,
-        ),
-        "invalid_diagnostic_detail_sensitivity",
-    );
-    assert_rejected(
-        DiagnosticDetailDraft::new(
-            "native",
-            "device.input",
-            "adb",
-            "tap",
-            "stderr=permission_denied",
-            Sensitivity::Internal,
-        ),
-        "invalid_diagnostic_detail_sensitivity",
-    );
-    sanitize(
-        failed(DiagnosticDetailDraft::new(
-            "native",
-            "device.input",
-            "adb",
-            "tap",
-            "stderr=permission_denied",
-            Sensitivity::Sensitive,
-        )),
-        95,
-    );
 
     let mut invalid_stored = stored;
     invalid_stored["payload"]["data"]["detail"]["stage"] = serde_json::json!("Device.input");
@@ -1535,12 +1446,12 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
         assert!(!json.contains(secret), "artifact metadata leaked {secret}");
         assert!(!debug.contains(secret), "artifact debug leaked {secret}");
         // ARTIFACT-PERSIST-v2: native text belongs only to the sensitive failure fact.
-        let failure = ArtifactFailureRecord {
+        let failure = ArtifactFailureDraft {
             artifact_id: *issued.reference().artifact_id(),
             stage: ArtifactFailureStage::BeforePublication,
             primary: ArtifactFailureCause {
-                code: "artifact_write_failed".to_owned(),
-                operation: "write_artifact_temp".to_owned(),
+                code: crate::codes::SharedCode::ArtifactWriteFailed.code(),
+                operation: crate::codes::ContractLocation::ExportEvidence.location(),
                 native_detail: LifecycleNativeDetail::new(secret, false),
                 raw_os_error: None,
             },
@@ -1557,7 +1468,16 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
         let roundtrip: EventPayload =
             serde_json::from_value(json.clone()).expect("failure round trip");
         roundtrip.validate().expect("valid typed failure");
-        assert_eq!(roundtrip.artifact_failure(), Some(&failure));
+        assert_eq!(
+            roundtrip.artifact_failure(),
+            Some(&ArtifactFailureRecord {
+                artifact_id: failure.artifact_id,
+                stage: failure.stage,
+                omitted_secondary_count: 0,
+                capacity: None,
+            })
+        );
+        assert_eq!(roundtrip.outcome(), Some(&failure.outcome()));
         assert!(!format!("{roundtrip:?}").contains(secret));
         assert!(
             !serde_json::to_string(&roundtrip.public_projection())
@@ -2070,7 +1990,7 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
         PerformanceMonitorStateEventData {
             observed_at_unix_ms: 1_752_147_201_000,
             health: PerformanceMonitorHealth::Degraded,
-            failure_code: None,
+            outcome: None,
             consecutive_failures: 1,
             terminal: false,
             unavailable_metrics: vec![PerformanceMetric::Gpu],
@@ -2419,18 +2339,18 @@ fn task_semantic_payload_rejects_invalid_facts() {
             targets: Vec::new(),
         },
         TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             final_page: Some("home".to_string()),
             executed_steps: Some(1),
-            failure_code: Some("must_be_absent".to_string()),
+            outcome: Some(Outcome::relayed("must_be_absent")),
             scheduling_disposition: None,
             task_timing: None,
         },
         TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             final_page: Some("home".to_string()),
             executed_steps: None,
-            failure_code: None,
+            outcome: None,
             scheduling_disposition: None,
             task_timing: None,
         },
@@ -2555,7 +2475,7 @@ fn resource_authoring_payloads_preserve_phase_and_publish_only_path_count() {
         (
             ResourceAuthoringPhase::PromoteFailed,
             EventType::ResourcePromoteFailed,
-            Some("authoring_validation_failed".to_string()),
+            Some(Outcome::relayed("authoring_validation_failed")),
         ),
     ];
 
@@ -2638,7 +2558,7 @@ fn resource_authoring_payload_rejects_invalid_identity_paths_and_failure_semanti
             "resource-root",
             "b".repeat(64),
             vec!["operations/task-a/task.json".to_string()],
-            Some("unexpected_failure".to_string()),
+            Some(Outcome::relayed("unexpected_failure")),
             AuditInput::new(),
         ),
     ];
@@ -3099,4 +3019,596 @@ fn c3b_queue_preemption_and_transfer_facts_are_typed_and_strict() {
     .sanitize(&SpyFingerprinter::new())
     .expect_err("same lease transfer");
     assert_eq!(error.code().as_str(), "invalid_lease_transfer");
+}
+
+// Workflow #378 A3 (ledger revision 3, model section 8.1): every record shape A3 touched round
+// trips with its `outcome`, every serde member named `outcome` is the envelope, no legacy
+// member survives, and a record's severity is its category.
+
+/// The `outcome` members of a serialized record: each must be an envelope (`{"code":..`).
+fn assert_outcome_members_are_envelopes(json: &str) {
+    for (index, _) in json.match_indices("\"outcome\":") {
+        let rest = &json[index + "\"outcome\":".len()..];
+        assert!(
+            rest.starts_with("{\"code\":"),
+            "a member named outcome that is not the envelope: {}",
+            &json[index..(index + 80).min(json.len())]
+        );
+    }
+}
+
+/// Members ledger revision 3 removed from the records A3 converted.
+const REVISION_2_MEMBERS: [&str; 5] = [
+    "\"failure_code\"",
+    "\"native_detail\"",
+    "\"cleanup_cause\"",
+    "\"message\"",
+    "\"fatal\"",
+];
+
+/// Members no record of any family keeps (ledger revision 3): persisted text and the former
+/// cleanup cause record.
+const REVISION_2_TEXT_MEMBERS: [&str; 3] =
+    ["\"native_detail\"", "\"cleanup_cause\"", "\"message\""];
+
+fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outcome::Code>)> {
+    let issuer = identifier_issuer();
+    let epoch = *issuer.mint_owner_epoch().expect("epoch").transport();
+    let detail = || {
+        DiagnosticDetailDraft::new(
+            "runtime_connection",
+            "runtime.ipc.receipt_write",
+            "local_ipc",
+            "runtime_local_ipc",
+        )
+    };
+    let failure = Outcome::new(crate::RuntimeErrorCode::BackendOperationFailed)
+        .operation(crate::codes::ContractLocation::ControlInstance);
+    let package: crate::PackageRef = format!("sha256:{}", "c".repeat(64)).into();
+    vec![
+        (
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                failure.clone(),
+                detail(),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFailed,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            RuntimePayloadDraft::failed_with_lifecycle(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                detail(),
+                RuntimeLifecycleFailureDraft::new(epoch, "runtime_host", failure.clone())
+                    .with_raw_os_error(Some(5))
+                    .with_runtime_code(Some(crate::RuntimeErrorCode::RuntimeFatal)),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFailed,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            InputPayloadDraft::failed_with_causes(
+                EventAction::InputTap,
+                DiagnosticCode::InputFailed,
+                EffectDisposition::NotPerformed,
+                failure.clone(),
+                Some(detail()),
+                Some(CleanupCauseDraft::new(
+                    crate::RuntimeErrorCode::BackendOpenFailed,
+                    CleanupCauseSeverity::Transient,
+                    Some(detail()),
+                )),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::InputFailed,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            InputPayloadDraft::failed(
+                EventAction::InputTap,
+                DiagnosticCode::InputFailed,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::InputFailed,
+            Some(DiagnosticCode::InputFailed.code()),
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: Some(2),
+                    outcome: Some(failure.clone()),
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskFailed,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Cancelled,
+                    final_page: None,
+                    executed_steps: None,
+                    outcome: Some(Outcome::new(
+                        crate::RuntimeErrorCode::ContainedTaskCancelled,
+                    )),
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskCancelled,
+            Some(crate::RuntimeErrorCode::ContainedTaskCancelled.code()),
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Success,
+                    final_page: Some("home".to_owned()),
+                    executed_steps: Some(1),
+                    outcome: None,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskCompleted,
+            None,
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::Finalizing {
+                    task_result: TaskOutcome::Failure,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskTerminalIntent,
+            None,
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EntryRecoveryFailed {
+                    package_sha256: package.clone(),
+                    outcome: failure.clone(),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskEntryPreflight,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EntryTargetDisposition {
+                    disposition: TaskEntryTargetDisposition::FailClosed,
+                    outcome: Some(failure.clone()),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskEntryPreflight,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalRejected {
+                    committed_outcome: TaskOutcome::Success,
+                    attempted_outcome: TaskOutcome::Failure,
+                    outcome: Outcome::new(crate::RuntimeErrorCode::ContainedTaskCancelled),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskTerminalRejected,
+            Some(crate::RuntimeErrorCode::ContainedTaskCancelled.code()),
+        ),
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::RecoveryRungFinished {
+                    rung: RecoveryRung::ReturnHome,
+                    rung_result: RecoveryRungOutcome::Failed,
+                    run_id: None,
+                    outcome: Some(failure.clone()),
+                    environment: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeLifecycleObserved,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::RecoveryLadderFinished {
+                    ladder_result: RecoveryLadderOutcome::Exhausted,
+                    rungs_tried: 3,
+                    outcome: Some(failure.clone()),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeLifecycleObserved,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            ProviderPayloadDraft::observed(ProviderStartupRecord {
+                owner_epoch: epoch,
+                backend: ProviderBackend::Configured,
+                observation: ProviderStartupObservation::Failed {
+                    stage: ProviderStartupStage::RegistryBinding,
+                    failure: ProviderNativeFailure {
+                        module: "provider_registry".to_owned(),
+                        outcome: failure.clone().caused_by(
+                            LifecycleNativeDetail::new("native registry refusal", false).outcome(),
+                        ),
+                    },
+                },
+            })
+            .into(),
+            EventType::ProviderStartupObserved,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            SchedulerPayloadDraft::denied(
+                EventAction::RuntimeAction,
+                DiagnosticCode::LeaseBusy,
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::SchedulerDenied,
+            Some(DiagnosticCode::LeaseBusy.code()),
+        ),
+    ]
+}
+
+#[test]
+fn revision_3_records_carry_their_outcome_and_round_trip() {
+    for (index, (draft, event_type, code)) in revision_3_records().into_iter().enumerate() {
+        let sanitized = sanitize(draft, index as u64 + 1);
+        assert_eq!(sanitized.schema_version(), "actingcommand.event.v3");
+        assert_eq!(sanitized.event_type(), event_type);
+        assert_eq!(
+            sanitized
+                .payload()
+                .outcome()
+                .map(|outcome| outcome.code().clone()),
+            code.map(CodeStr::from),
+            "{event_type:?}"
+        );
+        let json = serde_json::to_string(sanitized.payload()).expect("record JSON");
+        assert_outcome_members_are_envelopes(&json);
+        for member in REVISION_2_MEMBERS {
+            assert!(!json.contains(member), "{event_type:?} keeps {member}");
+        }
+        let round_trip: EventPayload = serde_json::from_str(&json).expect("record round trip");
+        round_trip
+            .validate()
+            .expect("round-tripped record validates");
+        assert_eq!(round_trip, *sanitized.payload());
+        let public = serde_json::to_string(&round_trip.public_projection()).expect("public");
+        assert!(
+            !public.contains("raw_text"),
+            "{event_type:?} public raw text"
+        );
+    }
+}
+
+#[test]
+fn revision_3_lifecycle_failure_links_its_os_error_and_keeps_the_runtime_code() {
+    let (draft, _, _) = revision_3_records().swap_remove(1);
+    let sanitized = sanitize(draft, 1);
+    let EventPayload::Runtime(RuntimePayload::Failed(failed)) = sanitized.payload() else {
+        panic!("runtime failure")
+    };
+    assert_eq!(
+        failed
+            .lifecycle_failure()
+            .map(RuntimeLifecycleFailureRecord::runtime_code),
+        Some(Some(crate::RuntimeErrorCode::RuntimeFatal))
+    );
+    let outcome = failed.outcome();
+    assert_eq!(
+        outcome.value("operation"),
+        Some(&serde_json::json!("control_instance"))
+    );
+    let [os_error] = outcome.causes() else {
+        panic!("the OS error link")
+    };
+    assert_eq!(os_error.relation().as_str(), "caused_by");
+    assert_eq!(
+        os_error.outcome().code(),
+        &ContractCode::ForeignOsError.code()
+    );
+    assert_eq!(
+        os_error.outcome().value("os_error"),
+        Some(&serde_json::json!(5))
+    );
+    assert_eq!(
+        os_error.outcome().value("raw_source"),
+        Some(&serde_json::json!("os"))
+    );
+}
+
+#[test]
+fn revision_3_renamed_members_keep_their_results_beside_the_envelope() {
+    let issuer = identifier_issuer();
+    let epoch = *issuer.mint_owner_epoch().expect("epoch").transport();
+    let cases: [(EventPayloadDraft, &str); 4] = [
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::Finalizing {
+                    task_result: TaskOutcome::Success,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            "\"task_result\":\"success\"",
+        ),
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::RecoveryLadderFinished {
+                    ladder_result: RecoveryLadderOutcome::Recovered,
+                    rungs_tried: 1,
+                    outcome: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            "\"ladder_result\":\"recovered\"",
+        ),
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::RecoveryRungFinished {
+                    rung: RecoveryRung::ReturnHome,
+                    rung_result: RecoveryRungOutcome::Skipped,
+                    run_id: None,
+                    outcome: Some(Outcome::new(crate::RuntimeErrorCode::BackendOpenFailed)),
+                    environment: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            "\"rung_result\":\"skipped\"",
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: None,
+                    outcome: Some(Outcome::new(
+                        crate::RuntimeErrorCode::BackendOperationFailed,
+                    )),
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            "\"task_result\":\"failure\"",
+        ),
+    ];
+    for (index, (draft, member)) in cases.into_iter().enumerate() {
+        let sanitized = sanitize(draft, index as u64 + 1);
+        let json = serde_json::to_string(sanitized.payload()).expect("record JSON");
+        assert!(json.contains(member), "missing {member}");
+        assert_outcome_members_are_envelopes(&json);
+    }
+}
+
+#[test]
+fn record_severity_is_the_outcome_category_else_the_event_type_category() {
+    // The categories the catalog gives these codes and event types (vocabulary `event_type`):
+    // task.completed is success, task.terminal_intent info, lease.expired warning,
+    // backend_operation_failed and input_failed error.
+    let expected = [
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Success,
+                    final_page: Some("home".to_owned()),
+                    executed_steps: Some(1),
+                    outcome: None,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventSeverity::Success,
+        ),
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::Finalizing {
+                    task_result: TaskOutcome::Failure,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventSeverity::Info,
+        ),
+        (
+            LeasePayloadDraft::expired(
+                EventAction::RuntimeAction,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+            EventSeverity::Warning,
+        ),
+        (
+            InputPayloadDraft::failed(
+                EventAction::InputTap,
+                DiagnosticCode::InputFailed,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            )
+            .into(),
+            EventSeverity::Error,
+        ),
+    ];
+    for (index, (draft, severity)) in expected.into_iter().enumerate() {
+        // The producer asks for `fatal`; only the category decides.
+        let issuer = identifier_issuer();
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            1_752_147_200_000 + index as u64,
+            EventSeverity::Fatal,
+            origin(),
+            links(&issuer),
+            draft,
+        )
+        .sanitize(&SpyFingerprinter::new())
+        .expect("sanitize record");
+        assert_eq!(sanitized.severity(), severity);
+    }
+
+    for (index, (draft, _, _)) in revision_3_records().into_iter().enumerate() {
+        let sanitized = sanitize(draft, index as u64 + 1);
+        let category = sanitized.payload().outcome().map_or_else(
+            || sanitized.event_type().category(),
+            crate::outcome::Outcome::category,
+        );
+        assert_eq!(sanitized.severity(), EventSeverity::from_category(category));
+    }
+
+    let issuer = identifier_issuer();
+    let debug = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Debug,
+        origin(),
+        links(&issuer),
+        TaskPayloadDraft::semantic(TaskSemanticFact::RunStarted, AuditInput::new()).into(),
+    )
+    .sanitize(&SpyFingerprinter::new())
+    .expect("debug record");
+    assert_eq!(debug.severity(), EventSeverity::Debug);
+}
+
+/// Ledger revision 3 (#378 A3): a recovery ladder's end carries why exactly when the climb ended
+/// exhausted, and that outcome's category is the record's severity, so an exhausted end keeps
+/// review L6's error or warning (#666).
+#[test]
+fn revision_3_ladder_end_carries_an_outcome_exactly_when_exhausted() {
+    let issuer = identifier_issuer();
+    let epoch = *issuer.mint_owner_epoch().expect("epoch").transport();
+    let end = |ladder_result, outcome| -> EventPayloadDraft {
+        RuntimePayloadDraft::lifecycle_observed(
+            epoch,
+            RuntimeLifecyclePhase::RecoveryLadderFinished {
+                ladder_result,
+                rungs_tried: 2,
+                outcome,
+            },
+            AuditInput::new(),
+        )
+        .into()
+    };
+    let error = Outcome::new(crate::RuntimeErrorCode::BackendOperationFailed)
+        .operation(crate::codes::ContractLocation::ControlInstance);
+    let warning = Outcome::new(ContractCode::PanicCaught)
+        .thread("worker")
+        .boundary(crate::codes::ContractLocation::ControlInstance)
+        .raw_source(crate::outcome::RawSource::Panic)
+        .raw_text("panicked");
+    for (index, (outcome, severity)) in [
+        (error.clone(), EventSeverity::Error),
+        (warning, EventSeverity::Warning),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let code = outcome.code().clone();
+        let exhausted = sanitize(
+            end(RecoveryLadderOutcome::Exhausted, Some(outcome)),
+            index as u64 + 1,
+        );
+        assert_eq!(exhausted.severity(), severity);
+        assert_eq!(
+            exhausted.payload().outcome().map(Outcome::code),
+            Some(&code)
+        );
+    }
+    assert_eq!(
+        sanitize(end(RecoveryLadderOutcome::Recovered, None), 3).severity(),
+        EventSeverity::Info
+    );
+    sanitize_error(end(RecoveryLadderOutcome::Exhausted, None));
+    sanitize_error(end(RecoveryLadderOutcome::Recovered, Some(error)));
+}
+
+/// Ledger revision 3 (#378 A3), the A2-R bridge: a relayed spelling becomes its registered code
+/// with the catalog's category and carries no values, so a code's required values are not
+/// demanded of a relay; an unregistered spelling stays visible as `outcome_relay_unregistered`
+/// with the spelling as `raw_code` when it is a token.
+#[test]
+fn revision_3_relayed_spellings_resolve_through_the_catalog() {
+    let relayed = Outcome::relayed("panic_caught");
+    assert_eq!(
+        relayed.code(),
+        &CodeStr::from(ContractCode::PanicCaught.code())
+    );
+    assert_eq!(
+        relayed.category(),
+        ContractCode::PanicCaught.code().category()
+    );
+    // `panic_caught` requires thread, boundary, raw_source and raw_text; the relay has none.
+    let json = serde_json::to_value(&relayed).expect("a relayed outcome serialises");
+    assert_eq!(json["code"], "panic_caught");
+
+    let unregistered = Outcome::relayed("no_such_code_anywhere");
+    assert_eq!(
+        unregistered.code(),
+        &CodeStr::from(ContractCode::OutcomeRelayUnregistered.code())
+    );
+    assert_eq!(
+        unregistered
+            .value("raw_code")
+            .and_then(serde_json::Value::as_str),
+        Some("no_such_code_anywhere")
+    );
+    let prose = Outcome::relayed("Not a token");
+    assert_eq!(
+        prose.code(),
+        &CodeStr::from(ContractCode::OutcomeRelayUnregistered.code())
+    );
+    assert!(prose.value("raw_code").is_none());
+}
+
+#[test]
+fn every_payload_variant_keeps_outcome_for_the_envelope_only() {
+    for (index, payload) in all_payload_drafts(AuditInput::new).into_iter().enumerate() {
+        let sanitized = sanitize(payload, index as u64 + 1);
+        let json = serde_json::to_string(sanitized.payload()).expect("serialize typed payload");
+        assert_outcome_members_are_envelopes(&json);
+        for member in REVISION_2_TEXT_MEMBERS {
+            assert!(
+                !json.contains(member),
+                "{:?} keeps {member}",
+                sanitized.event_type()
+            );
+        }
+    }
 }
