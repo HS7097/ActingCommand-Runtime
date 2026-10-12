@@ -121,8 +121,8 @@ impl From<GlobalLedgerError> for LedgerMaintenanceFailure {
 impl From<RuntimeDatabaseError> for LedgerMaintenanceFailure {
     fn from(error: RuntimeDatabaseError) -> Self {
         Self {
-            code: error.code().into(),
-            operation: error.operation().into(),
+            code: error.code().as_str().into(),
+            operation: error.operation().as_str().into(),
             cause: error.to_string(),
             cleanup: Vec::new(),
             warnings: error.warnings().to_vec(),

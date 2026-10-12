@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod codes;
 mod error;
 #[cfg(test)]
 #[path = "tests/gate_l1.rs"]
@@ -12,8 +13,11 @@ mod gate_l1;
 mod maintenance;
 pub use maintenance::*;
 
+pub use codes::{DatabaseCode, DatabaseLocation};
 pub use error::{RuntimeDatabaseError, RuntimeDatabaseResult};
 
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -100,20 +104,30 @@ impl RuntimeDatabase {
         E: From<RuntimeDatabaseError>,
     {
         Self::open_with_initializer(root, bootstrap_seed, prepare_root, |connection| {
-            connection
-                .execute_batch(schema_sql)
-                .map_err(|_| failure("state_schema_initialize_failed", "open_runtime_state"))?;
+            connection.execute_batch(schema_sql).map_err(|_| {
+                failure(
+                    DatabaseCode::StateSchemaInitializeFailed.code(),
+                    ContractLocation::OpenRuntimeState.location(),
+                )
+            })?;
             let schema_version = connection
                 .query_row(
                     "SELECT value FROM state_meta WHERE key = 'schema_version'",
                     [],
                     |row| row.get::<_, String>(0),
                 )
-                .map_err(|_| failure("state_schema_metadata_missing", "open_runtime_state"))?;
+                .map_err(|_| {
+                    failure(
+                        DatabaseCode::StateSchemaMetadataMissing.code(),
+                        ContractLocation::OpenRuntimeState.location(),
+                    )
+                })?;
             if schema_version != expected_version {
-                return Err(
-                    failure("state_schema_version_unsupported", "open_runtime_state").into(),
-                );
+                return Err(failure(
+                    DatabaseCode::StateSchemaVersionUnsupported.code(),
+                    ContractLocation::OpenRuntimeState.location(),
+                )
+                .into());
             }
             Ok(())
         })
@@ -131,15 +145,27 @@ impl RuntimeDatabase {
         E: From<RuntimeDatabaseError>,
     {
         if bootstrap_seed.len() < 16 || bootstrap_seed.len() > 1024 {
-            return Err(failure("state_integrity_key_invalid", "open_runtime_state").into());
+            return Err(failure(
+                DatabaseCode::StateIntegrityKeyInvalid.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+            .into());
         }
-        fs::create_dir_all(root)
-            .map_err(|_| failure("state_root_create_failed", "open_runtime_state"))?;
+        fs::create_dir_all(root).map_err(|_| {
+            failure(
+                SharedCode::StateRootCreateFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
         require_regular_directory(root)?;
         // Workflow #332 H2f: a fresh root takes the canonical form `open_existing` stores, so
         // the first session compares roots (e.g. the material root) like every later one.
         let canonical_root = root.canonicalize().map_err(|error| {
-            RuntimeDatabaseError::io("state_root_inspect_failed", "open_runtime_state", &error)
+            RuntimeDatabaseError::io(
+                SharedCode::StateRootInspectFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+                &error,
+            )
         })?;
         prepare_root(root)?;
         let database_path = root.join(DATABASE_FILE);
@@ -148,22 +174,43 @@ impl RuntimeDatabase {
             require_regular_file(&database_path)?;
         }
         let integrity_key = load_or_create_integrity_key(root, bootstrap_seed, database_existed)?;
-        let connection = Connection::open(&database_path)
-            .map_err(|_| failure("state_database_open_failed", "open_runtime_state"))?;
-        connection
-            .busy_timeout(BUSY_TIMEOUT)
-            .map_err(|_| failure("state_database_config_failed", "open_runtime_state"))?;
+        let connection = Connection::open(&database_path).map_err(|_| {
+            failure(
+                DatabaseCode::StateDatabaseOpenFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
+        connection.busy_timeout(BUSY_TIMEOUT).map_err(|_| {
+            failure(
+                DatabaseCode::StateDatabaseConfigFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
         connection
             .execute_batch(
                 "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
             )
-            .map_err(|_| failure("state_database_config_failed", "open_runtime_state"))?;
+            .map_err(|_| {
+                failure(
+                    DatabaseCode::StateDatabaseConfigFailed.code(),
+                    ContractLocation::OpenRuntimeState.location(),
+                )
+            })?;
         initialize(&connection)?;
         let integrity = connection
             .query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
-            .map_err(|_| failure("state_integrity_check_failed", "open_runtime_state"))?;
+            .map_err(|_| {
+                failure(
+                    DatabaseCode::StateIntegrityCheckFailed.code(),
+                    ContractLocation::OpenRuntimeState.location(),
+                )
+            })?;
         if integrity != "ok" {
-            return Err(failure("state_database_corrupt", "open_runtime_state").into());
+            return Err(failure(
+                DatabaseCode::StateDatabaseCorrupt.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+            .into());
         }
         Ok(Self {
             root: canonical_root,
@@ -208,8 +255,8 @@ impl RuntimeDatabase {
         if fs::metadata(&key_path)
             .map_err(|error| {
                 RuntimeDatabaseError::io(
-                    "state_integrity_key_read_failed",
-                    "inspect_existing_key",
+                    DatabaseCode::StateIntegrityKeyReadFailed.code(),
+                    DatabaseLocation::InspectExistingKey.location(),
                     &error,
                 )
             })?
@@ -217,21 +264,21 @@ impl RuntimeDatabase {
             != 32
         {
             return Err(failure(
-                "state_integrity_key_invalid",
-                "open_existing_database",
+                DatabaseCode::StateIntegrityKeyInvalid.code(),
+                DatabaseLocation::OpenExistingDatabase.location(),
             ));
         }
         let integrity_key = fs::read(&key_path).map_err(|error| {
             RuntimeDatabaseError::io(
-                "state_integrity_key_read_failed",
-                "open_existing_database",
+                DatabaseCode::StateIntegrityKeyReadFailed.code(),
+                DatabaseLocation::OpenExistingDatabase.location(),
                 &error,
             )
         })?;
         if integrity_key.len() != 32 {
             return Err(failure(
-                "state_integrity_key_invalid",
-                "open_existing_database",
+                DatabaseCode::StateIntegrityKeyInvalid.code(),
+                DatabaseLocation::OpenExistingDatabase.location(),
             ));
         }
         let flags = if read_only {
@@ -239,43 +286,68 @@ impl RuntimeDatabase {
         } else {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
         };
-        let connection = Connection::open_with_flags(&database_path, flags)
-            .map_err(|error| RuntimeDatabaseError::sql("open_existing_database", &error))?;
-        connection
-            .busy_timeout(BUSY_TIMEOUT)
-            .map_err(|error| RuntimeDatabaseError::sql("configure_existing_database", &error))?;
+        let connection = Connection::open_with_flags(&database_path, flags).map_err(|error| {
+            RuntimeDatabaseError::sql(DatabaseLocation::OpenExistingDatabase.location(), &error)
+        })?;
+        connection.busy_timeout(BUSY_TIMEOUT).map_err(|error| {
+            RuntimeDatabaseError::sql(
+                DatabaseLocation::ConfigureExistingDatabase.location(),
+                &error,
+            )
+        })?;
         connection
             .pragma_update(None, "foreign_keys", "ON")
-            .map_err(|error| RuntimeDatabaseError::sql("configure_existing_database", &error))?;
+            .map_err(|error| {
+                RuntimeDatabaseError::sql(
+                    DatabaseLocation::ConfigureExistingDatabase.location(),
+                    &error,
+                )
+            })?;
         if !read_only {
             let journal: String = connection
                 .pragma_query_value(None, "journal_mode", |row| row.get(0))
-                .map_err(|error| RuntimeDatabaseError::sql("inspect_existing_journal", &error))?;
+                .map_err(|error| {
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::InspectExistingJournal.location(),
+                        &error,
+                    )
+                })?;
             if journal != "wal" {
                 return Err(failure(
-                    "state_database_journal_invalid",
-                    "open_existing_database",
+                    DatabaseCode::StateDatabaseJournalInvalid.code(),
+                    DatabaseLocation::OpenExistingDatabase.location(),
                 ));
             }
             connection
                 .pragma_update(None, "synchronous", "FULL")
                 .map_err(|error| {
-                    RuntimeDatabaseError::sql("configure_existing_database", &error)
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::ConfigureExistingDatabase.location(),
+                        &error,
+                    )
                 })?;
         }
         if whole_file_check || !read_only {
             let integrity: String = connection
                 .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
-                .map_err(|error| RuntimeDatabaseError::sql("verify_existing_database", &error))?;
+                .map_err(|error| {
+                    RuntimeDatabaseError::sql(
+                        DatabaseLocation::VerifyExistingDatabase.location(),
+                        &error,
+                    )
+                })?;
             if integrity != "ok" {
-                return Err(failure("state_database_corrupt", "open_existing_database"));
+                return Err(failure(
+                    DatabaseCode::StateDatabaseCorrupt.code(),
+                    DatabaseLocation::OpenExistingDatabase.location(),
+                ));
             }
         }
         Ok(Self {
             root: root.canonicalize().map_err(|error| {
                 RuntimeDatabaseError::io(
-                    "state_root_inspect_failed",
-                    "open_existing_database",
+                    SharedCode::StateRootInspectFailed.code(),
+                    DatabaseLocation::OpenExistingDatabase.location(),
                     &error,
                 )
             })?,
@@ -296,13 +368,13 @@ impl RuntimeDatabase {
     /// A connection whose `Full` level could not be restored is refused.
     pub fn connection(
         &self,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
         let waiting = Instant::now();
         let guard = self
             .connection
             .lock()
-            .map_err(|_| failure("state_connection_poisoned", operation))?;
+            .map_err(|_| failure(DatabaseCode::StateConnectionPoisoned.code(), operation))?;
         self.connection_wait_peak_ns.fetch_max(
             u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
@@ -326,7 +398,7 @@ impl RuntimeDatabase {
     /// caller never falls back to the shared connection.
     pub fn read_snapshot_connection(
         &self,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeDatabaseResult<Connection> {
         let connection = Connection::open_with_flags(
             &self.database_path,
@@ -340,7 +412,10 @@ impl RuntimeDatabase {
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .map_err(|error| RuntimeDatabaseError::sql(operation, &error))?;
         if journal != "wal" {
-            return Err(failure("state_database_journal_invalid", operation));
+            return Err(failure(
+                DatabaseCode::StateDatabaseJournalInvalid.code(),
+                operation,
+            ));
         }
         Ok(connection)
     }
@@ -348,11 +423,15 @@ impl RuntimeDatabase {
     /// Error readback must not wait behind another owner of the connection.
     pub fn try_connection(
         &self,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeDatabaseResult<MutexGuard<'_, Connection>> {
         let guard = self.connection.try_lock().map_err(|error| match error {
-            std::sync::TryLockError::WouldBlock => failure("state_connection_busy", operation),
-            std::sync::TryLockError::Poisoned(_) => failure("state_connection_poisoned", operation),
+            std::sync::TryLockError::WouldBlock => {
+                failure(DatabaseCode::StateConnectionBusy.code(), operation)
+            }
+            std::sync::TryLockError::Poisoned(_) => {
+                failure(DatabaseCode::StateConnectionPoisoned.code(), operation)
+            }
         })?;
         self.require_full_sync(operation)?;
         Ok(guard)
@@ -370,7 +449,7 @@ impl RuntimeDatabase {
         connection: &Connection,
         sync: CommitSync,
     ) -> RuntimeDatabaseResult<()> {
-        const OPERATION: &str = "set_commit_sync";
+        const OPERATION: Location = DatabaseLocation::SetCommitSync.location();
         let (level, expected) = match sync {
             CommitSync::Full => ("FULL", 2),
             CommitSync::Normal => {
@@ -379,12 +458,14 @@ impl RuntimeDatabase {
             }
         };
         let sync_failure = |error: rusqlite::Error| {
-            failure("state_database_sync_config_failed", OPERATION).with_detail(
-                error.sqlite_error().map_or_else(
-                    || "sqlite=none".to_owned(),
-                    |error| format!("sqlite={}", error.extended_code),
-                ),
+            failure(
+                DatabaseCode::StateDatabaseSyncConfigFailed.code(),
+                OPERATION,
             )
+            .with_detail(error.sqlite_error().map_or_else(
+                || "sqlite=none".to_owned(),
+                |error| format!("sqlite={}", error.extended_code),
+            ))
         };
         connection
             .pragma_update(None, "synchronous", level)
@@ -398,8 +479,11 @@ impl RuntimeDatabase {
             CommitSync::Normal => observed,
         };
         if observed != expected {
-            return Err(failure("state_database_sync_config_failed", OPERATION)
-                .with_detail(format!("readback={observed}")));
+            return Err(failure(
+                DatabaseCode::StateDatabaseSyncConfigFailed.code(),
+                OPERATION,
+            )
+            .with_detail(format!("readback={observed}")));
         }
         if sync == CommitSync::Full {
             self.sync_relaxed.store(false, Ordering::SeqCst);
@@ -407,9 +491,12 @@ impl RuntimeDatabase {
         Ok(())
     }
 
-    fn require_full_sync(&self, operation: &'static str) -> RuntimeDatabaseResult<()> {
+    fn require_full_sync(&self, operation: Location) -> RuntimeDatabaseResult<()> {
         if self.sync_relaxed.load(Ordering::SeqCst) {
-            return Err(failure("state_database_sync_relaxed", operation));
+            return Err(failure(
+                DatabaseCode::StateDatabaseSyncRelaxed.code(),
+                operation,
+            ));
         }
         Ok(())
     }
@@ -429,19 +516,33 @@ impl RuntimeDatabase {
 
 fn require_regular_directory(path: &Path) -> RuntimeDatabaseResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        RuntimeDatabaseError::io("state_root_inspect_failed", "open_runtime_state", &error)
+        RuntimeDatabaseError::io(
+            SharedCode::StateRootInspectFailed.code(),
+            ContractLocation::OpenRuntimeState.location(),
+            &error,
+        )
     })?;
     if !metadata.is_dir() || is_link_or_reparse(&metadata) {
-        return Err(failure("state_root_unsafe", "open_runtime_state"));
+        return Err(failure(
+            SharedCode::StateRootUnsafe.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        ));
     }
     Ok(())
 }
 
 fn require_regular_file(path: &Path) -> RuntimeDatabaseResult<()> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| failure("state_database_inspect_failed", "open_runtime_state"))?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| {
+        failure(
+            DatabaseCode::StateDatabaseInspectFailed.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        )
+    })?;
     if !metadata.is_file() || is_link_or_reparse(&metadata) {
-        return Err(failure("state_database_unsafe", "open_runtime_state"));
+        return Err(failure(
+            DatabaseCode::StateDatabaseUnsafe.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        ));
     }
     Ok(())
 }
@@ -454,19 +555,32 @@ fn load_or_create_integrity_key(
     let path = root.join(INTEGRITY_KEY_FILE);
     if path.exists() {
         require_regular_file(&path)?;
-        let bytes = fs::read(&path)
-            .map_err(|_| failure("state_integrity_key_read_failed", "open_runtime_state"))?;
+        let bytes = fs::read(&path).map_err(|_| {
+            failure(
+                DatabaseCode::StateIntegrityKeyReadFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
         if bytes.len() != 32 {
-            return Err(failure("state_integrity_key_invalid", "open_runtime_state"));
+            return Err(failure(
+                DatabaseCode::StateIntegrityKeyInvalid.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            ));
         }
         return Ok(bytes.into_boxed_slice());
     }
     if database_existed {
-        return Err(failure("state_integrity_key_missing", "open_runtime_state"));
+        return Err(failure(
+            DatabaseCode::StateIntegrityKeyMissing.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        ));
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| failure("state_integrity_key_clock_failed", "open_runtime_state"))?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
+        failure(
+            DatabaseCode::StateIntegrityKeyClockFailed.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        )
+    })?;
     let mut digest = Sha256::new();
     digest.update(b"actingcommand-runtime-state-key-v1\0");
     update_field(&mut digest, bootstrap_seed);
@@ -480,12 +594,20 @@ fn load_or_create_integrity_key(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
-        .open(&path)
-        .map_err(|_| failure("state_integrity_key_create_failed", "open_runtime_state"))?;
+    let mut file = options.open(&path).map_err(|_| {
+        failure(
+            DatabaseCode::StateIntegrityKeyCreateFailed.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        )
+    })?;
     file.write_all(&key)
         .and_then(|()| file.sync_all())
-        .map_err(|_| failure("state_integrity_key_write_failed", "open_runtime_state"))?;
+        .map_err(|_| {
+            failure(
+                DatabaseCode::StateIntegrityKeyWriteFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
     sync_state_directory(root)?;
     Ok(key.into_boxed_slice())
 }
@@ -496,7 +618,12 @@ fn sync_state_directory(path: &Path) -> RuntimeDatabaseResult<()> {
         .read(true)
         .open(path)
         .and_then(|directory| directory.sync_all())
-        .map_err(|_| failure("state_directory_sync_failed", "open_runtime_state"))
+        .map_err(|_| {
+            failure(
+                SharedCode::StateDirectorySyncFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })
 }
 
 #[cfg(not(unix))]
@@ -521,6 +648,6 @@ fn update_field(digest: &mut Sha256, field: &[u8]) {
     digest.update(field);
 }
 
-fn failure(code: &'static str, operation: &'static str) -> RuntimeDatabaseError {
+fn failure(code: Code, operation: Location) -> RuntimeDatabaseError {
     RuntimeDatabaseError::new(code, operation)
 }

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{ForensicError, ForensicResult, map_ledger_error, query_view_page};
+use crate::codes::{ForensicsCode, ForensicsLocation};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     EventPayload, EventQuery, EventType, LedgerReadScope, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_FACTS, OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile,
@@ -15,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-const OPERATION: &str = "read_runtime_facts_at";
+const OPERATION: Location = ForensicsLocation::ReadRuntimeFactsAt.location();
 
 /// The offline face of `RuntimeOperation::RuntimeFactSnapshot` at one ledger position.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -81,11 +84,14 @@ fn read(
     deadline: Instant,
 ) -> ForensicResult<ForensicRuntimeFactsResult> {
     if state_root.as_os_str().is_empty() {
-        return Err(facts_error("invalid_state_root", "state root is empty"));
+        return Err(facts_error(
+            ForensicsCode::InvalidStateRoot.code(),
+            "state root is empty",
+        ));
     }
     if position == 0 {
         return Err(facts_error(
-            "runtime_fact_ledger_position_invalid",
+            SharedCode::RuntimeFactLedgerPositionInvalid.code(),
             "ledger positions start at sequence 1",
         ));
     }
@@ -122,8 +128,12 @@ fn read(
             Ok(())
         },
     )?;
-    let taken_at_unix_ms = taken_at_unix_ms
-        .ok_or_else(|| facts_error("runtime_facts_position_missing", "no event at the position"))?;
+    let taken_at_unix_ms = taken_at_unix_ms.ok_or_else(|| {
+        facts_error(
+            ForensicsCode::RuntimeFactsPositionMissing.code(),
+            "no event at the position",
+        )
+    })?;
     let mut sealed = Vec::new();
     let snapshot_query = EventQuery {
         event_type: Some(EventType::RuntimeFactSnapshot),
@@ -196,7 +206,7 @@ fn snapshot_part(
 ) -> ForensicResult<(u64, RuntimeFactSnapshot)> {
     let refused = |detail: &str| {
         ForensicError::new(
-            "runtime_fact_replay_failed",
+            SharedCode::RuntimeFactReplayFailed.code(),
             OPERATION,
             format!("sequence {sequence}: {detail}"),
         )
@@ -240,7 +250,7 @@ fn apply(
 ) -> ForensicResult<()> {
     let refused = |detail: &str| {
         ForensicError::new(
-            "runtime_fact_replay_failed",
+            SharedCode::RuntimeFactReplayFailed.code(),
             OPERATION,
             format!("sequence {}: {detail}", event.sequence),
         )
@@ -300,11 +310,7 @@ fn visit(
     mut each: impl FnMut(&ProjectedEvent) -> ForensicResult<()>,
 ) -> ForensicResult<LedgerReadScope> {
     let invalid_page = |error: actingcommand_contract::RuntimeContractError| {
-        ForensicError::new(
-            error.code().as_str(),
-            OPERATION,
-            "invalid runtime fact page request",
-        )
+        ForensicError::new(error.code(), OPERATION, "invalid runtime fact page request")
     };
     let mut request = RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, None)
         .and_then(|request| request.at_snapshot(position))
@@ -312,7 +318,7 @@ fn visit(
     loop {
         if Instant::now() >= deadline {
             return Err(facts_error(
-                "runtime_facts_read_budget_exceeded",
+                ForensicsCode::RuntimeFactsReadBudgetExceeded.code(),
                 "cooperative runtime fact read deadline expired",
             ));
         }
@@ -323,7 +329,7 @@ fn visit(
             .cloned()
             .ok_or_else(|| {
                 facts_error(
-                    "runtime_facts_source_incomplete",
+                    ForensicsCode::RuntimeFactsSourceIncomplete.code(),
                     "runtime fact events are not completely readable through the position",
                 )
             })?;
@@ -341,6 +347,6 @@ fn visit(
     }
 }
 
-fn facts_error(code: &'static str, detail: &str) -> ForensicError {
+fn facts_error(code: Code, detail: &str) -> ForensicError {
     ForensicError::new(code, OPERATION, detail)
 }

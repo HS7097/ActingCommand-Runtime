@@ -218,8 +218,8 @@ fn read_state(
         actingcommand_runtime_database::RuntimeDatabase::open_existing_unchecked(state_root)
             .map_err(|error| {
                 RuntimeHostError::fatal(
-                    error.code(),
-                    error.operation(),
+                    error.code().as_str(),
+                    error.operation().as_str(),
                     RuntimeErrorCode::LedgerFailure,
                 )
                 .with_native_detail(format!("{error:?}"))

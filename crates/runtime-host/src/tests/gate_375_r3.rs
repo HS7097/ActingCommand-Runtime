@@ -29,7 +29,9 @@ fn damage_index_root_page(root: &Path, index: &str) {
         RuntimeDatabase::open_existing(root, false).expect("open the state database read-write");
     let (database_path, offset) = {
         let connection = database
-            .connection("damage one index page")
+            .connection(
+                actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+            )
             .expect("state database connection");
         let busy = connection
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
@@ -84,8 +86,8 @@ fn gate_check_config_preview_runs_no_whole_file_quick_check() {
     match RuntimeDatabase::open_existing(root.path(), true) {
         Ok(_) => panic!("the checked open must refuse a file with a damaged page"),
         Err(error) => {
-            assert_eq!(error.code(), "state_database_corrupt");
-            assert_eq!(error.operation(), "open_existing_database");
+            assert_eq!(error.code().as_str(), "state_database_corrupt");
+            assert_eq!(error.operation().as_str(), "open_existing_database");
         }
     }
 

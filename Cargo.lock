@@ -335,6 +335,7 @@ dependencies = [
 name = "actingcommand-runtime-database"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "rusqlite",
  "serde",
  "serde_json",

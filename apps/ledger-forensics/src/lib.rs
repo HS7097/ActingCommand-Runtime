@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+mod codes;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
@@ -9,10 +11,14 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::codes::{ActingledgerCode, ActingledgerLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_ledger_forensics::{
     ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
     ForensicReplayRequest, ForensicReport, ForensicRequest, ForensicRuntimeFactsResult,
-    ForensicViewOptions, ForensicViewRequest, MAX_FORENSIC_EVENTS, TaskRecordsRequest,
+    ForensicViewOptions, ForensicViewRequest, ForensicsCode, ForensicsLocation,
+    MAX_FORENSIC_EVENTS, TaskRecordsRequest,
 };
 
 /// Cooperative deadline of one `facts` replay.
@@ -35,7 +41,14 @@ pub struct CliError {
 }
 
 impl CliError {
-    fn new(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
+    /// A command failure with a registered code and location.
+    fn new(code: Code, operation: Location, detail: impl Into<String>) -> Self {
+        Self::relayed(code.as_str(), operation.as_str(), detail)
+    }
+
+    /// A failure that relays a forensic error's code and operation, which stay strings while
+    /// they carry the ledger's and the artifact store's (Workflow #378, slice A2b).
+    fn relayed(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             operation,
@@ -68,7 +81,7 @@ where
     let report = match parse_args(args)? {
         CliRequest::Material(request) => {
             return actingcommand_ledger_forensics::read_material_to(*request, output).map_err(
-                |error| CliError::new(error.code(), error.operation(), error.to_string()),
+                |error| CliError::relayed(error.code(), error.operation(), error.to_string()),
             );
         }
         CliRequest::Views(request) => actingcommand_ledger_forensics::run_views(*request),
@@ -88,7 +101,7 @@ where
             ),
         )))),
     }
-    .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
+    .map_err(|error| CliError::relayed(error.code(), error.operation(), error.to_string()))?;
     let stability_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Stability(report)) if !report.gaps.is_empty());
     let task_evidence_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) if !report.gaps.is_empty());
     let signatures_incomplete = matches!(&report, ForensicOutput::Machine(ForensicReport::Signatures(report)) if !report.evidence_complete);
@@ -97,9 +110,10 @@ where
     let facts_unavailable = match &report {
         ForensicOutput::Machine(ForensicReport::Facts(result)) => match result.as_ref() {
             ForensicRuntimeFactsResult::Available { .. } => None,
-            ForensicRuntimeFactsResult::NotAvailable { .. } => {
-                Some(("runtime_facts_not_available", "read_runtime_facts_at"))
-            }
+            ForensicRuntimeFactsResult::NotAvailable { .. } => Some((
+                ForensicsCode::RuntimeFactsNotAvailable.as_str(),
+                ForensicsLocation::ReadRuntimeFactsAt.as_str(),
+            )),
             ForensicRuntimeFactsResult::Failed {
                 code, operation, ..
             } => Some((*code, *operation)),
@@ -120,7 +134,7 @@ where
     }
     output.flush().map_err(output_error)?;
     if let Some((code, operation)) = facts_unavailable {
-        return Err(CliError::new(
+        return Err(CliError::relayed(
             code,
             operation,
             "see the structured runtime fact result",
@@ -128,29 +142,29 @@ where
     }
     if views_incomplete {
         return Err(CliError::new(
-            "ledger_view_source_incomplete",
-            "read_ledger_views",
+            ActingledgerCode::LedgerViewSourceIncomplete.code(),
+            ContractLocation::ReadLedgerViews.location(),
             "see source completeness and read-through position in the page",
         ));
     }
     if signatures_incomplete {
         return Err(CliError::new(
-            "signature_replay_incomplete",
-            "replay_signatures",
+            SharedCode::SignatureReplayIncomplete.code(),
+            ActingledgerLocation::ReplaySignatures.location(),
             "see frozen prefixes, source snapshots and explicit gaps in the report",
         ));
     }
     if stability_incomplete {
         return Err(CliError::new(
-            "stability_export_incomplete",
-            "export_stability",
+            ActingledgerCode::StabilityExportIncomplete.code(),
+            ActingledgerLocation::ExportStability.location(),
             "see structured gaps and failures in the report",
         ));
     }
     if task_evidence_incomplete {
         return Err(CliError::new(
-            "task_evidence_export_incomplete",
-            "export_task_evidence",
+            ActingledgerCode::TaskEvidenceExportIncomplete.code(),
+            ActingledgerLocation::ExportTaskEvidence.location(),
             "see explicit relations, gaps and failures in the report",
         ));
     }
@@ -200,7 +214,9 @@ where
                 state_root, request,
             )
             .map(|request| CliRequest::Material(Box::new(request)))
-            .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()));
+            .map_err(|error| {
+                CliError::relayed(error.code(), error.operation(), error.to_string())
+            });
         }
         "views" => {
             return parse_views(state_root, args)
@@ -552,20 +568,32 @@ fn require_utf8(value: Option<OsString>, expected: &str) -> Result<String, CliEr
 }
 
 fn invalid_arguments(detail: impl Into<String>) -> CliError {
-    CliError::new("invalid_arguments", "parse_arguments", detail)
+    CliError::new(
+        SharedCode::InvalidArguments.code(),
+        ActingledgerLocation::ParseArguments.location(),
+        detail,
+    )
 }
 
 fn output_error(error: std::io::Error) -> CliError {
-    CliError::new("output_failed", "write_forensic_output", error.to_string())
+    CliError::new(
+        ActingledgerCode::OutputFailed.code(),
+        ActingledgerLocation::WriteForensicOutput.location(),
+        error.to_string(),
+    )
 }
 
 fn serialization_error(error: serde_json::Error) -> CliError {
     if error.is_io() {
-        CliError::new("output_failed", "write_forensic_output", error.to_string())
+        CliError::new(
+            ActingledgerCode::OutputFailed.code(),
+            ActingledgerLocation::WriteForensicOutput.location(),
+            error.to_string(),
+        )
     } else {
         CliError::new(
-            "serialization_failed",
-            "serialize_forensic_report",
+            SharedCode::SerializationFailed.code(),
+            ActingledgerLocation::SerializeForensicReport.location(),
             error.to_string(),
         )
     }

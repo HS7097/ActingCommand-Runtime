@@ -32,10 +32,14 @@ impl ApprovalFact {
             || event.origin().actor() != EventActor::User
             || event.origin().module() != OriginModule::Governance
         {
-            return Err(approval_error("approval_projection_origin_invalid"));
+            return Err(approval_error(
+                SharedCode::ApprovalProjectionOriginInvalid.code(),
+            ));
         }
         let EventPayload::Approval(ApprovalPayload::Decision(payload)) = event.payload() else {
-            return Err(approval_error("approval_projection_payload_mismatch"));
+            return Err(approval_error(
+                SharedCode::ApprovalProjectionPayloadMismatch.code(),
+            ));
         };
         let decision = payload.decision().clone();
         let (key, payload) = prepare_decision(&decision)?;
@@ -47,8 +51,8 @@ impl ApprovalFact {
         )?;
         sqlite_integer(
             event.sequence(),
-            "projection_sequence_overflow",
-            "prepare_approval_projection",
+            StateCode::ProjectionSequenceOverflow.code(),
+            StateLocation::PrepareApprovalProjection.location(),
         )?;
         let payload_sha256 = sha256(&payload);
         Ok(Self {
@@ -74,8 +78,11 @@ impl ApprovalFact {
     ) -> RuntimeStateResult<()> {
         actingcommand_ledger::verify_transaction_event(database, transaction, &self.event).map_err(
             |error| {
-                approval_error(error.code())
-                    .with_detail(format!("{error}; detail={:?}", error.detail()))
+                RuntimeStateError::relayed_fatal(
+                    error.code(),
+                    StateLocation::PersistApprovalProjection.as_str(),
+                )
+                .with_detail(format!("{error}; detail={:?}", error.detail()))
             },
         )
     }
@@ -104,24 +111,36 @@ impl PreparedApprovalProjection {
             || event.origin().actor() != EventActor::User
             || event.origin().module() != OriginModule::Governance
         {
-            return Err(approval_error("approval_projection_origin_invalid"));
+            return Err(approval_error(
+                SharedCode::ApprovalProjectionOriginInvalid.code(),
+            ));
         }
         if !matches!(event.payload(), EventPayload::Approval(ApprovalPayload::Decision(payload))
             if payload.decision() == &self.decision)
         {
-            return Err(approval_error("approval_projection_fact_mismatch"));
+            return Err(approval_error(
+                StateCode::ApprovalProjectionFactMismatch.code(),
+            ));
         }
         actingcommand_ledger::verify_transaction_event(&self.store.database, transaction, event)
-            .map_err(|error| approval_error(error.code()).with_detail(error.to_string()))?;
+            .map_err(|error| {
+                RuntimeStateError::relayed_fatal(
+                    error.code(),
+                    StateLocation::PersistApprovalProjection.as_str(),
+                )
+                .with_detail(error.to_string())
+            })?;
         if let Some(prior) = &self.prior {
             prior.verify(&self.store.database, transaction)?;
             if event.sequence() <= prior.event.sequence() {
-                return Err(approval_error("approval_projection_order_invalid"));
+                return Err(approval_error(
+                    SharedCode::ApprovalProjectionOrderInvalid.code(),
+                ));
             }
         }
         let current = self.read_current(transaction)?;
         if current != self.baseline {
-            return Err(approval_error("approval_projection_changed"));
+            return Err(approval_error(StateCode::ApprovalProjectionChanged.code()));
         }
         self.applied_sequence
             .store(event.sequence(), Ordering::Release);
@@ -134,7 +153,9 @@ impl PreparedApprovalProjection {
             &self.payload_sha256,
         )?;
         if written.ledger_sequence() != event.sequence() || written.payload() != self.payload {
-            return Err(approval_error("approval_projection_position_mismatch"));
+            return Err(approval_error(
+                StateCode::ApprovalProjectionPositionMismatch.code(),
+            ));
         }
         Ok(())
     }
@@ -163,7 +184,9 @@ impl PreparedApprovalProjection {
 
     fn require_owner(&self, transaction: &RuntimeTransaction<'_, '_>) -> RuntimeStateResult<()> {
         if !transaction.belongs_to(&self.store.database) {
-            return Err(approval_error("state_transaction_owner_mismatch"));
+            return Err(approval_error(
+                StateCode::StateTransactionOwnerMismatch.code(),
+            ));
         }
         Ok(())
     }
@@ -175,7 +198,7 @@ impl PreparedApprovalProjection {
         query_projection_entry(transaction.sql(), APPROVAL_PROJECTION_NAMESPACE, &self.key)?
             .map(|row| {
                 self.store
-                    .validate_projection_row(row, "apply_approval_projection")
+                    .validate_projection_row(row, StateLocation::ApplyApprovalProjection.location())
             })
             .transpose()
     }
@@ -194,13 +217,17 @@ impl RuntimeStateStore {
             fact.decision.approval_id() != decision.approval_id()
                 || fact.decision.target() != decision.target()
         }) {
-            return Err(approval_error("approval_target_identity_conflict"));
+            return Err(approval_error(
+                SharedCode::ApprovalTargetIdentityConflict.code(),
+            ));
         }
         let baseline = self.read_projection_entry(APPROVAL_PROJECTION_NAMESPACE, &key)?;
         if let Some(entry) = &baseline
             && prior.as_ref().is_none_or(|fact| !fact.matches_entry(entry))
         {
-            return Err(approval_error("approval_projection_source_unproven"));
+            return Err(approval_error(
+                StateCode::ApprovalProjectionSourceUnproven.code(),
+            ));
         }
         Ok(PreparedApprovalProjection {
             store: Arc::clone(self),
@@ -228,20 +255,27 @@ impl RuntimeStateStore {
         let mut previous_sequence = 0;
         for fact in &facts {
             if fact.event.sequence() <= previous_sequence {
-                return Err(approval_error("approval_projection_order_invalid"));
+                return Err(approval_error(
+                    SharedCode::ApprovalProjectionOrderInvalid.code(),
+                ));
             }
             previous_sequence = fact.event.sequence();
             if let Some(previous) = latest.insert(&fact.key, fact)
                 && previous.decision.target() != fact.decision.target()
             {
-                return Err(approval_error("approval_target_identity_conflict"));
+                return Err(approval_error(
+                    SharedCode::ApprovalTargetIdentityConflict.code(),
+                ));
             }
             positions.insert(fact.event.sequence(), fact);
         }
-        let mut connection = self.connection("recover_approval_projections")?;
+        let mut connection =
+            self.connection(StateLocation::RecoverApprovalProjections.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| approval_sql_error("begin_approval_recovery", &error))?;
+            .map_err(|error| {
+                approval_sql_error(StateLocation::BeginApprovalRecovery.location(), &error)
+            })?;
         let work = (|| {
             let scope = self.database.borrow_transaction(&transaction);
             for fact in &facts {
@@ -250,25 +284,42 @@ impl RuntimeStateStore {
             let keys = {
                 let mut statement = transaction.prepare(
                     "SELECT entry_key FROM projection_entries WHERE namespace=?1 ORDER BY entry_key"
-                ).map_err(|error| approval_sql_error("read_approval_projection_keys", &error))?;
+                ).map_err(|error| approval_sql_error(StateLocation::ReadApprovalProjectionKeys.location(), &error))?;
                 statement
                     .query_map([APPROVAL_PROJECTION_NAMESPACE], |row| {
                         row.get::<_, String>(0)
                     })
-                    .map_err(|error| approval_sql_error("read_approval_projection_keys", &error))?
+                    .map_err(|error| {
+                        approval_sql_error(
+                            StateLocation::ReadApprovalProjectionKeys.location(),
+                            &error,
+                        )
+                    })?
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|error| approval_sql_error("read_approval_projection_keys", &error))?
+                    .map_err(|error| {
+                        approval_sql_error(
+                            StateLocation::ReadApprovalProjectionKeys.location(),
+                            &error,
+                        )
+                    })?
             };
             for key in keys {
                 let row =
                     query_projection_entry(&transaction, APPROVAL_PROJECTION_NAMESPACE, &key)?
-                        .ok_or_else(|| approval_error("approval_projection_missing"))?;
-                let entry = self.validate_projection_row(row, "recover_approval_projections")?;
+                        .ok_or_else(|| {
+                            approval_error(StateCode::ApprovalProjectionMissing.code())
+                        })?;
+                let entry = self.validate_projection_row(
+                    row,
+                    StateLocation::RecoverApprovalProjections.location(),
+                )?;
                 if positions
                     .get(&entry.ledger_sequence())
                     .is_none_or(|fact| !fact.matches_entry(&entry))
                 {
-                    return Err(approval_error("approval_projection_source_unproven"));
+                    return Err(approval_error(
+                        StateCode::ApprovalProjectionSourceUnproven.code(),
+                    ));
                 }
             }
             for fact in latest.values() {
@@ -281,7 +332,9 @@ impl RuntimeStateStore {
                     &fact.payload_sha256,
                 )?;
                 if !fact.matches_entry(&written) {
-                    return Err(approval_error("approval_projection_position_mismatch"));
+                    return Err(approval_error(
+                        StateCode::ApprovalProjectionPositionMismatch.code(),
+                    ));
                 }
             }
             Ok(())
@@ -289,12 +342,14 @@ impl RuntimeStateStore {
         if let Err(original) = work {
             return match transaction.rollback() {
                 Ok(()) => Err(original),
-                Err(rollback) => Err(approval_error("approval_projection_rollback_failed")
-                    .with_detail(format!("primary={original}; rollback={rollback}"))),
+                Err(rollback) => Err(approval_error(
+                    StateCode::ApprovalProjectionRollbackFailed.code(),
+                )
+                .with_detail(format!("primary={original}; rollback={rollback}"))),
             };
         }
         transaction.commit().map_err(|error| {
-            approval_sql_error("commit_approval_recovery", &error)
+            approval_sql_error(StateLocation::CommitApprovalRecovery.location(), &error)
                 .with_detail(format!("commit_outcome=unknown; primary={error}"))
         })?;
         Ok(())
@@ -304,18 +359,22 @@ impl RuntimeStateStore {
 fn prepare_decision(decision: &ApprovalDecisionRecord) -> RuntimeStateResult<(String, Vec<u8>)> {
     decision
         .validate()
-        .map_err(|_| approval_error("approval_projection_record_invalid"))?;
+        .map_err(|_| approval_error(SharedCode::ApprovalProjectionRecordInvalid.code()))?;
     let key = format!("{:x}", Sha256::digest(decision.approval_id().as_bytes()));
     let payload = serde_json::to_vec(decision)
-        .map_err(|_| approval_error("approval_projection_encode_failed"))?;
+        .map_err(|_| approval_error(StateCode::ApprovalProjectionEncodeFailed.code()))?;
     validate_projection_input(APPROVAL_PROJECTION_NAMESPACE, &key, 1, &payload)?;
     Ok((key, payload))
 }
 
-fn approval_error(code: &'static str) -> RuntimeStateError {
-    fatal(code, "persist_approval_projection")
+fn approval_error(code: Code) -> RuntimeStateError {
+    fatal(code, StateLocation::PersistApprovalProjection.location())
 }
 
-fn approval_sql_error(operation: &'static str, error: &rusqlite::Error) -> RuntimeStateError {
-    fatal("approval_projection_transaction_failed", operation).with_detail(error.to_string())
+fn approval_sql_error(operation: Location, error: &rusqlite::Error) -> RuntimeStateError {
+    fatal(
+        StateCode::ApprovalProjectionTransactionFailed.code(),
+        operation,
+    )
+    .with_detail(error.to_string())
 }

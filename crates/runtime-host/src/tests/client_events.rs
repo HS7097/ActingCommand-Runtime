@@ -708,7 +708,9 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
         actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
             .expect("shared database");
     database
-        .connection("remove reconstructible projection in existing specification")
+        .connection(
+            actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+        )
         .expect("connection")
         .execute(
             "DELETE FROM projection_entries WHERE namespace='policy.planning-signal.v1'",

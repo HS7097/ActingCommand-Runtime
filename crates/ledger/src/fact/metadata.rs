@@ -2,6 +2,7 @@
 
 use super::*;
 use actingcommand_contract::GLOBAL_EVENT_SCHEMA_VERSION;
+use actingcommand_contract::codes::SharedCode;
 
 /// Ledger metadata carries no artifact-store capability. Readers expose it only after
 /// validating the containing ledger snapshot, and apply the requested output profile.
@@ -175,21 +176,21 @@ impl StoredEventRecord {
 pub(super) fn validate(event: &impl LedgerEventRead) -> Result<(), FactValidationError> {
     let invalid = |code| FactValidationError { code };
     if event.schema_version() != GLOBAL_EVENT_SCHEMA_VERSION {
-        return Err(invalid("unsupported_event_schema"));
+        return Err(invalid(LedgerCode::UnsupportedEventSchema.code()));
     }
     if event.sequence() == 0 {
-        return Err(invalid("invalid_sequence"));
+        return Err(invalid(LedgerCode::InvalidSequence.code()));
     }
     if event.timestamp_unix_ms() == 0 {
-        return Err(invalid("invalid_timestamp"));
+        return Err(invalid(SharedCode::InvalidTimestamp.code()));
     }
     if event.event_type() != event.payload().event_type()
         || event.event_type().family() != event.payload().family()
     {
-        return Err(invalid("payload_type_mismatch"));
+        return Err(invalid(LedgerCode::PayloadTypeMismatch.code()));
     }
     if event.payload_schema() != event.payload().schema() {
-        return Err(invalid("payload_schema_mismatch"));
+        return Err(invalid(LedgerCode::PayloadSchemaMismatch.code()));
     }
     let artifacts = event.projected_artifacts(true);
     let expected_sensitivity =
@@ -203,13 +204,13 @@ pub(super) fn validate(event: &impl LedgerEventRead) -> Result<(), FactValidatio
                 })
             });
     if event.sensitivity() != expected_sensitivity || event.payload().validate().is_err() {
-        return Err(invalid("invalid_typed_payload"));
+        return Err(invalid(LedgerCode::InvalidTypedPayload.code()));
     }
     if artifacts
         .iter()
         .any(|artifact| artifact.object_key.is_none() || artifact.validate().is_err())
     {
-        return Err(invalid("invalid_artifact_reference"));
+        return Err(invalid(SharedCode::InvalidArtifactReference.code()));
     }
     Ok(())
 }

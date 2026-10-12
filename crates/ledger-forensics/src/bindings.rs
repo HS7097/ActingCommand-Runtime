@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{ForensicError, ForensicResult, query_view_page};
+use crate::codes::{ForensicsCode, ForensicsLocation};
 use actingcommand_contract::{
     EventPayload, EventQuery, EventType, ExecutionBackendProvenance, InstanceId,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, ProjectionPayload, ProjectionProfile, RuntimeContractError,
@@ -50,8 +51,8 @@ pub fn instance_bindings(
     }
     let invalid_page = |error: RuntimeContractError| {
         ForensicError::new(
-            error.code().as_str(),
-            "read_instance_bindings",
+            error.code(),
+            ForensicsLocation::ReadInstanceBindings.location(),
             "invalid binding page request",
         )
     };
@@ -67,16 +68,16 @@ pub fn instance_bindings(
         let page = query_view_page(snapshot, &query, ProjectionProfile::Forensic, &request)?;
         if page.read_scope().is_none_or(|scope| !scope.read_complete) {
             return Err(ForensicError::new(
-                "instance_bindings_incomplete",
-                "read_instance_bindings",
+                ForensicsCode::InstanceBindingsIncomplete.code(),
+                ForensicsLocation::ReadInstanceBindings.location(),
                 "binding facts are not completely readable through the snapshot",
             ));
         }
         for event in page.events() {
             let malformed = |detail: &str| {
                 ForensicError::new(
-                    "instance_binding_malformed",
-                    "read_instance_bindings",
+                    ForensicsCode::InstanceBindingMalformed.code(),
+                    ForensicsLocation::ReadInstanceBindings.location(),
                     format!("sequence {}: {detail}", event.sequence),
                 )
             };
