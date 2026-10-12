@@ -6005,6 +6005,64 @@ mod tests {
             );
         }
 
+        /// The rows layout with six OCR features, each read at its own offset, built without a
+        /// vision provider.
+        fn ocr_rows_evaluator(readable_band: Option<Value>) -> RecognitionEvaluator {
+            let mut layout = rows_layout();
+            layout["features"] = (0..6)
+                .map(|index| {
+                    json!({
+                        "name": format!("label_{index}"), "value": "passed",
+                        "target": "text/row_label", "offset": {"x": 2 + 5 * index, "y": 1}
+                    })
+                })
+                .collect();
+            if let Some(band) = readable_band {
+                layout["readable_band"] = band;
+            }
+            let mut pack = rows_pack(layout);
+            pack["targets"]
+                .as_array_mut()
+                .expect("targets")
+                .push(json!({
+                    "type": "ocr", "id": "text/row_label",
+                    "region": {"x": 0, "y": 0, "width": 4, "height": 4},
+                    "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
+                    "expected": ["open"], "case_sensitive": false, "minimum_confidence": 0.9,
+                    "model_ref": "PP-OCRv6_medium", "model_sha256": "a".repeat(64)
+                }));
+            RecognitionEvaluator::with_asset_resolver(
+                load_pack_from_json_str(&pack.to_string()).expect("pack"),
+                Arc::new(MarkerAssets(encode_png(&marker()))),
+            )
+            .expect("layout admitted")
+        }
+
+        #[test]
+        fn repeated_anchor_provider_budget_counts_every_actionable_instance() {
+            let scene = rows_scene();
+            // Six OCR evaluations per instance on the three actionable rows make 18.
+            let over = ocr_rows_evaluator(None)
+                .scene_context(&scene)
+                .project_candidates("layout/rows")
+                .expect_err("18 OCR evaluations exceed the budget of 16");
+            assert_eq!(over.code().as_str(), "candidate_projection_budget_exceeded");
+            assert_eq!(over.item(), "provider_evaluations");
+            assert_eq!(
+                over.detail(),
+                "layout_id=layout/rows count=18 limit_count=16"
+            );
+
+            // A readable band that leaves two rows actionable needs 12, within the budget, so
+            // the features are read; offline, without a provider, that is refused as such.
+            let within =
+                ocr_rows_evaluator(Some(json!({"x": 0, "y": 0, "width": 96, "height": 40})))
+                    .scene_context(&scene)
+                    .project_candidates("layout/rows")
+                    .expect_err("no vision provider reads the OCR features");
+            assert_eq!(within.code().as_str(), "candidate_feature_provider_missing");
+        }
+
         #[test]
         fn repeated_anchor_declarations_are_refused_with_their_pointer() {
             let edit = |change: fn(&mut Value)| {
