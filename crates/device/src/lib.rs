@@ -15,6 +15,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     mod gate_381b;
+    mod gate_398_rd5a;
 }
 
 pub mod adb;

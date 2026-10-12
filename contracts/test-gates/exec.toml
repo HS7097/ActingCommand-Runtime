@@ -566,3 +566,17 @@ tests = [
     "actingcommand-device::lib::maatouch::tests::validate_input_rejects_x_over_max",
 ]
 incident = []
+
+# Handset device-state reads are typed and never guessed; the screen check wakes once, dismisses only a keyguard without a credential, reports a keyguard with one as device_locked, and sends only whitelisted commands
+[[gate]]
+key = "44"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5a_t1_neutral_answers_read_as_typed_values",
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5a_t1_unknown_answers_and_adb_failures_are_device_state_unreadable",
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t1_a_dark_screen_gets_exactly_one_wake_key",
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t2_an_insecure_keyguard_is_dismissed_once_or_left_waiting",
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t3_a_secure_keyguard_is_device_locked_and_gets_no_command",
+    "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t8_every_command_the_checks_can_send_is_on_the_whitelist",
+]
+incident = ["#398"]
