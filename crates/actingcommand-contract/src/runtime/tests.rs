@@ -2915,3 +2915,356 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
         assert!(!public.contains("entered_event_id"));
     }
 }
+
+// Workflow #378 A4 (model sections 7.1 and 7.2, slice row M378:493): runtime-client revision 2,
+// request v4 with `detail` and receipt v2 with `outcome`.
+
+/// Every receipt state carries its code: admitted, observed, queued and cancelled their info
+/// codes, completed the success code of the request kind; a denied or failed receipt carries its
+/// refusal or failure, so its state has no code of its own.
+#[test]
+fn a4_every_receipt_state_carries_its_outcome_code() {
+    use crate::outcome::Category;
+    let health = request(RuntimeOperation::Health);
+    let completed = RuntimeOperationKind::Health
+        .success_code()
+        .expect("health success code");
+    for (state, code, category) in [
+        (
+            RuntimeReceiptState::Admitted,
+            "request_admitted",
+            Category::Info,
+        ),
+        (
+            RuntimeReceiptState::Observed,
+            "request_observed",
+            Category::Info,
+        ),
+        (
+            RuntimeReceiptState::Queued,
+            "request_queued",
+            Category::Info,
+        ),
+        (
+            RuntimeReceiptState::Cancelled,
+            "request_cancelled",
+            Category::Info,
+        ),
+        (
+            RuntimeReceiptState::Completed,
+            completed.as_str(),
+            Category::Success,
+        ),
+    ] {
+        let outcome = receipt_state_outcome(&health, state).expect("state outcome");
+        assert_eq!(outcome.code().as_str(), code, "{state:?}");
+        assert_eq!(outcome.category(), category, "{state:?}");
+        assert!(outcome.values().is_empty(), "{state:?}");
+    }
+    for state in [RuntimeReceiptState::Denied, RuntimeReceiptState::Failed] {
+        assert_eq!(
+            receipt_state_outcome(&health, state)
+                .expect_err("a refusal carries its own outcome")
+                .code()
+                .as_str(),
+            "invalid_receipt_outcome",
+            "{state:?}"
+        );
+    }
+}
+
+/// One success code per request kind that completes (review L1): each is a success and no two
+/// kinds share one. A kind that never answers completed carries its state's info code instead,
+/// and the five kinds of #389 section 2.3 get theirs with their behaviour (U-2, U-3, U-4).
+#[test]
+fn a4_each_request_kind_that_completes_has_its_own_success_code() {
+    use crate::outcome::Category;
+    use RuntimeOperationKind as Kind;
+    let never_completed = [
+        Kind::RequestShutdown,
+        Kind::AcquireLease,
+        Kind::QueueLease,
+        Kind::PollQueuedLease,
+        Kind::CancelQueuedLease,
+        Kind::ObserveContainedPage,
+        Kind::BindChannel,
+        Kind::UpgradeState,
+        Kind::UpgradeStateStatus,
+        Kind::LoadPack,
+        Kind::UnloadPack,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for kind in RuntimeOperationKind::ALL {
+        match kind.success_code() {
+            Some(code) => {
+                assert!(!never_completed.contains(kind), "{kind:?}");
+                assert_eq!(code.category(), Category::Success, "{kind:?}");
+                assert!(seen.insert(code.as_str()), "{kind:?} shares {code}");
+            }
+            None => assert!(
+                never_completed.contains(kind),
+                "{kind:?} completes without a success code"
+            ),
+        }
+    }
+}
+
+/// Receipt v2 on the wire: `outcome` on every receipt and no `error` member; a refusal's top is
+/// the Runtime's specific code with the Runtime error code, the operation and the halt as values,
+/// and a busy refusal names the holder.
+#[test]
+fn a4_receipt_v2_carries_its_outcome_on_the_wire() {
+    use crate::codes::ContractLocation;
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let health = request(RuntimeOperation::Health);
+    let completed = RuntimeReceipt::success(
+        &health,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::Health { owner_epoch },
+    )
+    .expect("completed receipt");
+    assert_eq!(
+        serde_json::to_value(&completed).expect("completed receipt JSON"),
+        serde_json::json!({
+            "schema_version": "actingcommand.runtime.receipt.v2",
+            "request_id": serde_json::to_value(health.request_id()).expect("request id"),
+            "correlation_id": serde_json::to_value(health.correlation_id()).expect("correlation id"),
+            "state": "completed",
+            "result": {"kind": "health", "owner_epoch": serde_json::to_value(owner_epoch).expect("epoch")},
+            "outcome": {
+                "schema_version": "actingcommand.outcome.v1",
+                "code": "request_health_completed",
+                "category": "success",
+                "values": {}
+            }
+        })
+    );
+
+    let cancel = request(RuntimeOperation::CancelContainedTask {
+        task_request_id: *ids.mint_request_id().expect("task request").transport(),
+    });
+    let refusal = RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false);
+    let denied = RuntimeReceipt::failure(
+        &cancel,
+        RuntimeReceiptState::Denied,
+        None,
+        refusal.receipt_outcome(
+            Some(SharedCode::ScheduledContainedTaskNotClientCancellable.code()),
+            Some(ContractLocation::CancelContainedTask.location()),
+        ),
+    )
+    .expect("denied receipt");
+    assert_eq!(
+        serde_json::to_value(&denied).expect("denied receipt JSON"),
+        serde_json::json!({
+            "schema_version": "actingcommand.runtime.receipt.v2",
+            "request_id": serde_json::to_value(cancel.request_id()).expect("request id"),
+            "correlation_id": serde_json::to_value(cancel.correlation_id()).expect("correlation id"),
+            "state": "denied",
+            "outcome": {
+                "schema_version": "actingcommand.outcome.v1",
+                "code": "scheduled_contained_task_not_client_cancellable",
+                "category": "error",
+                "values": {
+                    "runtime_code": "invalid_request",
+                    "operation": "cancel_contained_task",
+                    "host_halted": false
+                }
+            }
+        })
+    );
+    assert_eq!(denied.error_projection(), Some(refusal));
+
+    let holder_id = *ids.mint_holder_id().expect("holder").transport();
+    let lease_id = *ids.mint_lease_id().expect("lease").transport();
+    let busy = RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false)
+        .with_holder(holder_id, lease_id);
+    let acquire = request(RuntimeOperation::acquire_lease(
+        "node.a",
+        ids.mint_holder_id().expect("requesting holder"),
+    ));
+    let refused = RuntimeReceipt::failure(
+        &acquire,
+        RuntimeReceiptState::Denied,
+        None,
+        busy.receipt_outcome(
+            Some(RuntimeErrorCode::LeaseBusy.code()),
+            Some(ContractLocation::AcquireLease.location()),
+        ),
+    )
+    .expect("busy receipt");
+    assert_eq!(
+        serde_json::to_value(&refused).expect("busy receipt JSON")["outcome"],
+        serde_json::json!({
+            "schema_version": "actingcommand.outcome.v1",
+            "code": "lease_busy",
+            "category": "error",
+            "values": {
+                "operation": "acquire_lease",
+                "host_halted": false,
+                "holder_id": serde_json::to_value(holder_id).expect("holder id"),
+                "lease_id": serde_json::to_value(lease_id).expect("lease id")
+            }
+        })
+    );
+    assert_eq!(refused.error_projection(), Some(busy));
+
+    for receipt in [completed, denied, refused] {
+        let decoded: RuntimeReceipt =
+            serde_json::from_str(&serde_json::to_string(&receipt).expect("receipt JSON"))
+                .expect("receipt v2 decodes");
+        decoded.validate().expect("decoded receipt validates");
+        assert_eq!(decoded, receipt);
+    }
+}
+
+/// Request v4: `detail` is optional; absent, the class default of the source applies, codes
+/// only for the console (`source: ui`) and the full outcome for every other source.
+#[test]
+fn a4_request_v4_names_its_receipt_detail_or_takes_its_class_default() {
+    use crate::outcome::Detail;
+    let ids = issuer();
+    let from = |actor, source| {
+        RuntimeRequest::new(
+            ids.mint_request_id().expect("request id"),
+            ids.mint_correlation_id().expect("correlation id"),
+            None,
+            actor,
+            source,
+            1,
+            RuntimeOperation::Status,
+        )
+        .expect("status request")
+    };
+    for (actor, source, class_default) in [
+        (EventActor::User, EventSource::Ui, Detail::Codes),
+        (EventActor::Cli, EventSource::Cli, Detail::Full),
+        (EventActor::Lab, EventSource::Lab, Detail::Full),
+        (EventActor::Agent, EventSource::Adapter, Detail::Full),
+    ] {
+        let request = from(actor, source);
+        assert_eq!(request.detail(), None, "{source:?}");
+        assert_eq!(request.receipt_detail(), class_default, "{source:?}");
+        let wire = serde_json::to_value(&request).expect("request JSON");
+        assert_eq!(wire["schema_version"], "actingcommand.runtime.request.v4");
+        assert!(wire.get("detail").is_none(), "{source:?}");
+        for detail in [Detail::Codes, Detail::Full] {
+            let asked = request.clone().with_detail(detail);
+            assert_eq!(asked.detail(), Some(detail), "{source:?}");
+            assert_eq!(asked.receipt_detail(), detail, "{source:?}");
+            let wire = serde_json::to_value(&asked).expect("request JSON");
+            assert_eq!(
+                wire["detail"],
+                serde_json::to_value(detail).expect("detail JSON"),
+                "{source:?}"
+            );
+            let decoded: RuntimeRequest = serde_json::from_value(wire).expect("request v4 decodes");
+            decoded.validate().expect("decoded request validates");
+            assert_eq!(decoded, asked, "{source:?}");
+        }
+    }
+}
+
+/// Codes mode keeps the registered names (the code, the operation, the Runtime error code) and
+/// withholds the data values; it is filtered once, where the receipt leaves, and the projection
+/// read back still names the Runtime error code.
+#[test]
+fn a4_codes_mode_keeps_the_registered_names_and_withholds_the_data() {
+    use crate::codes::ContractLocation;
+    use crate::outcome::Detail;
+    let ids = issuer();
+    let operation = RuntimeOperation::CancelContainedTask {
+        task_request_id: *ids.mint_request_id().expect("task request").transport(),
+    };
+    let ui = governance_request(operation.clone());
+    let cli = request(operation);
+    let refusal = RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, true);
+    let full = RuntimeReceipt::failure(
+        &ui,
+        RuntimeReceiptState::Denied,
+        None,
+        refusal.receipt_outcome(
+            Some(SharedCode::ScheduledContainedTaskNotClientCancellable.code()),
+            Some(ContractLocation::CancelContainedTask.location()),
+        ),
+    )
+    .expect("denied receipt");
+    assert_eq!(full.outcome_envelope().detail(), Detail::Full);
+    assert_eq!(full.clone().for_request_detail(&cli), full);
+
+    let codes = full.clone().for_request_detail(&ui);
+    assert_eq!(codes.outcome_envelope().detail(), Detail::Codes);
+    assert_eq!(
+        codes.outcome().code().as_str(),
+        "scheduled_contained_task_not_client_cancellable"
+    );
+    assert_eq!(
+        serde_json::Value::Object(codes.outcome().values().clone()),
+        serde_json::json!({
+            "operation": "cancel_contained_task",
+            "runtime_code": "invalid_request"
+        })
+    );
+    let wire = serde_json::to_value(&codes).expect("codes receipt JSON");
+    assert_eq!(wire["outcome"]["detail"], "codes");
+    let decoded: RuntimeReceipt = serde_json::from_value(wire).expect("codes receipt decodes");
+    decoded.validate().expect("codes receipt validates");
+    assert_eq!(decoded, codes);
+    assert_eq!(
+        decoded.error_projection(),
+        Some(RuntimeErrorProjection::new(
+            RuntimeErrorCode::InvalidRequest,
+            false
+        ))
+    );
+    assert_eq!(full.error_projection(), Some(refusal));
+}
+
+/// Receipt v2 reserves `outcome` for the envelope: the contained run's result and the
+/// cancellation status name how the run ended `task_result` (model section 8.1).
+#[test]
+fn a4_contained_task_results_name_their_end_task_result() {
+    let ids = issuer();
+    let completed = RuntimeResult::ContainedTaskCompleted {
+        run_id: *ids.mint_run_id().expect("run").transport(),
+        task_id: *ids.mint_task_id().expect("task").transport(),
+        task_request_id: *ids.mint_request_id().expect("task request").transport(),
+        response_deadline_monotonic_ms: None,
+        task_result: TaskOutcome::Success,
+        final_page: None,
+        executed_steps: 1,
+    };
+    let wire = serde_json::to_value(&completed).expect("completed result JSON");
+    assert_eq!(wire["task_result"], "success");
+    assert!(wire.get("outcome").is_none());
+    assert_eq!(
+        serde_json::from_value::<RuntimeResult>(wire).expect("completed result decodes"),
+        completed
+    );
+
+    let cancelled = ContainedTaskCancellationStatus::Terminal {
+        deadline_monotonic_ms: None,
+        task_result: TaskOutcome::Cancelled,
+        reason: Some(ContainedTaskCancellationReason::ClientRequested),
+        task_terminal: TerminalEvent {
+            sequence: 1,
+            event_id: *ids.mint_event_id().expect("task terminal").transport(),
+        },
+        lease_terminal: TerminalEvent {
+            sequence: 2,
+            event_id: *ids.mint_event_id().expect("lease terminal").transport(),
+        },
+        lease_disposition: ContainedTaskLeaseTerminal::Released,
+    };
+    cancelled.validate().expect("cancellation status");
+    let wire = serde_json::to_value(&cancelled).expect("cancellation status JSON");
+    assert_eq!(wire["task_result"], "cancelled");
+    assert!(wire.get("outcome").is_none());
+    assert_eq!(
+        serde_json::from_value::<ContainedTaskCancellationStatus>(wire)
+            .expect("cancellation status decodes"),
+        cancelled
+    );
+}

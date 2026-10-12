@@ -8,6 +8,8 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
 mod gate_a2a;
+// Workflow #378 A4: the client error's outcome and its links (model section 7.2).
+mod gate_a4;
 // #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).
 mod gate_c1;
 use crate::client::{

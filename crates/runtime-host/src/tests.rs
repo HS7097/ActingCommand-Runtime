@@ -134,6 +134,8 @@ mod policy_budget;
 mod policy_completion;
 mod project_interface;
 mod proposals;
+// Workflow #378 A4: receipt v2 outcomes and the class detail.
+mod receipt_outcome;
 mod releases;
 mod sampling;
 mod scheduled_execution;
