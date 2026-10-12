@@ -80,31 +80,6 @@ impl PolicyWakes {
     }
 }
 
-impl RuntimeHost {
-    /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
-    /// Opening them is the monitor's starting point: the wakes raised before are dropped, as
-    /// the monitor's ledger subscription used to start at the ledger head, because the initial
-    /// (`Recovery`) policy cycle has already evaluated what they report.
-    pub fn open_policy_wakes(&self) -> RuntimeHostResult<PolicyWakes> {
-        let shared = self.shared_ref(HostLocation::OpenPolicyWakes)?;
-        shared.policy_wakes.clear();
-        Ok(PolicyWakes {
-            signal: Arc::clone(&shared.policy_wakes),
-        })
-    }
-
-    /// Workflow #383 AO7-c, test builds and the `test-hooks` feature only: the event
-    /// subscriptions (`SubscribeEvents`) this host has served.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn event_subscriptions_for_test(&self) -> u64 {
-        self.shared
-            .as_ref()
-            .expect("test Runtime host is open")
-            .event_subscriptions_for_test
-            .load(Ordering::Acquire)
-    }
-}
-
 /// Workflow #383 AO-7: the ledger as a critical execution's appender that raises the policy
 /// driver's wake for each record it commits. The lease critical executions that end a lease
 /// (an explicit release, a cleanup and an expiry) append through it.
@@ -121,6 +96,17 @@ impl EventAppender for PolicyWakingLedger<'_> {
 }
 
 impl HostShared {
+    /// The daemon policy monitor's starting point ([`RuntimeHost::open_policy_wakes`]): the
+    /// wakes raised before are dropped, as the monitor's ledger subscription used to start at
+    /// the ledger head, because the initial (`Recovery`) policy cycle has already evaluated what
+    /// they report.
+    pub(super) fn open_policy_wakes(&self) -> PolicyWakes {
+        self.policy_wakes.clear();
+        PolicyWakes {
+            signal: Arc::clone(&self.policy_wakes),
+        }
+    }
+
     pub(super) fn policy_waking_ledger(&self) -> PolicyWakingLedger<'_> {
         PolicyWakingLedger { shared: self }
     }

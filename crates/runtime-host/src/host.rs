@@ -1912,6 +1912,25 @@ impl RuntimeHost {
             .lifecycle_draining()
     }
 
+    /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
+    /// Opening them is the monitor's starting point; the wakes raised before are dropped.
+    pub fn open_policy_wakes(&self) -> RuntimeHostResult<PolicyWakes> {
+        Ok(self
+            .shared_ref(HostLocation::OpenPolicyWakes)?
+            .open_policy_wakes())
+    }
+
+    /// Workflow #383 AO7-c, test builds and the `test-hooks` feature only: the event
+    /// subscriptions (`SubscribeEvents`) this host has served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn event_subscriptions_for_test(&self) -> u64 {
+        self.shared
+            .as_ref()
+            .expect("test Runtime host is open")
+            .event_subscriptions_for_test
+            .load(Ordering::Acquire)
+    }
+
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
     pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         Ok(self
