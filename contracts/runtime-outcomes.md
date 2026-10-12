@@ -140,6 +140,8 @@ Between Runtime modules outcomes always travel full.
   configuration or a refused contract value is row 7, whatever its words; a pack, binding or
   configuration that a run uses and finds wrong is row 3. Rows 3 and 4 part at the screen: a
   condition decided from the declarations alone is row 3, one that needs the screen is row 4.
+  A receipt or projection code takes the class of the outcome it projects: `recognition_failed`
+  is `pack_logic_mismatch`, `capture_failed` is `environment_fault`.
 - **Release snapshot**: `{schema_version: "actingcommand.outcome-codes.release.v1", release,
   codes: {name: {category, ladder_class, review, status, values: {key: {type, required}}}},
   locations: {name: {review, status}}}`.
