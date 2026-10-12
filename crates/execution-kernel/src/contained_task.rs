@@ -145,7 +145,9 @@ impl fmt::Display for ContainedTaskCode {
 pub struct ContainedTaskError {
     code: ContainedTaskCode,
     detail: Option<String>,
-    timing: Option<TaskTimingFailure>,
+    /// Boxed: only timed failures carry it, and inline it would put the error at 128 bytes now
+    /// that the code is a 24-byte `ContainedTaskCode` (clippy `result_large_err`).
+    timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
@@ -179,7 +181,7 @@ impl ContainedTaskError {
     }
 
     fn with_timing(mut self, timing: Option<TaskTimingFailure>) -> Self {
-        self.timing = timing;
+        self.timing = timing.map(Box::new);
         self
     }
 
@@ -201,7 +203,7 @@ impl ContainedTaskError {
     }
 
     pub fn timing(&self) -> Option<&TaskTimingFailure> {
-        self.timing.as_ref()
+        self.timing.as_deref()
     }
 
     fn with_timing_check_position(mut self, position: TaskTimingCheckPosition) -> Self {
@@ -1168,7 +1170,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                 if reason == OcrFieldReason::UnknownEntry
                                     && let Some(rule) = &field.text_extraction
                                     && let Some(extraction) = rule.extract(&normalized)
-                                        .map_err(|code| ContainedTaskError::new(code))?
+                                        .map_err(ContainedTaskError::new)?
                                 {
                                     (value, reason) = parse_ocr_field(
                                         &field.value,
@@ -4951,7 +4953,7 @@ impl TaskProgram {
                     &target_pages,
                     scheduling,
                 )
-                .map_err(|code| ContainedTaskError::new(code))?;
+                .map_err(ContainedTaskError::new)?;
         }
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
@@ -5033,7 +5035,7 @@ impl TaskProgram {
                     .map(|operation| operation.id.as_str())
                     .collect::<Vec<_>>(),
             )
-            .map_err(|code| ContainedTaskError::new(code))?;
+            .map_err(ContainedTaskError::new)?;
             if control.execution_mode != "navigable_route"
                 || !control.stop_on_confirmation.unwrap_or(true)
                 || self.entry_page.is_none()
@@ -5126,7 +5128,7 @@ impl TaskProgram {
                 &operations,
                 self.scheduling_outcome.as_ref().unwrap(),
             )
-            .map_err(|code| ContainedTaskError::new(code))?;
+            .map_err(ContainedTaskError::new)?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -5366,9 +5368,7 @@ impl TaskProgram {
                 ContainedTaskError::new(SharedCode::OcrFieldsDeclarationMissing.code())
             })?)
             .map_err(|_| ContainedTaskError::new(SharedCode::OcrFieldsDeclarationInvalid.code()))?;
-        declaration
-            .validate()
-            .map_err(|code| ContainedTaskError::new(code))?;
+        declaration.validate().map_err(ContainedTaskError::new)?;
         if let Some(metadata) = bundle.projection_metadata() {
             for field in &mut declaration.fields {
                 if metadata.target_privacy(&field.target_id)
@@ -5433,7 +5433,7 @@ impl TaskProgram {
                 })?;
                 parsed
                     .validate(&declaration.limits)
-                    .map_err(|code| ContainedTaskError::new(code))?;
+                    .map_err(ContainedTaskError::new)?;
                 dictionaries.insert(field.id.clone(), parsed);
             }
         }
