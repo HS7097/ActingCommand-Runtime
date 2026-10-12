@@ -120,6 +120,10 @@ pub(crate) struct RuntimeHostFailureContext {
     /// fatal state that stopped an install start; shown after the operation as
     /// `cause=<code> cause_operation=<operation>` until A2 makes it a `caused_by` link.
     pub(crate) latched_cause: Option<(&'static str, &'static str)>,
+    /// Workflow #378 A4: the error's outcome with the values its code declares, when its
+    /// producer attached them ([`RuntimeHostError::with_outcome_values`]); a denied or failed
+    /// receipt carries it. Otherwise the receipt's outcome is the code and operation alone.
+    outcome_values: Option<Outcome>,
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
     pub(crate) policy_rejection: Option<Box<actingcommand_contract::PolicyDispatchRejection>>,
@@ -156,6 +160,7 @@ impl PartialEq for RuntimeHostError {
                 == other.lifecycle.incomplete_device_diagnostic_summary
             && self.lifecycle.owner_probe == other.lifecycle.owner_probe
             && self.lifecycle.latched_cause == other.lifecycle.latched_cause
+            && self.lifecycle.outcome_values == other.lifecycle.outcome_values
     }
 }
 impl Eq for RuntimeHostError {}
@@ -354,20 +359,51 @@ impl RuntimeHostError {
     /// a spelling is looked up in the registries it can come from
     /// ([`crate::relayed_spelling`]); one that no registry knows (an operation spelled like a
     /// code, which A2-P renames) leaves the Runtime error code on top, or the operation out.
+    /// When the error's producer attached the values its code declares
+    /// ([`Self::with_outcome_values`]), that outcome is the top
+    /// ([`RuntimeErrorProjection::with_receipt_values`]).
     pub(crate) fn receipt_outcome(&self) -> Outcome {
-        let code = match self.code {
+        match &self.lifecycle.outcome_values {
+            Some(outcome) => self.projection.with_receipt_values(outcome.clone()),
+            None => self
+                .projection
+                .receipt_outcome(self.registered_code(), self.registered_operation()),
+        }
+    }
+
+    /// This error with the values its code declares on its receipt outcome (Workflow #378 A4):
+    /// `values` receives the outcome of the error's code and operation and returns it with the
+    /// values. A code whose catalog entry requires values tops a receipt only with them.
+    pub(crate) fn with_outcome_values(mut self, values: impl FnOnce(Outcome) -> Outcome) -> Self {
+        let code = self
+            .registered_code()
+            .unwrap_or_else(|| self.projection.code.code());
+        let outcome = match self.registered_operation() {
+            Some(operation) => Outcome::new(code).operation(operation),
+            None => Outcome::new(code),
+        };
+        self.lifecycle.outcome_values = Some(values(outcome));
+        self
+    }
+
+    /// The error's code, a relayed spelling looked up in the registries it can come from.
+    fn registered_code(&self) -> Option<Code> {
+        match self.code {
             HostErrorCode::Registered(code) => Some(code),
             HostErrorCode::Relayed { relayed_code } => {
                 crate::relayed_spelling::registered_code(relayed_code)
             }
-        };
-        let operation = match self.operation {
+        }
+    }
+
+    /// The error's operation, a relayed spelling looked up in the registries it can come from.
+    fn registered_operation(&self) -> Option<Location> {
+        match self.operation {
             HostErrorOperation::Registered(operation) => Some(operation),
             HostErrorOperation::Relayed { relayed_operation } => {
                 crate::relayed_spelling::registered_location(relayed_operation)
             }
-        };
-        self.projection.receipt_outcome(code, operation)
+        }
     }
 
     pub fn resource_declaration(

@@ -53,7 +53,77 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
+use actingcommand_contract::outcome::{Outcome, VocabularyToken};
 use actingcommand_contract::{EmulatorInstanceAction, FactValue};
+
+/// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (Workflow
+/// #378 A4: the `restart_phase` value of a failed restart's receipt outcome).
+#[derive(Clone, Copy)]
+struct RestartPhaseToken(&'static str);
+
+impl VocabularyToken for RestartPhaseToken {
+    const VOCABULARY: &'static str = "emulator_restart_phase";
+
+    fn token(self) -> &'static str {
+        self.0
+    }
+}
+
+/// How a restart's Stop ended, as a token of the catalog vocabulary `emulator_stop_result`.
+#[derive(Clone, Copy)]
+struct StopResultToken(&'static str);
+
+impl VocabularyToken for StopResultToken {
+    const VOCABULARY: &'static str = "emulator_stop_result";
+
+    fn token(self) -> &'static str {
+        self.0
+    }
+}
+
+/// The tokens of the vocabulary `emulator_stop_result`: `confirmed`, or the last part of the
+/// device stage a Stop failed at.
+const STOP_RESULT_TOKENS: [&str; 18] = [
+    "confirmed",
+    "control_exit",
+    "control_errcode",
+    "launch_error",
+    "wait_timeout",
+    "run",
+    "timeout",
+    "path",
+    "errcode",
+    "entry",
+    "exit",
+    "shape",
+    "decode",
+    "json",
+    "output_bound",
+    "unavailable",
+    "unsupported",
+    "unregistered",
+];
+
+/// The vocabulary token of a Stop's result; `None` for a stage part the vocabulary does not
+/// list, which the outcome then leaves out.
+fn stop_result_token(result: &str) -> Option<StopResultToken> {
+    STOP_RESULT_TOKENS
+        .iter()
+        .find(|token| **token == result)
+        .map(|token| StopResultToken(*token))
+}
+
+/// A Stop's process check as a token of the catalog vocabulary `device_process_presence`.
+#[derive(Clone, Copy)]
+struct ProcessPresenceToken(DeviceProcessPresence);
+
+impl VocabularyToken for ProcessPresenceToken {
+    const VOCABULARY: &'static str = "device_process_presence";
+
+    fn token(self) -> &'static str {
+        self.0.as_str()
+    }
+}
 
 const CONTROL_OPERATION: ContractLocation = ContractLocation::ControlEmulatorInstance;
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
@@ -241,6 +311,31 @@ fn stage_token(failure: &EmulatorControlFailure) -> &str {
         .diagnostic()
         .map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
     stage.rsplit_once('.').map_or(stage, |(_, token)| token)
+}
+
+/// The values of a failed restart's receipt outcome (F4.1; Workflow #378 A4): the report's
+/// tokens, which the failure record's primary detail also carries.
+fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outcome {
+    let outcome = outcome
+        .restart_phase(RestartPhaseToken(report.phase))
+        .stop_elapsed_ms(report.stop_ms)
+        .start_dispatched(report.start_ms.is_some())
+        .device_process_present(ProcessPresenceToken(report.device_process_present));
+    let outcome = match stop_result_token(report.stop_result) {
+        Some(token) => outcome.stop_result(token),
+        None => outcome,
+    };
+    let outcome = match report.start_ms {
+        Some(start_ms) => outcome.start_elapsed_ms(start_ms),
+        None => outcome,
+    };
+    match report.state {
+        Some(state) => outcome
+            .process_started(state.process_started)
+            .android_started(state.android_started)
+            .adb_port_present(state.adb_port_present),
+        None => outcome,
+    }
 }
 
 /// The canonical spelling of an instance id, for a `key=value` token.
@@ -905,6 +1000,8 @@ impl HostShared {
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
         )
+        // Workflow #378 A4: the receipt's outcome carries the values the code requires.
+        .with_outcome_values(|outcome| restart_report_outcome(outcome, report))
         .with_diagnostic_detail(DiagnosticDetailDraft::new(
             category,
             stage,

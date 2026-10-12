@@ -4362,7 +4362,28 @@ impl RuntimeErrorProjection {
         if let Some(operation) = operation {
             outcome = outcome.operation(operation);
         }
-        outcome = outcome.host_halted(self.fatal);
+        self.receipt_state_values(outcome)
+    }
+
+    /// The receipt values of this projection on `outcome`, which its producer built with the
+    /// values its code declares (Workflow #378 A4): a code whose catalog entry requires values
+    /// tops a denied or failed receipt only with them. The projection's Runtime error code is
+    /// the `runtime_code` value unless it is the outcome's own code; `host_halted`, the holder
+    /// and `retry_after_ms` follow as in [`Self::receipt_outcome`].
+    pub fn with_receipt_values(&self, outcome: Outcome) -> Outcome {
+        let runtime_code = self.code.code();
+        let outcome = if outcome.code().as_str() == runtime_code.as_str() {
+            outcome
+        } else {
+            outcome.runtime_code(runtime_code)
+        };
+        self.receipt_state_values(outcome)
+    }
+
+    /// `fatal` as `host_halted`, the current holder as `holder_id` and `lease_id`, and
+    /// `retry_after_ms`.
+    fn receipt_state_values(&self, outcome: Outcome) -> Outcome {
+        let mut outcome = outcome.host_halted(self.fatal);
         if let Some(holder_id) = self.current_holder_id.as_ref().and_then(id_text) {
             outcome = outcome.holder_id(holder_id);
         }
