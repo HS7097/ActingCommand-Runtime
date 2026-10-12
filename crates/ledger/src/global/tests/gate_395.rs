@@ -50,6 +50,14 @@ const FACTS_DEADLINE_CODES: [&str; 2] = [
     "ledger_read_budget_exceeded",
     "runtime_facts_read_budget_exceeded",
 ];
+/// The deadline codes of the offline material read (`contracts/material-read.md`, LEDG-395): a
+/// phase whose deadline runs out keeps the code of the bound that ran out, the ledger's, the
+/// artifact store's or the material read's.
+const MATERIAL_DEADLINE_CODES: [&str; 3] = [
+    "ledger_read_budget_exceeded",
+    "artifact_read_budget_exceeded",
+    "material_read_budget_exceeded",
+];
 
 /// One captured frame in a formal root whose writer is closed.
 struct SealedRoot {
@@ -219,6 +227,10 @@ fn gate_each_material_phase_has_its_own_deadline_and_a_run_out_names_its_phase()
         assert_eq!(result.limit, Some(RuntimeMaterialReadLimit::BudgetExceeded));
         assert!(result.chunk.is_none(), "{phase:?}: no bytes");
         let failure = result.failure.as_ref().expect("the failure");
+        assert!(
+            MATERIAL_DEADLINE_CODES.contains(&failure.code.as_str()),
+            "{phase:?}: a deadline code: {failure:?}"
+        );
         assert_eq!(failure.operation, location, "{phase:?}: {failure:?}");
         let answer = answer.expect_err("a deadline that ran out fails the command");
         assert_eq!(
