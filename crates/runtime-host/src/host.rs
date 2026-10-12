@@ -2897,6 +2897,11 @@ impl RuntimeHost {
     }
 
     /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
+    /// Read under the instance's queue-order lock, as `holds_key` reads a key: a lease
+    /// transition changes the scheduler before its outcome record is durable (a release's
+    /// `lease.released` is appended after the scheduler let the lease go) and holds that lock
+    /// until the record is written, so a reader outside it can see a holder-less instance whose
+    /// release is not in the ledger yet.
     #[cfg(test)]
     pub(crate) fn instance_claims_for_test(
         &self,
@@ -2908,6 +2913,10 @@ impl RuntimeHost {
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
+        let order_lock = shared
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
         let scheduler = lock(
             &shared.scheduler,
             crate::codes::test_spellings::TestLocation::ReadInstanceClaimsForTest,
