@@ -85,95 +85,9 @@ pub struct TaskPhaseOperation<'a> {
     pub retryable: bool,
 }
 
-// --- Workflow #373 NAV-3b: entry page sets (begin) ---
-
-/// The most pages one task entry page set names (Workflow #373 NAV-3b).
-pub const MAX_ENTRY_PAGES: usize = 16;
-
-crate::outcome_vocabulary! {
-    /// Why a task's entry page set is refused at admission (vocabulary `entry_problem`,
-    /// Workflow #373 NAV-3b).
-    pub enum EntryProblem: "entry_problem" {
-        Empty => "empty",
-        TooMany => "too_many",
-        Duplicate => "duplicate",
-        AnyInSet => "any_in_set",
-        Unresolved => "unresolved",
-        PhaseStartMissing => "phase_start_missing",
-        PhaseStartAmbiguous => "phase_start_ambiguous",
-    }
-}
-
-/// One start of a phased route: the stage the route enters at and the page it enters on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TaskPhaseEntry<'a> {
-    pub phase: usize,
-    pub page: &'a str,
-}
-
-/// The shape of a task's entry page set before its pages are resolved (Workflow #373 NAV-3b):
-/// 1..=16 labels, none of them `any` or blank, and no page named twice once the exact game
-/// prefix is removed. Source parsing, build and Runtime admission share this check.
-pub fn validate_entry_page_set(game: &str, pages: &[String]) -> Result<(), EntryProblem> {
-    if pages.is_empty() {
-        return Err(EntryProblem::Empty);
-    }
-    if pages.len() > MAX_ENTRY_PAGES {
-        return Err(EntryProblem::TooMany);
-    }
-    let prefix = format!("{game}/");
-    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
-    if pages.iter().any(|page| canonical(page) == "any") {
-        return Err(EntryProblem::AnyInSet);
-    }
-    if pages.iter().any(|page| canonical(page).trim().is_empty()) {
-        return Err(EntryProblem::Unresolved);
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    if !pages.iter().all(|page| seen.insert(canonical(page))) {
-        return Err(EntryProblem::Duplicate);
-    }
-    Ok(())
-}
-
-/// The stage a phased route enters at for one page of its entry page set (Workflow #373
-/// NAV-3b): the one stage that lists an operation whose `from` is that page. No such stage, or
-/// more than one, refuses the set.
-pub fn phase_entry_start(
-    game: &str,
-    page: &str,
-    phases: &[TaskPhase],
-    operations: &[TaskPhaseOperation<'_>],
-) -> Result<usize, EntryProblem> {
-    let prefix = format!("{game}/");
-    let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
-    let page = canonical(page);
-    let mut starts = phases
-        .iter()
-        .enumerate()
-        .filter(|(_, phase)| {
-            operations.iter().any(|operation| {
-                phase.operations.iter().any(|id| id == operation.id)
-                    && operation.from != "any"
-                    && canonical(operation.from) == page
-            })
-        })
-        .map(|(index, _)| index);
-    match (starts.next(), starts.next()) {
-        (Some(index), None) => Ok(index),
-        (None, _) => Err(EntryProblem::PhaseStartMissing),
-        (Some(_), Some(_)) => Err(EntryProblem::PhaseStartAmbiguous),
-    }
-}
-
-// --- Workflow #373 NAV-3b: entry page sets (end) ---
-
-/// The static reachability check of a phased route. Workflow #373 NAV-3b: a route may enter at
-/// several starts (an entry page set); the check runs once from each start, and each must
-/// reach a mapped terminal.
 pub fn validate_phased_route(
     game: &str,
-    entries: &[TaskPhaseEntry<'_>],
+    entry_page: &str,
     phases: &[TaskPhase],
     target_pages: &[String],
     operations: &[TaskPhaseOperation<'_>],
@@ -197,10 +111,8 @@ pub fn validate_phased_route(
             .map(|page| canonical(page))
             .collect::<std::collections::BTreeSet<_>>()
     };
-    if entries.is_empty()
-        || entries.iter().any(|entry| {
-            entry.page.trim().is_empty() || entry.page == "any" || entry.phase >= phases.len()
-        })
+    if entry_page.trim().is_empty()
+        || entry_page == "any"
         || pages(target_pages) != pages(&phases.last().unwrap().target_pages)
     {
         return Err(TaskflowCode::TaskPhasesInvalid.code());
@@ -218,25 +130,7 @@ pub fn validate_phased_route(
     {
         return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid.code());
     }
-    for entry in entries {
-        validate_phased_route_from(
-            entry, phases, operations, scheduling, designated, &canonical,
-        )?;
-    }
-    Ok(())
-}
-
-/// Today's reachability check of a phased route, from one start.
-fn validate_phased_route_from(
-    entry: &TaskPhaseEntry<'_>,
-    phases: &[TaskPhase],
-    operations: &[TaskPhaseOperation<'_>],
-    scheduling: &SchedulingOutcomeDeclaration,
-    designated: Option<&str>,
-    canonical: &dyn Fn(&str) -> String,
-) -> Result<(), crate::outcome::Code> {
-    let mut pending =
-        std::collections::VecDeque::from([(entry.phase, canonical(entry.page), false)]);
+    let mut pending = std::collections::VecDeque::from([(0_usize, canonical(entry_page), false)]);
     let mut visited = std::collections::BTreeSet::new();
     let mut terminals = 0;
     while let Some((index, page, effect)) = pending.pop_front() {

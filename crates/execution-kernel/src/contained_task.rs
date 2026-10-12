@@ -25,10 +25,6 @@ use actingcommand_contract::{
     TaskTimingScope, TaskTimingStage, ocr_confidence_milli, validate_resource_readings,
     validate_task_phases,
 };
-// Workflow #373 NAV-3b: entry page sets.
-use actingcommand_contract::{
-    EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, validate_entry_page_set,
-};
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
 use actingcommand_page_detector::{
@@ -1563,11 +1559,9 @@ pub enum ContainedTaskTrace {
         package_sha256: actingcommand_contract::PackageRef,
     },
     RunStarted,
-    /// Workflow #373 NAV-3b: the entry page set the run required and the one page of it the
-    /// frame matched, `None` when it matched none.
     EntryRecognition {
-        required_pages: Vec<String>,
-        matched_page: Option<String>,
+        required_page: String,
+        matched: bool,
     },
     CaptureCompleted {
         width: u32,
@@ -1908,7 +1902,7 @@ pub struct PreparedContainedTask {
     program: TaskProgram,
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
-    entry_page: Option<RequiredEntryPages>,
+    entry_page: Option<String>,
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     post_admission_fields: Option<PreparedOcrFields>,
@@ -2112,7 +2106,7 @@ impl PreparedContainedTask {
                 ));
             }
         }
-        let entry_page = program.required_entry(&control, &detector)?;
+        let entry_page = program.required_home_entry_page(&control, &detector)?;
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
@@ -2188,20 +2182,13 @@ impl PreparedContainedTask {
             .any(|operation| operation.select.is_some())
     }
 
-    /// The entry the run must see first, as detector page ids: one page, or the pages of an entry
-    /// page set (Workflow #373 NAV-3b); `None` when the run has no entry check.
-    pub fn required_entry_pages(&self) -> Option<&[String]> {
-        self.entry_page.as_ref().map(|entry| entry.pages.as_slice())
+    pub fn required_home_entry_page(&self) -> Option<&str> {
+        self.entry_page.as_deref()
     }
 
-    /// Workflow #373 NAV-3b: whether an entry recovery package's final page is a page of the
-    /// required entry (one page, or any page of the set).
-    pub fn terminal_in_required_entry(&self, page: &str) -> bool {
-        self.required_entry_pages().is_some_and(|required| {
-            required
-                .iter()
-                .any(|required| crate::page_anchor_matches(&self.control.game, page, required))
-        })
+    pub fn terminal_matches_required_home(&self, page: &str) -> bool {
+        self.required_home_entry_page()
+            .is_some_and(|required| crate::page_anchor_matches(&self.control.game, page, required))
     }
 
     /// A package that declares a prerequisite package is never an entry recovery package: the
@@ -2236,7 +2223,8 @@ impl PreparedContainedTask {
         }
         let entry = self
             .program
-            .single_entry_page()
+            .entry_page
+            .as_deref()
             .filter(|page| *page != linear::ANY_PAGE)?;
         let mut pages = self
             .detector
@@ -2338,24 +2326,13 @@ impl PreparedContainedTask {
     /// `min(step_timeout, task_timeout)` is spent (each frame at the `CapturePage` boundary, each
     /// sleep at `PageRecognitionWait`); a runtime without the production checkpoint keeps the
     /// single frame. A pack with target consensus keeps its single consensus verdict.
-    ///
-    /// Workflow #373 NAV-3b: each frame evaluates only the pages of the required entry; it returns
-    /// the one page that matched, `None` when none matched within the window, and fails with
-    /// `contained_task_recognition_conflict` when one frame matched more than one of them.
-    pub fn recognize_required_entry<R: ContainedTaskRuntime>(
+    pub fn recognize_required_home<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
-        let pages = self
-            .required_entry_pages()
-            .ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskHomeEntryNotRequired.code(),
-                )
-            })?
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        let page = self.required_home_entry_page().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskHomeEntryNotRequired.code())
+        })?;
         let started = Instant::now();
         let budget = Duration::from_millis(
             self.control
@@ -2375,17 +2352,17 @@ impl PreparedContainedTask {
                     None,
                     None,
                     timing,
-                    Some(PageCandidates::Exclusive(&pages)),
+                    Some(&[page]),
                     Some(timing.deadline()),
                 )
-                .map(|observation| observation.map(|value| value.page_label));
+                .map(|observation| observation.is_some_and(|value| value.page_label == page));
         }
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         loop {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_pages_frame(runtime, &pages, timing);
+            let matched = self.recognize_entry_frame(runtime, page, timing);
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
@@ -2394,8 +2371,8 @@ impl PreparedContainedTask {
                 ended: Instant::now(),
                 succeeded: matched.is_ok(),
             });
-            if let Some(page) = matched? {
-                return Ok(Some(page));
+            if matched? {
+                return Ok(true);
             }
             let elapsed = started.elapsed();
             if elapsed >= budget
@@ -2403,7 +2380,7 @@ impl PreparedContainedTask {
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?
             {
-                return Ok(None);
+                return Ok(false);
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
@@ -2539,19 +2516,6 @@ impl PreparedContainedTask {
         page: &str,
         timing: ContainedTaskTimingContext,
     ) -> Result<bool, ContainedTaskRunError<R::Error>> {
-        self.recognize_entry_pages_frame(runtime, &[page], timing)
-            .map(|matched| matched.is_some())
-    }
-
-    /// One entry frame evaluated against the required entry pages only (Workflow #373 NAV-3b):
-    /// the one page that matched, `None` when none did, and `contained_task_recognition_conflict`
-    /// when more than one did. A single page keeps the single-page evaluation.
-    fn recognize_entry_pages_frame<R: ContainedTaskRuntime>(
-        &self,
-        runtime: &mut R,
-        pages: &[&str],
-        timing: ContainedTaskTimingContext,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
         if !self.evaluator.pack().target_consensus.is_empty() {
             return self
                 .capture_frame(
@@ -2559,10 +2523,10 @@ impl PreparedContainedTask {
                     None,
                     None,
                     timing,
-                    Some(PageCandidates::Exclusive(pages)),
+                    Some(&[page]),
                     Some(timing.deadline()),
                 )
-                .map(|observation| observation.map(|value| value.page_label));
+                .map(|observation| observation.is_some());
         }
         let frame = runtime
             .capture()
@@ -2574,10 +2538,7 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let candidate_pages = pages
-            .iter()
-            .map(|page| (*page).to_owned())
-            .collect::<Vec<_>>();
+        let candidate_pages = vec![page.to_owned()];
         runtime
             .record(ContainedTaskTrace::RecognitionStarted {
                 candidate_pages: candidate_pages.clone(),
@@ -2585,10 +2546,6 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let [page] = pages else {
-            return self.recognize_entry_set_frame(runtime, &frame, pages, candidate_pages);
-        };
-        let page = *page;
         let result = self
             .detector
             .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
@@ -2624,79 +2581,7 @@ impl PreparedContainedTask {
                 targets,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(matched.then(|| page.to_owned()))
-    }
-
-    /// Workflow #373 NAV-3b: one entry frame evaluated against the pages of an entry page set
-    /// only, in one scene evaluation; more than one matched page is a recognition conflict.
-    fn recognize_entry_set_frame<R: ContainedTaskRuntime>(
-        &self,
-        runtime: &mut R,
-        frame: &Frame,
-        pages: &[&str],
-        candidate_pages: Vec<String>,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
-        let scene = scene_from_frame(frame)?;
-        let context = self.evaluator.scene_context(&scene);
-        let results = self
-            .detector
-            .evaluate_pages_outcomes_in_context(&context, pages);
-        runtime
-            .record_page_evaluations("home_preflight", &results, None)
-            .map_err(ContainedTaskRunError::Boundary)?;
-        let ppocr_diagnostics = match &results {
-            Ok(outcomes) => outcomes
-                .iter()
-                .flat_map(|outcome| match &outcome.result {
-                    Ok(page) => page.ppocr_diagnostics(),
-                    Err(error) => error.ppocr_diagnostics(),
-                })
-                .collect(),
-            Err(error) => error.ppocr_diagnostics(),
-        };
-        let evaluations = results
-            .map_err(|error| {
-                actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
-                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
-            })
-            .and_then(require_all_page_evaluations)
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
-            })?;
-        let matched_pages = evaluations
-            .iter()
-            .filter(|evaluation| evaluation.matched)
-            .map(|evaluation| evaluation.page_id.clone())
-            .collect::<Vec<_>>();
-        if matched_pages.len() > 1 {
-            return Err(ContainedTaskError::with_detail(
-                ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
-                matched_pages.join(","),
-            )
-            .with_ppocr_diagnostics(ppocr_diagnostics)
-            .into());
-        }
-        let page = matched_pages.into_iter().next();
-        let targets = recognized_page_targets(
-            &self.evaluator,
-            &evaluations,
-            page.as_deref(),
-            &candidate_pages,
-        )?;
-        runtime
-            .record(ContainedTaskTrace::RecognitionCompleted {
-                candidate_pages,
-                page_label: page.clone(),
-                width: frame.width,
-                height: frame.height,
-                targets,
-            })
-            .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(page)
+        Ok(matched)
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -2877,15 +2762,13 @@ impl PreparedContainedTask {
         } else {
             observation_timing.with_deadline(Instant::now() + step_timeout)
         };
-        let required_entry = self
-            .entry_page
-            .as_ref()
-            .filter(|_| entry == ContainedTaskEntry::Ordinary);
-        let mut observation = if let Some(required_entry) = required_entry {
+        let mut observation = if entry == ContainedTaskEntry::Ordinary
+            && let Some(required_page) = self.required_home_entry_page()
+        {
             Some(self.await_ordinary_home_entry(
                 runtime,
                 ocr_collector,
-                &required_entry.pages,
+                required_page,
                 step_timeout.min(task_timeout),
                 capture_interval,
                 entry_timing,
@@ -2951,19 +2834,6 @@ impl PreparedContainedTask {
         }
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
-        // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
-        if self.program.phases.is_some()
-            && let Some(phase) =
-                required_entry
-                    .zip(observation.as_ref())
-                    .and_then(|(required_entry, observed)| {
-                        required_entry.phase_of(&observed.page_label)
-                    })
-        {
-            machine.start_at_phase(phase).map_err(|_| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-            })?;
-        }
         machine
             .observe_page(
                 observation
@@ -3929,7 +3799,7 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
-        pages: &[String],
+        page: &str,
         budget: Duration,
         interval: Duration,
         timing: ContainedTaskTimingContext,
@@ -3946,7 +3816,7 @@ impl PreparedContainedTask {
             if let Some(observation) = self.capture_page(
                 runtime,
                 ocr_collector,
-                Some(RequiredEntry { pages, waits }),
+                Some(RequiredEntry { page, waits }),
                 timing,
             )? {
                 return Ok(observation);
@@ -3962,8 +3832,8 @@ impl PreparedContainedTask {
             {
                 runtime
                     .record(ContainedTaskTrace::EntryRecognition {
-                        required_pages: pages.to_vec(),
-                        matched_page: None,
+                        required_page: page.to_owned(),
+                        matched: false,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return Err(unmatched().into());
@@ -4003,23 +3873,17 @@ impl PreparedContainedTask {
     /// One observation and its page recognition, recorded as every capture is, at the
     /// `CapturePage` timing boundary. Without `ocr_collector` it is a select step's
     /// confirmation frame (Workflow #308): it feeds neither the stability sampling nor the
-    /// post-admission OCR collector. Ordered candidates retain their order and select the
-    /// first passing page; the global page graph and exclusive candidates (an entry page set,
-    /// Workflow #373 NAV-3b) require a unique match.
+    /// post-admission OCR collector. Explicit candidates retain their order and select the
+    /// first passing page; the global page graph requires a unique match.
     fn capture_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
         required_entry: Option<RequiredEntry<'_>>,
         timing: ContainedTaskTimingContext,
-        candidates: Option<PageCandidates<'_>>,
+        candidates: Option<&[&str]>,
         sampling_deadline: Option<Instant>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let (candidates, exclusive) = match candidates {
-            None => (None, true),
-            Some(PageCandidates::Ordered(pages)) => (Some(pages), false),
-            Some(PageCandidates::Exclusive(pages)) => (Some(pages), true),
-        };
         let feeds_collectors = ocr_collector.is_some();
         let mut unfed = PostAdmissionOcrCollector::default();
         let ocr_collector = ocr_collector.unwrap_or(&mut unfed);
@@ -4305,7 +4169,7 @@ impl PreparedContainedTask {
                 .filter(|evaluation| evaluation.matched)
                 .map(|evaluation| evaluation.page_id.clone())
                 .collect::<Vec<_>>();
-            if exclusive && matched_pages.len() > 1 {
+            if candidates.is_none() && matched_pages.len() > 1 {
                 return Err(ContainedTaskError::with_detail(
                     ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
                     matched_pages.join(","),
@@ -4330,10 +4194,7 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             if let Some(required) = required_entry {
-                // Workflow #373 NAV-3b: the frame's one page is any page of the required entry.
-                let matched = page
-                    .as_deref()
-                    .is_some_and(|page| required.pages.iter().any(|required| required == page));
+                let matched = page.as_deref() == Some(required.page);
                 // Workflow #371-3: inside a bounded entry wait an unmatched frame is no verdict;
                 // the wait records the entry once, matched or at its end.
                 if !matched && required.waits {
@@ -4341,8 +4202,8 @@ impl PreparedContainedTask {
                 }
                 runtime
                     .record(ContainedTaskTrace::EntryRecognition {
-                        required_pages: required.pages.to_vec(),
-                        matched_page: page.clone().filter(|_| matched),
+                        required_page: required.page.to_owned(),
+                        matched,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if !matched {
@@ -4508,43 +4369,8 @@ impl PreparedContainedTask {
 /// bounded entry wait (Workflow #371-3), so an unmatched frame records no entry verdict.
 #[derive(Clone, Copy)]
 struct RequiredEntry<'a> {
-    /// Workflow #373 NAV-3b: one page, or the pages of an entry page set.
-    pages: &'a [String],
+    page: &'a str,
     waits: bool,
-}
-
-/// The pages one frame is evaluated against (Workflow #373 NAV-3b): `Ordered` candidates select
-/// the first passing page (a linear wait); `Exclusive` candidates (an entry page set) allow at
-/// most one.
-#[derive(Clone, Copy)]
-enum PageCandidates<'a> {
-    Ordered(&'a [&'a str]),
-    Exclusive(&'a [&'a str]),
-}
-
-/// The entry a run must see first (Workflow #373 NAV-3b): its detector pages and, for each, the
-/// stage of a phased route it starts (0 for a route without stages and for a single entry page).
-#[derive(Debug, Clone)]
-struct RequiredEntryPages {
-    pages: Vec<String>,
-    phases: Vec<usize>,
-}
-
-impl RequiredEntryPages {
-    fn single(page: String) -> Self {
-        Self {
-            pages: vec![page],
-            phases: vec![0],
-        }
-    }
-
-    /// The stage a phased route starts at when the run entered on `page`.
-    fn phase_of(&self, page: &str) -> Option<usize> {
-        self.pages
-            .iter()
-            .position(|required| required == page)
-            .map(|index| self.phases[index])
-    }
 }
 
 struct PageObservation {
@@ -5027,7 +4853,7 @@ struct TaskProgram {
     server_scope: Vec<String>,
     coordinate_space: Resolution,
     #[serde(default)]
-    entry_page: Option<EntryPageDeclaration>,
+    entry_page: Option<String>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     phases: Option<Vec<TaskPhase>>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
@@ -5070,8 +4896,7 @@ impl TaskProgram {
             }),
             "0.9" => self.post_admission_ocr.is_none(),
             _ => false,
-        } && (self.schema_version == "0.9"
-            || !matches!(self.entry_page, Some(EntryPageDeclaration::Set(_))));
+        };
         if !schema_valid
             || self.task_id != control.entry_task_id
             || self.game != control.game
@@ -5118,8 +4943,6 @@ impl TaskProgram {
             return self.validate_linear(control, detector).map(|_| ());
         }
         validate_stability_contract(control, self)?;
-        // Workflow #373 NAV-3b: an entry page set is checked and resolved first.
-        self.entry_page_set(control, detector)?;
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
             if self.schema_version != "0.8" || self.recovery.is_some() {
@@ -5237,9 +5060,7 @@ impl TaskProgram {
                     ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
                 ));
             }
-            if let Some(page) = self.single_entry_page() {
-                validate_page_references(&control.game, &[page.to_owned()], detector)?;
-            }
+            validate_page_references(&control.game, &[self.entry_page.clone().unwrap()], detector)?;
             for phase in phases {
                 validate_page_references(&control.game, &phase.target_pages, detector)?;
                 validate_page_set_overlap(
@@ -5289,53 +5110,32 @@ impl TaskProgram {
             && self.phases.is_none()
         {
             let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
-            // Workflow #373 NAV-3b: coverage starts at every page of an entry page set.
-            match self.required_entry(control, detector)? {
-                Some(required) => {
-                    for page in &required.pages {
-                        validate_scheduling_outcome_coverage(
-                            Some(page),
-                            &control.game,
-                            &target_pages,
-                            &observable_pages,
-                            &self.operations,
-                            declaration,
-                        )?;
-                    }
-                }
-                None => validate_scheduling_outcome_coverage(
-                    None,
-                    &control.game,
-                    &target_pages,
-                    &observable_pages,
-                    &self.operations,
-                    declaration,
-                )?,
-            }
+            let required_home = self.required_home_entry_page(control, detector)?;
+            validate_scheduling_outcome_coverage(
+                required_home.as_deref(),
+                &control.game,
+                &target_pages,
+                &observable_pages,
+                &self.operations,
+                declaration,
+            )?;
         }
         if let Some(phases) = &self.phases {
-            let operations = self.phase_operations()?;
-            // Workflow #373 NAV-3b: a single entry page starts the first stage; each page of an
-            // entry page set starts the one stage it is mapped to.
-            let required = self.required_entry(control, detector)?;
-            let entries = match (&self.entry_page, &required) {
-                (Some(EntryPageDeclaration::Set(_)), Some(required)) => required
-                    .pages
-                    .iter()
-                    .zip(&required.phases)
-                    .map(|(page, phase)| TaskPhaseEntry {
-                        phase: *phase,
-                        page: page.as_str(),
+            let operations = self
+                .operations
+                .iter()
+                .map(|operation| {
+                    Ok(actingcommand_contract::TaskPhaseOperation {
+                        id: &operation.id,
+                        from: &operation.from,
+                        destinations: operation.destination_pages()?,
+                        retryable: operation.retryable.unwrap_or(false),
                     })
-                    .collect::<Vec<_>>(),
-                _ => vec![TaskPhaseEntry {
-                    phase: 0,
-                    page: self.single_entry_page().unwrap_or_default(),
-                }],
-            };
+                })
+                .collect::<Result<Vec<_>, ContainedTaskError>>()?;
             actingcommand_contract::validate_phased_route(
                 &control.game,
-                &entries,
+                self.entry_page.as_deref().unwrap_or_default(),
                 phases,
                 &target_pages,
                 &operations,
@@ -5357,91 +5157,14 @@ impl TaskProgram {
             return Ok(None);
         }
         Ok(self
-            .single_entry_page()
+            .entry_page
+            .as_deref()
             .filter(|page| {
                 self.phases.is_some() || crate::canonical_page_anchor(&control.game, page) == "home"
             })
             .map(|page| resolve_page_reference(&control.game, page, detector))
             .transpose()?
             .filter(|page| self.phases.is_some() || detector.page_uses_any_of(page)))
-    }
-
-    /// The `entry_page` string; `None` without one and for an entry page set (Workflow #373
-    /// NAV-3b).
-    fn single_entry_page(&self) -> Option<&str> {
-        match &self.entry_page {
-            Some(EntryPageDeclaration::Page(page)) => Some(page.as_str()),
-            Some(EntryPageDeclaration::Set(_)) | None => None,
-        }
-    }
-
-    /// Workflow #373 NAV-3b: the detector pages of an entry page set, in declared order, or
-    /// `None` when `entry_page` is no set. A refused set is `contained_task_entry_pages_invalid`
-    /// with its `entry_problem`.
-    fn entry_page_set(
-        &self,
-        control: &TaskControl,
-        detector: &PageDetector,
-    ) -> Result<Option<Vec<String>>, ContainedTaskError> {
-        let Some(EntryPageDeclaration::Set(pages)) = &self.entry_page else {
-            return Ok(None);
-        };
-        validate_entry_page_set(&control.game, pages).map_err(entry_pages_invalid)?;
-        let mut resolved = Vec::with_capacity(pages.len());
-        for page in pages {
-            let page = resolve_page_reference(&control.game, page, detector)
-                .map_err(|_| entry_pages_invalid(EntryProblem::Unresolved))?;
-            if resolved.contains(&page) {
-                return Err(entry_pages_invalid(EntryProblem::Duplicate));
-            }
-            resolved.push(page);
-        }
-        Ok(Some(resolved))
-    }
-
-    /// The entry a run must see first (Workflow #373 NAV-3b). An entry page set is always
-    /// required, each page with the stage it starts; a single entry page keeps the rule of
-    /// `required_home_entry_page` and starts the first stage.
-    fn required_entry(
-        &self,
-        control: &TaskControl,
-        detector: &PageDetector,
-    ) -> Result<Option<RequiredEntryPages>, ContainedTaskError> {
-        if control.execution_mode == linear::LINEAR_STEPS {
-            return Ok(None);
-        }
-        let Some(pages) = self.entry_page_set(control, detector)? else {
-            return Ok(self
-                .required_home_entry_page(control, detector)?
-                .map(RequiredEntryPages::single));
-        };
-        let phases = match &self.phases {
-            Some(phases) => {
-                let operations = self.phase_operations()?;
-                pages
-                    .iter()
-                    .map(|page| phase_entry_start(&control.game, page, phases, &operations))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(entry_pages_invalid)?
-            }
-            None => vec![0; pages.len()],
-        };
-        Ok(Some(RequiredEntryPages { pages, phases }))
-    }
-
-    /// The operations as the shared phase checks read them.
-    fn phase_operations(&self) -> Result<Vec<TaskPhaseOperation<'_>>, ContainedTaskError> {
-        self.operations
-            .iter()
-            .map(|operation| {
-                Ok(TaskPhaseOperation {
-                    id: &operation.id,
-                    from: &operation.from,
-                    destinations: operation.destination_pages()?,
-                    retryable: operation.retryable.unwrap_or(false),
-                })
-            })
-            .collect::<Result<Vec<_>, ContainedTaskError>>()
     }
 
     fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
@@ -6485,24 +6208,6 @@ fn validate_scheduling_outcome_coverage(
 enum PageDeclaration {
     Singleton(String),
     Set(Vec<String>),
-}
-
-/// A task's `entry_page` (Workflow #373 NAV-3b): one page, `any`, or from task schema `0.9` on
-/// a set of 1..=16 pages.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum EntryPageDeclaration {
-    Page(String),
-    Set(Vec<String>),
-}
-
-/// Workflow #373 NAV-3b: the admission refusal of an entry page set, with its `entry_problem`
-/// as the `key=value` detail token.
-fn entry_pages_invalid(problem: EntryProblem) -> ContainedTaskError {
-    ContainedTaskError::with_detail(
-        ExecutionKernelCode::ContainedTaskEntryPagesInvalid.code(),
-        format!("entry_problem={problem}"),
-    )
 }
 
 impl PageDeclaration {
@@ -8796,8 +8501,7 @@ mod post_admission_ocr_tests {
             detector.validate(&evaluator).unwrap();
             let entry_page = program
                 .required_home_entry_page(&control, &detector)
-                .unwrap()
-                .map(RequiredEntryPages::single);
+                .unwrap();
             let task = PreparedContainedTask {
                 control,
                 entry_page,
@@ -10286,7 +9990,7 @@ mod retry_wiring_tests {
             &only_designated,
         )
         .unwrap();
-        program.entry_page = Some(EntryPageDeclaration::Page("any".into()));
+        program.entry_page = Some("any".into());
         assert!(
             program
                 .required_home_entry_page(&control(), &detector)
@@ -10304,7 +10008,7 @@ mod retry_wiring_tests {
             )
             .is_err()
         );
-        program.entry_page = Some(EntryPageDeclaration::Page("neutral/home".into()));
+        program.entry_page = Some("neutral/home".into());
         let no_any_of = PageDetector::new(
             serde_json::from_value(json!({
                 "schema_version":"0.6","pages":[{"id":"neutral/home","required":["page/home"]}]
@@ -11109,10 +10813,7 @@ mod retry_wiring_tests {
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(
             "neutral",
-            &[TaskPhaseEntry {
-                phase: 0,
-                page: "home",
-            }],
+            "home",
             &phases,
             &["home".to_owned()],
             &graph,
@@ -11124,10 +10825,7 @@ mod retry_wiring_tests {
         assert_eq!(
             actingcommand_contract::validate_phased_route(
                 "neutral",
-                &[TaskPhaseEntry {
-                    phase: 0,
-                    page: "home",
-                }],
+                "home",
                 &repeated,
                 &["home".to_owned()],
                 &graph,

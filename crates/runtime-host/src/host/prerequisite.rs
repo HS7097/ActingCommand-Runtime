@@ -276,12 +276,10 @@ fn gate_layer(
     let initial = package
         .recognize_linear_entry(runtime)
         .map_err(|error| fail_recognition(runtime, gate, layer == 0, error))?;
-    // Workflow #373 NAV-3b: a linear package's entry is one page.
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::Initial,
-            required_pages: vec![required_page.clone()],
-            matched_page: initial.then(|| required_page.clone()),
+            required_page: required_page.clone(),
             matched: initial,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
@@ -376,13 +374,11 @@ fn gate_layer(
     let waited = package
         .await_linear_entry(runtime, budget, origin, layer, return_home)
         .map_err(|error| fail_recognition(runtime, gate, false, error))?;
-    let matched = waited.unmatched.is_none();
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::PostRecovery,
-            required_pages: vec![required_page.clone()],
-            matched_page: matched.then_some(required_page),
-            matched,
+            required_page,
+            matched: waited.unmatched.is_none(),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     if let Some(error) = waited.unmatched {

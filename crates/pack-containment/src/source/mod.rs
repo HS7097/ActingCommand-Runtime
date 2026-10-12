@@ -1051,7 +1051,7 @@ impl OperationParser {
         let mut pages = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in &self.bundles {
-            for anchor_id in entry_page_ids(bundle) {
+            if let Some(anchor_id) = bundle.data.get("entry_page").and_then(Value::as_str) {
                 add_page(
                     &self.game,
                     anchor_id,
@@ -2882,58 +2882,15 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .unwrap_or(false),
         });
     }
-    let game = bundle.data["game"].as_str().unwrap_or_default();
-    // Workflow #373 NAV-3b: each page of an entry page set starts the one stage it is mapped to;
-    // a single entry page starts the first stage.
-    let entries = match &bundle.data["entry_page"] {
-        Value::Array(_) => {
-            let pages = entry_page_ids(bundle);
-            let declared = pages
-                .iter()
-                .map(|page| (*page).to_owned())
-                .collect::<Vec<_>>();
-            let refused = |problem: actingcommand_contract::EntryProblem| {
-                CliError::package_invalid(format!("entry_problem={problem}"))
-            };
-            if declared.len() != bundle.data["entry_page"].as_array().map_or(0, Vec::len) {
-                return Err(CliError::package_invalid(
-                    "entry_page entries must be strings",
-                ));
-            }
-            actingcommand_contract::validate_entry_page_set(game, &declared).map_err(refused)?;
-            pages
-                .into_iter()
-                .map(|page| {
-                    actingcommand_contract::phase_entry_start(game, page, &phases, &operations)
-                        .map(|phase| actingcommand_contract::TaskPhaseEntry { phase, page })
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(refused)?
-        }
-        value => vec![actingcommand_contract::TaskPhaseEntry {
-            phase: 0,
-            page: value.as_str().unwrap_or_default(),
-        }],
-    };
     actingcommand_contract::validate_phased_route(
-        game,
-        &entries,
+        bundle.data["game"].as_str().unwrap_or_default(),
+        bundle.data["entry_page"].as_str().unwrap_or_default(),
         &phases,
         &declared_terminal_page_ids(bundle)?.unwrap_or_default(),
         &operations,
         &scheduling,
     )
     .map_err(|code| CliError::package_invalid(code.as_str()))
-}
-
-/// The pages a task's `entry_page` names: one page, or each page of an entry page set
-/// (Workflow #373 NAV-3b).
-fn entry_page_ids(bundle: &Bundle) -> Vec<&str> {
-    match bundle.data.get("entry_page") {
-        Some(Value::String(page)) => vec![page.as_str()],
-        Some(Value::Array(pages)) => pages.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
-    }
 }
 
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
@@ -4016,7 +3973,7 @@ fn has_page_anchor(page: &str, declared_anchor_ids: &BTreeSet<String>) -> bool {
 fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut pages = BTreeSet::new();
     for bundle in bundles {
-        for page in entry_page_ids(bundle) {
+        if let Some(page) = bundle.data.get("entry_page").and_then(Value::as_str) {
             insert_selected_page_id(game, page, &mut pages);
         }
         for page in declared_terminal_page_ids(bundle)?.into_iter().flatten() {

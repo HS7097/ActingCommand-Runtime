@@ -98,8 +98,6 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskSelectPolicyMismatch => "contained_task_select_policy_mismatch": error,
         ContainedTaskRequiresScheduler => "contained_task_requires_scheduler": error,
         ContainedTaskHomeEntryNotRequired => "contained_task_home_entry_not_required": error,
-        // Workflow #373 NAV-3b: a task's entry page set is refused (key `entry_problem`).
-        ContainedTaskEntryPagesInvalid => "contained_task_entry_pages_invalid": error,
         // Contained task prerequisites and entry.
         ContainedTaskPrerequisiteUnbound => "contained_task_prerequisite_unbound": error,
         ContainedTaskPrerequisiteCycle => "contained_task_prerequisite_cycle": error,
