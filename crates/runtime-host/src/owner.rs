@@ -197,6 +197,7 @@ impl OwnerGuard {
             active_instances: takeover_instances.clone(),
             closed_at_unix_ms: None,
             resource_disposition: Some(OwnerResourceDisposition::None),
+            closed_by: None,
         };
         let encoded = encode_record(&record)?;
         write_record(&mut file, &encoded)?;
@@ -771,6 +772,7 @@ mod tests {
                     active_instances: Vec::new(),
                     closed_at_unix_ms: None,
                     resource_disposition: Some(OwnerResourceDisposition::Unconfirmed),
+                    closed_by: None,
                 },
             )
             .expect("write stale unconfirmed owner");

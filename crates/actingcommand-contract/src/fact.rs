@@ -38,6 +38,29 @@ pub fn priority_offset_fact_key(task_id: &str) -> String {
     format!("{PRIORITY_OFFSET_KEY_PREFIX}{task_id}{PRIORITY_OFFSET_KEY_SUFFIX}")
 }
 
+/// Workflow #389 section 2.6: the static family of a fact key, read from the key's spelling alone.
+/// A `PublishFact` or `PublishFacts` request belongs to the interface block of its keys'
+/// family (`FactKeyFamily::interface_class`); `RuntimeRequest::validate` already refuses an
+/// observation that mixes an offset with other keys (`fact_origin_mixed`). The scheduling
+/// rules' pack schedule (SR-11) and feature lock (SR-5a) families join this function with
+/// their slices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FactKeyFamily {
+    /// `session.task.<task_id>.priority_offset`, a manual priority offset.
+    PriorityOffset,
+    /// Every other key: the instance information an agent or a person writes.
+    InstanceInformation,
+}
+
+/// The family of one fact key (Workflow #389 section 2.6).
+pub fn fact_key_family(key: &str) -> FactKeyFamily {
+    if priority_offset_task_id(key).is_some() {
+        FactKeyFamily::PriorityOffset
+    } else {
+        FactKeyFamily::InstanceInformation
+    }
+}
+
 /// Workflow #375 R5c: the `source_detector` prefix of a resource reading the Runtime took.
 pub const RESOURCE_READING_DETECTOR_PREFIX: &str = "resource_reading:";
 

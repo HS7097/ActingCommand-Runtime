@@ -165,6 +165,18 @@ tests = [
 ]
 incident = []
 
+# The unified interface's request table: each kind's block, class and G14 copy; the fact key
+# families; no channel judgement in RuntimeRequest::validate
+[[gate]]
+key = "K17"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::interface::tests::tu1_every_request_kind_has_its_block_class_and_g14_copy",
+    "actingcommand-contract::lib::runtime::interface::tests::tu1_fact_key_families_are_general_instructions",
+    "actingcommand-contract::lib::runtime::interface::tests::tu1_host_built_agent_adapter_leases_pass_validate_without_a_channel_judgement",
+]
+incident = ["#389 U-1"]
+
 # Per-operation receipt waits by their contract values
 [[gate]]
 key = "R1"
