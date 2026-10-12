@@ -1433,6 +1433,7 @@
     },
     "lab_tool_option_disabled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
@@ -1450,6 +1451,7 @@
     },
     "mcp_tier_retired": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,

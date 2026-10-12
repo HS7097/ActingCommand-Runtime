@@ -2915,6 +2915,7 @@
     },
     "client_channel_unsupported": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2930,6 +2931,7 @@
     },
     "client_channel_refused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,

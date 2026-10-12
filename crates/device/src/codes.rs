@@ -12,33 +12,33 @@ actingcommand_contract::outcome_codes! {
     /// Why resolving MuMu's external renderer (Nemu) for capture or input failed. A Nemu
     /// resolution context carries one, and the device error's diagnostic text names it.
     pub enum NemuResolutionReason {
-        InstallationAbsent => "installation_absent": error,
-        InstallationAmbiguous => "installation_ambiguous": error,
-        SharedAdbMultipleDllVersions => "shared_adb_multiple_dll_versions": error,
-        ConfiguredAdbIdentityUnrecognized => "configured_adb_identity_unrecognized": error,
-        RootMismatch => "root_mismatch": error,
-        DllOutsideRoot => "dll_outside_root": error,
-        DllVersionMissing => "dll_version_missing": error,
-        VersionMismatch => "version_mismatch": error,
-        CandidateAbsent => "candidate_absent": error,
-        CandidateOutsideRoot => "candidate_outside_root": error,
-        RunningExecutableTopologyInvalid => "running_executable_topology_invalid": error,
-        RunningVersionMissing => "running_version_missing": error,
-        TargetIdentityUnavailable => "target_identity_unavailable": error,
-        TargetIdentityInvalid => "target_identity_invalid": error,
-        TargetIdentityMismatch => "target_identity_mismatch": error,
-        TargetProcessAbsent => "target_process_absent": error,
-        TargetProcessAmbiguous => "target_process_ambiguous": error,
-        TargetExecutableMissing => "target_executable_missing": error,
-        CaptureIdentityUncoordinated => "capture_identity_uncoordinated": error,
+        InstallationAbsent => "installation_absent": error / environment_fault,
+        InstallationAmbiguous => "installation_ambiguous": error / environment_fault,
+        SharedAdbMultipleDllVersions => "shared_adb_multiple_dll_versions": error / environment_fault,
+        ConfiguredAdbIdentityUnrecognized => "configured_adb_identity_unrecognized": error / none,
+        RootMismatch => "root_mismatch": error / none,
+        DllOutsideRoot => "dll_outside_root": error / environment_fault,
+        DllVersionMissing => "dll_version_missing": error / environment_fault,
+        VersionMismatch => "version_mismatch": error / environment_fault,
+        CandidateAbsent => "candidate_absent": error / environment_fault,
+        CandidateOutsideRoot => "candidate_outside_root": error / environment_fault,
+        RunningExecutableTopologyInvalid => "running_executable_topology_invalid": error / environment_fault,
+        RunningVersionMissing => "running_version_missing": error / environment_fault,
+        TargetIdentityUnavailable => "target_identity_unavailable": error / environment_fault,
+        TargetIdentityInvalid => "target_identity_invalid": error / environment_fault,
+        TargetIdentityMismatch => "target_identity_mismatch": error / environment_fault,
+        TargetProcessAbsent => "target_process_absent": error / environment_fault,
+        TargetProcessAmbiguous => "target_process_ambiguous": error / environment_fault,
+        TargetExecutableMissing => "target_executable_missing": error / environment_fault,
+        CaptureIdentityUncoordinated => "capture_identity_uncoordinated": error / environment_fault,
         /// `MuMuManager version` is below `MUMU_MANAGER_MINIMUM_VERSION` (a Runtime policy floor).
-        ProviderVersionBelowMinimum => "provider_version_below_minimum": error,
+        ProviderVersionBelowMinimum => "provider_version_below_minimum": error / environment_fault,
         /// `MuMuManager version` did not produce a four-part numeric version.
-        ProviderVersionUnparseable => "provider_version_unparseable": error,
+        ProviderVersionUnparseable => "provider_version_unparseable": error / environment_fault,
         /// The Windows uninstall registry source cannot be read on this platform.
-        RegistrySourceUnavailable => "registry_source_unavailable": error,
+        RegistrySourceUnavailable => "registry_source_unavailable": error / environment_fault,
         /// A `MuMuPlayer*` uninstall entry carries no usable install location or an unsupported value type.
-        RegistryEntryInvalid => "registry_entry_invalid": error,
+        RegistryEntryInvalid => "registry_entry_invalid": error / environment_fault,
     }
 }
 

@@ -17,6 +17,7 @@
     },
     "artifact_availability_proof_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -30,6 +31,7 @@
     },
     "artifact_event_links_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -43,6 +45,7 @@
     },
     "artifact_event_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -56,6 +59,7 @@
     },
     "artifact_eviction_close_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -69,6 +73,7 @@
     },
     "artifact_eviction_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -82,6 +87,7 @@
     },
     "artifact_eviction_failed_run_basis_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -95,6 +101,7 @@
     },
     "artifact_eviction_guard_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -108,6 +115,7 @@
     },
     "artifact_eviction_intent_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -121,6 +129,7 @@
     },
     "artifact_eviction_intent_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -134,6 +143,7 @@
     },
     "artifact_eviction_intent_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -147,6 +157,7 @@
     },
     "artifact_eviction_not_eligible": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -160,6 +171,7 @@
     },
     "artifact_eviction_outcome_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -173,6 +185,7 @@
     },
     "artifact_eviction_outcome_guard_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -186,6 +199,7 @@
     },
     "artifact_eviction_root_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -199,6 +213,7 @@
     },
     "artifact_eviction_settlement_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -212,6 +227,7 @@
     },
     "artifact_eviction_settlement_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -225,6 +241,7 @@
     },
     "artifact_eviction_success_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -238,6 +255,7 @@
     },
     "artifact_eviction_summary_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -251,6 +269,7 @@
     },
     "artifact_eviction_summary_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -264,6 +283,7 @@
     },
     "artifact_eviction_task_not_successful": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -277,6 +297,7 @@
     },
     "artifact_eviction_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -290,6 +311,7 @@
     },
     "artifact_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -303,6 +325,7 @@
     },
     "artifact_lab_pin_release_request_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -316,6 +339,7 @@
     },
     "artifact_material_admission_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -329,6 +353,7 @@
     },
     "artifact_pin_not_releasable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -342,6 +367,7 @@
     },
     "artifact_pin_reason_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -355,6 +381,7 @@
     },
     "artifact_pin_release_not_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -368,6 +395,7 @@
     },
     "artifact_pin_release_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -381,6 +409,7 @@
     },
     "artifact_pin_trigger_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -394,6 +423,7 @@
     },
     "artifact_reference_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -407,6 +437,7 @@
     },
     "artifact_reference_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -420,6 +451,7 @@
     },
     "artifact_retention_clock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -433,6 +465,7 @@
     },
     "artifact_retention_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -446,6 +479,7 @@
     },
     "artifact_retention_links_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -459,6 +493,7 @@
     },
     "artifact_retention_origin_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -472,6 +507,7 @@
     },
     "artifact_retention_proof_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -485,6 +521,7 @@
     },
     "artifact_retention_recovery_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -498,6 +535,7 @@
     },
     "artifact_retention_snapshot_gap": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -511,6 +549,7 @@
     },
     "artifact_retention_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -524,6 +563,7 @@
     },
     "artifact_snapshot_position_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -537,6 +577,7 @@
     },
     "artifact_store_verification_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -550,6 +591,7 @@
     },
     "artifact_store_verification_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -563,6 +605,7 @@
     },
     "artifact_store_verification_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -576,6 +619,7 @@
     },
     "candidate_production_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -589,6 +633,7 @@
     },
     "candidate_segment_root_present": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -602,6 +647,7 @@
     },
     "clock_before_epoch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -615,6 +661,7 @@
     },
     "corrupt_ledger_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -628,6 +675,7 @@
     },
     "corrupt_repair_journal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -641,6 +689,7 @@
     },
     "corrupt_segment": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -654,6 +703,7 @@
     },
     "critical_action_id_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -667,6 +717,7 @@
     },
     "critical_correlation_id_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -680,6 +731,7 @@
     },
     "critical_duplicate_event_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -693,6 +745,7 @@
     },
     "critical_duplicate_event_type": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -706,6 +759,7 @@
     },
     "critical_effect_disposition_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -719,6 +773,7 @@
     },
     "critical_event_family_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -732,6 +787,7 @@
     },
     "critical_event_not_durable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -745,6 +801,7 @@
     },
     "critical_missing_action_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -758,6 +815,7 @@
     },
     "critical_missing_correlation_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -771,6 +829,7 @@
     },
     "critical_outcome_role_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -784,6 +843,7 @@
     },
     "critical_payload_action_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -797,6 +857,7 @@
     },
     "critical_stable_link_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -810,6 +871,7 @@
     },
     "critical_unsupported_intent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -823,6 +885,7 @@
     },
     "deferred_append_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -836,6 +899,7 @@
     },
     "deferred_replies_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -849,6 +913,7 @@
     },
     "duplicate_event_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -862,6 +927,7 @@
     },
     "event_serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -875,6 +941,7 @@
     },
     "ingress_full": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -888,6 +955,7 @@
     },
     "invalid_artifact_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -901,6 +969,7 @@
     },
     "invalid_artifact_retention_fact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -914,6 +983,7 @@
     },
     "invalid_artifact_selection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -927,6 +997,7 @@
     },
     "invalid_cutover_marker": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -940,6 +1011,7 @@
     },
     "invalid_event_column": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -953,6 +1025,7 @@
     },
     "invalid_event_integer": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -966,6 +1039,7 @@
     },
     "invalid_event_link": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -979,6 +1053,7 @@
     },
     "invalid_event_query_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -992,6 +1067,7 @@
     },
     "invalid_evidence_prefix": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1005,6 +1081,7 @@
     },
     "invalid_ledger_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1018,6 +1095,7 @@
     },
     "invalid_page_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1031,6 +1109,7 @@
     },
     "invalid_query_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1044,6 +1123,7 @@
     },
     "invalid_redactor_config": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1057,6 +1137,7 @@
     },
     "invalid_repair_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1070,6 +1151,7 @@
     },
     "invalid_replay_page_size": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1083,6 +1165,7 @@
     },
     "invalid_sequence": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1096,6 +1179,7 @@
     },
     "invalid_sqlite_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1109,6 +1193,7 @@
     },
     "invalid_typed_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1122,6 +1207,7 @@
     },
     "joint_event_type_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1135,6 +1221,7 @@
     },
     "lab_pin_release_artifact_sealed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1148,6 +1235,7 @@
     },
     "lab_pin_release_artifact_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1161,6 +1249,7 @@
     },
     "lab_pin_release_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1174,6 +1263,7 @@
     },
     "lab_pin_release_pin_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1187,6 +1277,7 @@
     },
     "lab_pin_release_pin_not_lab": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1200,6 +1291,7 @@
     },
     "lab_pin_release_pin_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1213,6 +1305,7 @@
     },
     "lab_pin_release_request_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1226,6 +1319,7 @@
     },
     "lab_pin_release_request_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1239,6 +1333,7 @@
     },
     "ledger_candidate_not_production": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1252,6 +1347,7 @@
     },
     "ledger_capture_buffer_busy": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1270,6 +1366,7 @@
     },
     "ledger_capture_buffer_overloaded": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1288,6 +1385,7 @@
     },
     "ledger_capture_spilled": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1306,6 +1404,7 @@
     },
     "ledger_database_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1319,6 +1418,7 @@
     },
     "ledger_dump_failed": {
       "category": "fatal",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1336,6 +1436,7 @@
     },
     "ledger_dump_imported": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1354,6 +1455,7 @@
     },
     "ledger_dump_incomplete": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1371,6 +1473,7 @@
     },
     "ledger_dump_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1389,6 +1492,7 @@
     },
     "ledger_dump_unsupported": {
       "category": "fatal",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1405,6 +1509,7 @@
     },
     "ledger_flush_delayed": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1422,6 +1527,7 @@
     },
     "ledger_format_marker_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1435,6 +1541,7 @@
     },
     "ledger_index_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1448,6 +1555,7 @@
     },
     "ledger_initialization_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1461,6 +1569,7 @@
     },
     "ledger_insert_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1474,6 +1583,7 @@
     },
     "ledger_io": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1487,6 +1597,7 @@
     },
     "ledger_joint_transaction_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1500,6 +1611,7 @@
     },
     "ledger_meta_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1513,6 +1625,7 @@
     },
     "ledger_meta_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1526,6 +1639,7 @@
     },
     "ledger_migration_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1539,6 +1653,7 @@
     },
     "ledger_not_an_empty_root": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1552,6 +1667,7 @@
     },
     "ledger_prefix_beyond_head": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1565,6 +1681,7 @@
     },
     "ledger_prefix_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1578,6 +1695,7 @@
     },
     "ledger_prefix_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1591,6 +1709,7 @@
     },
     "ledger_probe_done": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1606,6 +1725,7 @@
     },
     "ledger_read_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1619,6 +1739,7 @@
     },
     "ledger_record_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1632,6 +1753,7 @@
     },
     "ledger_record_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1645,6 +1767,7 @@
     },
     "ledger_record_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1663,6 +1786,7 @@
     },
     "ledger_schema_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1676,6 +1800,7 @@
     },
     "ledger_snapshot_boundary_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1689,6 +1814,7 @@
     },
     "ledger_snapshot_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1702,6 +1828,7 @@
     },
     "ledger_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1715,6 +1842,7 @@
     },
     "ledger_sql_selection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1728,6 +1856,7 @@
     },
     "ledger_sqlite_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1741,6 +1870,7 @@
     },
     "ledger_statistics_identity_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1754,6 +1884,7 @@
     },
     "ledger_statistics_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1767,6 +1898,7 @@
     },
     "ledger_store_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1787,6 +1919,7 @@
     },
     "ledger_store_revision_skipped": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1805,6 +1938,7 @@
     },
     "ledger_tag_index_mismatch": {
       "category": "fatal",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1823,6 +1957,7 @@
     },
     "ledger_tag_key_unclassified": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1838,6 +1973,7 @@
     },
     "ledger_tagged_entries_dropped": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1853,6 +1989,7 @@
     },
     "ledger_tagged_state_loaded": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1871,6 +2008,7 @@
     },
     "ledger_tagged_state_seeded": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1886,6 +2024,7 @@
     },
     "ledger_tail_unconfirmed": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1903,6 +2042,7 @@
     },
     "ledger_transaction_owner_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1916,6 +2056,7 @@
     },
     "ledger_view_schema_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1929,6 +2070,7 @@
     },
     "ledger_write_failed": {
       "category": "fatal",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1948,6 +2090,7 @@
     },
     "ledger_write_retried": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1965,6 +2108,7 @@
     },
     "malformed_owner_metadata": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1978,6 +2122,7 @@
     },
     "migration_binding_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -1991,6 +2136,7 @@
     },
     "migration_canonical_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2004,6 +2150,7 @@
     },
     "migration_completion_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2017,6 +2164,7 @@
     },
     "migration_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2030,6 +2178,7 @@
     },
     "migration_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2043,6 +2192,7 @@
     },
     "migration_prefix_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2056,6 +2206,7 @@
     },
     "migration_prefix_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2069,6 +2220,7 @@
     },
     "migration_prefix_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2082,6 +2234,7 @@
     },
     "migration_projection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2095,6 +2248,7 @@
     },
     "migration_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2108,6 +2262,7 @@
     },
     "migration_requires_import_transaction": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2121,6 +2276,7 @@
     },
     "migration_source_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2134,6 +2290,7 @@
     },
     "migration_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2147,6 +2304,7 @@
     },
     "migration_source_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2160,6 +2318,7 @@
     },
     "outcome_projection_admission_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2173,6 +2332,7 @@
     },
     "outcome_projection_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2186,6 +2346,7 @@
     },
     "outcome_projection_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2199,6 +2360,7 @@
     },
     "outcome_projection_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2212,6 +2374,7 @@
     },
     "outcome_projection_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2225,6 +2388,7 @@
     },
     "outcome_projection_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2238,6 +2402,7 @@
     },
     "outcome_projection_position_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2251,6 +2416,7 @@
     },
     "outcome_projection_terminal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2264,6 +2430,7 @@
     },
     "outcome_projection_terminal_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2277,6 +2444,7 @@
     },
     "owner_checkpoint_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2290,6 +2458,7 @@
     },
     "owner_compaction_incomplete_tail": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2303,6 +2472,7 @@
     },
     "owner_compaction_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2316,6 +2486,7 @@
     },
     "owner_compaction_repair_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2329,6 +2500,7 @@
     },
     "owner_journal_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2342,6 +2514,7 @@
     },
     "owner_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2355,6 +2528,7 @@
     },
     "owner_metadata_serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2368,6 +2542,7 @@
     },
     "owner_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2381,6 +2556,7 @@
     },
     "owner_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2394,6 +2570,7 @@
     },
     "owner_tail_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2407,6 +2584,7 @@
     },
     "owner_tail_truncate_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2420,6 +2598,7 @@
     },
     "payload_schema_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2433,6 +2612,7 @@
     },
     "payload_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2446,6 +2626,7 @@
     },
     "planning_recovery_interval_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2459,6 +2640,7 @@
     },
     "planning_recovery_interval_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2472,6 +2654,7 @@
     },
     "planning_recovery_sequence_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2485,6 +2668,7 @@
     },
     "planning_recovery_upper_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2498,6 +2682,7 @@
     },
     "prior_epoch_close_admission_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2511,6 +2696,7 @@
     },
     "prior_epoch_close_deadline": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2524,6 +2710,7 @@
     },
     "prior_epoch_close_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2537,6 +2724,7 @@
     },
     "prior_epoch_cursor_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2550,6 +2738,7 @@
     },
     "prior_epoch_identifier_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2563,6 +2752,7 @@
     },
     "prior_epoch_import_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2576,6 +2766,7 @@
     },
     "prior_epoch_import_prefix_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2589,6 +2780,7 @@
     },
     "prior_epoch_import_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2602,6 +2794,7 @@
     },
     "prior_epoch_native_proof_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2615,6 +2808,7 @@
     },
     "prior_epoch_native_proof_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2628,6 +2822,7 @@
     },
     "prior_epoch_sanitize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2641,6 +2836,7 @@
     },
     "prior_epoch_scope_prefix_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2654,6 +2850,7 @@
     },
     "prior_epoch_scope_range_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2667,6 +2864,7 @@
     },
     "prior_epoch_scope_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2680,6 +2878,7 @@
     },
     "prior_epoch_startup_barrier_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2693,6 +2892,7 @@
     },
     "prior_epoch_unproven_unclassified": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2706,6 +2906,7 @@
     },
     "prior_epoch_writer_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2719,6 +2920,7 @@
     },
     "recovery_event_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2732,6 +2934,7 @@
     },
     "release_baseline_source_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2745,6 +2948,7 @@
     },
     "release_ledger_source_reference_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2758,6 +2962,7 @@
     },
     "release_ledger_source_reference_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2771,6 +2976,7 @@
     },
     "release_ledger_source_storage_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2784,6 +2990,7 @@
     },
     "release_ledger_source_type_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2797,6 +3004,7 @@
     },
     "repair_recovery_event_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2810,6 +3018,7 @@
     },
     "repair_recovery_event_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2823,6 +3032,7 @@
     },
     "repair_state_inconsistent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2836,6 +3046,7 @@
     },
     "repair_tail_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2849,6 +3060,7 @@
     },
     "runtime_event_query_cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2862,6 +3074,7 @@
     },
     "scheduled_execution_recovery_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2875,6 +3088,7 @@
     },
     "scheduled_execution_recovery_clock_regressed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2888,6 +3102,7 @@
     },
     "scheduled_execution_recovery_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2901,6 +3116,7 @@
     },
     "scheduled_execution_recovery_draft_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2914,6 +3130,7 @@
     },
     "scheduled_execution_recovery_draft_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2927,6 +3144,7 @@
     },
     "scheduled_execution_recovery_fact_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2940,6 +3158,7 @@
     },
     "scheduled_execution_recovery_failure_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2953,6 +3172,7 @@
     },
     "scheduled_execution_recovery_failure_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2966,6 +3186,7 @@
     },
     "scheduled_execution_recovery_failure_severity_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2979,6 +3200,7 @@
     },
     "scheduled_execution_recovery_intent_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -2992,6 +3214,7 @@
     },
     "scheduled_execution_recovery_interruption_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3005,6 +3228,7 @@
     },
     "scheduled_execution_recovery_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3018,6 +3242,7 @@
     },
     "scheduled_execution_recovery_links_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3031,6 +3256,7 @@
     },
     "scheduled_execution_recovery_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3044,6 +3270,7 @@
     },
     "scheduled_execution_recovery_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3057,6 +3284,7 @@
     },
     "scheduled_execution_recovery_outcome_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3070,6 +3298,7 @@
     },
     "scheduled_execution_recovery_payload_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3083,6 +3312,7 @@
     },
     "scheduled_execution_recovery_refused_for_test": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3096,6 +3326,7 @@
     },
     "scheduled_execution_recovery_release_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3109,6 +3340,7 @@
     },
     "scheduled_execution_recovery_release_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3122,6 +3354,7 @@
     },
     "scheduled_execution_recovery_severity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3135,6 +3368,7 @@
     },
     "scheduled_execution_recovery_success_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3148,6 +3382,7 @@
     },
     "scheduled_execution_recovery_task_request_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3161,6 +3396,7 @@
     },
     "scheduled_execution_recovery_terminal_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3174,6 +3410,7 @@
     },
     "scheduled_execution_recovery_time_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3187,6 +3424,7 @@
     },
     "scheduled_recovery_action_id_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3200,6 +3438,7 @@
     },
     "scheduled_recovery_admission_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3213,6 +3452,7 @@
     },
     "scheduled_recovery_completion_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3226,6 +3466,7 @@
     },
     "scheduled_recovery_completion_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3239,6 +3480,7 @@
     },
     "scheduled_recovery_draft_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3252,6 +3494,7 @@
     },
     "scheduled_recovery_event_id_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3265,6 +3508,7 @@
     },
     "scheduled_recovery_execution_links_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3278,6 +3522,7 @@
     },
     "scheduled_recovery_execution_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3291,6 +3536,7 @@
     },
     "scheduled_recovery_fact_type_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3304,6 +3550,7 @@
     },
     "scheduled_recovery_intent_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3317,6 +3564,7 @@
     },
     "scheduled_recovery_lease_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3330,6 +3578,7 @@
     },
     "scheduled_recovery_links_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3343,6 +3592,7 @@
     },
     "scheduled_recovery_payload_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3356,6 +3606,7 @@
     },
     "scheduled_recovery_release_not_unique": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3369,6 +3620,7 @@
     },
     "scheduled_recovery_release_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3382,6 +3634,7 @@
     },
     "scheduled_recovery_sanitize_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3395,6 +3648,7 @@
     },
     "scheduled_settlement_continuation_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3408,6 +3662,7 @@
     },
     "segment_discontinuity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3421,6 +3676,7 @@
     },
     "sequence_discontinuity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3434,6 +3690,7 @@
     },
     "sequence_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3447,6 +3704,7 @@
     },
     "signature_catalog_byte_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3460,6 +3718,7 @@
     },
     "signature_catalog_event_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3473,6 +3732,7 @@
     },
     "signature_catalog_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3486,6 +3746,7 @@
     },
     "signature_cursor_out_of_range": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3499,6 +3760,7 @@
     },
     "signature_cursor_snapshot_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3512,6 +3774,7 @@
     },
     "signature_definition_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3525,6 +3788,7 @@
     },
     "signature_input_scope_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3538,6 +3802,7 @@
     },
     "signature_page_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3551,6 +3816,7 @@
     },
     "signature_prefix_byte_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3564,6 +3830,7 @@
     },
     "signature_prefix_encoding_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3577,6 +3844,7 @@
     },
     "signature_prefix_event_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3590,6 +3858,7 @@
     },
     "signature_registration_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3603,6 +3872,7 @@
     },
     "signature_registration_not_active": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3616,6 +3886,7 @@
     },
     "signature_result_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3629,6 +3900,7 @@
     },
     "signature_through_zero": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3642,6 +3914,7 @@
     },
     "source_writer_not_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3655,6 +3928,7 @@
     },
     "subscription_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3668,6 +3942,7 @@
     },
     "subscription_lagged": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3681,6 +3956,7 @@
     },
     "subscription_replay_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3694,6 +3970,7 @@
     },
     "subscription_sequence_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3707,6 +3984,7 @@
     },
     "subscription_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3720,6 +3998,7 @@
     },
     "unsupported_event_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3733,6 +4012,7 @@
     },
     "unsupported_repair_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3746,6 +4026,7 @@
     },
     "unsupported_writer_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3759,6 +4040,7 @@
     },
     "writer_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3772,6 +4054,7 @@
     },
     "writer_lock_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3785,6 +4068,7 @@
     },
     "writer_metadata_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3798,6 +4082,7 @@
     },
     "writer_metadata_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3811,6 +4096,7 @@
     },
     "writer_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3824,6 +4110,7 @@
     },
     "writer_response_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3837,6 +4124,7 @@
     },
     "writer_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3850,6 +4138,7 @@
     },
     "writer_start_cancelled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
@@ -3863,6 +4152,7 @@
     },
     "writer_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,

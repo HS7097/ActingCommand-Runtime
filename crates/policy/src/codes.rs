@@ -17,83 +17,83 @@ actingcommand_contract::outcome_codes! {
         /// candidate is deferred with no wake, until the facts, the catalog or the
         /// configuration change (keys `instance_id`, `fact_key`, `unknown_reason`; optional
         /// `reader_problem`).
-        FactRefreshUnbound => "fact_refresh_unbound": warning,
+        FactRefreshUnbound => "fact_refresh_unbound": warning / none,
         /// Warning. A candidate's selection document read an input that no reading can
         /// supply (an instruction key, pack data, a fixed field or a lookup that covers no
         /// value) and found it unknown: the candidate is deferred with no wake, until the facts
         /// or the catalog change (keys `instance_id`, `rule_id`, `unknown_reason`).
-        SelectionInputUnknown => "selection_input_unknown": warning,
+        SelectionInputUnknown => "selection_input_unknown": warning / none,
         /// Warning. A scheduling-layer selection document declares a `drop_candidate` or a
         /// substitute clause, which the scheduling layer does not apply (keys `rule_id`,
         /// `unknown_clause`).
-        SelectionUnknownClauseIgnored => "selection_unknown_clause_ignored": warning,
+        SelectionUnknownClauseIgnored => "selection_unknown_clause_ignored": warning / declaration_error,
         // Catalog compile diagnostics (`CatalogDiagnosticCode`); the spellings other owners also
         // use are the contract's `SharedCode`s.
-        CatalogTooLarge => "catalog_too_large": error,
-        UnknownField => "unknown_field": error,
-        DescriptorMismatch => "descriptor_mismatch": error,
-        PredicateUnreachable => "predicate_unreachable": error,
-        PredicateUncomputable => "predicate_uncomputable": error,
-        LoopBudgetMissing => "loop_budget_missing": error,
-        EffectIncompatible => "effect_incompatible": error,
-        ApprovalMissing => "approval_missing": error,
-        PrioritySelectionWithoutDocument => "priority_selection_without_document": error,
-        PrioritySelectionPercentileInvalid => "priority_selection_percentile_invalid": error,
+        CatalogTooLarge => "catalog_too_large": error / none,
+        UnknownField => "unknown_field": error / none,
+        DescriptorMismatch => "descriptor_mismatch": error / none,
+        PredicateUnreachable => "predicate_unreachable": error / none,
+        PredicateUncomputable => "predicate_uncomputable": error / none,
+        LoopBudgetMissing => "loop_budget_missing": error / none,
+        EffectIncompatible => "effect_incompatible": error / none,
+        ApprovalMissing => "approval_missing": error / none,
+        PrioritySelectionWithoutDocument => "priority_selection_without_document": error / none,
+        PrioritySelectionPercentileInvalid => "priority_selection_percentile_invalid": error / none,
         // Policy evaluation failures (`PolicyEvaluationError`).
-        PolicyEvaluationInputInvalid => "policy_evaluation_input_invalid": error,
-        PolicyEvaluationFactTypeMismatch => "policy_evaluation_fact_type_mismatch": error,
-        PolicyEvaluationNumericOverflow => "policy_evaluation_numeric_overflow": error,
-        ScoreOverflow => "score_overflow": error,
-        SelectionPolicyInvalid => "selection_policy_invalid": error,
+        PolicyEvaluationInputInvalid => "policy_evaluation_input_invalid": error / none,
+        PolicyEvaluationFactTypeMismatch => "policy_evaluation_fact_type_mismatch": error / none,
+        PolicyEvaluationNumericOverflow => "policy_evaluation_numeric_overflow": error / none,
+        ScoreOverflow => "score_overflow": error / none,
+        SelectionPolicyInvalid => "selection_policy_invalid": error / none,
         // Scheduling decision reasons.
-        ScopeWithoutInstance => "scope_without_instance": info,
-        FailureRetryImmediate => "failure_retry_immediate": info,
-        TriggerFalse => "trigger_false": info,
-        TriggerUnknown => "trigger_unknown": info,
-        FeedbackStopTrue => "feedback_stop_true": info,
-        FeedbackStopUnknown => "feedback_stop_unknown": info,
-        TaskCooldownActive => "task_cooldown_active": info,
-        InstanceAlreadySelected => "instance_already_selected": info,
-        HeavySceneBudgetDeferred => "heavy_scene_budget_deferred": info,
-        HostBudgetDeferred => "host_budget_deferred": info,
-        PlacementSelected => "placement_selected": info,
-        RankBreakdown => "rank_breakdown": info,
-        DecisionRecord => "decision_record": info,
-        InstanceUnavailable => "instance_unavailable": info,
-        CapabilityMissing => "capability_missing": info,
-        InstanceOverrideDisabled => "instance_override_disabled": info,
-        ActivityProfileMissing => "activity_profile_missing": info,
-        HeavySceneBudgetExhausted => "heavy_scene_budget_exhausted": info,
-        HostCapacityInsufficient => "host_capacity_insufficient": info,
-        ScoreDeferred => "score_deferred": info,
-        ScorePromoted => "score_promoted": info,
-        ScoreAgingCap => "score_aging_cap": info,
-        TimelineUnavailable => "timeline_unavailable": info,
-        TimelineActive => "timeline_active": info,
+        ScopeWithoutInstance => "scope_without_instance": info / none,
+        FailureRetryImmediate => "failure_retry_immediate": info / none,
+        TriggerFalse => "trigger_false": info / none,
+        TriggerUnknown => "trigger_unknown": info / none,
+        FeedbackStopTrue => "feedback_stop_true": info / none,
+        FeedbackStopUnknown => "feedback_stop_unknown": info / none,
+        TaskCooldownActive => "task_cooldown_active": info / none,
+        InstanceAlreadySelected => "instance_already_selected": info / none,
+        HeavySceneBudgetDeferred => "heavy_scene_budget_deferred": info / none,
+        HostBudgetDeferred => "host_budget_deferred": info / none,
+        PlacementSelected => "placement_selected": info / none,
+        RankBreakdown => "rank_breakdown": info / none,
+        DecisionRecord => "decision_record": info / none,
+        InstanceUnavailable => "instance_unavailable": info / none,
+        CapabilityMissing => "capability_missing": info / none,
+        InstanceOverrideDisabled => "instance_override_disabled": info / none,
+        ActivityProfileMissing => "activity_profile_missing": info / none,
+        HeavySceneBudgetExhausted => "heavy_scene_budget_exhausted": info / none,
+        HostCapacityInsufficient => "host_capacity_insufficient": info / none,
+        ScoreDeferred => "score_deferred": info / none,
+        ScorePromoted => "score_promoted": info / none,
+        ScoreAgingCap => "score_aging_cap": info / none,
+        TimelineUnavailable => "timeline_unavailable": info / none,
+        TimelineActive => "timeline_active": info / none,
         // Resource target reasons and failures.
-        ResourceTargets => "resource_targets": info,
-        ResourceWeights => "resource_weights": info,
-        ResourceTargetPolicyIgnored => "resource_target_policy_ignored": warning,
-        ResourceTargetPolicyUnreadable => "resource_target_policy_unreadable": warning,
-        ResourceTargetPolicyExpired => "resource_target_policy_expired": info,
-        ResourceTargetTasksUnevaluable => "resource_target_tasks_unevaluable": warning,
-        ResourceTargetsParserCodeUnexpected => "resource_targets_parser_code_unexpected": error,
-        ResourceTargetsCanonicalEncodeFailed => "resource_targets_canonical_encode_failed": error,
-        ResourceTargetsViewEncodeFailed => "resource_targets_view_encode_failed": error,
-        MalformedRows => "malformed_rows": error,
+        ResourceTargets => "resource_targets": info / none,
+        ResourceWeights => "resource_weights": info / none,
+        ResourceTargetPolicyIgnored => "resource_target_policy_ignored": warning / none,
+        ResourceTargetPolicyUnreadable => "resource_target_policy_unreadable": warning / none,
+        ResourceTargetPolicyExpired => "resource_target_policy_expired": info / none,
+        ResourceTargetTasksUnevaluable => "resource_target_tasks_unevaluable": warning / none,
+        ResourceTargetsParserCodeUnexpected => "resource_targets_parser_code_unexpected": error / none,
+        ResourceTargetsCanonicalEncodeFailed => "resource_targets_canonical_encode_failed": error / none,
+        ResourceTargetsViewEncodeFailed => "resource_targets_view_encode_failed": error / none,
+        MalformedRows => "malformed_rows": error / none,
         // Forward projection (`ForwardError`) and its evidence gaps.
-        ForwardProjectionInvalid => "forward_projection_invalid": error,
-        ForwardProjectionOverflow => "forward_projection_overflow": error,
-        StepBudgetExhausted => "step_budget_exhausted": warning,
-        EffectEvidenceInsufficient => "effect_evidence_insufficient": warning,
+        ForwardProjectionInvalid => "forward_projection_invalid": error / none,
+        ForwardProjectionOverflow => "forward_projection_overflow": error / none,
+        StepBudgetExhausted => "step_budget_exhausted": warning / none,
+        EffectEvidenceInsufficient => "effect_evidence_insufficient": warning / none,
         // Strategic report projection (`StrategyError`) and its planning-lane reasons.
-        StrategyReportInvalid => "strategy_report_invalid": error,
-        StrategyCatalogMismatch => "strategy_catalog_mismatch": error,
-        StrategyTemplateAmbiguous => "strategy_template_ambiguous": error,
-        StrategyNumericOverflow => "strategy_numeric_overflow": error,
-        ExecutionContinues => "execution_continues": info,
-        NoConditionalTemplateMatched => "no_conditional_template_matched": info,
-        PinnedObservationMissing => "pinned_observation_missing": info,
+        StrategyReportInvalid => "strategy_report_invalid": error / none,
+        StrategyCatalogMismatch => "strategy_catalog_mismatch": error / none,
+        StrategyTemplateAmbiguous => "strategy_template_ambiguous": error / none,
+        StrategyNumericOverflow => "strategy_numeric_overflow": error / none,
+        ExecutionContinues => "execution_continues": info / none,
+        NoConditionalTemplateMatched => "no_conditional_template_matched": info / none,
+        PinnedObservationMissing => "pinned_observation_missing": info / none,
     }
 }
 
@@ -106,18 +106,18 @@ actingcommand_contract::outcome_codes! {
         /// Info. A candidate is deferred because a `session.feature.*` record of its instance
         /// says a feature the task needs is locked (keys `fact_key`, and
         /// `next_eligible_unix_ms` when the record expires; SR-5a).
-        FeatureLocked => "feature_locked": info,
+        FeatureLocked => "feature_locked": info / none,
         /// Error. A decision that is not selected ended without a reason: a programming error.
         /// The candidate is still deferred and the round goes on (keys `task_id`,
         /// `instance_id`; SR-6a).
-        DecisionReasonMissing => "decision_reason_missing": error,
+        DecisionReasonMissing => "decision_reason_missing": error / none,
         /// Info. A candidate's task package is not schedulable at this time by the instance's
         /// pack schedule (keys `package_id`, and `next_eligible_unix_ms` when the covering row
         /// ends; SR-11).
-        PackScheduleClosed => "pack_schedule_closed": info,
+        PackScheduleClosed => "pack_schedule_closed": info / none,
         /// Info. A pack schedule row names a package no task of the active catalog uses;
         /// reported once per cycle, not an error (keys `package_id`; SR-11).
-        PackScheduleUnknownPackage => "pack_schedule_unknown_package": info,
+        PackScheduleUnknownPackage => "pack_schedule_unknown_package": info / none,
     }
 }
 // ---- Workflow #386 SR-0 (scheduling rules): end ----

@@ -11,7 +11,7 @@ actingcommand_contract::outcome_codes! {
     pub(crate) enum ActinglabCode {
         /// Error. An offline package-tool command while Lab option one (authoring) is not
         /// installed (keys `operation`, `lab_option`).
-        LabCommandOptionDisabled => "lab_command_option_disabled": error,
+        LabCommandOptionDisabled => "lab_command_option_disabled": error / none,
         // ---- end of #389 U-0 registrations
     }
 }

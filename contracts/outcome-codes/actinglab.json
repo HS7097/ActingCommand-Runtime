@@ -3,6 +3,7 @@
   "codes": {
     "lab_command_option_disabled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "actinglab",
       "layer": "process",
       "uncertain": false,

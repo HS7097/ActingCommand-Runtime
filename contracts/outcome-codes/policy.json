@@ -72,6 +72,7 @@
     },
     "policy_evaluation_input_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -85,6 +86,7 @@
     },
     "policy_evaluation_fact_type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -98,6 +100,7 @@
     },
     "policy_evaluation_numeric_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -111,6 +114,7 @@
     },
     "score_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -124,6 +128,7 @@
     },
     "selection_policy_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -137,6 +142,7 @@
     },
     "scope_without_instance": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -150,6 +156,7 @@
     },
     "failure_retry_immediate": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -163,6 +170,7 @@
     },
     "trigger_false": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -176,6 +184,7 @@
     },
     "trigger_unknown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -189,6 +198,7 @@
     },
     "feedback_stop_true": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -202,6 +212,7 @@
     },
     "feedback_stop_unknown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -215,6 +226,7 @@
     },
     "task_cooldown_active": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -228,6 +240,7 @@
     },
     "instance_already_selected": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -241,6 +254,7 @@
     },
     "heavy_scene_budget_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -254,6 +268,7 @@
     },
     "host_budget_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -267,6 +282,7 @@
     },
     "placement_selected": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -280,6 +296,7 @@
     },
     "rank_breakdown": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -293,6 +310,7 @@
     },
     "decision_record": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -306,6 +324,7 @@
     },
     "instance_unavailable": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -319,6 +338,7 @@
     },
     "capability_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -332,6 +352,7 @@
     },
     "instance_override_disabled": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -345,6 +366,7 @@
     },
     "activity_profile_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -358,6 +380,7 @@
     },
     "heavy_scene_budget_exhausted": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -371,6 +394,7 @@
     },
     "host_capacity_insufficient": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -384,6 +408,7 @@
     },
     "score_deferred": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -397,6 +422,7 @@
     },
     "score_promoted": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -410,6 +436,7 @@
     },
     "score_aging_cap": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -423,6 +450,7 @@
     },
     "timeline_unavailable": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -436,6 +464,7 @@
     },
     "timeline_active": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -449,6 +478,7 @@
     },
     "resource_targets": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -462,6 +492,7 @@
     },
     "resource_weights": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -475,6 +506,7 @@
     },
     "resource_target_policy_ignored": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -488,6 +520,7 @@
     },
     "resource_target_policy_unreadable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -501,6 +534,7 @@
     },
     "resource_target_policy_expired": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -514,6 +548,7 @@
     },
     "resource_target_tasks_unevaluable": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -527,6 +562,7 @@
     },
     "resource_targets_parser_code_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -540,6 +576,7 @@
     },
     "resource_targets_canonical_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -553,6 +590,7 @@
     },
     "resource_targets_view_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -566,6 +604,7 @@
     },
     "malformed_rows": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -579,6 +618,7 @@
     },
     "forward_projection_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -592,6 +632,7 @@
     },
     "forward_projection_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -605,6 +646,7 @@
     },
     "step_budget_exhausted": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -618,6 +660,7 @@
     },
     "effect_evidence_insufficient": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -631,6 +674,7 @@
     },
     "strategy_report_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -644,6 +688,7 @@
     },
     "strategy_catalog_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -657,6 +702,7 @@
     },
     "strategy_template_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -670,6 +716,7 @@
     },
     "strategy_numeric_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -683,6 +730,7 @@
     },
     "execution_continues": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -696,6 +744,7 @@
     },
     "no_conditional_template_matched": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -709,6 +758,7 @@
     },
     "pinned_observation_missing": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -722,6 +772,7 @@
     },
     "catalog_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -735,6 +786,7 @@
     },
     "unknown_field": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -748,6 +800,7 @@
     },
     "descriptor_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -761,6 +814,7 @@
     },
     "predicate_unreachable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -774,6 +828,7 @@
     },
     "predicate_uncomputable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -787,6 +842,7 @@
     },
     "loop_budget_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -800,6 +856,7 @@
     },
     "effect_incompatible": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -813,6 +870,7 @@
     },
     "approval_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -826,6 +884,7 @@
     },
     "priority_selection_without_document": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -839,6 +898,7 @@
     },
     "priority_selection_percentile_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -852,6 +912,7 @@
     },
     "feature_locked": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -868,6 +929,7 @@
     },
     "decision_reason_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -884,6 +946,7 @@
     },
     "pack_schedule_closed": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,
@@ -900,6 +963,7 @@
     },
     "pack_schedule_unknown_package": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "policy",
       "layer": "policy",
       "uncertain": false,

@@ -558,7 +558,7 @@
     },
     "recognition_failed": {
       "category": "error",
-      "ladder_class": "environment_fault",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1272,6 +1272,7 @@
     },
     "consecutive_unchanged_threshold_reached": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -11089,6 +11090,7 @@
     },
     "max_steps_reached": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
