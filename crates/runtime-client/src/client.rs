@@ -54,8 +54,9 @@ mod lab_operation;
 pub use lab_operation::VerifiedLabOperation;
 mod run_status;
 pub use run_status::{
-    ContainedRunEvidence, ContainedRunLease, ContainedRunProgress, ContainedRunState,
-    ContainedRunStatus, ContainedRunTerminal, RecentContainedRuns, RunDispatch, RunKey, RunOrigin,
+    ContainedRunEvidence, ContainedRunLease, ContainedRunPage, ContainedRunProgress,
+    ContainedRunState, ContainedRunStatus, ContainedRunTerminal, ListedContainedRun,
+    RecentContainedRuns, RunDispatch, RunKey, RunListFilter, RunListPosition, RunOrigin,
     RunStatusMode,
 };
 

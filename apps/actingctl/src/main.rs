@@ -15,6 +15,11 @@ mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
 
+// Workflow #389 MCP-3: `runs` (MCP `ac_runs`), with the instance selector it shares with MCP.
+mod instance_selector;
+mod run_list;
+// End of MCP-3.
+
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -62,6 +67,11 @@ fn main() -> ExitCode {
         if let Some(exit) = watchdog::dispatch(&arguments) {
             return exit;
         }
+    }
+    // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
+    // `Invocation::parse`.
+    if let Some(exit) = run_list::dispatch(&arguments) {
+        return exit;
     }
     match run(arguments) {
         Ok(output) => match write_output(&output) {

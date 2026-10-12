@@ -11,6 +11,8 @@ mod lab;
 mod observer;
 mod operator;
 mod protocol;
+// Workflow #389 MCP-3: ac_runs.
+mod run_list;
 mod runs;
 mod runtime;
 mod server;

@@ -94,3 +94,11 @@ carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` r
 window, refused and deferred rows before owed ones, newest first in each, with
 `clock_slots_total` when fewer are kept; to fit its output budget it cuts them before any
 other list (Workflow #372 K3, `policy-suspension.md`).
+
+`list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
+and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
+first by their first listing fact, each read in brief mode and kept by its task_id
+prefix, dispatch and state, at most 100 a page. A later page continues at the first
+page's snapshot, after the last run the page before it examined. A listing the deadline
+ended early examines no run; a page the deadline ended early is `incomplete` and
+continues after the last run it read.
