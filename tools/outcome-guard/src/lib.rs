@@ -9,7 +9,9 @@
 //! - G2 string channels, G3 `json!` keys, G4 construction, G5 stray literals: every workspace
 //!   member starts on [`ALLOW_LIST`]; A2a-A2e remove members as they convert them and name the
 //!   channels that stay strings as bridges;
-//! - G6 persisted prose (A3) and G10 review (A8) are not implemented yet;
+//! - G6 persisted prose (A3): no text member in a contract type a stored record reaches
+//!   (`persisted.rs`), outside the G6 bridges of [`ALLOW_LIST`];
+//! - G10 review (A8) is not implemented yet;
 //! - G7 key table and vocabularies = catalog (A1);
 //! - G8 naming and prefixes (A1);
 //! - G9 the merged file and the released contract (A1).
@@ -20,6 +22,7 @@
 //! `include!` is itself a G2 finding.
 
 pub mod catalog;
+pub mod persisted;
 pub mod source;
 
 pub use catalog::Catalog;
@@ -279,63 +282,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/ledger-forensics/src/lib.rs",
-        "ForensicEventFilter.diagnostic_code",
-        &[Check::G2],
-        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "ForensicEventFilter::new",
-        &[Check::G2],
-        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "ForensicEventFilter::query",
-        &[Check::G3],
-        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "CorruptTailReport.code",
-        &[Check::G2],
-        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "StabilityFailure.code",
-        &[Check::G2],
-        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "StabilityFailure.operation",
-        &[Check::G2],
-        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "StabilityComparison.terminal_reason",
-        &[Check::G2],
-        "A3: an actingledger report field that carries the execution kernel's stop reason as read (SharedCode::MaxStepsReached, SharedCode::ConsecutiveUnchangedThresholdReached); A3 replaces the forensic reports",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/lib.rs",
         "task_evidence_report",
         &[Check::G5],
         "A2-P: the report gap token artifact_verification_failed shares its spelling with a contract code; A2-P renames one side (model section 2.2)",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/runtime_facts.rs",
-        "ForensicRuntimeFactsResult::Failed.code",
-        &[Check::G2],
-        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
-    ),
-    bridge(
-        "crates/ledger-forensics/src/runtime_facts.rs",
-        "ForensicRuntimeFactsResult::Failed.operation",
-        &[Check::G2],
-        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
     ),
     bridge(
         "apps/ledger-forensics/src/lib.rs",
@@ -364,24 +313,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     // A2a part 1 bridges: channels of the contract crate and runtime-client that stay strings
     // until the slice the reason names removes the entry (brief-a2a.md A2a-9).
     bridge(
-        "crates/actingcommand-contract/src/agent.rs",
-        "AgentSessionResponse.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/agent.rs",
-        "AgentSessionResponse::code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/agent.rs",
-        "AgentSessionResponse::new",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/emulator.rs",
         "EmulatorVersionEvidence::Unavailable.reason",
         &[Check::G2],
@@ -391,421 +322,139 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/event/artifact.rs",
         "TaskDiagnosticRecognitionError.code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticTerminalData::OperationError.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticTerminalData::TaskError.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticUnexecutedData::Guard.reason",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticUnexecutedPage.reason",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ArtifactFailureCause.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ArtifactFailureCause.operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "CleanupCauseDraft.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "CleanupCauseRecord.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: a recognition pack error's PascalCase spelling (`InvalidPackage`, ...) in the task-diagnostic artifact; A2-P registers and renames these spellings, then the row carries an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft.operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft.stage",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.stage",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "LifecycleCauseDraft.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "LifecycleCauseRecord.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PerformanceMonitorStatePayload.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyDispatchRejection.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyDispatchRejection.operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyFailureRecord.error_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyPlanningSignalEventData.fact_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyPlanningSignalPayload.fact_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyReasonRecord.code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: a policy reason code is the evaluator's text, including the dynamic family `score_unknown:<rule>` that A2-P splits; ledger revision 3 already persists no reason text",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PublicPayload.policy_signal_fact_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ResourceAuthoringDraft.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ResourceAuthoringPayload.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord.operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord.stage",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecyclePhase::InstancePreparationFinished.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecyclePhase::RecoveryRungFinished.reason",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "SchedulingOutcomeDeclaration.designated_operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "TaskGeometryFailure.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "TaskSemanticFact::EntryRecoveryFailed.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "TaskSemanticFact::EntryTargetDisposition.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "TaskSemanticFact::TerminalCommitted.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "TaskSemanticFact::TerminalRejected.reason",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "B4: a package's operation id from its scheduling declaration (pack vocabulary, model section 8.1), not a Runtime location; B4 decides its typing with the package interface",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "Wire.error_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "CleanupCauseDraft::code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "CleanupCauseRecord::code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "LifecycleCauseRecord::code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord::code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ResourceAuthoringPayloadDraft::event",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyPlanningSignalPayload::fact_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PerformanceMonitorStatePayload::failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "ResourceAuthoringPayload::failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload::failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::new",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "CleanupCauseDraft::new",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "LifecycleCauseDraft::new",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureDraft::new",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord::operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "PublicPayload::policy_signal_fact_code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::stage",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::stage",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureRecord::stage",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "validate_diagnostic_detail",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "validate_resource_authoring_fields",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "RuntimeLifecycleFailureDraft::with_operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/provider.rs",
-        "ProviderNativeFailure.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/recovery_ladder.rs",
-        "RecoveryLadderTrigger.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/recovery_ladder.rs",
-        "is_preparation_recovery_trigger",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/recovery_ladder.rs",
-        "is_stuck_recovery_trigger",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload/signature.rs",
         "SignatureLifecyclePredicate.code",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "B3: a diagnostic signature's match pattern (a stored query over runtime.failed outcomes), not a result; B3 types its conditions",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload/signature.rs",
         "SignatureLifecyclePredicate.operation",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "B3: a diagnostic signature's match pattern (a stored query over runtime.failed outcomes), not a result; B3 types its conditions",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload/signature.rs",
         "SignatureLifecyclePredicate.stage",
         &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/task_selection.rs",
-        "TaskSelectionConfirmation::CaptureFailed.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload/task_selection.rs",
-        "TaskSelectionConfirmation::GuardFailed.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
+        "B3: a diagnostic signature's match pattern (a stored query over runtime.failed outcomes), not a result; B3 types its conditions",
     ),
     bridge(
         "crates/actingcommand-contract/src/game_engine.rs",
@@ -880,18 +529,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the Lab page projection's json keys blocked_reason and reason hold registered PageProjectionCode spellings; B4 converts the Lab sites",
     ),
     bridge(
-        "crates/actingcommand-contract/src/performance.rs",
-        "PerformanceMonitorStateEventData.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/performance/capacity.rs",
-        "CapacityNativeCause.operation",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/ppocr_diagnostic.rs",
         "PpocrCpuAssignedNodeDiagnostic.placement_reason",
         &[Check::G2],
@@ -914,12 +551,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "TapRequest.reason",
         &[Check::G2],
         "B1: a free name or text field that is not an outcome code (legacy engine and primitive requests, extension ids); B1 settles it",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/project.rs",
-        "ProjectDiagnosticView.code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/proposal.rs",
@@ -959,12 +590,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "ContainedTaskCancellationReason::from_failure_code",
-        &[Check::G2],
-        "A3: takes a cancelled terminal's committed failure_code as read back from the ledger (the persisted task terminal and payload failure_code fields are A3 bridges); ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime.rs",
         "RuntimeErrorProjection::host_code",
         &[Check::G2],
         "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
@@ -998,18 +623,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "RuntimeMaterialReadFailure.operation",
         &[Check::G2],
         "A2b/A2c merge follow-up: filled with a runtime host error's operation (RuntimeHostError::operation, which still relays ledger, state and artifact-store operations until the host and ledger channels take Location together after the A2 train); then the field takes a Location",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime_fact.rs",
-        "ConfigSubsystem.reason",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
-        "crates/runtime-client/src/client/run_status.rs",
-        "ContainedRunTerminal.failure_code",
-        &[Check::G2],
-        "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
     // A2e bridges: channels of the device crate that stay strings until the slice the reason
     // names removes the entry (brief-a2e.md; A2e is mechanical and keeps every emitted string).
@@ -1158,18 +771,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "pinned_binaries",
         &[Check::G2],
         "A6a: prose about the embedded pin, reported only through check-config v1 and the FATAL line",
-    ),
-    bridge(
-        "apps/actingd/src/config/manifest.rs",
-        "subsystem",
-        &[Check::G2],
-        "A3: config_manifest.subsystems[].reason prose; A3 replaces it",
-    ),
-    bridge(
-        "apps/actingd/src/config/provider_startup.rs",
-        "bind_discovered_instances",
-        &[Check::G5],
-        "A3: the provider native failure family <category>.<stage> and its fallback device_error (decision D6); A3's provider_native_failed replaces it",
     ),
     bridge(
         "apps/actingd/src/owner_unlock.rs",
@@ -1520,18 +1121,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/error.rs",
-        "RuntimeHostError::with_failure_stage",
-        &[Check::G2],
-        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
-    ),
-    bridge(
-        "crates/runtime-host/src/error.rs",
-        "RuntimeHostFailureContext.failure_stage",
-        &[Check::G2],
-        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
-    ),
-    bridge(
         "crates/runtime-host/src/failure_identity.rs",
         "FailureIdentity::parse",
         &[Check::G2],
@@ -1563,21 +1152,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/runtime-host/src/host/contained_task.rs",
-        "ContainedTaskTerminalDraft.failure_code",
-        &[Check::G2],
-        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
         "EntryRecoveryRuntime::record_guard_evaluation",
         &[Check::G2],
         "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
-        "FailedTaskTerminal.failure_code",
-        &[Check::G2],
-        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
     ),
     bridge(
         "crates/runtime-host/src/host/contained_task.rs",
@@ -1640,12 +1217,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: builds an artifact-store error, whose constructor takes spellings because the runtime host fills it with its own codes (A2c's ArtifactStoreError::fatal bridge); it takes Code with the store error when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/host/lifecycle.rs",
-        "HostShared::append_lifecycle_failure_with_severity",
-        &[Check::G3],
-        "A3: the persisted runtime lifecycle failure message is a JSON document with code, operation and runtime_code keys; ledger revision 3 replaces it with an outcome",
-    ),
-    bridge(
         "crates/runtime-host/src/host/policy_dispatch.rs",
         "policy_rejection_severity",
         &[Check::G2],
@@ -1671,13 +1242,19 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/runtime-host/src/host/recovery_ladder.rs",
-        "HostShared::append_recovery_rung_finished",
+        "HostShared::finish_interrupted_ladder",
         &[Check::G2],
         "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
         "crates/runtime-host/src/host/recovery_ladder.rs",
-        "HostShared::finish_interrupted_ladder",
+        "rung_failure_outcome",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "rung_reason_outcome",
         &[Check::G2],
         "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
@@ -1698,12 +1275,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "recovery_entry_skip",
         &[Check::G2],
         "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/requests.rs",
-        "TaskFailureEvidence.code",
-        &[Check::G2],
-        "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
         "crates/runtime-host/src/host/requests.rs",
@@ -1952,7 +1523,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/execution-kernel/src/online_observation.rs",
         "PreparedPageObservation::evaluate",
         &[Check::G3],
-        "A3: the observation evidence rows' json keys stage, reason and code are persisted in observation records; ledger revision 3 replaces them with an outcome",
+        "B4: the observation evidence rows' json keys stage, reason and code (observation artifact facts, not ledger records; A3 left them) carry codes and locations; B4 settles the recognition records",
     ),
     bridge(
         "crates/execution-kernel/src/provider.rs",
@@ -2615,6 +2186,45 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
     ),
     // End of the A2d bridges.
+    // A3 entries (ledger revision 3): G6 members that are data, not Runtime prose, and the
+    // policy's Severe code list (model section 8.1).
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "LifecycleNativeDetail.text",
+        &[Check::G6],
+        "B5: foreign text (adb command output) the typed ADB target recovery evidence still holds; B5 moves device evidence onto foreign links' raw_text",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/artifact.rs",
+        "TaskDiagnosticOcrBlock.text",
+        &[Check::G6],
+        "B4: text the OCR provider recognised (data the task-diagnostic artifact records), not Runtime prose; B4 settles the recognition records",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/candidate_projection.rs",
+        "CandidateRecognitionInput::Ocr.text",
+        &[Check::G6],
+        "B4: text the OCR provider recognised for a candidate (data a selection record keeps), not Runtime prose; B4 settles the recognition records",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/runtime.rs",
+        "InputAction::Text.text",
+        &[Check::G6],
+        "B4: the text an input action types (data; a task record persists it only as [redacted]), not Runtime prose; B4 settles the input records",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/emulator.rs",
+        "EmulatorVersionEvidence::Unavailable.reason",
+        &[Check::G6],
+        "A2-P: the unavailable version's reason is English text (the same channel as its G2 bridge); A2-P replaces it with a typed reason",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "severe_policy_failure_codes",
+        &[Check::G5],
+        "B4: the policy's Severe code list (model section 8.1) spells other owners' codes; B4 reviews the list with the policy",
+    ),
+    // End of the A3 entries.
 ];
 
 /// One bridge: a function (`Type::method`, `Trait::method` or a free function's name), or a
@@ -2796,6 +2406,35 @@ pub fn check_channels(workspace: &Workspace) -> Vec<String> {
                     finding.check, file.path, finding.line, finding.detail
                 ));
             }
+        }
+    }
+    violations
+}
+
+/// G6: no persisted contract type holds a text member (Workflow #378 model section 9), outside
+/// the G6 entries of the allow list.
+pub fn check_persisted_prose(workspace: &Workspace) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut types = Vec::new();
+    for file in workspace
+        .files
+        .iter()
+        .filter(|file| file.member == CONTRACT_MEMBER)
+    {
+        let found = fs::read_to_string(workspace.root.join(&file.path))
+            .map_err(|error| error.to_string())
+            .and_then(|text| persisted::serde_types(&file.path, &text));
+        match found {
+            Ok(found) => types.extend(found),
+            Err(error) => violations.push(format!("G6 {}: {error}", file.path)),
+        }
+    }
+    for (path, finding) in persisted::persisted_prose(&types) {
+        if !finding_allowed(CONTRACT_MEMBER, &path, &finding) {
+            violations.push(format!(
+                "{:?} {}:{}: {}",
+                finding.check, path, finding.line, finding.detail
+            ));
         }
     }
     violations

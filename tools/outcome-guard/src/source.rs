@@ -57,7 +57,7 @@ pub struct MacroFacts {
     pub errors: Vec<String>,
 }
 
-/// The four string-channel checks.
+/// The four string-channel checks, and G6 (persisted prose, `persisted.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Check {
     /// A code or location carried as a string: field, parameter, `Result` error, getter.
@@ -68,6 +68,8 @@ pub enum Check {
     G4,
     /// A string literal equal to a registered code or location outside its registry.
     G5,
+    /// A text member of a persisted contract type (Workflow #378 A3).
+    G6,
 }
 
 /// One string-channel finding.
@@ -993,7 +995,7 @@ fn type_arguments(ty: &Type) -> Vec<&Type> {
 
 /// `String`, `&str`, `Box<str>`, `Cow<str>`, `impl Into<String>`, `impl AsRef<str>`, an
 /// `Option` or `Vec` of these, or a tuple, array or slice that contains one.
-fn is_string_type(ty: &Type) -> bool {
+pub fn is_string_type(ty: &Type) -> bool {
     match ty {
         Type::Reference(reference) => {
             is_path_named(&reference.elem, "str") || is_string_type(&reference.elem)
