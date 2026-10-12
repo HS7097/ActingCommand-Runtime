@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{ForensicError, ForensicReport, ForensicResult};
-use actingcommand_artifact_store::{ArtifactStoreError, open_projected_stream};
+use crate::codes::{ForensicsCode, ForensicsLocation};
+use actingcommand_artifact_store::{ArtifactStoreError, StoreCode, open_projected_stream};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactEvictionDisposition, RUNTIME_MATERIAL_READ_BUDGET_MS, RuntimeErrorCode,
     RuntimeErrorProjection, RuntimeMaterialChunk, RuntimeMaterialReadFailure,
@@ -10,7 +13,7 @@ use actingcommand_contract::{
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, LedgerArtifactSelection,
-    ResolvedLedgerArtifact,
+    LedgerCode, ResolvedLedgerArtifact,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -28,7 +31,10 @@ impl ForensicMaterialRequest {
     ) -> ForensicResult<Self> {
         let state_root = state_root.into();
         if state_root.as_os_str().is_empty() {
-            return Err(material_error("invalid_state_root", "state root is empty"));
+            return Err(material_error(
+                ForensicsCode::InvalidStateRoot.code(),
+                "state root is empty",
+            ));
         }
         request
             .validate()
@@ -43,7 +49,7 @@ impl ForensicMaterialRequest {
 enum ReadError {
     Ledger(GlobalLedgerError),
     Artifact(ArtifactStoreError),
-    Identity(&'static str),
+    Identity(Code),
     Request(ForensicError),
     Budget(ForensicError),
 }
@@ -82,7 +88,7 @@ pub fn read_material_complete(
     let work = (|| -> Result<ForensicMaterialCompleteResult, ReadError> {
         if state_root.as_os_str().is_empty() {
             return Err(ReadError::Request(material_error(
-                "invalid_state_root",
+                ForensicsCode::InvalidStateRoot.code(),
                 "state root is empty",
             )));
         }
@@ -100,7 +106,7 @@ pub fn read_material_complete(
         })?;
         if max_material_bytes == 0 || max_material_bytes > isize::MAX as usize {
             return Err(ReadError::Request(material_error(
-                "invalid_material_read_limit",
+                SharedCode::InvalidMaterialReadLimit.code(),
                 "complete material requires a positive owned-buffer bound within isize::MAX",
             )));
         }
@@ -135,7 +141,9 @@ pub fn read_material_complete(
             || original.links() != current.links()
             || original.event() != current.event()
         {
-            return Err(ReadError::Identity("material_read_reference_changed"));
+            return Err(ReadError::Identity(
+                SharedCode::MaterialReadReferenceChanged.code(),
+            ));
         }
         actual_source = Some(source(&current));
         if let Some(limit) = actual_source.as_ref().and_then(retention_limit) {
@@ -150,14 +158,18 @@ pub fn read_material_complete(
             .read_verified_complete(max_material_bytes, deadline)
             .map_err(ReadError::Artifact)?;
         if verified.reference().project(true) != *current.reference() {
-            return Err(ReadError::Identity("material_read_verification_mismatch"));
+            return Err(ReadError::Identity(
+                SharedCode::MaterialReadVerificationMismatch.code(),
+            ));
         }
         if u64::try_from(bytes.len()).ok() != Some(selection.byte_count) {
-            return Err(ReadError::Identity("material_read_length_overflow"));
+            return Err(ReadError::Identity(
+                SharedCode::MaterialReadLengthOverflow.code(),
+            ));
         }
         if Instant::now() >= deadline {
             return Err(ReadError::Budget(material_error(
-                "material_read_budget_exceeded",
+                SharedCode::MaterialReadBudgetExceeded.code(),
                 "cooperative material read deadline expired",
             )));
         }
@@ -198,7 +210,12 @@ pub fn read_material_to<W: Write>(
 ) -> ForensicResult<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(RUNTIME_MATERIAL_READ_BUDGET_MS))
-        .ok_or_else(|| material_error("material_read_deadline_overflow", "deadline overflow"))?;
+        .ok_or_else(|| {
+            material_error(
+                SharedCode::MaterialReadDeadlineOverflow.code(),
+                "deadline overflow",
+            )
+        })?;
     let request = input.request;
     let selection = LedgerArtifactSelection {
         event: request.event,
@@ -246,7 +263,9 @@ pub fn read_material_to<W: Write>(
             || original.links() != current.links()
             || original.event() != current.event()
         {
-            return Err(ReadError::Identity("material_read_reference_changed"));
+            return Err(ReadError::Identity(
+                SharedCode::MaterialReadReferenceChanged.code(),
+            ));
         }
         result.source = Some(source(&current));
         if retained(&mut result) {
@@ -261,10 +280,12 @@ pub fn read_material_to<W: Write>(
             .map_err(ReadError::Artifact)?;
         let (verified, offset, bytes) = range.into_parts();
         if verified.reference().project(true) != *current.reference() {
-            return Err(ReadError::Identity("material_read_verification_mismatch"));
+            return Err(ReadError::Identity(
+                SharedCode::MaterialReadVerificationMismatch.code(),
+            ));
         }
         let actual_length = u32::try_from(bytes.len())
-            .map_err(|_| ReadError::Identity("material_read_length_overflow"))?;
+            .map_err(|_| ReadError::Identity(SharedCode::MaterialReadLengthOverflow.code()))?;
         result.state = RuntimeMaterialReadState::Verified;
         result.chunk = Some(RuntimeMaterialChunk {
             offset,
@@ -293,7 +314,7 @@ pub fn read_material_to<W: Write>(
     let mut report = ForensicReport::MaterialRead(Box::new(result));
     let mut body = serde_json::to_vec(&report).map_err(|_| {
         material_error(
-            "material_read_encode_failed",
+            ForensicsCode::MaterialReadEncodeFailed.code(),
             "cannot encode material result",
         )
     })?;
@@ -309,9 +330,9 @@ pub fn read_material_to<W: Write>(
     {
         body.clear();
         let code = if limit == RuntimeMaterialReadLimit::ReplyBytes {
-            "material_read_reply_limit"
+            SharedCode::MaterialReadReplyLimit.code()
         } else {
-            "material_read_budget_exceeded"
+            SharedCode::MaterialReadBudgetExceeded.code()
         };
         let ForensicReport::MaterialRead(result) = &mut report else {
             unreachable!()
@@ -320,8 +341,8 @@ pub fn read_material_to<W: Write>(
         result.state = RuntimeMaterialReadState::NotProvided;
         result.limit = Some(limit);
         result.failure = Some(RuntimeMaterialReadFailure {
-            code: code.to_owned(),
-            operation: "read_ledger_material".to_owned(),
+            code: code.as_str().to_owned(),
+            operation: ForensicsLocation::ReadLedgerMaterial.as_str().to_owned(),
             error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
         });
         result
@@ -333,7 +354,7 @@ pub fn read_material_to<W: Write>(
         ));
         body = serde_json::to_vec(&report).map_err(|_| {
             material_error(
-                "material_read_encode_failed",
+                ForensicsCode::MaterialReadEncodeFailed.code(),
                 "cannot encode material result",
             )
         })?;
@@ -341,7 +362,7 @@ pub fn read_material_to<W: Write>(
     if body.len() > maximum_reply_bytes {
         return Err(native_error.unwrap_or_else(|| {
             material_error(
-                "material_read_reply_limit",
+                SharedCode::MaterialReadReplyLimit.code(),
                 "complete failure result does not fit reply bound",
             )
         }));
@@ -350,14 +371,19 @@ pub fn read_material_to<W: Write>(
         .write_all(&body)
         .and_then(|()| output.write_all(b"\n"))
         .and_then(|()| output.flush())
-        .map_err(|error| material_error("material_read_output_failed", &error.to_string()))?;
+        .map_err(|error| {
+            material_error(
+                ForensicsCode::MaterialReadOutputFailed.code(),
+                &error.to_string(),
+            )
+        })?;
     if let Some(error) = native_error {
         return Err(error);
     }
     if matches!(&report, ForensicReport::MaterialRead(result) if result.state != RuntimeMaterialReadState::Verified)
     {
         return Err(material_error(
-            "material_not_provided",
+            ForensicsCode::MaterialNotProvided.code(),
             "see committed retention state in structured result",
         ));
     }
@@ -399,8 +425,12 @@ fn retention_limit(source: &RuntimeMaterialReadSource) -> Option<RuntimeMaterial
     })
 }
 
-fn material_error(code: &'static str, detail: &str) -> ForensicError {
-    ForensicError::new(code, "read_ledger_material", detail)
+fn material_error(code: Code, detail: &str) -> ForensicError {
+    ForensicError::new(
+        code,
+        ForensicsLocation::ReadLedgerMaterial.location(),
+        detail,
+    )
 }
 
 fn read_failure(
@@ -413,14 +443,18 @@ fn read_failure(
 ) {
     let (state, limit, code, operation, projection, detail) = match error {
         ReadError::Ledger(error) => {
-            let (state, limit) = match error.code() {
-                "ledger_read_budget_exceeded" => (
+            let failed = error.code();
+            let (state, limit) = if failed == LedgerCode::LedgerReadBudgetExceeded.as_str() {
+                (
                     RuntimeMaterialReadState::NotProvided,
                     Some(RuntimeMaterialReadLimit::BudgetExceeded),
-                ),
-                "ledger_source_incomplete" => (RuntimeMaterialReadState::SourceIncomplete, None),
-                _ if error.is_fatal() => (RuntimeMaterialReadState::ReadFailed, None),
-                _ => (RuntimeMaterialReadState::RequestDenied, None),
+                )
+            } else if failed == LedgerCode::LedgerSourceIncomplete.as_str() {
+                (RuntimeMaterialReadState::SourceIncomplete, None)
+            } else if error.is_fatal() {
+                (RuntimeMaterialReadState::ReadFailed, None)
+            } else {
+                (RuntimeMaterialReadState::RequestDenied, None)
             };
             (
                 state,
@@ -442,19 +476,18 @@ fn read_failure(
             )
         }
         ReadError::Artifact(error) => {
-            let state = if matches!(
-                error.code(),
-                "artifact_read_budget_exceeded" | "artifact_read_material_limit"
-            ) {
+            let code = error.code();
+            let state = if code == StoreCode::ArtifactReadBudgetExceeded.as_str()
+                || code == StoreCode::ArtifactReadMaterialLimit.as_str()
+            {
                 RuntimeMaterialReadState::NotProvided
-            } else if error.code() == "artifact_read_failed"
+            } else if code == SharedCode::ArtifactReadFailed.as_str()
                 && error.io_error_kind() == Some(std::io::ErrorKind::NotFound)
             {
                 RuntimeMaterialReadState::Missing
-            } else if matches!(
-                error.code(),
-                "artifact_hash_mismatch" | "artifact_verify_failed"
-            ) {
+            } else if code == StoreCode::ArtifactHashMismatch.as_str()
+                || code == SharedCode::ArtifactVerifyFailed.as_str()
+            {
                 RuntimeMaterialReadState::IntegrityFailed
             } else {
                 RuntimeMaterialReadState::ReadFailed
@@ -479,8 +512,8 @@ fn read_failure(
         ReadError::Identity(code) => (
             RuntimeMaterialReadState::IntegrityFailed,
             None,
-            code,
-            "read_ledger_material",
+            code.as_str(),
+            ForensicsLocation::ReadLedgerMaterial.as_str(),
             RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true),
             "material source identity changed".to_owned(),
         ),
@@ -509,6 +542,6 @@ fn read_failure(
             operation: operation.to_owned(),
             error: projection,
         },
-        ForensicError::new(code, operation, detail),
+        ForensicError::relayed(code, operation, detail),
     )
 }

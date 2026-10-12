@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::evidence_archive::{
     EVIDENCE_MANIFEST_PATH, EVIDENCE_SCHEMA_VERSION, inspect_evidence_archive,
     validate_archive_path, validate_projected_events, verify_evidence_archive,
@@ -11,6 +12,8 @@ use crate::{
     EvidenceScreenshot, EvidenceScreenshotCounts, MissingPinnedFrame, ScreenshotNameAllocator,
     StoredArtifact, canonical_sha256, capture_summary_record, validate_capture_pipeline_summary,
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactPayloadDraft, ArtifactProducer,
     ArtifactRedactionState, ArtifactReference, AuditInput, CapturePayload, CorrelationId,
@@ -36,25 +39,25 @@ pub struct EvidenceJsonDocument(Vec<u8>);
 impl EvidenceJsonDocument {
     pub fn from_serializable<T: Serialize>(value: &T) -> ArtifactStoreResult<Self> {
         let value = serde_json::to_value(value).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_json_invalid",
-                "serialize_evidence_json",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceJsonInvalid.code(),
+                StoreLocation::SerializeEvidenceJson.location(),
                 error.to_string(),
             )
         })?;
         if !value.is_object() {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_json_invalid",
-                "serialize_evidence_json",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceJsonInvalid.code(),
+                StoreLocation::SerializeEvidenceJson.location(),
                 "evidence JSON document must be an object",
             ));
         }
         serde_json::to_vec_pretty(&value)
             .map(Self)
             .map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "evidence_json_invalid",
-                    "serialize_evidence_json",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceJsonInvalid.code(),
+                    StoreLocation::SerializeEvidenceJson.location(),
                     error.to_string(),
                 )
             })
@@ -80,9 +83,9 @@ impl EvidenceExportDocuments {
     ) -> ArtifactStoreResult<Self> {
         let summary = summary.into();
         if summary.trim().is_empty() || summary.contains('\0') {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_summary_invalid",
-                "create_evidence_documents",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceSummaryInvalid.code(),
+                StoreLocation::CreateEvidenceDocuments.location(),
                 "evidence summary must be non-empty text without NUL bytes",
             ));
         }
@@ -180,9 +183,9 @@ impl EvidenceExporter {
         Ok(Self {
             artifact_store: ArtifactStore::open(artifact_root)?,
             event_ids: IdentifierIssuer::new().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "open_evidence_exporter",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    StoreLocation::OpenEvidenceExporter.location(),
                     error.to_string(),
                 )
             })?,
@@ -234,18 +237,18 @@ impl EvidenceExporter {
         let output_path =
             normalize_output_path(&request.output_path, &self.artifact_store, write_context)?;
         if output_path.exists() {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_output_collision",
-                "export_evidence",
+            return Err(ArtifactStoreError::new(
+                StoreCode::EvidenceOutputCollision.code(),
+                ContractLocation::ExportEvidence.location(),
                 "evidence output path already exists",
             ));
         }
 
         let (entries, manifest) = self.build_entries(request, &output_path)?;
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_manifest_invalid",
-                "serialize_evidence_manifest",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceManifestInvalid.code(),
+                StoreLocation::SerializeEvidenceManifest.location(),
                 error.to_string(),
             )
         })?;
@@ -259,12 +262,20 @@ impl EvidenceExporter {
             &manifest_bytes,
             (&self.artifact_store, &temp_path, write_context),
         ) {
-            return Err(cleanup_file(&temp_path, "cleanup_evidence_temp", error));
+            return Err(cleanup_file(
+                &temp_path,
+                StoreLocation::CleanupEvidenceTemp.location(),
+                error,
+            ));
         }
         let temp_verification = match inspect_evidence_archive(&temp_path) {
             Ok(verification) => verification,
             Err(error) => {
-                return Err(cleanup_file(&temp_path, "cleanup_evidence_temp", error));
+                return Err(cleanup_file(
+                    &temp_path,
+                    StoreLocation::CleanupEvidenceTemp.location(),
+                    error,
+                ));
             }
         };
         if temp_verification.manifest != manifest
@@ -272,10 +283,10 @@ impl EvidenceExporter {
         {
             return Err(cleanup_file(
                 &temp_path,
-                "cleanup_evidence_temp",
-                ArtifactStoreError::fatal(
-                    "evidence_archive_mismatch",
-                    "verify_evidence_temp",
+                StoreLocation::CleanupEvidenceTemp.location(),
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceArchiveMismatch.code(),
+                    StoreLocation::VerifyEvidenceTemp.location(),
                     "archive manifest changed during ZIP generation",
                 ),
             ));
@@ -287,7 +298,7 @@ impl EvidenceExporter {
             Err(error) => {
                 return Err(cleanup_file(
                     &output_path,
-                    "rollback_evidence_output",
+                    StoreLocation::RollbackEvidenceOutput.location(),
                     error,
                 ));
             }
@@ -297,10 +308,10 @@ impl EvidenceExporter {
             Err(error) => {
                 return Err(cleanup_file(
                     &output_path,
-                    "rollback_evidence_output",
-                    ArtifactStoreError::fatal(
-                        "evidence_archive_read_failed",
-                        "read_published_evidence",
+                    StoreLocation::RollbackEvidenceOutput.location(),
+                    ArtifactStoreError::new(
+                        StoreCode::EvidenceArchiveReadFailed.code(),
+                        StoreLocation::ReadPublishedEvidence.location(),
                         error.to_string(),
                     )
                     .with_raw_os_error(error.raw_os_error()),
@@ -325,7 +336,7 @@ impl EvidenceExporter {
             Err(error) => {
                 return Err(cleanup_file(
                     &output_path,
-                    "rollback_evidence_output",
+                    StoreLocation::RollbackEvidenceOutput.location(),
                     error,
                 ));
             }
@@ -335,10 +346,10 @@ impl EvidenceExporter {
         {
             let error = cleanup_file(
                 &output_path,
-                "rollback_evidence_output",
-                ArtifactStoreError::fatal(
-                    "evidence_archive_mismatch",
-                    "store_evidence_archive",
+                StoreLocation::RollbackEvidenceOutput.location(),
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceArchiveMismatch.code(),
+                    StoreLocation::StoreEvidenceArchive.location(),
                     "stored archive metadata does not match the published ZIP",
                 ),
             );
@@ -348,9 +359,9 @@ impl EvidenceExporter {
         let completed_artifact_count = artifact_count(&request.pipeline)?
             .checked_add(1)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "evidence_count_overflow",
-                    "complete_evidence_export",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceCountOverflow.code(),
+                    StoreLocation::CompleteEvidenceExport.location(),
                     "archive artifact count exceeds u64",
                 )
             })?;
@@ -366,7 +377,11 @@ impl EvidenceExporter {
             EventSeverity::Info,
             Some(&stored),
         ) {
-            let error = cleanup_file(&output_path, "rollback_evidence_output", error);
+            let error = cleanup_file(
+                &output_path,
+                StoreLocation::RollbackEvidenceOutput.location(),
+                error,
+            );
             return Err(error);
         }
 
@@ -415,31 +430,31 @@ impl EvidenceExporter {
                 .find(|observation| &observation.artifact_id == frame.artifact.artifact_id())
             {
                 observation.validate().map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        "evidence_retention_observation_invalid",
-                        "build_evidence_entries",
+                    ArtifactStoreError::new(
+                        StoreCode::EvidenceRetentionObservationInvalid.code(),
+                        StoreLocation::BuildEvidenceEntries.location(),
                         error.to_string(),
                     )
                 })?;
-                return Err(ArtifactStoreError::fatal(
+                return Err(ArtifactStoreError::new(
                     match observation.disposition {
                         Some(
                             actingcommand_contract::ArtifactEvictionDisposition::Deleted
                             | actingcommand_contract::ArtifactEvictionDisposition::RecoveryAbsent,
-                        ) => "evidence_artifact_evicted",
+                        ) => StoreCode::EvidenceArtifactEvicted.code(),
                         Some(actingcommand_contract::ArtifactEvictionDisposition::Failed) => {
-                            "evidence_artifact_eviction_failed"
+                            StoreCode::EvidenceArtifactEvictionFailed.code()
                         }
-                        None => "evidence_artifact_pending_eviction",
+                        None => StoreCode::EvidenceArtifactPendingEviction.code(),
                     },
-                    "build_evidence_entries",
+                    StoreLocation::BuildEvidenceEntries.location(),
                     "complete evidence export requires every original frame material",
                 ));
             }
             if frame.artifact.kind() != ArtifactKind::CaptureFrame {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_artifact_invalid",
-                    "build_evidence_entries",
+                return Err(ArtifactStoreError::new(
+                    StoreCode::EvidenceArtifactInvalid.code(),
+                    StoreLocation::BuildEvidenceEntries.location(),
                     "capture pipeline contains a non-frame artifact",
                 ));
             }
@@ -447,9 +462,9 @@ impl EvidenceExporter {
             let file_name = names.allocate(frame.artifact.created_at_unix_ms())?;
             let archive_path = format!("screenshots/{file_name}");
             if entries.insert(archive_path.clone(), bytes).is_some() {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_entry_collision",
-                    "build_evidence_entries",
+                return Err(ArtifactStoreError::new(
+                    StoreCode::EvidenceEntryCollision.code(),
+                    StoreLocation::BuildEvidenceEntries.location(),
                     "duplicate screenshot archive path",
                 ));
             }
@@ -467,9 +482,9 @@ impl EvidenceExporter {
             .collect::<ArtifactStoreResult<Vec<_>>>()?;
         let archive_content_sha256 =
             canonical_sha256(&serde_json::to_vec(&entry_digests).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "evidence_manifest_invalid",
-                    "hash_evidence_entry_manifest",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceManifestInvalid.code(),
+                    StoreLocation::HashEvidenceEntryManifest.location(),
                     error.to_string(),
                 )
             })?);
@@ -485,9 +500,9 @@ impl EvidenceExporter {
             })
             .collect();
         let normalized_output_path = output_path.to_str().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_output_invalid",
-                "normalize_evidence_output",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceOutputInvalid.code(),
+                StoreLocation::NormalizeEvidenceOutput.location(),
                 "evidence output path is not valid UTF-8",
             )
         })?;
@@ -496,9 +511,9 @@ impl EvidenceExporter {
             .first()
             .map(|event| event.sequence)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "evidence_ledger_missing",
-                    "build_evidence_manifest",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceLedgerMissing.code(),
+                    StoreLocation::BuildEvidenceManifest.location(),
                     "evidence event range is empty",
                 )
             })?;
@@ -507,9 +522,9 @@ impl EvidenceExporter {
             .last()
             .map(|event| event.sequence)
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "evidence_ledger_missing",
-                    "build_evidence_manifest",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceLedgerMissing.code(),
+                    StoreLocation::BuildEvidenceManifest.location(),
                     "evidence event range is empty",
                 )
             })?;
@@ -531,9 +546,9 @@ impl EvidenceExporter {
                 screenshots,
                 screenshot_counts: request.pipeline.counts.into(),
                 pinned_count: u64::try_from(request.pipeline.pinned.len()).map_err(|_| {
-                    ArtifactStoreError::fatal(
-                        "evidence_count_overflow",
-                        "build_evidence_manifest",
+                    ArtifactStoreError::new(
+                        StoreCode::EvidenceCountOverflow.code(),
+                        StoreLocation::BuildEvidenceManifest.location(),
                         "pinned frame count exceeds u64",
                     )
                 })?,
@@ -559,9 +574,9 @@ impl EvidenceExporter {
     ) -> ArtifactStoreResult<()> {
         let mut draft = EventDraft::new(
             self.event_ids.mint_event_id().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "append_evidence_export_event",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    StoreLocation::AppendEvidenceExportEvent.location(),
                     error.to_string(),
                 )
             })?,
@@ -603,22 +618,22 @@ fn validate_authoritative_capture_summary(
         .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
         .collect::<Vec<_>>();
     let [event] = summaries.as_slice() else {
-        return Err(ArtifactStoreError::fatal(
+        return Err(ArtifactStoreError::new(
             if summaries.is_empty() {
-                "evidence_capture_summary_missing"
+                SharedCode::EvidenceCaptureSummaryMissing.code()
             } else {
-                "evidence_capture_summary_duplicate"
+                SharedCode::EvidenceCaptureSummaryDuplicate.code()
             },
-            "validate_evidence_capture_summary",
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "evidence export requires exactly one authoritative capture summary",
         ));
     };
     if event.sequence != request.source_capture_summary_sequence
         || event.sequence >= request.identity.terminal_receipt.sequence
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_not_ready",
-            "validate_evidence_capture_summary",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryNotReady.code(),
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "capture summary sequence is not covered before the terminal receipt",
         ));
     }
@@ -628,31 +643,31 @@ fn validate_authoritative_capture_summary(
         || event.origin.module() != OriginModule::CapturePipeline
         || event.origin.actor() != EventActor::Runtime
     {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_conflict",
-            "validate_evidence_capture_summary",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryConflict.code(),
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "capture summary links do not match the export identity",
         ));
     }
     let ProjectionPayload::Full(payload) = &event.payload else {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_invalid",
-            "validate_evidence_capture_summary",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryInvalid.code(),
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "capture summary requires a forensic full projection",
         ));
     };
     let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref() else {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_invalid",
-            "validate_evidence_capture_summary",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryInvalid.code(),
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "capture summary event has an incompatible payload",
         ));
     };
     let expected = capture_summary_record(&request.pipeline)?;
     if payload.summary() != &expected {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_capture_summary_conflict",
-            "validate_evidence_capture_summary",
+        return Err(ArtifactStoreError::new(
+            SharedCode::EvidenceCaptureSummaryConflict.code(),
+            StoreLocation::ValidateEvidenceCaptureSummary.location(),
             "capture summary payload does not match the supplied pipeline summary",
         ));
     }
@@ -683,9 +698,9 @@ fn pinned_accounting(
 
 fn artifact_count(summary: &CapturePipelineSummary) -> ArtifactStoreResult<u64> {
     u64::try_from(summary.frames.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "count_evidence_artifacts",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceCountOverflow.code(),
+            StoreLocation::CountEvidenceArtifacts.location(),
             "artifact count exceeds u64",
         )
     })
@@ -695,9 +710,9 @@ fn events_jsonl(events: &[ProjectedEvent]) -> ArtifactStoreResult<Vec<u8>> {
     let mut bytes = Vec::new();
     for event in events {
         serde_json::to_writer(&mut bytes, event).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "evidence_event_invalid",
-                "serialize_evidence_events",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceEventInvalid.code(),
+                StoreLocation::SerializeEvidenceEvents.location(),
                 error.to_string(),
             )
         })?;
@@ -711,9 +726,9 @@ fn entry_digest(path: &str, bytes: &[u8]) -> ArtifactStoreResult<EvidenceArchive
     Ok(EvidenceArchiveEntry {
         path: path.to_string(),
         byte_count: u64::try_from(bytes.len()).map_err(|_| {
-            ArtifactStoreError::fatal(
-                "evidence_count_overflow",
-                "hash_evidence_entry",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceCountOverflow.code(),
+                StoreLocation::HashEvidenceEntry.location(),
                 "evidence entry byte count exceeds u64",
             )
         })?,
@@ -727,16 +742,16 @@ fn normalize_output_path(
     context: &mut ArtifactWriteContext,
 ) -> ArtifactStoreResult<PathBuf> {
     let file_name = path.file_name().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "evidence_output_invalid",
-            "normalize_evidence_output",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceOutputInvalid.code(),
+            StoreLocation::NormalizeEvidenceOutput.location(),
             "evidence output path must include a file name",
         )
     })?;
     if file_name.to_str().is_none() {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_output_invalid",
-            "normalize_evidence_output",
+        return Err(ArtifactStoreError::new(
+            StoreCode::EvidenceOutputInvalid.code(),
+            StoreLocation::NormalizeEvidenceOutput.location(),
             "evidence output file name is not valid UTF-8",
         ));
     }
@@ -745,9 +760,9 @@ fn normalize_output_path(
     } else {
         std::env::current_dir()
             .map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "evidence_output_invalid",
-                    "resolve_evidence_output",
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceOutputInvalid.code(),
+                    StoreLocation::ResolveEvidenceOutput.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
@@ -755,25 +770,25 @@ fn normalize_output_path(
             .join(path)
     };
     let parent = absolute.parent().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "evidence_output_invalid",
-            "normalize_evidence_output",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceOutputInvalid.code(),
+            StoreLocation::NormalizeEvidenceOutput.location(),
             "evidence output path has no parent directory",
         )
     })?;
     store.admit_new_bytes(context, &absolute, 0)?;
     fs::create_dir_all(parent).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_output_failed",
-            "create_evidence_output_directory",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceOutputFailed.code(),
+            StoreLocation::CreateEvidenceOutputDirectory.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
     })?;
     let parent = parent.canonicalize().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_output_invalid",
-            "canonicalize_evidence_output_directory",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceOutputInvalid.code(),
+            StoreLocation::CanonicalizeEvidenceOutputDirectory.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
@@ -783,9 +798,9 @@ fn normalize_output_path(
 
 fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)> {
     let parent = output_path.parent().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "evidence_output_invalid",
-            "create_evidence_temp",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceOutputInvalid.code(),
+            StoreLocation::CreateEvidenceTemp.location(),
             "evidence output path has no parent directory",
         )
     })?;
@@ -793,9 +808,9 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_output_invalid",
-                "create_evidence_temp",
+            ArtifactStoreError::new(
+                StoreCode::EvidenceOutputInvalid.code(),
+                StoreLocation::CreateEvidenceTemp.location(),
                 "evidence output file name is not valid UTF-8",
             )
         })?;
@@ -806,18 +821,18 @@ fn create_export_temp(output_path: &Path) -> ArtifactStoreResult<(PathBuf, File)
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_archive_write_failed",
-                    "create_evidence_temp",
+                return Err(ArtifactStoreError::new(
+                    StoreCode::EvidenceArchiveWriteFailed.code(),
+                    StoreLocation::CreateEvidenceTemp.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error()));
             }
         }
     }
-    Err(ArtifactStoreError::fatal(
-        "evidence_temp_exhausted",
-        "create_evidence_temp",
+    Err(ArtifactStoreError::new(
+        StoreCode::EvidenceTempExhausted.code(),
+        StoreLocation::CreateEvidenceTemp.location(),
         "could not allocate a unique evidence temporary file",
     ))
 }
@@ -829,9 +844,9 @@ struct CapacityArchiveWriter<'a> {
 }
 
 impl CapacityArchiveWriter<'_> {
-    fn io_error(&mut self, error: std::io::Error, operation: &'static str) -> std::io::Error {
-        let error = ArtifactStoreError::fatal(
-            "evidence_archive_write_failed",
+    fn io_error(&mut self, error: std::io::Error, operation: Location) -> std::io::Error {
+        let error = ArtifactStoreError::new(
+            StoreCode::EvidenceArchiveWriteFailed.code(),
             operation,
             error.to_string(),
         )
@@ -854,7 +869,7 @@ impl Write for CapacityArchiveWriter<'_> {
         }
         self.file
             .write(bytes)
-            .map_err(|error| self.io_error(error, "write_evidence_archive"))
+            .map_err(|error| self.io_error(error, StoreLocation::WriteEvidenceArchive.location()))
     }
     fn flush(&mut self) -> std::io::Result<()> {
         if let Some(error) = &self.failure {
@@ -862,7 +877,7 @@ impl Write for CapacityArchiveWriter<'_> {
         }
         self.file
             .flush()
-            .map_err(|error| self.io_error(error, "flush_evidence_archive"))
+            .map_err(|error| self.io_error(error, StoreLocation::FlushEvidenceArchive.location()))
     }
 }
 
@@ -873,7 +888,7 @@ impl Seek for CapacityArchiveWriter<'_> {
         }
         self.file
             .seek(position)
-            .map_err(|error| self.io_error(error, "seek_evidence_archive"))
+            .map_err(|error| self.io_error(error, StoreLocation::SeekEvidenceArchive.location()))
     }
 }
 
@@ -894,18 +909,20 @@ fn write_archive(
     for (path, bytes) in entries {
         validate_archive_path(path)?;
         zip.start_file(path, options).map_err(zip_write_error)?;
-        zip.write_all(bytes)
-            .map_err(|error| archive_io_error(error, "write_evidence_entry"))?;
+        zip.write_all(bytes).map_err(|error| {
+            archive_io_error(error, StoreLocation::WriteEvidenceEntry.location())
+        })?;
     }
     zip.start_file(EVIDENCE_MANIFEST_PATH, options)
         .map_err(zip_write_error)?;
-    zip.write_all(manifest)
-        .map_err(|error| archive_io_error(error, "write_evidence_manifest"))?;
+    zip.write_all(manifest).map_err(|error| {
+        archive_io_error(error, StoreLocation::WriteEvidenceManifest.location())
+    })?;
     let file = zip.finish().map_err(zip_write_error)?;
     file.file.sync_all().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "evidence_archive_sync_failed",
-            "sync_evidence_temp",
+        ArtifactStoreError::new(
+            StoreCode::EvidenceArchiveSyncFailed.code(),
+            StoreLocation::SyncEvidenceTemp.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
@@ -916,21 +933,29 @@ fn write_archive(
 fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<()> {
     fs::hard_link(temp_path, output_path).map_err(|error| {
         let code = if error.kind() == std::io::ErrorKind::AlreadyExists {
-            "evidence_output_collision"
+            StoreCode::EvidenceOutputCollision.code()
         } else {
-            "evidence_archive_publish_failed"
+            StoreCode::EvidenceArchivePublishFailed.code()
         };
-        ArtifactStoreError::fatal(code, "publish_evidence_archive", error.to_string())
-            .with_raw_os_error(error.raw_os_error())
+        ArtifactStoreError::new(
+            code,
+            StoreLocation::PublishEvidenceArchive.location(),
+            error.to_string(),
+        )
+        .with_raw_os_error(error.raw_os_error())
     })?;
     if let Err(error) = fs::remove_file(temp_path) {
-        let error = ArtifactStoreError::fatal(
-            "evidence_temp_cleanup_failed",
-            "publish_evidence_archive",
+        let error = ArtifactStoreError::new(
+            StoreCode::EvidenceTempCleanupFailed.code(),
+            StoreLocation::PublishEvidenceArchive.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error());
-        return Err(cleanup_file(output_path, "rollback_evidence_output", error));
+        return Err(cleanup_file(
+            output_path,
+            StoreLocation::RollbackEvidenceOutput.location(),
+            error,
+        ));
     }
     OpenOptions::new()
         .read(true)
@@ -940,10 +965,10 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
         .map_err(|error| {
             cleanup_file(
                 output_path,
-                "rollback_evidence_output",
-                ArtifactStoreError::fatal(
-                    "evidence_archive_sync_failed",
-                    "sync_published_evidence",
+                StoreLocation::RollbackEvidenceOutput.location(),
+                ArtifactStoreError::new(
+                    StoreCode::EvidenceArchiveSyncFailed.code(),
+                    StoreLocation::SyncPublishedEvidence.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error()),
@@ -951,17 +976,13 @@ fn publish_archive(temp_path: &Path, output_path: &Path) -> ArtifactStoreResult<
         })
 }
 
-fn cleanup_file(
-    path: &Path,
-    operation: &'static str,
-    error: ArtifactStoreError,
-) -> ArtifactStoreError {
+fn cleanup_file(path: &Path, operation: Location, error: ArtifactStoreError) -> ArtifactStoreError {
     match fs::remove_file(path) {
         Ok(()) => error,
         Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => error,
         Err(remove_error) => error.with_secondary(
-            &ArtifactStoreError::fatal(
-                "evidence_cleanup_failed",
+            &ArtifactStoreError::new(
+                StoreCode::EvidenceCleanupFailed.code(),
                 operation,
                 remove_error.to_string(),
             )
@@ -972,24 +993,24 @@ fn cleanup_file(
 
 fn zip_write_error(error: zip::result::ZipError) -> ArtifactStoreError {
     if let zip::result::ZipError::Io(error) = error {
-        return archive_io_error(error, "write_evidence_archive");
+        return archive_io_error(error, StoreLocation::WriteEvidenceArchive.location());
     }
-    ArtifactStoreError::fatal(
-        "evidence_archive_write_failed",
-        "write_evidence_archive",
+    ArtifactStoreError::new(
+        StoreCode::EvidenceArchiveWriteFailed.code(),
+        StoreLocation::WriteEvidenceArchive.location(),
         error.to_string(),
     )
 }
 
-fn archive_io_error(error: std::io::Error, operation: &'static str) -> ArtifactStoreError {
+fn archive_io_error(error: std::io::Error, operation: Location) -> ArtifactStoreError {
     if let Some(typed) = error
         .get_ref()
         .and_then(|error| error.downcast_ref::<ArtifactStoreError>())
     {
         return typed.clone();
     }
-    ArtifactStoreError::fatal(
-        "evidence_archive_write_failed",
+    ArtifactStoreError::new(
+        StoreCode::EvidenceArchiveWriteFailed.code(),
         operation,
         error.to_string(),
     )

@@ -16,10 +16,17 @@ const FAMILY: &str = "json_extract(CAST(canonical_record AS TEXT),'$.payload.fam
 
 pub(super) fn key(value: impl Serialize) -> GlobalLedgerResult<String> {
     match serde_json::to_value(value).map_err(|error| {
-        GlobalLedgerError::json("event_serialization_failed", "encode_ledger_query", &error)
+        GlobalLedgerError::json(
+            LedgerCode::EventSerializationFailed.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+            &error,
+        )
     })? {
         Value::String(value) => Ok(value),
-        _ => Err(failure("invalid_event_query_value", "encode_ledger_query")),
+        _ => Err(failure(
+            LedgerCode::InvalidEventQueryValue.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+        )),
     }
 }
 
@@ -123,21 +130,21 @@ fn definitions() -> GlobalLedgerResult<Vec<(String, String)>> {
 pub(super) fn installed(connection: &Connection) -> GlobalLedgerResult<bool> {
     let mut statement = connection
         .prepare("SELECT name,sql FROM sqlite_schema WHERE name GLOB 'ledger_view_*' ORDER BY name")
-        .map_err(|error| sql_error(error, "inspect_ledger_views"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::InspectLedgerViews.location()))?;
     let actual = statement
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|error| sql_error(error, "read_ledger_views"))?
+        .map_err(|error| sql_error(error, ContractLocation::ReadLedgerViews.location()))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| sql_error(error, "read_ledger_views"))?;
+        .map_err(|error| sql_error(error, ContractLocation::ReadLedgerViews.location()))?;
     if actual.is_empty() {
         return Ok(false);
     }
     if actual != definitions()? {
         return Err(failure(
-            "ledger_view_schema_mismatch",
-            "verify_ledger_views",
+            LedgerCode::LedgerViewSchemaMismatch.code(),
+            LedgerLocation::VerifyLedgerViews.location(),
         ));
     }
     Ok(true)
@@ -148,7 +155,7 @@ pub(super) fn deploy(connection: &Connection) -> GlobalLedgerResult<()> {
         for (_, sql) in definitions()? {
             connection
                 .execute_batch(&sql)
-                .map_err(|error| sql_error(error, "create_ledger_views"))?;
+                .map_err(|error| sql_error(error, LedgerLocation::CreateLedgerViews.location()))?;
         }
     }
     Ok(())
@@ -191,7 +198,11 @@ pub(super) fn select_sequences(
         }
     }
     let query_value = serde_json::to_value(query).map_err(|error| {
-        GlobalLedgerError::json("event_serialization_failed", "encode_ledger_query", &error)
+        GlobalLedgerError::json(
+            LedgerCode::EventSerializationFailed.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+            &error,
+        )
     })?;
     for (field, column) in [
         ("event_type", "e.event_type"),
@@ -210,7 +221,10 @@ pub(super) fn select_sequences(
     ] {
         if let Some(value) = query_value.get(field).filter(|value| !value.is_null()) {
             let Some(value) = value.as_str() else {
-                return Err(failure("invalid_event_query_value", "encode_ledger_query"));
+                return Err(failure(
+                    LedgerCode::InvalidEventQueryValue.code(),
+                    LedgerLocation::EncodeLedgerQuery.location(),
+                ));
             };
             sql.push_str(&format!(" AND {column}=?"));
             values.push(SqlValue::Text(value.to_owned()));
@@ -225,7 +239,10 @@ pub(super) fn select_sequences(
         let mut bindings = Vec::with_capacity(instance_ids.len());
         for instance_id in instance_ids {
             let Some(instance_id) = instance_id.as_str() else {
-                return Err(failure("invalid_event_query_value", "encode_ledger_query"));
+                return Err(failure(
+                    LedgerCode::InvalidEventQueryValue.code(),
+                    LedgerLocation::EncodeLedgerQuery.location(),
+                ));
             };
             bindings.push(SqlValue::Text(instance_id.to_owned()));
         }
@@ -244,7 +261,10 @@ pub(super) fn select_sequences(
         let mut bindings = Vec::with_capacity(event_types.len());
         for event_type in event_types {
             let Some(event_type) = event_type.as_str() else {
-                return Err(failure("invalid_event_query_value", "encode_ledger_query"));
+                return Err(failure(
+                    LedgerCode::InvalidEventQueryValue.code(),
+                    LedgerLocation::EncodeLedgerQuery.location(),
+                ));
             };
             bindings.push(SqlValue::Text(event_type.to_owned()));
         }
@@ -284,32 +304,38 @@ pub(super) fn select_sequences(
             .map(|event| encode(event.sequence()))
             .collect();
         let matching = serde_json::to_string(&matching).map_err(|error| {
-            GlobalLedgerError::json("event_serialization_failed", "encode_ledger_query", &error)
+            GlobalLedgerError::json(
+                LedgerCode::EventSerializationFailed.code(),
+                LedgerLocation::EncodeLedgerQuery.location(),
+                &error,
+            )
         })?;
         sql.push_str(" AND e.sequence IN (SELECT value FROM json_each(?))");
         values.push(SqlValue::Text(matching));
     }
     sql.push_str(" ORDER BY e.sequence LIMIT ?");
     values.push(SqlValue::Integer(i64::try_from(limit).map_err(|_| {
-        failure("invalid_page_limit", "encode_ledger_query")
+        failure(
+            LedgerCode::InvalidPageLimit.code(),
+            LedgerLocation::EncodeLedgerQuery.location(),
+        )
     })?));
     check_read_budget(budget, 0, events.len())?;
     let mut statement = connection
         .prepare(&sql)
-        .map_err(|error| sql_error(error, "prepare_ledger_view_query"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::PrepareLedgerViewQuery.location()))?;
     let mut rows = statement
         .query(params_from_iter(values.iter()))
-        .map_err(|error| sql_error(error, "query_ledger_view"))?;
+        .map_err(|error| sql_error(error, LedgerLocation::QueryLedgerView.location()))?;
     let mut sequences = Vec::new();
     while let Some(row) = rows
         .next()
-        .map_err(|error| sql_error(error, "read_ledger_view"))?
+        .map_err(|error| sql_error(error, LedgerLocation::ReadLedgerView.location()))?
     {
         check_read_budget(budget, 0, events.len())?;
-        sequences
-            .push(decode(row.get(0).map_err(|error| {
-                sql_error(error, "read_ledger_view_sequence")
-            })?));
+        sequences.push(decode(row.get(0).map_err(|error| {
+            sql_error(error, LedgerLocation::ReadLedgerViewSequence.location())
+        })?));
     }
     check_read_budget(budget, 0, events.len())?;
     Ok(sequences)

@@ -1,0 +1,83 @@
+{
+  "owner": "recognition",
+  "codes": {
+    "color_digest_algorithm_unknown": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A color digest declaration names an algorithm other than color_digest.v1.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "color_digest_grid_invalid": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A color digest grid is refused: an axis lies outside 1..=32 cells, or the grid has more cells than the region has pixels on an axis.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "color_digest_region_invalid": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A color digest region is refused: it does not lie inside the frame or its bounds overflow.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "color_digest_cells_invalid": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A color digest's cells are refused: the hex encoding has the wrong length, is not lowercase hex, or holds a channel above the quantized maximum.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "color_digest_exclude_cells_invalid": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A color digest's exclude_cells list is refused: an index lies outside the grid, the list is not strictly ascending, or it leaves no active cell.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "color_digest_grid_mismatch": {
+      "category": "error",
+      "owner": "recognition",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Two color digests cannot be compared because their grids differ.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

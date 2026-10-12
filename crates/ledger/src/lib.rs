@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::outcome::CodeStr;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -17,11 +18,20 @@ mod codes;
 pub mod critical;
 mod durability;
 mod fact;
+#[cfg(test)]
+#[path = "tests/gate_l1.rs"]
+mod gate_l1;
 pub mod global;
+pub mod local_time;
 pub mod owner_journal;
 pub mod signatures;
+#[cfg(any(test, feature = "test-hooks"))]
+mod writer_stall;
+pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use writer_stall::WriterStallGate;
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
 const LEDGER_HEADER_SCHEMA_VERSION: &str = "actingcommand.ledger.session.v0.1";
@@ -656,7 +666,7 @@ impl EvidenceStore {
 pub struct LastResortError {
     pub command: String,
     pub phase: String,
-    pub error_code: String,
+    pub error_code: CodeStr,
     pub error_message: String,
     pub timestamp_unix_ms: u64,
     pub input_summary: Value,
@@ -667,7 +677,7 @@ impl LastResortError {
     pub fn new(
         command: impl Into<String>,
         phase: impl Into<String>,
-        error_code: impl Into<String>,
+        error_code: impl Into<CodeStr>,
         error_message: impl Into<String>,
         input_summary: Value,
         attempted_ledger_path: Option<String>,

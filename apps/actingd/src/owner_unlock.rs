@@ -11,7 +11,7 @@ const UNLOCK_OWNER_SCHEMA_VERSION: &str = "actingcommand.actingd.unlock-owner.v1
 /// owner journal, `owner.unlock` records it, and the next start takes the epoch over.
 pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     if arguments.len() > 6 {
-        return Err(ActingdError::config("unlock_owner_usage_invalid"));
+        return Err(ActingdError::config(ActingdCode::UnlockOwnerUsageInvalid));
     }
     let mut config = None;
     let mut actor = None;
@@ -25,23 +25,27 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             }
             Some("--config") => &mut config,
             Some("--actor") => &mut actor,
-            _ => return Err(ActingdError::config("unlock_owner_option_invalid")),
+            _ => return Err(ActingdError::config(ActingdCode::UnlockOwnerOptionInvalid)),
         };
         match options.next() {
             Some(value) if slot.is_none() && !value.is_empty() => *slot = Some(value),
-            _ => return Err(ActingdError::config("unlock_owner_option_invalid")),
+            _ => return Err(ActingdError::config(ActingdCode::UnlockOwnerOptionInvalid)),
         }
     }
-    let config_path =
-        PathBuf::from(config.ok_or_else(|| ActingdError::config("unlock_owner_config_missing"))?);
+    let config_path = PathBuf::from(
+        config.ok_or_else(|| ActingdError::config(ActingdCode::UnlockOwnerConfigMissing))?,
+    );
     let actor = actor
-        .ok_or_else(|| ActingdError::config("unlock_owner_actor_missing"))?
+        .ok_or_else(|| ActingdError::config(ActingdCode::UnlockOwnerActorMissing))?
         .to_str()
         .and_then(|actor| OwnerUnlockActor::new(actor).ok())
-        .ok_or_else(|| ActingdError::config("unlock_owner_actor_invalid"))?;
+        .ok_or_else(|| ActingdError::config(ActingdCode::UnlockOwnerActorInvalid))?;
     let loaded = config::load(&config_path).and_then(config::ActingdConfigFile::maintenance_config);
     let (report, result) = match loaded {
-        Err(code) => (failed(code, "load", false), Err(ActingdError::config(code))),
+        Err(code) => (
+            failed(UnlockFailure::Load(code), false),
+            Err(ActingdError::config(code)),
+        ),
         Ok(host) => match RuntimeHost::unlock_owner(host, actor.clone(), confirmed) {
             Ok(receipt) => (
                 json!({
@@ -55,22 +59,31 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 Ok(()),
             ),
             Err(failure) => (
-                failed(
-                    failure.error.code(),
-                    failure.stage,
-                    failure.journal_appended,
-                ),
+                failed(UnlockFailure::Host(&failure), failure.journal_appended),
                 Err(ActingdError::runtime(failure.error)),
             ),
         },
     };
     let encoded = serde_json::to_string(&report)
-        .map_err(|_| ActingdError::process("unlock_owner_report_encode_failed"))?;
+        .map_err(|_| ActingdError::process(ActingdCode::UnlockOwnerReportEncodeFailed))?;
     println!("{encoded}");
     result
 }
 
-fn failed(code: &str, stage: &str, journal_appended: bool) -> serde_json::Value {
+/// What refused an unlock: loading the configuration, or the runtime host.
+enum UnlockFailure<'a> {
+    Load(Code),
+    Host(&'a actingcommand_runtime_host::OwnerUnlockFailure),
+}
+
+fn failed(failure: UnlockFailure<'_>, journal_appended: bool) -> serde_json::Value {
+    let (code, stage) = match failure {
+        UnlockFailure::Load(code) => (
+            code.as_str(),
+            v1_stage_token(ActingdLocation::ConfigLoad.location()),
+        ),
+        UnlockFailure::Host(failure) => (failure.error.code(), failure.stage),
+    };
     json!({
         "schema_version": UNLOCK_OWNER_SCHEMA_VERSION,
         "status": "failed",

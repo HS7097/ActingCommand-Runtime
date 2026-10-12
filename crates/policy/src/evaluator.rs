@@ -6,13 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_selection_policy::{
-    Candidate, CandidateStatus, CandidateVerdict, GateOutcome, ScalarValue, SelectionFactEntry,
-    SelectionFactSnapshot, SelectionOutcome, SelectionPolicy, TermOutcome, UnknownReason,
+    Candidate, CollectedVerdict, ScalarValue, SelectionFactEntry, SelectionFactSnapshot,
+    SelectionPolicy, UnknownInput, UnknownReason, ValueRef,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::codes::PolicyCode;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
@@ -418,12 +421,12 @@ pub struct PolicyEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyEvaluationError {
-    code: &'static str,
+    code: Code,
     message: String,
 }
 
 impl PolicyEvaluationError {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> Code {
         self.code
     }
 
@@ -433,42 +436,35 @@ impl PolicyEvaluationError {
 
     fn invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_input_invalid",
+            code: PolicyCode::PolicyEvaluationInputInvalid.code(),
             message: message.into(),
         }
     }
 
     fn type_mismatch(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_fact_type_mismatch",
+            code: PolicyCode::PolicyEvaluationFactTypeMismatch.code(),
             message: message.into(),
         }
     }
 
     fn overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "policy_evaluation_numeric_overflow",
+            code: PolicyCode::PolicyEvaluationNumericOverflow.code(),
             message: message.into(),
         }
     }
 
     fn score_overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "score_overflow",
+            code: PolicyCode::ScoreOverflow.code(),
             message: message.into(),
         }
     }
 
     fn selection_invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "selection_policy_invalid",
-            message: message.into(),
-        }
-    }
-
-    fn selection_aborted(message: impl Into<String>) -> Self {
-        Self {
-            code: "selection_evaluation_aborted",
+            code: PolicyCode::SelectionPolicyInvalid.code(),
             message: message.into(),
         }
     }
@@ -788,7 +784,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             work.push(TaskWork::blocked_without_instance(
                 task.id.clone(),
                 reason(
-                    "scope_without_instance",
+                    PolicyCode::ScopeWithoutInstance.as_str(),
                     "no runtime instance matches the task scope",
                 ),
             ));
@@ -823,7 +819,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 trigger.truth = PredicateTruth::True;
                 trigger.suggestions.clear();
                 task_work.reasons.push(reason(
-                    "failure_retry_immediate",
+                    PolicyCode::FailureRetryImmediate.as_str(),
                     "the latest failure is rerun at once: its trigger and cooldown are not awaited",
                 ));
             }
@@ -849,14 +845,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                     task_work.eligibility = EligibilityState::False;
                     task_work.state = SchedulingDecisionState::Blocked;
                     task_work.reasons.push(reason(
-                        "trigger_false",
+                        PolicyCode::TriggerFalse.as_str(),
                         "the task trigger evaluated to false for this instance",
                     ));
                 }
                 PredicateTruth::Unknown => {
                     task_work.suggestions = trigger.suggestions;
                     task_work.reasons.push(reason(
-                        "trigger_unknown",
+                        PolicyCode::TriggerUnknown.as_str(),
                         "the task trigger requires additional observations",
                     ));
                 }
@@ -945,14 +941,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             task_work.eligibility = EligibilityState::False;
                             task_work.state = SchedulingDecisionState::Blocked;
                             task_work.reasons.push(reason(
-                                "feedback_stop_true",
+                                PolicyCode::FeedbackStopTrue.as_str(),
                                 "the feedback stop predicate evaluated to true for this instance",
                             ));
                         }
                         PredicateTruth::Unknown => {
                             task_work.suggestions = stop.suggestions;
                             task_work.reasons.push(reason(
-                                "feedback_stop_unknown",
+                                PolicyCode::FeedbackStopUnknown.as_str(),
                                 "the feedback stop predicate requires additional observations",
                             ));
                         }
@@ -982,7 +978,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             if cooldown_until.is_some_and(|until| time.unix_ms < until) {
                                 task_work.state = SchedulingDecisionState::Deferred;
                                 task_work.reasons.push(reason(
-                                    "task_cooldown_active",
+                                    PolicyCode::TaskCooldownActive.as_str(),
                                     "the task-specific dispatch cooldown has not elapsed",
                                 ));
                                 task_work.next_wake_unix_ms =
@@ -1053,7 +1049,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     for candidate in candidates {
         if selected_instances.contains(candidate.instance_id.as_str()) {
             work[candidate.work_index].reasons.push(reason(
-                "instance_already_selected",
+                PolicyCode::InstanceAlreadySelected.as_str(),
                 "a higher-ranked task already owns this instance for the evaluation round",
             ));
             continue;
@@ -1071,12 +1067,12 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 && host.active_heavy_dispatches >= host.heavy_dispatch_limit
             {
                 (
-                    "heavy_scene_budget_deferred",
+                    PolicyCode::HeavySceneBudgetDeferred.as_str(),
                     "the shared host heavy-scene concurrency budget was consumed by higher-ranked dispatches",
                 )
             } else {
                 (
-                    "host_budget_deferred",
+                    PolicyCode::HostBudgetDeferred.as_str(),
                     "the shared host budget was consumed by higher-ranked dispatches",
                 )
             };
@@ -1098,7 +1094,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         let mut reasons = work[candidate.work_index].reasons.clone();
         reasons.extend([
             reason(
-                "placement_selected",
+                PolicyCode::PlacementSelected.as_str(),
                 format!(
                     "instance '{}' satisfies scope, capability, affinity, and host budget",
                     candidate.instance_id
@@ -1419,11 +1415,11 @@ fn decision_record(
     }
     let mut reasons = Vec::with_capacity(2 + shown);
     reasons.push(reason(
-        "rank_breakdown",
+        PolicyCode::RankBreakdown.as_str(),
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
     reasons.push(reason(
-        "decision_record",
+        PolicyCode::DecisionRecord.as_str(),
         bounded_detail(decision_record_detail(
             &target_policy_field(target_policies.get(instance_id)),
             related.len(),
@@ -1700,7 +1696,7 @@ fn build_candidate(
 ) -> PolicyEvaluationResult<PlacementResult> {
     if !instance.available {
         return Ok(PlacementResult::Blocked(reason(
-            "instance_unavailable",
+            PolicyCode::InstanceUnavailable.as_str(),
             "the instance is unavailable",
         )));
     }
@@ -1710,7 +1706,7 @@ fn build_candidate(
         .any(|operation| operation == &task.entrypoint.operation_id)
     {
         return Ok(PlacementResult::Blocked(reason(
-            "capability_missing",
+            PolicyCode::CapabilityMissing.as_str(),
             format!(
                 "instance '{}' does not provide operation '{}'",
                 instance.instance_id, task.entrypoint.operation_id
@@ -1727,14 +1723,14 @@ fn build_candidate(
         .is_some_and(|enabled| !enabled)
     {
         return Ok(PlacementResult::Blocked(reason(
-            "instance_override_disabled",
+            PolicyCode::InstanceOverrideDisabled.as_str(),
             "the task is disabled by its instance override",
         )));
     }
 
     let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
         return Ok(PlacementResult::Blocked(reason(
-            "activity_profile_missing",
+            PolicyCode::ActivityProfileMissing.as_str(),
             format!(
                 "instance '{}' has no matching activity profile",
                 instance.instance_id
@@ -1759,7 +1755,7 @@ fn build_candidate(
         let (code, detail) =
             if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
                 (
-                    "heavy_scene_budget_exhausted",
+                    PolicyCode::HeavySceneBudgetExhausted.as_str(),
                     format!(
                         "host '{}' has no remaining heavy-scene concurrency budget",
                         instance.host_id
@@ -1767,7 +1763,7 @@ fn build_candidate(
                 )
             } else {
                 (
-                    "host_capacity_insufficient",
+                    PolicyCode::HostCapacityInsufficient.as_str(),
                     format!(
                         "host '{}' cannot satisfy the task load profile",
                         instance.host_id
@@ -1828,9 +1824,20 @@ fn build_candidate(
 /// What the selection document said about one candidate, before any manual offset.
 #[derive(Debug, Clone)]
 enum CandidateScore {
-    Scored(i64),
-    /// The verdict carried no score; names the gate or term that settled the candidate.
-    Unknown(String),
+    /// `known_until_unix_ms` is the last instant every document fact the score read stays
+    /// known.
+    Scored {
+        score_milli: i64,
+        known_until_unix_ms: Option<u64>,
+    },
+    /// A gate decided against the candidate, so it carries no score; names that gate.
+    Unscored {
+        gate_id: String,
+        known_until_unix_ms: Option<u64>,
+    },
+    /// A gate or term met an unknown input: the candidate is deferred with these reasons and no
+    /// wake, and takes no part in ranking (Workflow #384, D2 S1).
+    Deferred(Vec<DecisionReason>),
 }
 
 /// How one scored candidate leaves the score stage, with the reason detail it records.
@@ -2095,7 +2102,41 @@ fn apply_priority_selection(
     };
     let mut ranked = Vec::with_capacity(candidates.len());
     let mut staged = Vec::with_capacity(candidates.len());
-    for (candidate, score) in candidates.into_iter().zip(scores) {
+    for (mut candidate, score) in candidates.into_iter().zip(scores) {
+        let (score_milli, unknown_rule, known_until_unix_ms) = match score {
+            None => (None, None, None),
+            Some(CandidateScore::Scored {
+                score_milli,
+                known_until_unix_ms,
+            }) => (Some(score_milli), None, known_until_unix_ms),
+            Some(CandidateScore::Unscored {
+                gate_id,
+                known_until_unix_ms,
+            }) => (None, Some(gate_id), known_until_unix_ms),
+            // An unknown input of the document defers only this candidate, with no wake: it is
+            // evaluated again when its facts, the catalog or the configuration change, and it
+            // takes no part in ranking (D2 S1; model §3.3, §3.7 rows 1-2).
+            Some(CandidateScore::Deferred(reasons)) => {
+                let task_work = &mut work[candidate.work_index];
+                task_work.state = SchedulingDecisionState::Deferred;
+                task_work.reasons.extend(reasons);
+                continue;
+            }
+        };
+        // Every document fact the score read bounds the candidate's freshness, and the
+        // evaluation wakes when the first of them lapses, as for an applied resource target
+        // (D2 S1; model §3.8).
+        if let Some(known_until) = known_until_unix_ms {
+            candidate.facts_fresh_until_unix_ms =
+                min_wake(candidate.facts_fresh_until_unix_ms, Some(known_until));
+            if let Some(wake) = known_until
+                .checked_add(1)
+                .filter(|wake| *wake > time.unix_ms)
+            {
+                let task_work = &mut work[candidate.work_index];
+                task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
+            }
+        }
         let targets = instance_targets.get(candidate.instance_id.as_str());
         let target = targets.map_or(TargetEffect::None, |targets| {
             targets.effect(&candidate.task_id)
@@ -2132,11 +2173,6 @@ fn apply_priority_selection(
             continue;
         }
         let offset_milli = i64::from(offset.unwrap_or(0));
-        let (score_milli, unknown_rule) = match score {
-            Some(CandidateScore::Scored(score)) => (Some(score), None),
-            Some(CandidateScore::Unknown(rule)) => (None, Some(rule)),
-            None => (None, None),
-        };
         let utility = candidate_utility(&candidate, aging_ms_per_milli)?;
         let overflow = || {
             PolicyEvaluationError::overflow(format!(
@@ -2390,7 +2426,7 @@ fn apply_priority_selection(
             } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(reason(
-                    "score_deferred",
+                    PolicyCode::ScoreDeferred.as_str(),
                     format!("{detail}; reevaluation at {wake_unix_ms}"),
                 ));
                 task_work.next_wake_unix_ms =
@@ -2398,13 +2434,15 @@ fn apply_priority_selection(
             }
             ScoreDisposition::Promoted { detail } => {
                 candidate.promoted = true;
-                task_work.reasons.push(reason("score_promoted", detail));
+                task_work
+                    .reasons
+                    .push(reason(PolicyCode::ScorePromoted.as_str(), detail));
                 ranked.push(candidate);
             }
             ScoreDisposition::AgingCap { aging_ms, cap_ms } => {
                 candidate.promoted = true;
                 task_work.reasons.push(reason(
-                    "score_aging_cap",
+                    PolicyCode::ScoreAgingCap.as_str(),
                     format!("aging_ms={aging_ms} cap_ms={cap_ms}"),
                 ));
                 ranked.push(candidate);
@@ -2416,8 +2454,10 @@ fn apply_priority_selection(
 }
 
 /// Runs the selection document once per instance over that instance's eligible candidates
-/// and its own fact projection. Per-candidate scores do not depend on the other candidates,
-/// so grouping by instance changes nothing but which facts the snapshot can answer.
+/// and its own fact projection, under the collect option. Per-candidate scores do not depend
+/// on the other candidates, so grouping by instance changes nothing but which facts the
+/// snapshot can answer. The document's `on_unknown` clauses do not apply at this layer: a
+/// candidate that meets an unknown input is deferred on its own, and the evaluation goes on.
 fn score_candidates(
     policy: &SelectionPolicy,
     facts: &EvaluationFacts,
@@ -2442,7 +2482,7 @@ fn score_candidates(
                     "candidate instance '{instance_id}' is missing from the snapshot"
                 ))
             })?;
-        let projection = instance_fact_projection(facts, instance);
+        let projection = instance_fact_projection(facts, instance, time.unix_ms);
         let snapshot = SelectionFactSnapshot {
             snapshot_id: facts.fact_snapshot_id.clone(),
             snapshot_at_unix_ms: time.unix_ms,
@@ -2452,7 +2492,7 @@ fn score_candidates(
             .iter()
             .map(|&index| selection_candidate(&candidates[index], &projection.fields))
             .collect::<PolicyEvaluationResult<Vec<_>>>()?;
-        let decision = actingcommand_selection_policy::evaluate(
+        let collected = actingcommand_selection_policy::evaluate_collect(
             policy,
             &selection_candidates,
             &snapshot,
@@ -2461,64 +2501,163 @@ fn score_candidates(
         .map_err(|error| {
             PolicyEvaluationError::selection_invalid(format!("instance '{instance_id}': {error}"))
         })?;
-        if let SelectionOutcome::Unknown { reason, detail } = &decision.outcome {
-            return Err(PolicyEvaluationError::selection_aborted(format!(
-                "instance '{instance_id}': {detail} ({reason:?})"
-            )));
-        }
         for (&index, selection_candidate) in indices.iter().zip(&selection_candidates) {
-            let verdict = decision
-                .candidates
+            let result = collected
                 .iter()
-                .find(|verdict| verdict.candidate_id == selection_candidate.candidate_id)
+                .find(|result| result.candidate_id == selection_candidate.candidate_id)
                 .ok_or_else(|| {
                     PolicyEvaluationError::selection_invalid(format!(
                         "verdict for candidate '{}' is missing",
                         selection_candidate.candidate_id
                     ))
                 })?;
-            scores[index] = Some(match (verdict.status, verdict.score_milli) {
-                (CandidateStatus::Ranked, Some(score)) => CandidateScore::Scored(score),
-                _ => CandidateScore::Unknown(unscored_rule_id(verdict)),
+            // The facts a score read: a `fact` source carries its own bound, an instance-fact
+            // field its record's expiry; a fixed field has none. A `keyed_fact` read never comes
+            // back here (the collect option refuses a record-list document), so it is a fact
+            // source only to keep the match total.
+            let known_until_unix_ms = result
+                .known_inputs
+                .iter()
+                .filter_map(|known| match &known.input {
+                    ValueRef::Fact { .. } | ValueRef::KeyedFact { .. } => known.known_until_unix_ms,
+                    ValueRef::Field { field } => projection.field_expiries.get(field).copied(),
+                })
+                .min();
+            scores[index] = Some(match &result.verdict {
+                CollectedVerdict::Scored { score_milli } => CandidateScore::Scored {
+                    score_milli: *score_milli,
+                    known_until_unix_ms,
+                },
+                CollectedVerdict::GateRejected { gate_id } => CandidateScore::Unscored {
+                    gate_id: gate_id.clone(),
+                    known_until_unix_ms,
+                },
+                CollectedVerdict::Unknown { inputs } => CandidateScore::Deferred(
+                    unknown_input_reasons(instance_id, inputs, &projection.expired_fields),
+                ),
             });
         }
     }
     Ok(scores)
 }
 
-/// The gate or term at which a verdict stopped carrying a score.
-fn unscored_rule_id(verdict: &CandidateVerdict) -> String {
-    verdict
-        .gates
+/// The instance fact families recognition writes: the realistic keys (model §3.1).
+const REALISTIC_FACT_PREFIXES: [&str; 2] = ["resource.", "inventory."];
+
+/// The deferral reasons of a candidate the document met unknown inputs for, by the first row
+/// of model §3.7 that matches:
+///
+/// 1. any input that is not a realistic key (an instruction key, pack data, a fixed field or a
+///    lookup that covers no value) gives one `selection_input_unknown` per gate or term that
+///    met one: a reading cannot supply it;
+/// 2. otherwise every unknown key gives one `fact_refresh_unbound`. S1 binds no reader yet, so
+///    the optional `reader_problem` is not written (decision D6).
+fn unknown_input_reasons(
+    instance_id: &str,
+    inputs: &[UnknownInput],
+    expired_fields: &BTreeSet<String>,
+) -> Vec<DecisionReason> {
+    let inputs = inputs
         .iter()
-        .find(|gate| {
-            !matches!(
-                gate.outcome,
-                GateOutcome::Passed | GateOutcome::UnknownSubstituted { passes: true, .. }
-            )
+        .map(|unknown| {
+            let (key, unknown_reason) = match &unknown.input {
+                // The collect option refuses a record-list document, so a `keyed_fact` input is
+                // never listed; its list's fact key keeps the match total.
+                ValueRef::Fact { fact_key } | ValueRef::KeyedFact { fact_key, .. } => {
+                    (fact_key.as_str(), unknown.reason)
+                }
+                // A field that names an instance fact whose record has expired is read as
+                // expired, not as missing (decision D1).
+                ValueRef::Field { field }
+                    if unknown.reason == UnknownReason::FieldMissing
+                        && expired_fields.contains(field) =>
+                {
+                    (field.as_str(), UnknownReason::FactExpired)
+                }
+                ValueRef::Field { field } => (field.as_str(), unknown.reason),
+            };
+            (unknown.rule_id.as_str(), key, unknown_reason)
         })
-        .map(|gate| gate.gate_id.clone())
-        .or_else(|| {
-            verdict
-                .terms
-                .iter()
-                .find(|term| matches!(term.outcome, TermOutcome::UnknownDropped { .. }))
-                .map(|term| term.term_id.clone())
-        })
-        .unwrap_or_else(|| "unknown".to_owned())
+        .collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    if inputs
+        .iter()
+        .all(|(_, key, unknown_reason)| is_realistic(key, *unknown_reason))
+    {
+        inputs
+            .iter()
+            .filter(|(_, key, _)| seen.insert(*key))
+            .map(|(_, key, unknown_reason)| {
+                reason(
+                    PolicyCode::FactRefreshUnbound.as_str(),
+                    format!(
+                        "instance_id={instance_id} fact_key={key} unknown_reason={}",
+                        unknown_token(*unknown_reason)
+                    ),
+                )
+            })
+            .collect()
+    } else {
+        inputs
+            .iter()
+            .filter(|(_, key, unknown_reason)| !is_realistic(key, *unknown_reason))
+            .filter(|(rule_id, _, _)| seen.insert(*rule_id))
+            .map(|(rule_id, _, unknown_reason)| {
+                reason(
+                    PolicyCode::SelectionInputUnknown.as_str(),
+                    format!(
+                        "instance_id={instance_id} rule_id={rule_id} unknown_reason={}",
+                        unknown_token(*unknown_reason)
+                    ),
+                )
+            })
+            .collect()
+    }
+}
+
+/// A realistic input: a key of a family recognition writes, read without a lookup miss (model
+/// §3.1). A lookup that covers no value is not something a reading can fix.
+fn is_realistic(key: &str, unknown_reason: UnknownReason) -> bool {
+    unknown_reason != UnknownReason::LookupMiss
+        && REALISTIC_FACT_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+}
+
+/// The token of the `unknown_reason` vocabulary for one selection-policy reason.
+const fn unknown_token(unknown_reason: UnknownReason) -> &'static str {
+    match unknown_reason {
+        UnknownReason::FactMissing => "fact_missing",
+        UnknownReason::FactExpired => "fact_expired",
+        UnknownReason::FactStale => "fact_stale",
+        UnknownReason::FactLowConfidence => "fact_low_confidence",
+        UnknownReason::FactNotScalar => "fact_not_scalar",
+        UnknownReason::FieldMissing => "field_missing",
+        // The vocabulary token shares the registered code's spelling.
+        UnknownReason::TypeMismatch => SharedCode::TypeMismatch.as_str(),
+        UnknownReason::LookupMiss => "lookup_miss",
+    }
 }
 
 struct InstanceFactProjection {
     entries: BTreeMap<String, SelectionFactEntry>,
     fields: BTreeMap<String, ScalarValue>,
+    /// The expiry of each field whose record has one.
+    field_expiries: BTreeMap<String, u64>,
+    /// The keys whose record has expired and so carry no field.
+    expired_fields: BTreeSet<String>,
 }
 
 /// Projects the facts one instance can see (its own, its server's and its game's scope, the
 /// most specific scope winning per key) into the snapshot the document reads as `fact`
-/// sources and the scalar fields every candidate on that instance carries.
+/// sources and the scalar fields every candidate on that instance carries. A field holds only
+/// a record that has not expired at `now_unix_ms`, by the predicate the fact contract and the
+/// `fact` source share (D2 S1, decision D2); the snapshot keeps an expired record, which the
+/// selection-policy crate reads as expired.
 fn instance_fact_projection(
     facts: &EvaluationFacts,
     instance: &InstanceSnapshot,
+    now_unix_ms: u64,
 ) -> InstanceFactProjection {
     let mut chosen: BTreeMap<&str, (u8, &ObservedFact)> = BTreeMap::new();
     for fact in &facts.facts {
@@ -2533,12 +2672,26 @@ fn instance_fact_projection(
             }
         }
     }
-    let mut entries = BTreeMap::new();
-    let mut fields = BTreeMap::new();
+    let mut projection = InstanceFactProjection {
+        entries: BTreeMap::new(),
+        fields: BTreeMap::new(),
+        field_expiries: BTreeMap::new(),
+        expired_fields: BTreeSet::new(),
+    };
     for (key, (_, fact)) in chosen {
         let entry = match selection_scalar(&fact.value) {
             Ok(value) => {
-                fields.insert(key.to_owned(), value.clone());
+                match fact.expires_at_unix_ms {
+                    Some(expiry) if now_unix_ms > expiry => {
+                        projection.expired_fields.insert(key.to_owned());
+                    }
+                    expiry => {
+                        if let Some(expiry) = expiry {
+                            projection.field_expiries.insert(key.to_owned(), expiry);
+                        }
+                        projection.fields.insert(key.to_owned(), value.clone());
+                    }
+                }
                 SelectionFactEntry::Published {
                     value,
                     published_at_unix_ms: fact.observed_at_unix_ms,
@@ -2548,9 +2701,9 @@ fn instance_fact_projection(
             }
             Err(reason) => SelectionFactEntry::Unusable { reason },
         };
-        entries.insert(key.to_owned(), entry);
+        projection.entries.insert(key.to_owned(), entry);
     }
-    InstanceFactProjection { entries, fields }
+    projection
 }
 
 fn selection_scalar(value: &FactValue) -> Result<ScalarValue, UnknownReason> {
@@ -3085,7 +3238,7 @@ fn evaluate_predicate(
             let availability = timeline_availability(event, time, applicable)?;
             if availability.state == EligibilityState::Unknown {
                 reasons.push(reason(
-                    "timeline_unavailable",
+                    PolicyCode::TimelineUnavailable.as_str(),
                     format!("event '{event_id}' has no positive applicable interval"),
                 ));
                 let mut result = PredicateEvaluation::known(false, None);
@@ -3095,7 +3248,7 @@ fn evaluate_predicate(
             let window = availability.active_interval;
             let next = availability.next_wake_unix_ms;
             reasons.push(reason(
-                "timeline_active",
+                PolicyCode::TimelineActive.as_str(),
                 format!(
                     "event '{event_id}' at {}: interval {window:?}; next boundary {next:?}",
                     time.unix_ms
@@ -3198,7 +3351,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
             Ok(PredicateEvaluation {
@@ -3272,7 +3425,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             };
             let cutoff = time.unix_ms.checked_add(*within_ms).ok_or_else(|| {
@@ -3298,7 +3451,7 @@ fn evaluate_predicate(
                     return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                         scope: scope.clone(),
                         fact_key: fact_key.clone(),
-                        reason: "type_mismatch".to_owned(),
+                        reason: SharedCode::TypeMismatch.as_str().to_owned(),
                     }));
                 };
                 if *deadline > time.unix_ms && *deadline <= cutoff {
@@ -3373,7 +3526,7 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: decision_scope.clone(),
                     fact_key: format!("outcome.{task_id}.{outcome_key}"),
-                    reason: "type_mismatch".to_owned(),
+                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
                 }));
             }
             let mut result = PredicateEvaluation::known(
@@ -4460,11 +4613,11 @@ fn validate_instance_alias(value: &str) -> PolicyEvaluationResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{CatalogDocumentSource, CatalogSources, compile_catalog};
 
-    const NOW: u64 = 3_600_000;
+    pub(crate) const NOW: u64 = 3_600_000;
 
     // Specification criteria: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551152553
     #[test]
@@ -4661,7 +4814,8 @@ mod tests {
                     &["unknown".into()]
                 )
                 .unwrap_err()
-                .code(),
+                .code()
+                .as_str(),
                 "policy_evaluation_input_invalid"
             );
         }
@@ -4859,7 +5013,7 @@ mod tests {
                 7,
             )
             .expect_err("overflow must fail visibly");
-            assert_eq!(error.code(), "policy_evaluation_numeric_overflow");
+            assert_eq!(error.code().as_str(), "policy_evaluation_numeric_overflow");
         }
         let event = &compiled.catalog().timeline.events[0];
         let result = timeline_window(
@@ -5300,7 +5454,6 @@ mod tests {
     }
 
     #[test]
-    // Also Workflow #308 RT-S1b/S1c (Alice 2026-09-29 answer 3): dynamic target scoring, release, instance isolation.
     fn aging_eventually_prevents_lower_priority_starvation() {
         let catalog = two_task_catalog(|tasks| {
             tasks[0]["priority"] = serde_json::json!(100);
@@ -5344,7 +5497,11 @@ mod tests {
             result.dispatch_intents[0].task_id,
             "fixture.observe-secondary"
         );
+    }
 
+    #[test]
+    // Also Workflow #308 RT-S1b/S1c (Alice 2026-09-29 answer 3): dynamic target scoring, release, instance isolation.
+    fn resource_target_scoring_release_override_and_instance_isolation() {
         // A resource target on instance A names the priority-0 task: the gap outranks the
         // 100-level priority difference, a closed gap releases it, an override supersedes a
         // manual offset, and instance B decides as if A had no policy.
@@ -5612,7 +5769,17 @@ mod tests {
                 instance_b(&evaluate_at(current, None, Some(-300_000)))
             );
         }
+    }
 
+    #[test]
+    fn resource_target_valuation_maps_milli_yields_before_rounding() {
+        let time = EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        };
+        let instance_a = || ScopeSelector::Instance {
+            instance_id: "fixture-instance-a".to_owned(),
+        };
         // WF345 R4 specification: milli-yields map before rounding, sum within and
         // across resources, and read the same fresh inventory facts for gap weights.
         for (amounts, other, weight, base_score, gap_score) in [
@@ -6812,7 +6979,7 @@ mod tests {
         )
         .expect_err("invalid host reference");
 
-        assert_eq!(error.code(), "policy_evaluation_input_invalid");
+        assert_eq!(error.code().as_str(), "policy_evaluation_input_invalid");
         assert!(error.message().contains("missing host"));
     }
 
@@ -6839,7 +7006,7 @@ mod tests {
         }
     }
 
-    fn decision_for<'a>(
+    pub(crate) fn decision_for<'a>(
         evaluation: &'a PolicyEvaluation,
         task_id: &str,
         instance_id: &str,
@@ -6859,7 +7026,9 @@ mod tests {
         compile_documents(documents)
     }
 
-    fn two_task_catalog(mutator: impl FnOnce(&mut Vec<serde_json::Value>)) -> CompiledCatalog {
+    pub(crate) fn two_task_catalog(
+        mutator: impl FnOnce(&mut Vec<serde_json::Value>),
+    ) -> CompiledCatalog {
         let mut documents = example_documents();
         let mut second = documents.0["tasks"][0].clone();
         second["id"] = serde_json::json!("fixture.observe-secondary");
@@ -6930,14 +7099,14 @@ mod tests {
         .expect("compiled catalog")
     }
 
-    fn due_clock() -> serde_json::Value {
+    pub(crate) fn due_clock() -> serde_json::Value {
         serde_json::json!({
             "kind": "clock",
             "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 3600000, "anchor_ms": 0}
         })
     }
 
-    fn false_fact() -> serde_json::Value {
+    pub(crate) fn false_fact() -> serde_json::Value {
         serde_json::json!({
             "kind": "fact",
             "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
@@ -6948,7 +7117,7 @@ mod tests {
         })
     }
 
-    fn base_facts() -> EvaluationFacts {
+    pub(crate) fn base_facts() -> EvaluationFacts {
         EvaluationFacts {
             ledger_position: 42,
             fact_snapshot_id: "snapshot:fixture-a".to_owned(),
@@ -6977,7 +7146,7 @@ mod tests {
         }
     }
 
-    fn base_resources() -> EvaluationResources {
+    pub(crate) fn base_resources() -> EvaluationResources {
         EvaluationResources {
             pools: vec![PoolValueSnapshot {
                 pool_id: "fixture-pool-a".to_owned(),

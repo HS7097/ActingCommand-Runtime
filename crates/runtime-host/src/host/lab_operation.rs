@@ -5,6 +5,8 @@ use super::online_observation::{
     observation_kernel_error,
 };
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::page_projection::{FrameIdentity, FrameKind};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
@@ -27,7 +29,7 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
-        let run_links = lock(&self.debug_runs, "read_lab_operation_run")?
+        let run_links = lock(&self.debug_runs, HostLocation::ReadLabOperationRun)?
             .get(&request.correlation_id())
             .map(|run| RuntimeRunLinks::new(run.task_id, run.run_id));
         self.append_request_lifecycle(
@@ -41,8 +43,8 @@ impl HostShared {
             let path = Path::new(&input.package_path);
             if !path.is_absolute() {
                 return Err(observation_admission_error(
-                    "observation_path_not_absolute",
-                    "open_lab_operation_package",
+                    HostCode::ObservationPathNotAbsolute,
+                    HostLocation::OpenLabOperationPackage,
                     "absolute package path required",
                 ));
             }
@@ -53,8 +55,8 @@ impl HostShared {
                     ))
                     .ok_or_else(|| {
                         observation_admission_error(
-                            "lab_package_deadline_overflow",
-                            "admit_lab_operation",
+                            HostCode::LabPackageDeadlineOverflow,
+                            HostLocation::AdmitLabOperation,
                             "admission deadline overflow",
                         )
                     })?;
@@ -70,8 +72,8 @@ impl HostShared {
             } else {
                 let file = fs::File::open(path).map_err(|error| {
                     observation_admission_error(
-                        "observation_package_open_failed",
-                        "open_lab_operation_package",
+                        HostCode::ObservationPackageOpenFailed,
+                        HostLocation::OpenLabOperationPackage,
                         error,
                     )
                 })?;
@@ -80,31 +82,31 @@ impl HostShared {
                     .read_to_end(&mut bytes)
                     .map_err(|error| {
                         observation_admission_error(
-                            "observation_package_read_failed",
-                            "read_lab_operation_package",
+                            HostCode::ObservationPackageReadFailed,
+                            HostLocation::ReadLabOperationPackage,
                             error,
                         )
                     })?;
                 if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
                     return Err(observation_admission_error(
-                        "observation_package_limit_exceeded",
-                        "read_lab_operation_package",
+                        HostCode::ObservationPackageLimitExceeded,
+                        HostLocation::ReadLabOperationPackage,
                         "compressed package limit exceeded",
                     ));
                 }
                 let expected = ExternalExpectedSha256::parse_hex(
                     input.expected_sha256.legacy_sha256().ok_or_else(|| {
                         observation_admission_error(
-                            "observation_hash_invalid",
-                            "admit_lab_operation",
+                            HostCode::ObservationHashInvalid,
+                            HostLocation::AdmitLabOperation,
                             "legacy package reference required",
                         )
                     })?,
                 )
                 .map_err(|error| {
                     observation_admission_error(
-                        "observation_hash_invalid",
-                        "admit_lab_operation",
+                        HostCode::ObservationHashInvalid,
+                        HostLocation::AdmitLabOperation,
                         error,
                     )
                 })?;
@@ -123,8 +125,8 @@ impl HostShared {
                 .is_some_and(|after| !observer.contains_page(&after.page_id))
             {
                 return Err(observation_admission_error(
-                    "lab_arrival_page_absent",
-                    "admit_lab_operation",
+                    HostCode::LabArrivalPageAbsent,
+                    HostLocation::AdmitLabOperation,
                     "arrival page must be an exact page ID in the verified package",
                 ));
             }
@@ -170,7 +172,7 @@ impl HostShared {
             })?;
             let RuntimeResult::LeaseGranted { token: acquired } = lease.result else {
                 return Err(observation_integrity_failure(
-                    "lab_operation_lease_result_invalid",
+                    HostCode::LabOperationLeaseResultInvalid,
                 ));
             };
             prepared.lease_id = Some(acquired.lease_id());
@@ -209,7 +211,7 @@ impl HostShared {
                     RequestFailure::request(
                         RuntimeHostError::request(
                             error.code(),
-                            "resolve_current_lab_operation",
+                            HostLocation::ResolveCurrentLabOperation,
                             RuntimeErrorCode::RecognitionFailed,
                         ),
                         RuntimeReceiptState::Denied,
@@ -232,7 +234,7 @@ impl HostShared {
             artifact_links = artifact_links.with_run_id(run_links.run_id);
         }
         let bytes = serde_json::to_vec(&prepared)
-            .map_err(|_| observation_integrity_failure("lab_prepared_encode_failed"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabPreparedEncodeFailed))?;
         let (artifact, verified) =
             self.persist_observation_artifact(&bytes, artifact_links.clone(), links.clone())?;
         let mut record = LabOperationRecord {
@@ -321,8 +323,8 @@ impl HostShared {
                     LabOperationStage::Input,
                     RequestFailure::request(
                         RuntimeHostError::request(
-                            "lab_input_outcome_missing",
-                            "resolve_lab_input_evidence",
+                            HostCode::LabInputOutcomeMissing,
+                            HostLocation::ResolveLabInputEvidence,
                             RuntimeErrorCode::BackendOperationFailed,
                         ),
                         RuntimeReceiptState::Failed,
@@ -334,15 +336,16 @@ impl HostShared {
             if record.failure.is_none() {
                 let started = self.monotonic_ms()?;
                 let elapsed = |now: u64| {
-                    now.checked_sub(started)
-                        .ok_or_else(|| observation_integrity_failure("lab_arrival_clock_regressed"))
+                    now.checked_sub(started).ok_or_else(|| {
+                        observation_integrity_failure(HostCode::LabArrivalClockRegressed)
+                    })
                 };
                 let deadline = input
                     .after
                     .as_ref()
                     .map(|after| {
                         started.checked_add(after.timeout_ms).ok_or_else(|| {
-                            observation_integrity_failure("lab_arrival_deadline_overflow")
+                            observation_integrity_failure(HostCode::LabArrivalDeadlineOverflow)
                         })
                     })
                     .transpose()?;
@@ -407,7 +410,7 @@ impl HostShared {
                         {
                             let instance_guard = self.instance_guard(held.instance_id())?;
                             let _admission =
-                                lock(&instance_guard, "validate_lab_after_projection")?;
+                                lock(&instance_guard, HostLocation::ValidateLabAfterProjection)?;
                             self.validated_instance(request, held, connection_id)?;
                         }
                         let Some(deadline) = deadline else {
@@ -433,8 +436,8 @@ impl HostShared {
                         ) {
                             return Err(RequestFailure::request(
                                 RuntimeHostError::request(
-                                    "lab_arrival_observation_failed",
-                                    "wait_lab_arrival",
+                                    HostCode::LabArrivalObservationFailed,
+                                    HostLocation::WaitLabArrival,
                                     RuntimeErrorCode::RecognitionFailed,
                                 ),
                                 RuntimeReceiptState::Failed,
@@ -455,8 +458,8 @@ impl HostShared {
                     arrival.status = LabArrivalStatus::TimedOut;
                     Err(RequestFailure::request(
                         RuntimeHostError::request(
-                            "lab_arrival_timeout",
-                            "wait_lab_arrival",
+                            SharedCode::LabArrivalTimeout,
+                            HostLocation::WaitLabArrival,
                             RuntimeErrorCode::RecognitionFailed,
                         ),
                         RuntimeReceiptState::Failed,
@@ -476,7 +479,7 @@ impl HostShared {
             }
         }
         if let Some(held) = token.as_ref() {
-            let still_owned = lock(&self.scheduler, "read_lab_operation_cleanup_lease")?
+            let still_owned = lock(&self.scheduler, HostLocation::ReadLabOperationCleanupLease)?
                 .active_tokens()
                 .iter()
                 .any(|active| active == held);
@@ -498,7 +501,7 @@ impl HostShared {
             }
         }
         let bytes = serde_json::to_vec(&record)
-            .map_err(|_| observation_integrity_failure("lab_terminal_encode_failed"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabTerminalEncodeFailed))?;
         let (artifact, verified) =
             self.persist_observation_artifact(&bytes, artifact_links, links.clone())?;
         let payload = if record.failure.is_some() {
@@ -536,7 +539,7 @@ impl HostShared {
         };
         operation
             .validate()
-            .map_err(|_| observation_integrity_failure("lab_operation_result_invalid"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabOperationResultInvalid))?;
         Ok(OperationSuccess {
             state: if operation.record.failure.is_some() {
                 RuntimeReceiptState::Failed
@@ -562,8 +565,8 @@ impl HostShared {
         if self.fatal.is_shutdown_requested() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "lab_arrival_shutdown",
-                    "wait_lab_arrival",
+                    HostCode::LabArrivalShutdown,
+                    HostLocation::WaitLabArrival,
                     RuntimeErrorCode::RuntimeUnavailable,
                 ),
                 RuntimeReceiptState::Failed,
@@ -571,7 +574,7 @@ impl HostShared {
             ));
         }
         let instance_guard = self.instance_guard(token.instance_id())?;
-        let _admission = lock(&instance_guard, "validate_lab_arrival_token")?;
+        let _admission = lock(&instance_guard, HostLocation::ValidateLabArrivalToken)?;
         self.validated_instance(request, token, connection_id)
             .map(|_| ())
     }
@@ -607,24 +610,29 @@ impl HostShared {
             )
             .map_err(|error| {
                 RequestFailure::poison_without_terminal(
-                    ledger_error("query_lab_input_intent").with_native_detail(error.to_string()),
+                    ledger_error(HostLocation::QueryLabInputIntent)
+                        .with_native_detail(error.to_string()),
                 )
             })?;
         if intents.len() > 1 {
-            return Err(observation_integrity_failure("lab_input_intent_not_unique"));
+            return Err(observation_integrity_failure(
+                HostCode::LabInputIntentNotUnique,
+            ));
         }
         let mut outcome = None;
         if let Some(intent) = intents.first() {
             let action_id = *intent
                 .links()
                 .action_id()
-                .ok_or_else(|| observation_integrity_failure("lab_input_action_missing"))?;
+                .ok_or_else(|| observation_integrity_failure(HostCode::LabInputActionMissing))?;
             if !identity_matches(intent)
                 || intent.sequence() <= record.prepared_artifact.verified.sequence
                 || Some(intent.payload().action())
                     != prepared.action.as_ref().map(InputAction::event_action)
             {
-                return Err(observation_integrity_failure("lab_input_intent_mismatch"));
+                return Err(observation_integrity_failure(
+                    HostCode::LabInputIntentMismatch,
+                ));
             }
             record.input_action_id = Some(action_id);
             record.input_intent = Some(terminal(intent));
@@ -643,19 +651,23 @@ impl HostShared {
                     )
                     .map_err(|error| {
                         RequestFailure::poison_without_terminal(
-                            ledger_error("query_lab_input_outcome")
+                            ledger_error(HostLocation::QueryLabInputOutcome)
                                 .with_native_detail(error.to_string()),
                         )
                     })?;
                 if events.len() > 1 || (!events.is_empty() && outcome.is_some()) {
-                    return Err(observation_integrity_failure("lab_input_outcome_conflict"));
+                    return Err(observation_integrity_failure(
+                        HostCode::LabInputOutcomeConflict,
+                    ));
                 }
                 if let Some(event) = events.into_iter().next() {
                     if !identity_matches(&event)
                         || event.sequence() <= intent.sequence()
                         || event.payload().action() != intent.payload().action()
                     {
-                        return Err(observation_integrity_failure("lab_input_outcome_mismatch"));
+                        return Err(observation_integrity_failure(
+                            HostCode::LabInputOutcomeMismatch,
+                        ));
                     }
                     outcome = Some(event);
                 }
@@ -676,13 +688,13 @@ impl HostShared {
                 )
                 .map_err(|error| {
                     RequestFailure::poison_without_terminal(
-                        ledger_error("query_lab_returned_input_terminal")
+                        ledger_error(HostLocation::QueryLabReturnedInputTerminal)
                             .with_native_detail(error.to_string()),
                     )
                 })?;
             let [event] = events.as_slice() else {
                 return Err(observation_integrity_failure(
-                    "lab_returned_input_terminal_missing",
+                    HostCode::LabReturnedInputTerminalMissing,
                 ));
             };
             if terminal(event) != reference
@@ -696,7 +708,7 @@ impl HostShared {
                 || (!input_failed && event.event_type() != EventType::InputCommitted)
             {
                 return Err(observation_integrity_failure(
-                    "lab_returned_input_terminal_mismatch",
+                    HostCode::LabReturnedInputTerminalMismatch,
                 ));
             }
         }
@@ -704,14 +716,14 @@ impl HostShared {
             let effect = outcome
                 .payload()
                 .effect_disposition()
-                .ok_or_else(|| observation_integrity_failure("lab_input_effect_missing"))?;
+                .ok_or_else(|| observation_integrity_failure(HostCode::LabInputEffectMissing))?;
             if (outcome.event_type() == EventType::InputCommitted
                 && effect != EffectDisposition::Performed)
                 || (outcome.event_type() == EventType::InputFailed
                     && (!input_failed || effect == EffectDisposition::Performed))
             {
                 return Err(observation_integrity_failure(
-                    "lab_input_outcome_effect_mismatch",
+                    HostCode::LabInputOutcomeEffectMismatch,
                 ));
             }
             record.input_event = Some(terminal(&outcome));
@@ -728,18 +740,17 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<(CompletedReadonlyObservation, Result<(), RequestFailure>), RequestFailure> {
         let instance_guard = self.instance_guard(token.instance_id())?;
-        let admission = lock(&instance_guard, "lock_lab_operation_capture")?;
+        let admission = lock(&instance_guard, HostLocation::LockLabOperationCapture)?;
         let instance = self.validated_instance(request, token, connection_id)?;
         let frame_id = self
             .events
             .issuer()
             .mint_frame_id()
-            .map_err(|_| observation_integrity_failure("lab_frame_id_issue_failed"))?;
-        let recognition_id = self
-            .events
-            .issuer()
-            .mint_recognition_id()
-            .map_err(|_| observation_integrity_failure("lab_recognition_id_issue_failed"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabFrameIdIssueFailed))?;
+        let recognition_id =
+            self.events.issuer().mint_recognition_id().map_err(|_| {
+                observation_integrity_failure(HostCode::LabRecognitionIdIssueFailed)
+            })?;
         let mut links = request
             .event_links(Some(token.instance_id()), Some(token.lease_id()), None)
             .with_frame_id(frame_id)
@@ -777,7 +788,7 @@ impl HostShared {
             .events
             .issuer()
             .mint_recognition_id()
-            .map_err(|_| observation_integrity_failure("lab_projection_id_issue_failed"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabProjectionIdIssueFailed))?;
         let links = captured.links.clone().with_recognition_id(recognition_id);
         self.append_event(
             EventSeverity::Info,
@@ -796,7 +807,7 @@ impl HostShared {
                     .artifact()
                     .sha256
                     .strip_prefix("sha256:")
-                    .ok_or_else(|| observation_integrity_failure("lab_frame_hash_invalid"))?
+                    .ok_or_else(|| observation_integrity_failure(HostCode::LabFrameHashInvalid))?
                     .to_string(),
                 width: captured.observation.width(),
                 height: captured.observation.height(),
@@ -823,7 +834,7 @@ impl HostShared {
             private_facts: evaluated.private_facts,
         };
         let bytes = serde_json::to_vec(&evidence)
-            .map_err(|_| observation_integrity_failure("lab_projection_encode_failed"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::LabProjectionEncodeFailed))?;
         let (artifact, verified) = self.persist_observation_artifact(
             &bytes,
             captured.artifact_links.clone(),

@@ -3,6 +3,7 @@
 //! Versioned Runtime state, release-set, migration, and recovery contracts.
 
 use crate::SanitizationError;
+use crate::codes::SanitizationCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -93,14 +94,14 @@ impl RuntimeReleaseSet {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.schema_version != RUNTIME_RELEASE_SET_SCHEMA_VERSION {
             return Err(SanitizationError::new(
-                "unsupported_release_set_schema",
+                SanitizationCode::UnsupportedReleaseSetSchema,
                 "release_set",
             ));
         }
         self.validate_components()?;
         if self.release_id != release_id_for(self)? {
             return Err(SanitizationError::new(
-                "release_set_identity_mismatch",
+                SanitizationCode::ReleaseSetIdentityMismatch,
                 "release_id",
             ));
         }
@@ -148,7 +149,7 @@ impl RuntimeReleaseSet {
         validate_sha256(&self.ui_content_sha256, "ui_content_sha256")?;
         if self.resources.is_empty() || self.resources.len() > MAX_RELEASE_RESOURCES {
             return Err(SanitizationError::new(
-                "invalid_release_resource_count",
+                SanitizationCode::InvalidReleaseResourceCount,
                 "release_resources",
             ));
         }
@@ -160,7 +161,7 @@ impl RuntimeReleaseSet {
                 || previous.is_some_and(|value| value > resource.resource_id())
             {
                 return Err(SanitizationError::new(
-                    "release_resources_not_canonical",
+                    SanitizationCode::ReleaseResourcesNotCanonical,
                     "release_resources",
                 ));
             }
@@ -350,7 +351,7 @@ impl ReleaseTransitionData {
             || self.previous_release_id.as_deref() == Some(self.release_id.as_str())
         {
             return Err(SanitizationError::new(
-                "invalid_release_transition",
+                SanitizationCode::InvalidReleaseTransition,
                 "release_transition",
             ));
         }
@@ -453,7 +454,7 @@ fn release_id_for(value: &RuntimeReleaseSet) -> Result<String, SanitizationError
         ui_content_sha256,
         resources,
     })
-    .map_err(|_| SanitizationError::new("release_set_encode_failed", "release_set"))?;
+    .map_err(|_| SanitizationError::new(SanitizationCode::ReleaseSetEncodeFailed, "release_set"))?;
     Ok(format!("release:{:x}", Sha256::digest(bytes)))
 }
 
@@ -466,7 +467,10 @@ fn validate_identifier(value: &str, field: &'static str) -> Result<(), Sanitizat
                 || matches!(byte, b'.' | b'_' | b':' | b'-')
         })
     {
-        return Err(SanitizationError::new("invalid_state_identifier", field));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidStateIdentifier,
+            field,
+        ));
     }
     Ok(())
 }
@@ -478,7 +482,10 @@ fn validate_version(value: &str, field: &'static str) -> Result<(), Sanitization
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
     {
-        return Err(SanitizationError::new("invalid_state_version", field));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidStateVersion,
+            field,
+        ));
     }
     Ok(())
 }
@@ -498,7 +505,10 @@ fn validate_hash_identity(
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     }) {
-        return Err(SanitizationError::new("invalid_state_hash", field));
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidStateHash,
+            field,
+        ));
     }
     Ok(())
 }
@@ -552,7 +562,11 @@ mod tests {
         value["runtime_version"] = serde_json::json!("9.9.9");
         let tampered = serde_json::from_value::<RuntimeReleaseSet>(value).expect("typed JSON");
         assert_eq!(
-            tampered.validate().expect_err("identity mismatch").code(),
+            tampered
+                .validate()
+                .expect_err("identity mismatch")
+                .code()
+                .as_str(),
             "release_set_identity_mismatch"
         );
     }
@@ -570,13 +584,15 @@ mod tests {
                 vec![duplicate.clone(), duplicate],
             )
             .expect_err("duplicate resource")
-            .code(),
+            .code()
+            .as_str(),
             "release_resources_not_canonical"
         );
         assert_eq!(
             RuntimeReleaseSet::new("1.0.0", hash('c'), "1.0.0", hash('d'), Vec::new())
                 .expect_err("empty release")
-                .code(),
+                .code()
+                .as_str(),
             "invalid_release_resource_count"
         );
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::SanitizationCode;
 use crate::{DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus};
 
 /// The frame size a capture (or Nemu pair) open verified with its first frame.
@@ -89,7 +90,12 @@ impl DeviceSelfCheckPayload {
     }
 
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
-        let invalid = || SanitizationError::new("invalid_device_self_check", "device_self_check");
+        let invalid = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidDeviceSelfCheck,
+                "device_self_check",
+            )
+        };
         crate::validate_instance_alias(&self.instance_alias).map_err(|_| invalid())?;
         let backend_name = |value: &str| {
             !value.is_empty()

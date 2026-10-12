@@ -7,6 +7,8 @@
 // Parsing keeps the existing LabError-by-value API.
 #![allow(clippy::result_large_err)]
 
+use crate::codes::PackContainmentCode;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::page_projection::{ProjectionCatalog, ProjectionMetadata};
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, OcrFieldDictionary, OcrFieldType,
@@ -2888,7 +2890,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &operations,
         &scheduling,
     )
-    .map_err(CliError::package_invalid)
+    .map_err(|code| CliError::package_invalid(code.as_str()))
 }
 
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
@@ -3228,8 +3230,9 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         .unwrap_or_default();
     let declaration = bundle.data.get("post_admission_ocr");
     if schema == "0.8" {
-        let value = declaration
-            .ok_or_else(|| CliError::package_invalid("ocr_fields_declaration_missing"))?;
+        let value = declaration.ok_or_else(|| {
+            CliError::package_invalid(SharedCode::OcrFieldsDeclarationMissing.as_str())
+        })?;
         validate_ocr_fields_mode_declaration(schema, value, bundle.data.get("scheduling_outcome"))?;
         let fields: OcrFieldsDeclaration = serde_json::from_value(value.clone())
             .map_err(|e| CliError::package_invalid(e.to_string()))?;
@@ -3242,7 +3245,7 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                 .collect::<Vec<_>>();
             let [target] = matching.as_slice() else {
                 return Err(CliError::package_invalid(
-                    "ocr_fields_target_missing_or_duplicate",
+                    PackContainmentCode::OcrFieldsTargetMissingOrDuplicate.as_str(),
                 ));
             };
             validate_post_admission_ocr_target_region(bundle, &field.target_id, target)?;
@@ -3250,11 +3253,11 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                 let path = bundle.dir.join(&dictionary.path);
                 let size = files.length(&path).map_err(CliError::package_invalid)?;
                 dictionary_bytes = dictionary_bytes.checked_add(size).ok_or_else(|| {
-                    CliError::package_invalid("ocr_fields_dictionary_limit_exceeded")
+                    CliError::package_invalid(SharedCode::OcrFieldsDictionaryLimitExceeded.as_str())
                 })?;
                 if dictionary_bytes > fields.limits.max_total_bytes {
                     return Err(CliError::package_invalid(
-                        "ocr_fields_dictionary_limit_exceeded",
+                        SharedCode::OcrFieldsDictionaryLimitExceeded.as_str(),
                     ));
                 }
                 let bytes = files.read(&path).map_err(CliError::package_invalid)?;
@@ -3262,14 +3265,14 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                     || format!("{:x}", Sha256::digest(bytes)) != dictionary.sha256
                 {
                     return Err(CliError::package_invalid(
-                        "ocr_fields_dictionary_hash_mismatch",
+                        PackContainmentCode::OcrFieldsDictionaryHashMismatch.as_str(),
                     ));
                 }
                 let parsed: OcrFieldDictionary = serde_json::from_slice(bytes)
                     .map_err(|e| CliError::package_invalid(e.to_string()))?;
                 parsed
                     .validate(&fields.limits)
-                    .map_err(CliError::package_invalid)?;
+                    .map_err(|code| CliError::package_invalid(code.as_str()))?;
             }
         }
         return Ok(());
@@ -4807,17 +4810,20 @@ pub fn validate_ocr_fields_mode_declaration(
     scheduling: Option<&Value>,
 ) -> CliOutcome<()> {
     if schema != "0.8" {
-        return Err(CliError::package_invalid("ocr_mode_schema_mismatch"));
+        return Err(CliError::package_invalid(
+            PackContainmentCode::OcrModeSchemaMismatch.as_str(),
+        ));
     }
     let declaration: OcrFieldsDeclaration = serde_json::from_value(value.clone())
         .map_err(|e| CliError::package_invalid(e.to_string()))?;
-    declaration.validate().map_err(CliError::package_invalid)?;
-    let scheduling: SchedulingOutcomeDeclaration = serde_json::from_value(
-        scheduling
-            .cloned()
-            .ok_or_else(|| CliError::package_invalid("ocr_fields_outcome_missing"))?,
-    )
-    .map_err(|e| CliError::package_invalid(e.to_string()))?;
+    declaration
+        .validate()
+        .map_err(|code| CliError::package_invalid(code.as_str()))?;
+    let scheduling: SchedulingOutcomeDeclaration =
+        serde_json::from_value(scheduling.cloned().ok_or_else(|| {
+            CliError::package_invalid(PackContainmentCode::OcrFieldsOutcomeMissing.as_str())
+        })?)
+        .map_err(|e| CliError::package_invalid(e.to_string()))?;
     scheduling
         .validate()
         .map_err(|e| CliError::package_invalid(e.to_string()))?;
@@ -4828,7 +4834,9 @@ pub fn validate_ocr_fields_mode_declaration(
         .count()
         != 1
     {
-        return Err(CliError::package_invalid("ocr_fields_outcome_invalid"));
+        return Err(CliError::package_invalid(
+            SharedCode::OcrFieldsOutcomeInvalid.as_str(),
+        ));
     }
     Ok(())
 }

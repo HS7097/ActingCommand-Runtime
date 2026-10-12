@@ -14,7 +14,8 @@
 //! Absent, stale, low-confidence, and non-scalar facts stay [`UnknownReason`]-typed all the
 //! way into the decision. Nothing here substitutes `false` or `0` for an unknown input; a
 //! term or gate that meets one applies the handling its document declares, and the decision
-//! records that it did.
+//! records that it did. Under the collect option ([`evaluate_collect`]) the declared handling
+//! does not apply: every unknown input is listed per candidate for the caller to treat.
 //!
 //! The `selection-eval` binary in `src/bin` is an offline debugging shell around
 //! [`evaluate`]. It is the only place in this crate that reads a file, and it is not a
@@ -24,6 +25,7 @@
 
 mod bound;
 mod canonical;
+mod codes;
 mod evaluator;
 mod facts;
 mod schema;
@@ -32,9 +34,11 @@ pub use bound::{FieldDomain, UpperBound, upper_bound};
 pub use canonical::{
     CanonicalValue, MAX_DOCUMENT_BYTES, canonical_bytes, canonical_sha256, parse_canonical_json,
 };
+pub use codes::SelectionPolicyCode;
 pub use evaluator::{
-    CandidateStatus, CandidateVerdict, DecisionReason, GateOutcome, GateResult, SelectionDecision,
-    SelectionOutcome, TermOutcome, TermResult, evaluate,
+    CandidateStatus, CandidateVerdict, CollectedCandidate, CollectedVerdict, DecisionReason,
+    GateOutcome, GateResult, KnownInput, SelectionDecision, SelectionOutcome, TermOutcome,
+    TermResult, UnknownInput, evaluate, evaluate_collect,
 };
 pub use facts::{
     Candidate, RecordRow, ScalarValue, SelectionFactEntry, SelectionFactSnapshot, UnknownReason,

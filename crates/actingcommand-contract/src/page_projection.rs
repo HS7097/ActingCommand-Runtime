@@ -2,6 +2,7 @@
 
 //! Shared, side-effect-free projection of already resolved single-frame facts.
 
+use crate::codes::PageProjectionCode;
 use crate::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -318,7 +319,7 @@ impl ProjectionMetadata {
                 };
                 return Err(LabError::new(
                     crate::LabErrorClass::UsageValidation,
-                    "resource_declaration_invalid",
+                    crate::codes::SharedCode::ResourceDeclarationInvalid.as_str(),
                     format!(
                         "{} contains an unknown declaration field {}",
                         path, issue.field_path
@@ -965,9 +966,9 @@ pub fn project_observation(
                 geometry,
             } => {
                 let reason = if !passed {
-                    Some("target_not_matched")
+                    Some(PageProjectionCode::TargetNotMatched)
                 } else if geometry.is_none() {
-                    Some("matched_template_rect_unavailable")
+                    Some(PageProjectionCode::MatchedTemplateRectUnavailable)
                 } else {
                     None
                 };
@@ -984,9 +985,11 @@ pub fn project_observation(
                 Some(target_id),
                 "not_evaluated",
                 Some(match reason {
-                    NotEvaluatedReason::DynamicTarget => "dynamic_target_not_evaluated",
-                    NotEvaluatedReason::ClickOnly => "target_not_recognizable",
-                    NotEvaluatedReason::Unscoped => "target_not_evaluated",
+                    NotEvaluatedReason::DynamicTarget => {
+                        PageProjectionCode::DynamicTargetNotEvaluated
+                    }
+                    NotEvaluatedReason::ClickOnly => PageProjectionCode::TargetNotRecognizable,
+                    NotEvaluatedReason::Unscoped => PageProjectionCode::TargetNotEvaluated,
                 }),
                 None,
             ),
@@ -994,7 +997,7 @@ pub fn project_observation(
                 false,
                 Some(target_id),
                 "multiple_target_evaluations",
-                Some("target_evaluation_ambiguous"),
+                Some(PageProjectionCode::TargetEvaluationAmbiguous),
                 None,
             ),
         };
@@ -1009,7 +1012,7 @@ pub fn project_observation(
                 .validate(output.frame.width, output.frame.height)
                 .is_err()
         {
-            reason = Some("invalid_frame_geometry");
+            reason = Some(PageProjectionCode::InvalidFrameGeometry);
             geometry = None;
         }
         let annotation = metadata
@@ -1035,7 +1038,7 @@ pub fn project_observation(
             "scope": if control { "unscoped" } else { "page" }, "recognized": recognized,
             "target_id": target, "recognition_basis": basis,
             "availability": if control { "unknown" } else if recognized { "available" } else { "unavailable" },
-            "actionable": geometry.is_some(), "blocked_reason": reason,
+            "actionable": geometry.is_some(), "blocked_reason": reason.map(PageProjectionCode::as_str),
             "safety": annotation.map(|a| a.safety).unwrap_or(Safety::Unclassified),
             "safety_source": annotation.map(|a| &a.source), "input": geometry,
         });
@@ -1069,7 +1072,7 @@ pub fn project_observation(
             ),
         )?;
         output.append("missing", json!({"id":missing.id,"role":missing.role,"group_index":missing.group_index,
-            "group_satisfied":missing.group_satisfied,"recognized":false,"reason":"target_not_matched"}))?;
+            "group_satisfied":missing.group_satisfied,"recognized":false,"reason":PageProjectionCode::TargetNotMatched.as_str()}))?;
     }
     let mut field_ids = BTreeSet::new();
     for field in input.fields {

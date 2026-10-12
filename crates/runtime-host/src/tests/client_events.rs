@@ -356,7 +356,8 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
                     catalog_hash: format!("sha256:{}", "a".repeat(64)),
                     catalog_version: 1,
                 },
-                "user_confirmed",
+                actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                    .expect("approval reason"),
             )
             .expect("approval decision"),
         },
@@ -425,7 +426,8 @@ fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
                         catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
                         catalog_version: 1,
                     },
-                    "user_confirmed",
+                    actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                        .expect("approval reason"),
                 )
                 .expect("approval decision"),
             });
@@ -706,7 +708,9 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
         actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
             .expect("shared database");
     database
-        .connection("remove reconstructible projection in existing specification")
+        .connection(
+            actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+        )
         .expect("connection")
         .execute(
             "DELETE FROM projection_entries WHERE namespace='policy.planning-signal.v1'",

@@ -3,12 +3,16 @@
 //! Runtime-owned catalog generations and replayable policy admission state.
 
 mod catalog_preview;
+pub(crate) mod clock_slot;
 pub use catalog_preview::{
     CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest, preview_policy_catalog_transition,
 };
 mod catalog_transaction;
 pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
+use crate::codes::HostLocation;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
 
@@ -19,6 +23,7 @@ use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
 };
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
 use crate::{
     InstanceArbitrationRank, PerformanceControlWorkload, ProcedureManifest, RuntimeHostError,
     RuntimeHostResult,
@@ -148,7 +153,10 @@ impl PolicyCadence {
             || self.reconciliation_interval_ms < self.cooldown_ms
             || self.clock_jump_threshold_ms == 0
         {
-            return Err(fatal("invalid_policy_cadence", "initialize_policy_runtime"));
+            return Err(fatal(
+                HostCode::InvalidPolicyCadence,
+                HostLocation::InitializePolicyRuntime,
+            ));
         }
         Ok(())
     }
@@ -225,6 +233,8 @@ pub struct PolicyCycle {
     pub evaluation: Option<PolicyEvaluation>,
     pub pending_dispatch_intents: Vec<DispatchIntent>,
     pub detection_planning_signals: Vec<PolicyPlanningSignalEventData>,
+    /// Workflow #372 K2: the clock-slot records this cycle appends after its detection signals.
+    pub clock_slot_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
 }
 
@@ -316,8 +326,8 @@ impl PolicyRunContext {
     ) -> RuntimeHostResult<Self> {
         let package_digest = intent.package_digest.clone().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "policy_run_package_digest_missing",
-                "build_policy_run_context",
+                HostCode::PolicyRunPackageDigestMissing,
+                HostLocation::BuildPolicyRunContext,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -327,8 +337,8 @@ impl PolicyRunContext {
             || catalog.catalog_version() != intent.catalog_version
         {
             return Err(RuntimeHostError::fatal(
-                "policy_run_identity_mismatch",
-                "build_policy_run_context",
+                HostCode::PolicyRunIdentityMismatch,
+                HostLocation::BuildPolicyRunContext,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -564,7 +574,10 @@ impl PolicyCadenceState {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyRecomputeDirective> {
         if now_unix_ms == 0 {
-            return Err(request("invalid_policy_time", "evaluate_policy_cycle"));
+            return Err(request(
+                HostCode::InvalidPolicyTime,
+                HostLocation::EvaluatePolicyCycle,
+            ));
         }
         if self.full_recompute_required || trigger == PolicyTrigger::Recovery {
             return self.full(now_unix_ms, PolicyRecomputeReason::StartupOrRecovery);
@@ -583,7 +596,12 @@ impl PolicyCadenceState {
             let due = self
                 .last_full_recompute_unix_ms
                 .and_then(|last| last.checked_add(self.config.reconciliation_interval_ms))
-                .ok_or_else(|| fatal("policy_time_overflow", "evaluate_reconciliation_trigger"))?;
+                .ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyTimeOverflow,
+                        HostLocation::EvaluateReconciliationTrigger,
+                    )
+                })?;
             if now_unix_ms >= due {
                 return self.full(now_unix_ms, PolicyRecomputeReason::Reconciliation);
             }
@@ -614,7 +632,12 @@ impl PolicyCadenceState {
         }
         self.cooldown_until_unix_ms = now_unix_ms
             .checked_add(self.config.cooldown_ms)
-            .ok_or_else(|| fatal("policy_time_overflow", "evaluate_policy_event"))?;
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyTimeOverflow,
+                    HostLocation::EvaluatePolicyEvent,
+                )
+            })?;
         Ok(PolicyRecomputeDirective {
             kind: PolicyRecomputeKind::Incremental,
             reason: PolicyRecomputeReason::Event,
@@ -632,7 +655,12 @@ impl PolicyCadenceState {
         self.last_full_recompute_unix_ms = Some(now_unix_ms);
         self.cooldown_until_unix_ms = now_unix_ms
             .checked_add(self.config.cooldown_ms)
-            .ok_or_else(|| fatal("policy_time_overflow", "evaluate_full_policy_cycle"))?;
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyTimeOverflow,
+                    HostLocation::EvaluateFullPolicyCycle,
+                )
+            })?;
         Ok(PolicyRecomputeDirective {
             kind: PolicyRecomputeKind::Full,
             reason,
@@ -680,7 +708,7 @@ fn eligibility_verdict(decision: &TaskDecision, in_flight: bool) -> EligibilityV
         SchedulingDecisionState::Deferred => decision
             .reasons
             .iter()
-            .any(|reason| reason.code == "score_deferred"),
+            .any(|reason| reason.code == actingcommand_policy::PolicyCode::ScoreDeferred.as_str()),
         SchedulingDecisionState::Blocked => false,
     };
     if waiting && !in_flight {
@@ -842,6 +870,10 @@ pub(crate) struct PolicyHost {
     /// instance) pair, the completed run whose admission request the ledger confirmed and the
     /// terminal sequence it was read through. A host starts with none.
     confirmed_run_admissions: BTreeMap<(String, String), (CompletedPolicyRunIdentity, u64)>,
+    /// Workflow #369 E3 (#670 safety net): the dispatches this start could not settle. They
+    /// stay open, out of the pending settlements and the active workloads; a later start that
+    /// settles them leaves them out of this set.
+    quarantined_dispatches: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -874,6 +906,7 @@ impl PolicyHost {
             eligibility: EligibilityAges::default(),
             arbitration: BTreeMap::new(),
             confirmed_run_admissions: BTreeMap::new(),
+            quarantined_dispatches: BTreeSet::new(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -909,13 +942,16 @@ impl PolicyHost {
         ledger: &GlobalLedger,
         ledger_position: u64,
     ) -> RuntimeHostResult<Option<LoadedCatalog>> {
-        let latest = ledger
-            .latest_sequence()
-            .map_err(|_| fatal("catalog_projection_query_failed", "project_policy_catalog"))?;
+        let latest = ledger.latest_sequence().map_err(|_| {
+            fatal(
+                HostCode::CatalogProjectionQueryFailed,
+                HostLocation::ProjectPolicyCatalog,
+            )
+        })?;
         if ledger_position == 0 || ledger_position > latest {
             return Err(request(
-                "catalog_projection_position_invalid",
-                "project_policy_catalog",
+                HostCode::CatalogProjectionPositionInvalid,
+                HostLocation::ProjectPolicyCatalog,
             ));
         }
         self.store.project_catalog_source(ledger, ledger_position)
@@ -926,9 +962,12 @@ impl PolicyHost {
         current_ledger_position: u64,
         page_request: &ProjectDecisionPageRequest,
     ) -> RuntimeHostResult<PolicyDispatchPage> {
-        page_request
-            .validate()
-            .map_err(|_| request("project_decision_page_invalid", "project_policy_dispatches"))?;
+        page_request.validate().map_err(|_| {
+            request(
+                SharedCode::ProjectDecisionPageInvalid,
+                HostLocation::ProjectPolicyDispatches,
+            )
+        })?;
         let snapshot_ledger_position = page_request
             .cursor()
             .map_or(current_ledger_position, |cursor| {
@@ -936,8 +975,8 @@ impl PolicyHost {
             });
         if snapshot_ledger_position == 0 || snapshot_ledger_position > current_ledger_position {
             return Err(request(
-                "project_decision_cursor_invalid",
-                "project_policy_dispatches",
+                SharedCode::ProjectDecisionCursorInvalid,
+                HostLocation::ProjectPolicyDispatches,
             ));
         }
         let limit = usize::from(page_request.limit());
@@ -949,8 +988,8 @@ impl PolicyHost {
                 .is_none_or(|decision_id| decision_id != cursor.before_decision_id())
             {
                 return Err(request(
-                    "project_decision_cursor_invalid",
-                    "project_policy_dispatches",
+                    SharedCode::ProjectDecisionCursorInvalid,
+                    HostLocation::ProjectPolicyDispatches,
                 ));
             }
             for (_, decision_id) in self
@@ -986,14 +1025,16 @@ impl PolicyHost {
         decision_id: &str,
         snapshot_ledger_position: u64,
     ) -> RuntimeHostResult<PolicyDispatchProjection> {
-        let dispatch = self
-            .seen_dispatches
-            .get(decision_id)
-            .ok_or_else(|| fatal("policy_dispatch_order_corrupt", "project_policy_dispatches"))?;
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchOrderCorrupt,
+                HostLocation::ProjectPolicyDispatches,
+            )
+        })?;
         if dispatch.intent_sequence > snapshot_ledger_position {
             return Err(fatal(
-                "policy_dispatch_snapshot_invalid",
-                "project_policy_dispatches",
+                HostCode::PolicyDispatchSnapshotInvalid,
+                HostLocation::ProjectPolicyDispatches,
             ));
         }
         Ok(PolicyDispatchProjection {
@@ -1072,8 +1113,8 @@ impl PolicyHost {
             .map(|((task_id, instance_id), (_, dispatch))| {
                 let admission = dispatch.admission.as_ref().ok_or_else(|| {
                     fatal(
-                        "policy_dispatch_admission_missing",
-                        "project_policy_task_state",
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::ProjectPolicyTaskState,
                     )
                 })?;
                 let (terminal_state, completed_window) = if dispatch
@@ -1082,8 +1123,8 @@ impl PolicyHost {
                 {
                     let execution = dispatch.execution.as_ref().ok_or_else(|| {
                         fatal(
-                            "policy_execution_outcome_missing",
-                            "project_policy_task_state",
+                            HostCode::PolicyExecutionOutcomeMissing,
+                            HostLocation::ProjectPolicyTaskState,
                         )
                     })?;
                     let terminal_state = match execution.outcome {
@@ -1180,10 +1221,12 @@ impl PolicyHost {
         &self,
         decision_id: &str,
     ) -> RuntimeHostResult<Option<PolicySettlement>> {
-        let dispatch = self
-            .seen_dispatches
-            .get(decision_id)
-            .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_settlement"))?;
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            request(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReadPolicySettlement,
+            )
+        })?;
         if dispatch.execution.is_none() {
             return Ok(None);
         }
@@ -1197,21 +1240,81 @@ impl PolicyHost {
             .collect())
     }
 
+    /// Workflow #369 E3 (#670 safety net): leaves a dispatch the start could not settle open,
+    /// out of the pending settlements and the active workloads.
+    pub(crate) fn quarantine_dispatch(&mut self, decision_id: &str) {
+        self.quarantined_dispatches.insert(decision_id.to_owned());
+    }
+
+    /// Coordinator ruling on #670: whether a run of the dispatch `decision_id` that ran
+    /// `runtime_ms` exceeded its admitted runtime budget, by the policy's own rule.
+    pub(crate) fn runtime_budget_exceeded(
+        &self,
+        decision_id: &str,
+        runtime_ms: u64,
+    ) -> RuntimeHostResult<bool> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReadPolicyRuntimeBudget,
+            )
+        })?;
+        let admission = dispatch.admission.as_ref().ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::ReadPolicyRuntimeBudget,
+            )
+        })?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+        crate::policy_control::runtime_budget_exceeded(&intent, admission, runtime_ms)
+    }
+
     pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
-            .filter(|(_, dispatch)| {
-                dispatch.lifecycle == DispatchLifecycle::Admitted && dispatch.execution.is_some()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && dispatch.execution.is_some()
+                    && !self.quarantined_dispatches.contains(*decision_id)
             })
             .map(|(decision_id, _)| decision_id.clone())
             .collect()
     }
 
+    /// Workflow #369 E3 (#670 final review): the procedure ref of a dispatch's task in the
+    /// catalog generation the dispatch pinned, which a package rebind does not change.
+    pub(crate) fn dispatch_procedure_ref(&self, decision_id: &str) -> RuntimeHostResult<String> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReadDispatchProcedureRef,
+            )
+        })?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        catalog
+            .compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == dispatch.data.task_id)
+            .map(|task| task.procedure_ref.clone())
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyTaskMissing,
+                    HostLocation::ReadDispatchProcedureRef,
+                )
+            })
+    }
+
     pub(crate) fn pending_dispatch_outcomes(&self) -> Vec<String> {
         self.seen_dispatches
             .iter()
-            .filter(|(_, dispatch)| {
-                dispatch.lifecycle == DispatchLifecycle::Admitted && dispatch.execution.is_none()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && dispatch.execution.is_none()
+                    && !self.quarantined_dispatches.contains(*decision_id)
             })
             .map(|(decision_id, _)| decision_id.clone())
             .collect()
@@ -1272,18 +1375,22 @@ impl PolicyHost {
                 evaluation: None,
                 pending_dispatch_intents: Vec::new(),
                 detection_planning_signals: Vec::new(),
+                clock_slot_signals: Vec::new(),
                 measurement: None,
             });
         }
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::EvaluatePolicyCycle,
+            )
+        })?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
         // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
         let immediate_retries = self
             .control
             .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
+        let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
         let mut evaluation = evaluate_with_immediate_retries::<RuntimeHostError>(
             &active.compiled,
@@ -1292,7 +1399,7 @@ impl PolicyHost {
             time,
             seed,
             &immediate_retries,
-            |intent| match (
+            deferrals.capture(|intent| match (
                 scheduling_pause(&intent.instance_id),
                 instance_occupancy(&intent.instance_id),
             ) {
@@ -1335,6 +1442,7 @@ impl PolicyHost {
                     Ok(_) => Ok(CandidateEligibility::Eligible),
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
+                        deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
                                 code: rejection.code,
@@ -1348,13 +1456,13 @@ impl PolicyHost {
                     }
                     Err(error) => Err(error),
                 },
-            },
+            }),
         )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
         let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
             fatal(
-                "policy_evaluation_measurement_overflow",
-                "measure_policy_evaluation",
+                HostCode::PolicyEvaluationMeasurementOverflow,
+                HostLocation::MeasurePolicyEvaluation,
             )
         })?;
         let pending_dispatch_intents: Vec<DispatchIntent> = evaluation
@@ -1388,6 +1496,17 @@ impl PolicyHost {
                 )
             })
             .collect::<BTreeSet<_>>();
+        let clock_slot_signals = clock_slot::preview(
+            &self.store,
+            &active.compiled,
+            &facts.tasks,
+            &facts.instances,
+            &evaluation,
+            &pending_dispatch_intents,
+            &in_flight,
+            deferrals,
+            time,
+        )?;
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         self.arbitration
@@ -1398,6 +1517,7 @@ impl PolicyHost {
             evaluation: Some(evaluation),
             pending_dispatch_intents,
             detection_planning_signals,
+            clock_slot_signals,
             measurement: Some(PolicyEvaluationMeasurement {
                 sampled_at_monotonic_ms,
                 elapsed_micros,
@@ -1416,16 +1536,18 @@ impl PolicyHost {
         owner_epoch: OwnerEpoch,
         ledger_high_watermark: u64,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| request("policy_catalog_unavailable", "validate_policy_dispatch"))?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::ValidatePolicyDispatch,
+            )
+        })?;
         if intent.catalog_hash != active.generation.catalog_hash
             || intent.catalog_version != active.generation.catalog_version
         {
             return Err(request(
-                "policy_catalog_mismatch",
-                "validate_policy_dispatch",
+                HostCode::PolicyCatalogMismatch,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         let task = active
@@ -1435,7 +1557,12 @@ impl PolicyHost {
             .tasks
             .iter()
             .find(|task| task.id == intent.task_id)
-            .ok_or_else(|| request("policy_task_missing", "validate_policy_dispatch"))?;
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyTaskMissing,
+                    HostLocation::ValidatePolicyDispatch,
+                )
+            })?;
         let descriptor = &active.compiled.catalog().tasks.catalog;
         if task.entrypoint.operation_id != intent.operation_id
             || task.procedure_ref != intent.procedure_ref
@@ -1461,8 +1588,8 @@ impl PolicyHost {
             )
         {
             return Err(request(
-                "policy_intent_catalog_mismatch",
-                "validate_policy_dispatch",
+                HostCode::PolicyIntentCatalogMismatch,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         if intent.input_ledger_position != context.fact_ledger_position
@@ -1470,8 +1597,8 @@ impl PolicyHost {
             || intent.fact_snapshot_id != context.fact_snapshot_id
         {
             return Err(request(
-                "policy_fact_position_mismatch",
-                "validate_policy_dispatch",
+                HostCode::PolicyFactPositionMismatch,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         if reason_chain.id != intent.reason_chain_id
@@ -1479,15 +1606,13 @@ impl PolicyHost {
             || reason_chain.reasons.is_empty()
         {
             return Err(request(
-                "policy_reason_chain_mismatch",
-                "validate_policy_dispatch",
+                HostCode::PolicyReasonChainMismatch,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
-        if reason_chain
-            .reasons
-            .iter()
-            .any(|reason| reason.code == "failure_retry_immediate")
-        {
+        if reason_chain.reasons.iter().any(|reason| {
+            reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+        }) {
             self.control
                 .validate_immediate_retry(&active.compiled, intent, context.now_unix_ms)?;
         }
@@ -1497,14 +1622,14 @@ impl PolicyHost {
             .any(|approval| !context.approval_fact_ids.contains(approval))
         {
             return Err(request(
-                "policy_approval_fact_missing",
-                "validate_policy_dispatch",
+                HostCode::PolicyApprovalFactMissing,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         if context.fencing_owner_epoch != owner_epoch || !intent.prerequisites.fencing_required {
             return Err(request(
-                "policy_fencing_mismatch",
-                "validate_policy_dispatch",
+                HostCode::PolicyFencingMismatch,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         if context.now_unix_ms < intent.prerequisites.evaluated_at_unix_ms
@@ -1513,7 +1638,10 @@ impl PolicyHost {
                 .facts_fresh_until_unix_ms
                 .is_some_and(|expires| context.now_unix_ms > expires)
         {
-            return Err(request("policy_facts_stale", "validate_policy_dispatch"));
+            return Err(request(
+                HostCode::PolicyFactsStale,
+                HostLocation::ValidatePolicyDispatch,
+            ));
         }
         if intent.prerequisites.daily_limit == 0
             || intent.prerequisites.window_iteration_limit == 0
@@ -1521,8 +1649,8 @@ impl PolicyHost {
             || intent.expected_duration_ms > intent.prerequisites.max_runtime_ms
         {
             return Err(request(
-                "policy_budget_exhausted",
-                "validate_policy_dispatch",
+                HostCode::PolicyBudgetExhausted,
+                HostLocation::ValidatePolicyDispatch,
             ));
         }
         Ok(active.generation.clone())
@@ -1538,8 +1666,8 @@ impl PolicyHost {
         };
         if seen.data != dispatch_event_data(intent, reason_chain)? {
             return Err(fatal(
-                "policy_decision_identity_conflict",
-                "replay_policy_dispatch",
+                HostCode::PolicyDecisionIdentityConflict,
+                HostLocation::ReplayPolicyDispatch,
             ));
         }
         let catalog = self
@@ -1560,10 +1688,12 @@ impl PolicyHost {
         now_unix_ms: u64,
         suspension_lift: &SuspensionLiftView<'_>,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| request("policy_catalog_unavailable", "reserve_policy_budget"))?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::ReservePolicyBudget,
+            )
+        })?;
         self.control.preview_admission_lifted(
             &active.compiled,
             intent,
@@ -1594,18 +1724,19 @@ impl PolicyHost {
         admission: &PolicyAdmissionRecord,
         reason_chain: &DecisionReasonChain,
     ) -> RuntimeHostResult<()> {
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| request("policy_catalog_unavailable", "commit_policy_budget"))?;
+        let active = self.active.as_ref().ok_or_else(|| {
+            request(
+                SharedCode::PolicyCatalogUnavailable,
+                HostLocation::CommitPolicyBudget,
+            )
+        })?;
         self.control.commit_admission(
             &active.compiled,
             intent,
             admission,
-            reason_chain
-                .reasons
-                .iter()
-                .any(|reason| reason.code == "failure_retry_immediate"),
+            reason_chain.reasons.iter().any(|reason| {
+                reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+            }),
         )?;
         // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
         self.eligibility
@@ -1628,8 +1759,8 @@ impl PolicyHost {
         let EventPayload::Policy(PolicyPayload::DispatchIntent(intent_payload)) = intent.payload()
         else {
             return Err(fatal(
-                "policy_admission_event_invalid",
-                "apply_policy_admission_events",
+                HostCode::PolicyAdmissionEventInvalid,
+                HostLocation::ApplyPolicyAdmissionEvents,
             ));
         };
         let (decision_id, mut record) = self.seen_intent(intent, intent_payload)?;
@@ -1642,15 +1773,15 @@ impl PolicyHost {
             }
             _ => {
                 return Err(fatal(
-                    "policy_admission_event_invalid",
-                    "apply_policy_admission_events",
+                    HostCode::PolicyAdmissionEventInvalid,
+                    HostLocation::ApplyPolicyAdmissionEvents,
                 ));
             }
         };
         if outcome_payload.decision_id() != decision_id {
             return Err(fatal(
-                "policy_dispatch_intent_missing",
-                "apply_policy_admission_events",
+                HostCode::PolicyDispatchIntentMissing,
+                HostLocation::ApplyPolicyAdmissionEvents,
             ));
         }
         transition_record(
@@ -1664,14 +1795,14 @@ impl PolicyHost {
             Some(admitted) => {
                 let admission = outcome_payload.admission().ok_or_else(|| {
                     fatal(
-                        "policy_dispatch_admission_missing",
-                        "apply_policy_admission_events",
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::ApplyPolicyAdmissionEvents,
                     )
                 })?;
                 if admission != admitted {
                     return Err(fatal(
-                        "policy_budget_receipt_mismatch",
-                        "apply_policy_admission_events",
+                        HostCode::PolicyBudgetReceiptMismatch,
+                        HostLocation::ApplyPolicyAdmissionEvents,
                     ));
                 }
                 record.admission = Some(admission.clone());
@@ -1692,8 +1823,8 @@ impl PolicyHost {
         )?;
         if pinned.is_some() && self.pinned_dispatches.contains_key(&decision_id) {
             return Err(fatal(
-                "policy_admission_event_invalid",
-                "apply_policy_admission_events",
+                HostCode::PolicyAdmissionEventInvalid,
+                HostLocation::ApplyPolicyAdmissionEvents,
             ));
         }
         insert_seen_intent(
@@ -1726,20 +1857,25 @@ impl PolicyHost {
         let dispatch = self
             .seen_dispatches
             .get(context.decision_id())
-            .ok_or_else(|| request("policy_run_dispatch_unknown", "validate_policy_run_context"))?;
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyRunDispatchUnknown,
+                    HostLocation::ValidatePolicyRunContext,
+                )
+            })?;
         let expected_data = dispatch_event_data(&context.intent, &context.reason_chain)?;
         let pinned = self.pinned_dispatches.get(context.decision_id());
         if dispatch.data != expected_data || dispatch.admission.as_ref() != Some(&context.admission)
         {
             return Err(fatal(
-                "policy_run_context_mismatch",
-                "validate_policy_run_context",
+                HostCode::PolicyRunContextMismatch,
+                HostLocation::ValidatePolicyRunContext,
             ));
         }
         if dispatch.lifecycle != DispatchLifecycle::Admitted || pinned != Some(&context.catalog) {
             return Err(request(
-                "policy_run_not_admitted",
-                "validate_policy_run_context",
+                HostCode::PolicyRunNotAdmitted,
+                HostLocation::ValidatePolicyRunContext,
             ));
         }
         Ok(())
@@ -1753,8 +1889,8 @@ impl PolicyHost {
         let loaded = self.store.load_generation(context.catalog.catalog_hash())?;
         if loaded.generation() != &context.catalog {
             return Err(fatal(
-                "policy_run_catalog_identity_mismatch",
-                "read_policy_outcome_keys",
+                HostCode::PolicyRunCatalogIdentityMismatch,
+                HostLocation::ReadPolicyOutcomeKeys,
             ));
         }
         Ok(loaded
@@ -1769,7 +1905,12 @@ impl PolicyHost {
         let dispatch = self
             .seen_dispatches
             .get(context.decision_id())
-            .ok_or_else(|| request("policy_run_dispatch_unknown", "read_policy_outcome_keys"))?;
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyRunDispatchUnknown,
+                    HostLocation::ReadPolicyOutcomeKeys,
+                )
+            })?;
         let expected_data = dispatch_event_data(&context.intent, &context.reason_chain)?;
         if dispatch.data != expected_data
             || dispatch.admission.as_ref() != Some(&context.admission)
@@ -1777,15 +1918,15 @@ impl PolicyHost {
             || self.pinned_dispatches.contains_key(context.decision_id())
         {
             return Err(fatal(
-                "policy_run_completed_context_mismatch",
-                "read_policy_outcome_keys",
+                HostCode::PolicyRunCompletedContextMismatch,
+                HostLocation::ReadPolicyOutcomeKeys,
             ));
         }
         let loaded = self.store.load_generation(context.catalog.catalog_hash())?;
         if loaded.generation() != &context.catalog {
             return Err(fatal(
-                "policy_run_catalog_identity_mismatch",
-                "read_policy_outcome_keys",
+                HostCode::PolicyRunCatalogIdentityMismatch,
+                HostLocation::ReadPolicyOutcomeKeys,
             ));
         }
         Ok(loaded
@@ -1808,32 +1949,46 @@ impl PolicyHost {
                 keys.insert(task.id.clone(), referenced);
             }
         }
-        let mut completed_runs = BTreeMap::new();
-        for dispatch in self
+        // Workflow #399: a pair's latest completion alone decides its outcome. A completion
+        // carries a run identity only when its own catalog referenced the task's outcome, so a
+        // latest completion without one means the current catalog references an outcome the
+        // pair has not produced yet: the pair has no usable outcome (the evaluator reads it as
+        // `outcome_missing`) until the task completes under a referencing catalog.
+        // Workflow #400: the same holds for a latest completion whose outcome key the current
+        // catalog no longer lists for the task. That key is known only from the authoritative
+        // outcome, so the run stays in `completed_runs` and the projection
+        // (`project_authoritative_policy_inputs_with_gaps_under_gate`) leaves the pair out.
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for (sequence, dispatch) in self
             .seen_dispatches
             .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
             .filter(|dispatch| keys.contains_key(&dispatch.data.task_id))
+            .filter_map(completion_of)
         {
-            let completed = dispatch.completed_run.clone().ok_or_else(|| {
-                fatal(
-                    "policy_run_identity_missing",
-                    "snapshot_policy_scheduling_outcomes",
-                )
-            })?;
             let key = (
-                completed.catalog_task_id.clone(),
-                completed.instance_alias.clone(),
+                dispatch.data.task_id.as_str(),
+                dispatch.data.instance_id.as_str(),
             );
-            if completed_runs
+            if latest
                 .get(&key)
-                .is_none_or(|current: &CompletedPolicyRunIdentity| {
-                    current.completion_sequence < completed.completion_sequence
-                })
+                .is_none_or(|(current, _)| *current < sequence)
             {
-                completed_runs.insert(key, completed);
+                latest.insert(key, (sequence, dispatch));
             }
         }
+        let completed_runs = latest
+            .into_values()
+            .filter_map(|(_, dispatch)| dispatch.completed_run.clone())
+            .map(|completed| {
+                (
+                    (
+                        completed.catalog_task_id.clone(),
+                        completed.instance_alias.clone(),
+                    ),
+                    completed,
+                )
+            })
+            .collect();
         Ok(PolicyOutcomeKeySnapshot {
             generation: Some(active.generation.clone()),
             keys,
@@ -1847,8 +2002,8 @@ impl PolicyHost {
     ) -> RuntimeHostResult<()> {
         if &self.outcome_key_snapshot()? != snapshot {
             return Err(request(
-                "policy_outcome_snapshot_changed",
-                "validate_policy_outcome_key_snapshot",
+                HostCode::PolicyOutcomeSnapshotChanged,
+                HostLocation::ValidatePolicyOutcomeKeySnapshot,
             ));
         }
         Ok(())
@@ -1886,39 +2041,45 @@ impl PolicyHost {
     /// Workflow #191 A2 / #330 H1: each (catalog task, instance) pair's latest completed run.
     /// A pair's authoritative outcome is decided by its latest run alone, the same result as the
     /// online commit/clear sequence; the limit counts distinct pairs.
+    ///
+    /// Workflow #399: the latest completion is taken before its run identity is read. A pair
+    /// whose latest completion has none (its catalog did not reference the task's outcome) has
+    /// no authoritative outcome and is not counted, so an older run never stands for it.
     pub(crate) fn latest_completed_policy_runs(
         &self,
         limit: usize,
     ) -> RuntimeHostResult<Vec<CompletedPolicyRunIdentity>> {
-        let mut latest = BTreeMap::<(&str, &str), &CompletedPolicyRunIdentity>::new();
-        for run in self
-            .seen_dispatches
-            .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
-            .filter_map(|dispatch| dispatch.completed_run.as_ref())
-        {
-            let key = (run.catalog_task_id.as_str(), run.instance_alias.as_str());
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
+            let key = (
+                dispatch.data.task_id.as_str(),
+                dispatch.data.instance_id.as_str(),
+            );
             match latest.get(&key) {
                 // A completion sequence is the completion event's own; equal means corruption.
-                Some(existing) if existing.completion_sequence == run.completion_sequence => {
+                Some((existing, _)) if *existing == sequence => {
                     return Err(fatal(
-                        "policy_outcome_replay_order_conflict",
-                        "recover_policy_scheduling_outcomes",
+                        HostCode::PolicyOutcomeReplayOrderConflict,
+                        HostLocation::RecoverPolicySchedulingOutcomes,
                     ));
                 }
-                Some(existing) if existing.completion_sequence > run.completion_sequence => {}
-                None if latest.len() >= limit => {
-                    return Err(fatal(
-                        "policy_scheduling_outcome_capacity_exceeded",
-                        "recover_policy_scheduling_outcomes",
-                    ));
-                }
+                Some((existing, _)) if *existing > sequence => {}
                 _ => {
-                    latest.insert(key, run);
+                    latest.insert(key, (sequence, dispatch));
                 }
             }
         }
-        Ok(latest.into_values().cloned().collect())
+        let runs = latest
+            .into_values()
+            .filter_map(|(_, dispatch)| dispatch.completed_run.as_ref())
+            .collect::<Vec<_>>();
+        if runs.len() > limit {
+            return Err(fatal(
+                HostCode::PolicySchedulingOutcomeCapacityExceeded,
+                HostLocation::RecoverPolicySchedulingOutcomes,
+            ));
+        }
+        Ok(runs.into_iter().cloned().collect())
     }
 
     pub(crate) fn admitted_at(&self, decision_id: &str) -> RuntimeHostResult<u64> {
@@ -1928,8 +2089,8 @@ impl PolicyHost {
             .map(|admission| admission.activity.admitted_at_unix_ms)
             .ok_or_else(|| {
                 request(
-                    "policy_dispatch_admission_missing",
-                    "read_policy_admission_time",
+                    HostCode::PolicyDispatchAdmissionMissing,
+                    HostLocation::ReadPolicyAdmissionTime,
                 )
             })
     }
@@ -1945,8 +2106,8 @@ impl PolicyHost {
                     .map(|admission| admission.activity.admitted_at_unix_ms)
                     .ok_or_else(|| {
                         fatal(
-                            "policy_dispatch_admission_missing",
-                            "recover_policy_dispatch_clocks",
+                            HostCode::PolicyDispatchAdmissionMissing,
+                            HostLocation::RecoverPolicyDispatchClocks,
                         )
                     })?;
                 Ok((decision_id.clone(), admitted_at_unix_ms))
@@ -1959,17 +2120,19 @@ impl PolicyHost {
         decision_id: &str,
         input: &PolicyExecutionInput,
     ) -> RuntimeHostResult<Option<PolicyExecutionEventData>> {
-        let dispatch = self
-            .seen_dispatches
-            .get(decision_id)
-            .ok_or_else(|| request("policy_dispatch_unknown", "replay_policy_execution_outcome"))?;
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            request(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReplayPolicyExecutionOutcome,
+            )
+        })?;
         let Some(existing) = &dispatch.execution else {
             return Ok(None);
         };
         if !execution_input_matches(&existing.outcome, input) {
             return Err(fatal(
-                "policy_execution_identity_conflict",
-                "replay_policy_execution_outcome",
+                HostCode::PolicyExecutionIdentityConflict,
+                HostLocation::ReplayPolicyExecutionOutcome,
             ));
         }
         Ok(Some(existing.clone()))
@@ -1979,7 +2142,12 @@ impl PolicyHost {
         self.seen_dispatches
             .get(decision_id)
             .map(|dispatch| dispatch.data.instance_id.as_str())
-            .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_dispatch_instance"))
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyDispatchUnknown,
+                    HostLocation::ReadPolicyDispatchInstance,
+                )
+            })
     }
 
     pub(crate) fn active_performance_workloads(
@@ -1988,13 +2156,17 @@ impl PolicyHost {
         let mut workloads = BTreeMap::new();
         for dispatch in self
             .seen_dispatches
-            .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Admitted)
+            .iter()
+            .filter(|(decision_id, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted
+                    && !self.quarantined_dispatches.contains(*decision_id)
+            })
+            .map(|(_, dispatch)| dispatch)
         {
             let admission = dispatch.admission.as_ref().ok_or_else(|| {
                 fatal(
-                    "policy_dispatch_admission_missing",
-                    "read_active_performance_workloads",
+                    HostCode::PolicyDispatchAdmissionMissing,
+                    HostLocation::ReadActivePerformanceWorkloads,
                 )
             })?;
             let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2009,8 +2181,8 @@ impl PolicyHost {
                 .is_some()
             {
                 return Err(fatal(
-                    "policy_instance_dispatch_conflict",
-                    "read_active_performance_workloads",
+                    HostCode::PolicyInstanceDispatchConflict,
+                    HostLocation::ReadActivePerformanceWorkloads,
                 ));
             }
         }
@@ -2023,26 +2195,26 @@ impl PolicyHost {
     ) -> RuntimeHostResult<(PolicyDispatchEventData, PolicyAdmissionRecord)> {
         if !self.pinned_dispatches.contains_key(decision_id) {
             return Err(request(
-                "policy_dispatch_not_pinned",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchNotPinned,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
             fatal(
-                "policy_dispatch_state_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchStateIncomplete,
+                HostLocation::CompletePolicyDispatch,
             )
         })?;
         let admission = dispatch.admission.clone().ok_or_else(|| {
             fatal(
-                "policy_dispatch_admission_missing",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::CompletePolicyDispatch,
             )
         })?;
         if dispatch.execution.is_none() {
             return Err(request(
-                "policy_execution_outcome_missing",
-                "complete_policy_dispatch",
+                HostCode::PolicyExecutionOutcomeMissing,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         Ok((dispatch.data.clone(), admission))
@@ -2054,20 +2226,20 @@ impl PolicyHost {
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
             fatal(
-                "policy_dispatch_state_incomplete",
-                "read_policy_execution_outcome",
+                HostCode::PolicyDispatchStateIncomplete,
+                HostLocation::ReadPolicyExecutionOutcome,
             )
         })?;
         if dispatch.lifecycle != DispatchLifecycle::Admitted {
             return Err(request(
-                "policy_dispatch_not_admitted",
-                "read_policy_execution_outcome",
+                HostCode::PolicyDispatchNotAdmitted,
+                HostLocation::ReadPolicyExecutionOutcome,
             ));
         }
         dispatch.execution.clone().ok_or_else(|| {
             fatal(
-                "policy_execution_outcome_missing",
-                "read_policy_execution_outcome",
+                HostCode::PolicyExecutionOutcomeMissing,
+                HostLocation::ReadPolicyExecutionOutcome,
             )
         })
     }
@@ -2079,8 +2251,8 @@ impl PolicyHost {
     ) -> RuntimeHostResult<()> {
         let dispatch = self.seen_dispatches.get_mut(decision_id).ok_or_else(|| {
             fatal(
-                "policy_dispatch_state_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchStateIncomplete,
+                HostLocation::CompletePolicyDispatch,
             )
         })?;
         if dispatch.lifecycle != DispatchLifecycle::Admitted
@@ -2088,14 +2260,14 @@ impl PolicyHost {
             || dispatch.completed_sequence.is_some()
         {
             return Err(fatal(
-                "policy_dispatch_completion_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         if !self.pinned_dispatches.contains_key(decision_id) {
             return Err(request(
-                "policy_dispatch_not_pinned",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchNotPinned,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         // The completion gets the checks recovery runs on it (R5, R8; Workflow #191 U5-F1)
@@ -2103,34 +2275,34 @@ impl PolicyHost {
         let EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) = completion.payload()
         else {
             return Err(fatal(
-                "policy_dispatch_completion_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::CompletePolicyDispatch,
             ));
         };
         if payload.decision_id() != decision_id {
             return Err(fatal(
-                "policy_dispatch_completion_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         if event_data(payload)? != dispatch.data
             || completion.sequence() <= dispatch.intent_sequence
         {
             return Err(fatal(
-                "policy_dispatch_lifecycle_invalid",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchLifecycleInvalid,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         if payload.admission() != dispatch.admission.as_ref() {
             return Err(fatal(
-                "policy_dispatch_completion_incomplete",
-                "complete_policy_dispatch",
+                HostCode::PolicyDispatchCompletionIncomplete,
+                HostLocation::CompletePolicyDispatch,
             ));
         }
         let execution = dispatch.execution.as_ref().ok_or_else(|| {
             fatal(
-                "policy_execution_outcome_missing",
-                "complete_policy_dispatch",
+                HostCode::PolicyExecutionOutcomeMissing,
+                HostLocation::CompletePolicyDispatch,
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2155,16 +2327,18 @@ impl PolicyHost {
     }
 
     pub(crate) fn dispatch_needs_completion(&self, decision_id: &str) -> RuntimeHostResult<bool> {
-        let dispatch = self
-            .seen_dispatches
-            .get(decision_id)
-            .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_dispatch_lifecycle"))?;
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            request(
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::ReadPolicyDispatchLifecycle,
+            )
+        })?;
         match dispatch.lifecycle {
             DispatchLifecycle::Admitted => Ok(true),
             DispatchLifecycle::Completed => Ok(false),
             DispatchLifecycle::Intent | DispatchLifecycle::Rejected => Err(request(
-                "policy_dispatch_not_admitted",
-                "read_policy_dispatch_lifecycle",
+                HostCode::PolicyDispatchNotAdmitted,
+                HostLocation::ReadPolicyDispatchLifecycle,
             )),
         }
     }
@@ -2179,29 +2353,29 @@ impl PolicyHost {
     ) -> RuntimeHostResult<PolicyExecutionPreparation> {
         let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
             request(
-                "policy_dispatch_unknown",
-                "prepare_policy_execution_outcome",
+                HostCode::PolicyDispatchUnknown,
+                HostLocation::PreparePolicyExecutionOutcome,
             )
         })?;
         if let Some(existing) = &dispatch.execution {
             if !execution_input_matches(&existing.outcome, input) {
                 return Err(fatal(
-                    "policy_execution_identity_conflict",
-                    "prepare_policy_execution_outcome",
+                    HostCode::PolicyExecutionIdentityConflict,
+                    HostLocation::PreparePolicyExecutionOutcome,
                 ));
             }
             return Ok(PolicyExecutionPreparation::Replay(existing.clone()));
         }
         if dispatch.lifecycle != DispatchLifecycle::Admitted {
             return Err(request(
-                "policy_dispatch_not_admitted",
-                "prepare_policy_execution_outcome",
+                HostCode::PolicyDispatchNotAdmitted,
+                HostLocation::PreparePolicyExecutionOutcome,
             ));
         }
         let admission = dispatch.admission.as_ref().ok_or_else(|| {
             fatal(
-                "policy_dispatch_admission_missing",
-                "prepare_policy_execution_outcome",
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::PreparePolicyExecutionOutcome,
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2228,24 +2402,29 @@ impl PolicyHost {
         let dispatch = self
             .seen_dispatches
             .get_mut(&data.decision_id)
-            .ok_or_else(|| fatal("policy_dispatch_unknown", "commit_policy_execution_outcome"))?;
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchUnknown,
+                    HostLocation::CommitPolicyExecutionOutcome,
+                )
+            })?;
         if dispatch.execution.is_some() {
             return Err(fatal(
-                "policy_execution_duplicate",
-                "commit_policy_execution_outcome",
+                HostCode::PolicyExecutionDuplicate,
+                HostLocation::CommitPolicyExecutionOutcome,
             ));
         }
         // Recovery accepts an execution only on an admitted dispatch (R9, Workflow #191 U5-F1).
         if dispatch.lifecycle != DispatchLifecycle::Admitted {
             return Err(fatal(
-                "policy_execution_lifecycle_invalid",
-                "commit_policy_execution_outcome",
+                HostCode::PolicyExecutionLifecycleInvalid,
+                HostLocation::CommitPolicyExecutionOutcome,
             ));
         }
         let admission = dispatch.admission.as_ref().ok_or_else(|| {
             fatal(
-                "policy_dispatch_admission_missing",
-                "commit_policy_execution_outcome",
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::CommitPolicyExecutionOutcome,
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2281,8 +2460,8 @@ impl PolicyHost {
             )
         {
             return Err(fatal(
-                "policy_detection_budget_unexpected",
-                "commit_policy_detection_budget",
+                SharedCode::PolicyDetectionBudgetUnexpected,
+                HostLocation::CommitPolicyDetectionBudget,
             ));
         }
         if let Some(budget) = &data.detection_budget
@@ -2314,15 +2493,15 @@ impl PolicyHost {
             .find(|profile| profile.id == budget.profile_id)
             .ok_or_else(|| {
                 fatal(
-                    "policy_detection_budget_profile_mismatch",
-                    "validate_policy_detection_budget",
+                    HostCode::PolicyDetectionBudgetProfileMismatch,
+                    HostLocation::ValidatePolicyDetectionBudget,
                 )
             })?;
         let (_, expected_window_id) = active_activity_window(profile, data.observed_at_unix_ms)
             .map_err(|_| {
                 fatal(
-                    "policy_detection_budget_window_mismatch",
-                    "validate_policy_detection_budget",
+                    HostCode::PolicyDetectionBudgetWindowMismatch,
+                    HostLocation::ValidatePolicyDetectionBudget,
                 )
             })?;
         let instance_scope_matches = match &profile.scope {
@@ -2336,8 +2515,8 @@ impl PolicyHost {
             || budget.reservation_ms != profile.detection_budget.expected_duration_ms
         {
             return Err(fatal(
-                "policy_detection_budget_profile_mismatch",
-                "validate_policy_detection_budget",
+                HostCode::PolicyDetectionBudgetProfileMismatch,
+                HostLocation::ValidatePolicyDetectionBudget,
             ));
         }
         Ok(())
@@ -2369,24 +2548,29 @@ impl PolicyHost {
     }
 
     fn recover_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        let mut events = Vec::new();
-        for event_type in [
-            EventType::PolicyDispatchIntent,
-            EventType::PolicyDispatchAdmitted,
-            EventType::PolicyDispatchRejected,
-            EventType::PolicyDispatchCompleted,
-            EventType::PolicyExecutionRecorded,
-        ] {
-            events.extend(
-                ledger
-                    .query(EventQuery {
-                        event_type: Some(event_type),
-                        ..EventQuery::default()
-                    })
-                    .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?,
-            );
-        }
-        events.sort_by_key(|event| event.sequence());
+        // Workflow #381 R4a: each dispatch type through one position, in bounded pages.
+        let events = ledger
+            .latest_sequence()
+            .and_then(|through| {
+                read_event_types(
+                    ledger,
+                    &[
+                        EventType::PolicyDispatchIntent,
+                        EventType::PolicyDispatchAdmitted,
+                        EventType::PolicyDispatchRejected,
+                        EventType::PolicyDispatchCompleted,
+                        EventType::PolicyExecutionRecorded,
+                    ],
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+            })
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyRecoveryFailed,
+                    HostLocation::RecoverPolicyDispatches,
+                )
+            })?;
         let mut seen_dispatches = BTreeMap::new();
         let mut dispatch_order = BTreeMap::new();
         let mut control = PolicyControlState::default();
@@ -2415,8 +2599,8 @@ impl PolicyHost {
                     )?;
                     let admission = payload.admission().cloned().ok_or_else(|| {
                         fatal(
-                            "policy_dispatch_admission_missing",
-                            "recover_policy_dispatches",
+                            HostCode::PolicyDispatchAdmissionMissing,
+                            HostLocation::RecoverPolicyDispatches,
                         )
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2425,11 +2609,10 @@ impl PolicyHost {
                         &catalog.compiled,
                         &intent,
                         &admission,
-                        dispatch
-                            .data
-                            .reasons
-                            .iter()
-                            .any(|reason| reason.code == "failure_retry_immediate"),
+                        dispatch.data.reasons.iter().any(|reason| {
+                            reason.code
+                                == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+                        }),
                     )?;
                     dispatch.admission = Some(admission);
                 }
@@ -2454,14 +2637,14 @@ impl PolicyHost {
                         || payload.admission() != dispatch.admission.as_ref()
                     {
                         return Err(fatal(
-                            "policy_dispatch_completion_incomplete",
-                            "recover_policy_dispatches",
+                            HostCode::PolicyDispatchCompletionIncomplete,
+                            HostLocation::RecoverPolicyDispatches,
                         ));
                     }
                     let execution = dispatch.execution.as_ref().ok_or_else(|| {
                         fatal(
-                            "policy_execution_outcome_missing",
-                            "recover_policy_dispatches",
+                            HostCode::PolicyExecutionOutcomeMissing,
+                            HostLocation::RecoverPolicyDispatches,
                         )
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2485,20 +2668,23 @@ impl PolicyHost {
                         seen_dispatches
                             .get_mut(payload.decision_id())
                             .ok_or_else(|| {
-                                fatal("policy_dispatch_intent_missing", "recover_policy_execution")
+                                fatal(
+                                    HostCode::PolicyDispatchIntentMissing,
+                                    ContractLocation::RecoverPolicyExecution,
+                                )
                             })?;
                     if dispatch.lifecycle != DispatchLifecycle::Admitted
                         || dispatch.execution.is_some()
                     {
                         return Err(fatal(
-                            "policy_execution_lifecycle_invalid",
-                            "recover_policy_execution",
+                            HostCode::PolicyExecutionLifecycleInvalid,
+                            ContractLocation::RecoverPolicyExecution,
                         ));
                     }
                     let admission = dispatch.admission.as_ref().ok_or_else(|| {
                         fatal(
-                            "policy_dispatch_admission_missing",
-                            "recover_policy_execution",
+                            HostCode::PolicyDispatchAdmissionMissing,
+                            ContractLocation::RecoverPolicyExecution,
                         )
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
@@ -2508,8 +2694,8 @@ impl PolicyHost {
                 }
                 PolicyPayload::PlanningSignalObserved(_) => {
                     return Err(fatal(
-                        "policy_recovery_query_mismatch",
-                        "recover_policy_dispatches",
+                        SharedCode::PolicyRecoveryQueryMismatch,
+                        HostLocation::RecoverPolicyDispatches,
                     ));
                 }
             }
@@ -2542,8 +2728,8 @@ impl PolicyHost {
         let mut after_sequence = self.store.load_planning_checkpoint()?.unwrap_or(0);
         if after_sequence > latest {
             return Err(fatal(
-                "policy_planning_checkpoint_ahead",
-                "recover_policy_planning_signals",
+                SharedCode::PolicyPlanningCheckpointAhead,
+                HostLocation::RecoverPolicyPlanningSignals,
             ));
         }
         while after_sequence < latest {
@@ -2606,8 +2792,8 @@ impl DetectionQuotaState {
         }
         let next_dispatch = usage.dispatch_used.checked_add(1).ok_or_else(|| {
             fatal(
-                "policy_detection_budget_overflow",
-                "reserve_policy_detection_budget",
+                HostCode::PolicyDetectionBudgetOverflow,
+                HostLocation::ReservePolicyDetectionBudget,
             )
         })?;
         let next_runtime = usage
@@ -2615,8 +2801,8 @@ impl DetectionQuotaState {
             .checked_add(profile.detection_budget.expected_duration_ms)
             .ok_or_else(|| {
                 fatal(
-                    "policy_detection_budget_overflow",
-                    "reserve_policy_detection_budget",
+                    HostCode::PolicyDetectionBudgetOverflow,
+                    HostLocation::ReservePolicyDetectionBudget,
                 )
             })?;
         let exhausted = next_dispatch > profile.detection_budget.window_dispatch_limit
@@ -2659,15 +2845,15 @@ impl DetectionQuotaState {
                 Ok(())
             } else {
                 Err(fatal(
-                    "policy_detection_budget_unexpected",
-                    "commit_policy_detection_budget",
+                    SharedCode::PolicyDetectionBudgetUnexpected,
+                    HostLocation::CommitPolicyDetectionBudget,
                 ))
             };
         }
         let budget = data.detection_budget.as_ref().ok_or_else(|| {
             fatal(
-                "policy_detection_budget_missing",
-                "commit_policy_detection_budget",
+                SharedCode::PolicyDetectionBudgetMissing,
+                HostLocation::CommitPolicyDetectionBudget,
             )
         })?;
         let key = (data.instance_id.clone(), budget.window_id.clone());
@@ -2679,8 +2865,8 @@ impl DetectionQuotaState {
             PolicyPlanningSignalKind::DetectionReserved => {
                 let expected_dispatch = current.dispatch_used.checked_add(1).ok_or_else(|| {
                     fatal(
-                        "policy_detection_budget_overflow",
-                        "commit_policy_detection_budget",
+                        HostCode::PolicyDetectionBudgetOverflow,
+                        HostLocation::CommitPolicyDetectionBudget,
                     )
                 })?;
                 let expected_runtime = current
@@ -2688,8 +2874,8 @@ impl DetectionQuotaState {
                     .checked_add(budget.reservation_ms)
                     .ok_or_else(|| {
                         fatal(
-                            "policy_detection_budget_overflow",
-                            "commit_policy_detection_budget",
+                            HostCode::PolicyDetectionBudgetOverflow,
+                            HostLocation::CommitPolicyDetectionBudget,
                         )
                     })?;
                 if budget.dispatch_used != expected_dispatch
@@ -2698,8 +2884,8 @@ impl DetectionQuotaState {
                     || budget.runtime_reserved_ms > budget.runtime_limit_ms
                 {
                     return Err(fatal(
-                        "policy_detection_budget_receipt_mismatch",
-                        "commit_policy_detection_budget",
+                        HostCode::PolicyDetectionBudgetReceiptMismatch,
+                        HostLocation::CommitPolicyDetectionBudget,
                     ));
                 }
                 self.cache_usage(
@@ -2720,8 +2906,8 @@ impl DetectionQuotaState {
                             .is_some_and(|next| next <= budget.runtime_limit_ms)
                 {
                     return Err(fatal(
-                        "policy_detection_budget_receipt_mismatch",
-                        "commit_policy_detection_budget",
+                        HostCode::PolicyDetectionBudgetReceiptMismatch,
+                        HostLocation::CommitPolicyDetectionBudget,
                     ));
                 }
             }
@@ -2740,14 +2926,14 @@ impl DetectionQuotaState {
         while self.windows.len() > MAX_DETECTION_QUOTA_CACHE_WINDOWS {
             let oldest = self.recency.pop_front().ok_or_else(|| {
                 fatal(
-                    "policy_detection_quota_cache_invariant",
-                    "cache_policy_detection_quota",
+                    HostCode::PolicyDetectionQuotaCacheInvariant,
+                    HostLocation::CachePolicyDetectionQuota,
                 )
             })?;
             if self.windows.remove(&oldest).is_none() {
                 return Err(fatal(
-                    "policy_detection_quota_cache_invariant",
-                    "cache_policy_detection_quota",
+                    HostCode::PolicyDetectionQuotaCacheInvariant,
+                    HostLocation::CachePolicyDetectionQuota,
                 ));
             }
         }
@@ -2773,8 +2959,8 @@ fn preview_detection_planning_signals(
 ) -> RuntimeHostResult<Vec<PolicyPlanningSignalEventData>> {
     if now_unix_ms == 0 {
         return Err(fatal(
-            "policy_detection_time_invalid",
-            "plan_policy_detection",
+            HostCode::PolicyDetectionTimeInvalid,
+            HostLocation::PlanPolicyDetection,
         ));
     }
     let ordinary_instances = pending_dispatch_intents
@@ -2795,9 +2981,19 @@ fn preview_detection_planning_signals(
             .instances
             .iter()
             .find(|instance| instance.instance_id == instance_id)
-            .ok_or_else(|| fatal("policy_detection_instance_missing", "plan_policy_detection"))?;
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDetectionInstanceMissing,
+                    HostLocation::PlanPolicyDetection,
+                )
+            })?;
         let profile = matching_activity_profile(&catalog.catalog().activity.profiles, instance)
-            .ok_or_else(|| request("policy_activity_profile_missing", "plan_policy_detection"))?;
+            .ok_or_else(|| {
+                request(
+                    HostCode::PolicyActivityProfileMissing,
+                    HostLocation::PlanPolicyDetection,
+                )
+            })?;
         for suggestion in &decision.detection_suggestions {
             let reservation_id = detection_signal_id(
                 "reserved",
@@ -2819,7 +3015,8 @@ fn preview_detection_planning_signals(
             let (_, window_id) = match active_activity_window(profile, now_unix_ms) {
                 Ok(window) => window,
                 Err(error)
-                    if !error.is_fatal() && error.code() == "policy_activity_window_closed" =>
+                    if !error.is_fatal()
+                        && error.code() == HostCode::PolicyActivityWindowClosed.as_str() =>
                 {
                     continue;
                 }
@@ -2829,7 +3026,9 @@ fn preview_detection_planning_signals(
             let (kind, budget) =
                 match staged.preview(profile, catalog.catalog_hash(), instance_id, now_unix_ms) {
                     Ok(value) => value,
-                    Err(error) if error.code() == "policy_activity_window_closed" => continue,
+                    Err(error) if error.code() == HostCode::PolicyActivityWindowClosed.as_str() => {
+                        continue;
+                    }
                     Err(error) => return Err(error),
                 };
             let signal_id = if kind == PolicyPlanningSignalKind::DetectionQuotaExhausted {
@@ -2924,8 +3123,8 @@ fn event_data(
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
     payload.package_digest().validate().map_err(|_| {
         fatal(
-            "procedure_binding_event_invalid",
-            "recover_policy_dispatches",
+            HostCode::ProcedureBindingEventInvalid,
+            HostLocation::RecoverPolicyDispatches,
         )
     })?;
     {
@@ -2940,8 +3139,8 @@ fn event_data(
             });
         if !valid {
             return Err(fatal(
-                "procedure_binding_event_invalid",
-                "recover_policy_dispatches",
+                HostCode::ProcedureBindingEventInvalid,
+                HostLocation::RecoverPolicyDispatches,
             ));
         }
     }
@@ -2976,14 +3175,14 @@ fn dispatch_event_data(
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
     let package_digest = intent.package_digest.clone().ok_or_else(|| {
         fatal(
-            "procedure_package_digest_missing",
-            "build_policy_dispatch_event",
+            HostCode::ProcedurePackageDigestMissing,
+            HostLocation::BuildPolicyDispatchEvent,
         )
     })?;
     let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
         fatal(
-            "procedure_binding_digest_missing",
-            "build_policy_dispatch_event",
+            HostCode::ProcedureBindingDigestMissing,
+            HostLocation::BuildPolicyDispatchEvent,
         )
     })?;
     Ok(PolicyDispatchEventData {
@@ -3020,8 +3219,8 @@ fn transition_dispatch<'a>(
 ) -> RuntimeHostResult<&'a mut SeenDispatch> {
     let Some(intent) = seen.get_mut(payload.decision_id()) else {
         return Err(fatal(
-            "policy_dispatch_intent_missing",
-            "recover_policy_dispatches",
+            HostCode::PolicyDispatchIntentMissing,
+            HostLocation::RecoverPolicyDispatches,
         ));
     };
     transition_record(intent, payload, expected, next, sequence)?;
@@ -3042,8 +3241,8 @@ fn transition_record(
         || sequence <= intent.intent_sequence
     {
         return Err(fatal(
-            "policy_dispatch_lifecycle_invalid",
-            "recover_policy_dispatches",
+            HostCode::PolicyDispatchLifecycleInvalid,
+            HostLocation::RecoverPolicyDispatches,
         ));
     }
     match next {
@@ -3052,8 +3251,8 @@ fn transition_record(
         DispatchLifecycle::Completed => intent.completed_sequence = Some(sequence),
         DispatchLifecycle::Intent => {
             return Err(fatal(
-                "policy_dispatch_lifecycle_invalid",
-                "recover_policy_dispatches",
+                HostCode::PolicyDispatchLifecycleInvalid,
+                HostLocation::RecoverPolicyDispatches,
             ));
         }
     }
@@ -3070,14 +3269,14 @@ fn check_seen_intent(
 ) -> RuntimeHostResult<()> {
     if seen.contains_key(decision_id) {
         return Err(fatal(
-            "policy_decision_identity_conflict",
-            "recover_policy_dispatches",
+            HostCode::PolicyDecisionIdentityConflict,
+            HostLocation::RecoverPolicyDispatches,
         ));
     }
     if order.contains_key(&sequence) {
         return Err(fatal(
-            "policy_dispatch_sequence_conflict",
-            "recover_policy_dispatches",
+            HostCode::PolicyDispatchSequenceConflict,
+            HostLocation::RecoverPolicyDispatches,
         ));
     }
     Ok(())
@@ -3098,6 +3297,15 @@ fn insert_seen_intent(
     Ok(())
 }
 
+/// A completed dispatch with its completion event's sequence (Workflow #399).
+/// `complete_dispatch` and `transition_record` set the lifecycle and the sequence together.
+fn completion_of(dispatch: &SeenDispatch) -> Option<(u64, &SeenDispatch)> {
+    match (dispatch.lifecycle, dispatch.completed_sequence) {
+        (DispatchLifecycle::Completed, Some(sequence)) => Some((sequence, dispatch)),
+        _ => None,
+    }
+}
+
 fn completed_policy_run_identity(
     event: &PersistedEvent,
     data: &PolicyDispatchEventData,
@@ -3105,14 +3313,14 @@ fn completed_policy_run_identity(
 ) -> RuntimeHostResult<CompletedPolicyRunIdentity> {
     let EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) = event.payload() else {
         return Err(fatal(
-            "policy_dispatch_completion_incomplete",
-            "recover_policy_dispatches",
+            HostCode::PolicyDispatchCompletionIncomplete,
+            HostLocation::RecoverPolicyDispatches,
         ));
     };
     let admission = payload.admission().ok_or_else(|| {
         fatal(
-            "policy_dispatch_admission_missing",
-            "recover_policy_dispatches",
+            HostCode::PolicyDispatchAdmissionMissing,
+            HostLocation::RecoverPolicyDispatches,
         )
     })?;
     let links = event.links();
@@ -3133,8 +3341,8 @@ fn completed_policy_run_identity(
     )
     else {
         return Err(fatal(
-            "policy_run_identity_missing",
-            "recover_policy_dispatches",
+            HostCode::PolicyRunIdentityMissing,
+            HostLocation::RecoverPolicyDispatches,
         ));
     };
     Ok(CompletedPolicyRunIdentity {
@@ -3171,8 +3379,8 @@ fn fold_settlements<'a>(
     for (dispatch, execution) in executed {
         let admission = dispatch.admission.as_ref().ok_or_else(|| {
             fatal(
-                "policy_dispatch_admission_missing",
-                "project_policy_settlement",
+                HostCode::PolicyDispatchAdmissionMissing,
+                HostLocation::ProjectPolicySettlement,
             )
         })?;
         let (succeeded, duration_ms) = match &execution.outcome {
@@ -3235,7 +3443,12 @@ fn control_intent(
         .tasks
         .iter()
         .find(|task| task.id == data.task_id)
-        .ok_or_else(|| fatal("policy_task_missing", "recover_policy_control"))?;
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyTaskMissing,
+                HostLocation::RecoverPolicyControl,
+            )
+        })?;
     Ok(DispatchIntent {
         decision_id: data.decision_id.clone(),
         task_id: data.task_id.clone(),
@@ -3325,8 +3538,12 @@ impl CatalogStore {
     fn open(state_root: &Path, state: Arc<RuntimeStateStore>) -> RuntimeHostResult<Self> {
         let root = state_root.join("policy").join("catalogs");
         let generations = root.join(GENERATIONS_DIR);
-        fs::create_dir_all(&generations)
-            .map_err(|_| fatal("catalog_state_create_failed", "open_catalog_store"))?;
+        fs::create_dir_all(&generations).map_err(|_| {
+            fatal(
+                HostCode::CatalogStateCreateFailed,
+                HostLocation::OpenCatalogStore,
+            )
+        })?;
         let store = Self {
             legacy_active_pointer: root.join(ACTIVE_POINTER_FILE),
             root,
@@ -3351,8 +3568,12 @@ impl CatalogStore {
     }
 
     fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {
-        let compiled = compile_catalog(sources)
-            .map_err(|_| request("catalog_compile_failed", "stage_catalog_generation"))?;
+        let compiled = compile_catalog(sources).map_err(|_| {
+            request(
+                HostCode::CatalogCompileFailed,
+                HostLocation::StageCatalogGeneration,
+            )
+        })?;
         let generation = generation_from(&compiled, sources);
         let path = self.generation_path(&generation.catalog_hash)?;
         if path.exists() {
@@ -3367,8 +3588,8 @@ impl CatalogStore {
         ));
         fs::create_dir(&temporary).map_err(|_| {
             fatal(
-                "catalog_generation_create_failed",
-                "stage_catalog_generation",
+                HostCode::CatalogGenerationCreateFailed,
+                HostLocation::StageCatalogGeneration,
             )
         })?;
         let result = (|| {
@@ -3380,13 +3601,17 @@ impl CatalogStore {
             if let Some(selection) = &sources.selection {
                 write_new_file(&temporary.join("selection.json"), &selection.bytes)?;
             }
-            let manifest = serde_json::to_vec_pretty(&generation)
-                .map_err(|_| fatal("catalog_manifest_encode_failed", "stage_catalog_generation"))?;
+            let manifest = serde_json::to_vec_pretty(&generation).map_err(|_| {
+                fatal(
+                    HostCode::CatalogManifestEncodeFailed,
+                    HostLocation::StageCatalogGeneration,
+                )
+            })?;
             write_new_file(&temporary.join("manifest.json"), &manifest)?;
             fs::rename(&temporary, &path).map_err(|_| {
                 fatal(
-                    "catalog_generation_publish_failed",
-                    "stage_catalog_generation",
+                    HostCode::CatalogGenerationPublishFailed,
+                    HostLocation::StageCatalogGeneration,
                 )
             })?;
             Ok(())
@@ -3409,23 +3634,27 @@ impl CatalogStore {
         };
         if document.schema_version() != CATALOG_STATE_SCHEMA {
             return Err(fatal(
-                "catalog_pointer_version_unsupported",
-                "load_active_catalog",
+                HostCode::CatalogPointerVersionUnsupported,
+                HostLocation::LoadActiveCatalog,
             ));
         }
-        let pointer: CatalogPointer = serde_json::from_slice(document.payload())
-            .map_err(|_| fatal("catalog_pointer_invalid", "load_active_catalog"))?;
+        let pointer: CatalogPointer = serde_json::from_slice(document.payload()).map_err(|_| {
+            fatal(
+                HostCode::CatalogPointerInvalid,
+                HostLocation::LoadActiveCatalog,
+            )
+        })?;
         if pointer.schema_version != CATALOG_STATE_SCHEMA {
             return Err(fatal(
-                "catalog_pointer_version_unsupported",
-                "load_active_catalog",
+                HostCode::CatalogPointerVersionUnsupported,
+                HostLocation::LoadActiveCatalog,
             ));
         }
         let loaded = self.load_generation(&pointer.generation.catalog_hash)?;
         if loaded.generation != pointer.generation {
             return Err(fatal(
-                "catalog_pointer_generation_mismatch",
-                "load_active_catalog",
+                HostCode::CatalogPointerGenerationMismatch,
+                HostLocation::LoadActiveCatalog,
             ));
         }
         Ok(Some(LoadedCatalog::clone(&loaded)))
@@ -3444,7 +3673,12 @@ impl CatalogStore {
         let loaded = self
             .memo
             .lock()
-            .map_err(|_| fatal("runtime_state_poisoned", "load_catalog_generation"))?
+            .map_err(|_| {
+                fatal(
+                    HostCode::RuntimeStatePoisoned,
+                    HostLocation::LoadCatalogGeneration,
+                )
+            })?
             .get(hash);
         let Some(loaded) = loaded else {
             return Ok(None);
@@ -3453,8 +3687,8 @@ impl CatalogStore {
             || loaded.generation.catalog_hash != hash
         {
             return Err(fatal(
-                "catalog_generation_identity_mismatch",
-                "load_catalog_generation",
+                HostCode::CatalogGenerationIdentityMismatch,
+                HostLocation::LoadCatalogGeneration,
             ));
         }
         Ok(Some(loaded))
@@ -3463,7 +3697,12 @@ impl CatalogStore {
     fn memoise_generation(&self, hash: &str, loaded: Arc<LoadedCatalog>) -> RuntimeHostResult<()> {
         self.memo
             .lock()
-            .map_err(|_| fatal("runtime_state_poisoned", "load_catalog_generation"))?
+            .map_err(|_| {
+                fatal(
+                    HostCode::RuntimeStatePoisoned,
+                    HostLocation::LoadCatalogGeneration,
+                )
+            })?
             .insert(hash.to_owned(), loaded);
         Ok(())
     }
@@ -3471,12 +3710,16 @@ impl CatalogStore {
     fn read_generation(&self, hash: &str) -> RuntimeHostResult<LoadedCatalog> {
         let path = self.generation_path(hash)?;
         let manifest = read_bounded(&path.join("manifest.json"), MAX_MANIFEST_BYTES)?;
-        let generation: CatalogGeneration = serde_json::from_slice(&manifest)
-            .map_err(|_| fatal("catalog_manifest_invalid", "load_catalog_generation"))?;
+        let generation: CatalogGeneration = serde_json::from_slice(&manifest).map_err(|_| {
+            fatal(
+                HostCode::CatalogManifestInvalid,
+                HostLocation::LoadCatalogGeneration,
+            )
+        })?;
         if generation.schema_version != CATALOG_STATE_SCHEMA || generation.catalog_hash != hash {
             return Err(fatal(
-                "catalog_generation_identity_mismatch",
-                "load_catalog_generation",
+                HostCode::CatalogGenerationIdentityMismatch,
+                HostLocation::LoadCatalogGeneration,
             ));
         }
         // A generation records its selection document only when it has one; its absence is
@@ -3497,15 +3740,19 @@ impl CatalogStore {
             timeline: self.load_source(&path, &generation, "timeline")?,
             selection,
         };
-        let compiled = compile_catalog(&sources)
-            .map_err(|_| fatal("catalog_generation_invalid", "load_catalog_generation"))?;
+        let compiled = compile_catalog(&sources).map_err(|_| {
+            fatal(
+                HostCode::CatalogGenerationInvalid,
+                HostLocation::LoadCatalogGeneration,
+            )
+        })?;
         if compiled.catalog_hash() != generation.catalog_hash
             || compiled.summary().catalog_id != generation.catalog_id
             || compiled.summary().catalog_version != generation.catalog_version
         {
             return Err(fatal(
-                "catalog_generation_content_mismatch",
-                "load_catalog_generation",
+                HostCode::CatalogGenerationContentMismatch,
+                HostLocation::LoadCatalogGeneration,
             ));
         }
         Ok(LoadedCatalog {
@@ -3550,32 +3797,40 @@ impl CatalogStore {
             .sources
             .iter()
             .find(|record| record.kind == kind)
-            .ok_or_else(|| fatal("catalog_source_missing", "load_catalog_generation"))?;
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::CatalogSourceMissing,
+                    HostLocation::LoadCatalogGeneration,
+                )
+            })?;
         let bytes = read_bounded(
             &path.join(format!("{kind}.json")),
             actingcommand_policy::MAX_DOCUMENT_BYTES,
         )?;
         if sha256(&bytes) != record.sha256 {
             return Err(fatal(
-                "catalog_source_hash_mismatch",
-                "load_catalog_generation",
+                HostCode::CatalogSourceHashMismatch,
+                HostLocation::LoadCatalogGeneration,
             ));
         }
         Ok(CatalogDocumentSource::new(record.source_uri.clone(), bytes))
     }
 
     fn generation_path(&self, hash: &str) -> RuntimeHostResult<PathBuf> {
-        let digest = hash
-            .strip_prefix("sha256:")
-            .ok_or_else(|| request("catalog_hash_invalid", "resolve_catalog_generation"))?;
+        let digest = hash.strip_prefix("sha256:").ok_or_else(|| {
+            request(
+                HostCode::CatalogHashInvalid,
+                HostLocation::ResolveCatalogGeneration,
+            )
+        })?;
         if digest.len() != 64
             || !digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         {
             return Err(request(
-                "catalog_hash_invalid",
-                "resolve_catalog_generation",
+                HostCode::CatalogHashInvalid,
+                HostLocation::ResolveCatalogGeneration,
             ));
         }
         Ok(self.generations.join(digest))
@@ -3619,19 +3874,41 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> RuntimeHostResult<()> {
         .create_new(true)
         .write(true)
         .open(path)
-        .map_err(|_| fatal("catalog_file_create_failed", "write_catalog_state"))?;
+        .map_err(|_| {
+            fatal(
+                HostCode::CatalogFileCreateFailed,
+                HostLocation::WriteCatalogState,
+            )
+        })?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|_| fatal("catalog_file_write_failed", "write_catalog_state"))
+        .map_err(|_| {
+            fatal(
+                HostCode::CatalogFileWriteFailed,
+                HostLocation::WriteCatalogState,
+            )
+        })
 }
 
 fn read_bounded(path: &Path, maximum_bytes: usize) -> RuntimeHostResult<Vec<u8>> {
-    let metadata =
-        fs::metadata(path).map_err(|_| fatal("catalog_file_unavailable", "read_catalog_state"))?;
+    let metadata = fs::metadata(path).map_err(|_| {
+        fatal(
+            HostCode::CatalogFileUnavailable,
+            HostLocation::ReadCatalogState,
+        )
+    })?;
     if metadata.len() > maximum_bytes as u64 {
-        return Err(fatal("catalog_file_too_large", "read_catalog_state"));
+        return Err(fatal(
+            HostCode::CatalogFileTooLarge,
+            HostLocation::ReadCatalogState,
+        ));
     }
-    fs::read(path).map_err(|_| fatal("catalog_file_read_failed", "read_catalog_state"))
+    fs::read(path).map_err(|_| {
+        fatal(
+            HostCode::CatalogFileReadFailed,
+            HostLocation::ReadCatalogState,
+        )
+    })
 }
 
 fn remove_directory_if_exists(path: &Path) -> RuntimeHostResult<()> {
@@ -3639,8 +3916,8 @@ fn remove_directory_if_exists(path: &Path) -> RuntimeHostResult<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(fatal(
-            "catalog_temporary_cleanup_failed",
-            "stage_catalog_generation",
+            HostCode::CatalogTemporaryCleanupFailed,
+            HostLocation::StageCatalogGeneration,
         )),
     }
 }
@@ -3708,31 +3985,32 @@ fn count_u64(value: usize) -> RuntimeHostResult<u64> {
 
 fn policy_evaluation_measurement_overflow() -> RuntimeHostError {
     fatal(
-        "policy_evaluation_measurement_overflow",
-        "measure_policy_evaluation",
+        HostCode::PolicyEvaluationMeasurementOverflow,
+        HostLocation::MeasurePolicyEvaluation,
     )
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path, operation: &'static str) -> RuntimeHostResult<()> {
+fn sync_directory(path: &Path, operation: impl Into<Location>) -> RuntimeHostResult<()> {
+    let operation: Location = operation.into();
     OpenOptions::new()
         .read(true)
         .open(path)
         .and_then(|directory| directory.sync_all())
-        .map_err(|_| fatal("catalog_directory_sync_failed", operation))
+        .map_err(|_| fatal(HostCode::CatalogDirectorySyncFailed, operation))
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path, _operation: &'static str) -> RuntimeHostResult<()> {
+fn sync_directory(_path: &Path, _operation: impl Into<Location>) -> RuntimeHostResult<()> {
     // Rust's standard library cannot open Windows directories for fsync without unsafe flags.
     Ok(())
 }
 
-fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
-fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 

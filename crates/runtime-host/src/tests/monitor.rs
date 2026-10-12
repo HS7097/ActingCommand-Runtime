@@ -653,6 +653,107 @@ fn missing_monitor_evidence_never_stops_the_runtime() {
     restarted.close().expect("close restarted host");
 }
 
+/// Workflow #375 R5d: `ReadMaterial` reads a frame that the cleaner moved into
+/// `kept\<date>\<leaf>\` (here by hand, as another process would) as verified bytes.
+#[test]
+fn moved_monitor_evidence_reads_verified() {
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one("node.a", instance_id, Arc::clone(&state))),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "node.a".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        state.monitor_observation_count.load(Ordering::Acquire) >= 1
+    });
+    let verified = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    );
+    let frame_event = verified.last().expect("monitor frame event").clone();
+    let frame = frame_event
+        .artifacts
+        .first()
+        .expect("monitor artifact")
+        .clone();
+    let object_key = frame
+        .object_key()
+        .expect("monitor artifact object key")
+        .to_string();
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "node.a".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close host");
+    let source = root.path().join(object_key.as_str());
+    let object_file = source
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .expect("object file name")
+        .to_owned();
+    let leaf = root
+        .path()
+        .join("kept")
+        .join("2026-10-12")
+        .join("node_a-1-monitor");
+    fs::create_dir_all(&leaf).expect("kept leaf");
+    fs::rename(&source, leaf.join(format!("061502-117_{object_file}")))
+        .expect("move the frame as the cleaner does");
+
+    let restarted = RuntimeHost::start(
+        config(&root).with_frame_retention_enabled(false),
+        Arc::new(FakeProvider::one("node.a", instance_id, state)),
+    )
+    .expect("restart");
+    let mut client = TestClient::connect(&restarted);
+    let read = client.request(RuntimeOperation::ReadMaterial {
+        request: Box::new(actingcommand_contract::RuntimeMaterialReadRequest {
+            event: actingcommand_contract::LedgerEventPosition {
+                event_id: frame_event.event_id,
+                sequence: frame_event.sequence,
+            },
+            artifact_id: frame.artifact_id,
+            snapshot_position: frame_event.sequence,
+            byte_count: frame.byte_count,
+            sha256: frame.sha256.clone(),
+            expected_run_id: None,
+            expected_frame_id: None,
+            expected_request_id: None,
+            expected_correlation_id: None,
+            offset: 0,
+            requested_length: 1,
+            max_reply_bytes: actingcommand_contract::MAX_RUNTIME_MATERIAL_REPLY_BYTES,
+        }),
+    });
+    let receipt = client.send(&read);
+    let Some(RuntimeResult::MaterialRead { result }) = receipt.result() else {
+        panic!("material read result");
+    };
+    assert_eq!(
+        result.state,
+        actingcommand_contract::RuntimeMaterialReadState::Verified
+    );
+    assert!(result.failure.is_none());
+    drop(client);
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+    restarted.close().expect("close restarted host");
+}
+
 #[test]
 fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure() {
     let root = TempDir::new().expect("tempdir");

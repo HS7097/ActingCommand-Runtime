@@ -2,10 +2,12 @@
 
 //! Translation from Runtime-owned domain state into the read-only project transport contract.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::{
     LoadedCatalog, PolicyDispatchPage, PolicyDispatchProjection, PolicyDispatchProjectionState,
 };
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalTarget, EventSeverity, EventType, FactRecord, FactScope,
     PROJECT_INTERFACE_CONTRACT_V2, PROJECT_INTERFACE_CONTRACT_V3, ProjectApprovalView,
@@ -47,7 +49,7 @@ impl ProjectInterfaceProjection {
         let negotiated_version = request.negotiate().map_err(|error| {
             RuntimeHostError::request(
                 error.code(),
-                "negotiate_project_interface",
+                HostLocation::NegotiateProjectInterface,
                 RuntimeErrorCode::ProtocolInvalid,
             )
         })?;
@@ -86,8 +88,8 @@ impl ProjectInterfaceProjection {
             negotiated_version == actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1;
         if legacy_contract && older_decisions_exist {
             return Err(RuntimeHostError::request(
-                "project_interface_v1_requires_v3",
-                "project_runtime_interface",
+                HostCode::ProjectInterfaceV1RequiresV3,
+                HostLocation::ProjectRuntimeInterface,
                 RuntimeErrorCode::ProtocolInvalid,
             ));
         }
@@ -99,8 +101,8 @@ impl ProjectInterfaceProjection {
                     .is_some())
         {
             return Err(RuntimeHostError::request(
-                "project_interface_v2_requires_v3",
-                "project_runtime_interface",
+                HostCode::ProjectInterfaceV2RequiresV3,
+                HostLocation::ProjectRuntimeInterface,
                 RuntimeErrorCode::ProtocolInvalid,
             ));
         }
@@ -130,8 +132,8 @@ impl ProjectInterfaceProjection {
                 let next_cursor = if has_more {
                     let (intent_sequence, decision) = decisions.last().ok_or_else(|| {
                         RuntimeHostError::request(
-                            "project_interface_response_too_large",
-                            "project_runtime_interface",
+                            SharedCode::ProjectInterfaceResponseTooLarge,
+                            HostLocation::ProjectRuntimeInterface,
                             RuntimeErrorCode::ProtocolInvalid,
                         )
                     })?;
@@ -152,8 +154,8 @@ impl ProjectInterfaceProjection {
                         requested_decision_limit,
                         u16::try_from(decisions.len()).map_err(|_| {
                             RuntimeHostError::fatal(
-                                "project_decision_count_overflow",
-                                "project_runtime_interface",
+                                HostCode::ProjectDecisionCountOverflow,
+                                HostLocation::ProjectRuntimeInterface,
                                 RuntimeErrorCode::RuntimeFatal,
                             )
                         })?,
@@ -172,8 +174,8 @@ impl ProjectInterfaceProjection {
             let response = if negotiated_version == PROJECT_INTERFACE_CONTRACT_V3 {
                 let decision_page = decision_page.ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "project_decision_page_missing",
-                        "project_runtime_interface",
+                        HostCode::ProjectDecisionPageMissing,
+                        HostLocation::ProjectRuntimeInterface,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
@@ -225,24 +227,24 @@ impl ProjectInterfaceProjection {
             match response {
                 Ok(response) => return Ok(response),
                 Err(error)
-                    if error.code() == "project_interface_response_too_large"
+                    if error.code() == SharedCode::ProjectInterfaceResponseTooLarge.code()
                         && decisions.len() > 1
                         && negotiated_version == PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
                     decisions.pop();
                 }
                 Err(error)
-                    if error.code() == "project_interface_response_too_large"
+                    if error.code() == SharedCode::ProjectInterfaceResponseTooLarge.code()
                         && decisions.len() > 1
                         && negotiated_version != PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
                     return Err(RuntimeHostError::request(
                         if legacy_contract {
-                            "project_interface_v1_requires_v3"
+                            HostCode::ProjectInterfaceV1RequiresV3
                         } else {
-                            "project_interface_v2_requires_v3"
+                            HostCode::ProjectInterfaceV2RequiresV3
                         },
-                        "project_runtime_interface",
+                        HostLocation::ProjectRuntimeInterface,
                         RuntimeErrorCode::ProtocolInvalid,
                     ));
                 }
@@ -255,16 +257,16 @@ impl ProjectInterfaceProjection {
 fn project_contract_error(
     error: actingcommand_contract::ProjectInterfaceError,
 ) -> RuntimeHostError {
-    if error.code() == "project_interface_response_too_large" {
+    if error.code().as_str() == SharedCode::ProjectInterfaceResponseTooLarge.as_str() {
         RuntimeHostError::request(
             error.code(),
-            "project_runtime_interface",
+            HostLocation::ProjectRuntimeInterface,
             RuntimeErrorCode::ProtocolInvalid,
         )
     } else {
         RuntimeHostError::fatal(
             error.code(),
-            "project_runtime_interface",
+            HostLocation::ProjectRuntimeInterface,
             RuntimeErrorCode::RuntimeFatal,
         )
     }
@@ -426,8 +428,8 @@ fn project_metric(metric: &MetricRef) -> ProjectGoalMetricView {
 fn bounded_count(value: usize) -> RuntimeHostResult<u32> {
     u32::try_from(value).map_err(|_| {
         RuntimeHostError::fatal(
-            "project_interface_count_overflow",
-            "project_runtime_interface",
+            HostCode::ProjectInterfaceCountOverflow,
+            HostLocation::ProjectRuntimeInterface,
             RuntimeErrorCode::RuntimeFatal,
         )
     })

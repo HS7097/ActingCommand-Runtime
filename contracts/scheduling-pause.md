@@ -11,7 +11,7 @@ and an instance resume reconnects the device at once through the connection prep
 ## Operations and origin gate
 
 ```text
-PauseScheduling  { scope, reason_code, drain_timeout_ms }
+PauseScheduling  { scope, pause_reason, drain_timeout_ms }
 ResumeScheduling { scope, expected? }
 scope = { "kind": "global" } | { "kind": "instance", "instance_alias": "<alias>" }
 expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
@@ -21,8 +21,8 @@ expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
   `(Cli, Cli)`; every other origin is `invalid_scheduling_pause_origin`. No scheduler,
   agent or Lab path can pause or resume dispatch. A `Ui` request needs no governance
   identity card.
-- `reason_code` is a closed code: 1..=64 bytes of `[a-z0-9_.-]`
-  (`invalid_scheduling_pause_reason`).
+- `pause_reason` is a name (outcome key `pause_reason`, type `name`; Workflow #378 A2a): 1..=64
+  bytes of `[a-z0-9_.-]` (`invalid_scheduling_pause_reason`).
 - `drain_timeout_ms` is bounded to `1_000..=600_000`
   (`invalid_scheduling_pause_drain_timeout`). It is validated for both scopes and used only
   by an instance pause.
@@ -45,8 +45,11 @@ is `CandidateEligibility::Deferred` with reason code `dispatch_paused_global` /
 `dispatch_paused_instance` and no next wake time, so a paused cycle emits no dispatch intent
 for it.
 
-The gate covers policy dispatch only. Client requests (`task-run`, leases, observation), the
-startup package and the stuck-recovery ladder are not gated.
+The gate covers policy dispatch only. Client requests (`task-run`, leases, observation) and the
+startup package are not gated (the startup package until Workflow #369 S6b). A stuck-recovery
+ladder is admitted only while its instance is not paused; a pause that arrives while a ladder
+holds the instance ends the ladder at its next step (`recovery_admission_denied`), and its one
+release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
 ## Global pause
 
@@ -120,17 +123,28 @@ client's receipt wait is the drain timeout plus that grace plus its IO timeout.
 global resume answers `SchedulingResumed { scope, revision, selfcheck: absent }` and
 reconnects nothing.
 
-An instance resume (ps2) accepts a pause in stage `released` only. Under the instance
-admission guard it lifts the gate and then reconnects the device at once instead of at the next
-lazy open. Since Workflow #317 sc3 the reconnect is the instance's connection preparation phase
-(`runtime-fact-store.md`, "Connection preparation phase"): under a dedicated preparation lease,
+An instance resume (ps2) accepts a pause in stage `released` only; a resume refused for its
+stage or its expectation takes no claim. Since Workflow #369 S5 the resume then waits for its
+reconnect claim (`ResumeReconnect`) in the instance's one queue, at most
+`CONNECTION_PREPARATION_CLAIM_WAIT_MS` (`3_000` ms), before anything changes. It is an operator
+entry, so the closed gate does not hold it back, while every routine entry stays held back. Not
+granted in time, the resume is refused `lease_queue_expired` (`QueueExpired`) before the gate is
+lifted: nothing has changed, and the operator retries. Once the claim is granted the resume
+lifts the gate (the stage and the expectation are checked again, since the pause can change
+while the claim waits; a refusal then releases the claim and lifts nothing) and then reconnects
+the device at once instead of at the next lazy open. Since Workflow #317 sc3 the reconnect is the
+instance's connection preparation phase (`runtime-fact-store.md`, "Connection preparation
+phase"): on the reconnect claim's key, with no dedicated preparation lease, and under the
+instance admission guard only for its device steps,
 `ExecutionKernel::open_instance_backends` opens the instance's input and capture backends
 through the same provider opens as the lazy paths (a Nemu pair opens once) and takes the first
 frame of a capture it opened, as the first lazy capture does, then drops it (no frame artifact
 is written). The opens are recorded like every open (`backend-open-observation.md`):
 `backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check`, and the
-instance's policy availability following the self-check. The lease is then released and the
-session stays open for the next tasks (Workflow #191 H; a failed open, or an instance outside
+instance's policy availability following the self-check. The claim's key is then released
+(its release hands the instance on, so a startup or other claim the lift made eligible follows
+the reconnect; no dispatch reaches the instance while the key is held) and the session stays
+open for the next tasks (Workflow #191 H; a failed open, or an instance outside
 the multi-Nemu gate, closes it before the release). The session kept through the pause, or
 one a read-only observe retained after it (the existing sc2 design), is closed first, so a
 resume is a disconnect and a reconnect and the receipt's self-check reflects this
@@ -154,18 +168,23 @@ selfcheck = {
 - A side without a report of this resume has `ok: false` and no values.
 - `failure_code` is the code of the failing step verbatim: a failed open's device code, for
   example `input_backend_open_failed`, `capture_backend_open_failed`,
-  `capture_backend_operation_failed` or `paired_backend_open_failed`; a refused preparation
-  lease's scheduler code (`lease_busy`, `lease_cooldown`, `lease_transfer_not_safe`, both sides
-  `ok: false`); or a failed close's code.
+  `capture_backend_operation_failed` or `paired_backend_open_failed`; or a failed close's
+  code. A resume and a self-check take no preparation lease that could be refused (Workflow
+  #369 S5): a claim not granted within its wait refuses the request with `lease_queue_expired`
+  instead, and no self-check is reported.
 
 A failed reconnect does not roll the resume back and is not retried: the resume is performed,
 the failure is recorded, the instance stays unavailable until a self-check passes, and the
 receipt reports it. Only an unconfirmed close or a failed record fails the request.
-`actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause and
-answers `InstanceSelfChecked { instance_alias, selfcheck }` with this `selfcheck` shape. The
-client's receipt wait for an instance resume and for a self-check is the backend-open bound
+`actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause, on its
+own `SelfCheck` claim, which waits as the reconnect claim does (at most
+`CONNECTION_PREPARATION_CLAIM_WAIT_MS`, without the admission guard; not granted in time, it is
+refused `lease_queue_expired` and no preparation runs), and answers
+`InstanceSelfChecked { instance_alias, selfcheck }` with this `selfcheck` shape. The client's
+receipt wait for an instance resume and for a self-check is the backend-open bound
 `CONNECTION_PREPARATION_WAIT_MS` (`30_000` ms: the touch handshake and the capture prime) plus
-its IO timeout (Workflow #191 h2); a global resume keeps the IO timeout. A resume triggers no
+the claim's wait `CONNECTION_PREPARATION_CLAIM_WAIT_MS` (`3_000` ms), that is `33_000` ms, plus
+its IO timeout (Workflow #191 h2, #369 S5); a global resume keeps the IO timeout. A resume triggers no
 extra policy evaluation: the next cycle runs on its ordinary trigger.
 
 ## Conditional resume (Workflow #338 R4)
@@ -211,9 +230,9 @@ stage changes `draining` to `paused` to `released` do not.
 
 ## Status
 
-`Status` (`RuntimeControlPlaneStatus`) carries `scheduling_pause: { revision, reason_code,
+`Status` (`RuntimeControlPlaneStatus`) carries `scheduling_pause: { revision, pause_reason,
 since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` carries
-`pause: { revision, reason_code, since_unix_ms, stage: draining | paused | released }` while
+`pause: { revision, pause_reason, since_unix_ms, stage: draining | paused | released }` while
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
 
@@ -222,7 +241,7 @@ its instance is paused. Both fields are absent otherwise (additive wire: a
 A pause has no TTL; only `ResumeScheduling` lifts it. Since Workflow #361 B1 a pause survives a
 restart. The held pauses are the runtime fact `host.scheduling_pause` (scope `Runtime`,
 `record_list`, no lifetime; `contracts/runtime-fact-store.md`), one row per held pause:
-`scope` (`global` or `instance`), `instance_alias` (instance rows), `reason_code`,
+`scope` (`global` or `instance`), `instance_alias` (instance rows), `pause_reason`,
 `since_unix_ms` (`timestamp_ms`), `set_in_owner_epoch` and, on a restored row,
 `restored_from_owner_epoch`. An empty list means nothing is paused; a ledger without the fact
 (any ledger older than this rule) starts unpaused, as before.

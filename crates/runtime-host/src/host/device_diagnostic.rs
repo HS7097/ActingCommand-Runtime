@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::HostLocation;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     DeviceDiagnosticBudgetRecord, DeviceDiagnosticMode, DeviceDiagnosticSample,
     DeviceDiagnosticSourceField, DiagnosticDetailRecord, RuntimePayload,
@@ -73,9 +75,12 @@ impl HostShared {
         field: DeviceDiagnosticSourceField,
         detail: &DiagnosticDetailRecord,
     ) -> RuntimeHostResult<()> {
-        let mut budget = lock(&self.device_diagnostics, "observe_device_diagnostic_budget")?;
+        let mut budget = lock(
+            &self.device_diagnostics,
+            HostLocation::ObserveDeviceDiagnosticBudget,
+        )?;
         if budget.closed {
-            return Err(ledger_error("device_diagnostic_budget_closed"));
+            return Err(ledger_error(HostLocation::DeviceDiagnosticBudgetClosed));
         }
         let sample = DeviceDiagnosticSample {
             source_event_id: *event.event_id(),
@@ -95,7 +100,7 @@ impl HostShared {
         record.emitted_count = record
             .emitted_count
             .checked_add(1)
-            .ok_or_else(|| ledger_error("device_diagnostic_count_overflow"))?;
+            .ok_or_else(|| ledger_error(HostLocation::DeviceDiagnosticCountOverflow))?;
         Ok(())
     }
 
@@ -112,7 +117,7 @@ impl HostShared {
                     confirm_deferred_appends(
                         &self.ledger,
                         GlobalLedger::REPLY_TIMEOUT,
-                        "append_device_diagnostic_budget",
+                        HostLocation::AppendDeviceDiagnosticBudget,
                     )
                 });
         if let Err(error) = &result {
@@ -127,7 +132,7 @@ impl HostShared {
     pub(super) fn confirm_deferred_appends(
         &self,
         deadline: Duration,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
         let result = confirm_deferred_appends(&self.ledger, deadline, operation);
         if result.is_err() {
@@ -137,13 +142,19 @@ impl HostShared {
     }
 
     fn close_device_diagnostic_budget(&self) -> RuntimeHostResult<()> {
-        let _gate = lock(&self.fact_write_gate, "close_device_diagnostic_budget")?;
-        let mut budget = lock(&self.device_diagnostics, "close_device_diagnostic_budget")?;
+        let _gate = lock(
+            &self.fact_write_gate,
+            HostLocation::CloseDeviceDiagnosticBudget,
+        )?;
+        let mut budget = lock(
+            &self.device_diagnostics,
+            HostLocation::CloseDeviceDiagnosticBudget,
+        )?;
         if budget.closed {
             return Ok(());
         }
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error("close_device_diagnostic_budget"));
+            return Err(ledger_error(HostLocation::CloseDeviceDiagnosticBudget));
         }
         self.append_device_diagnostic_record_under_fact_gate(budget.record.clone())?;
         budget.closed = true;
@@ -204,7 +215,7 @@ pub(super) fn append_device_diagnostic_record(
             ledger
                 .append_deferred(draft)
                 .map(|_| ())
-                .map_err(|_| ledger_error("append_device_diagnostic_budget"))
+                .map_err(|_| ledger_error(HostLocation::AppendDeviceDiagnosticBudget))
         })
 }
 
@@ -214,8 +225,9 @@ pub(super) fn append_device_diagnostic_record(
 pub(super) fn confirm_deferred_appends(
     ledger: &GlobalLedger,
     deadline: Duration,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<()> {
+    let operation: Location = operation.into();
     let summary = ledger
         .confirm_deferred(deadline)
         .map_err(|_| ledger_error(operation))?;

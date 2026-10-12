@@ -875,3 +875,245 @@ fn agent_wake_is_reconciled_from_a_committed_planning_signal() {
     drop(observer);
     reopened.close().expect("close reopened runtime");
 }
+
+fn record_unrelated_client_actions(client: &mut TestClient, count: usize) {
+    for _ in 0..count {
+        let request = client.request(RuntimeOperation::RecordClientAction {
+            action: ClientActionRecord::new(
+                "settings",
+                "account_token",
+                ClientActionKind::Input,
+                Some(POLICY_INSTANCE_ALIAS.to_owned()),
+                Some(ClientActionValue::Redacted {
+                    sha256: format!("sha256:{}", "e".repeat(64)),
+                    byte_count: 24,
+                }),
+            )
+            .expect("client action"),
+        });
+        assert!(matches!(
+            client.send(&request).result(),
+            Some(RuntimeResult::ClientActionRecorded)
+        ));
+    }
+}
+
+fn wake_signal(index: u64, kind: PolicyPlanningSignalKind) -> PolicyPlanningSignalEventData {
+    PolicyPlanningSignalEventData {
+        signal_id: format!("signal:paged-recovery-{index}"),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind,
+        fact_code: format!("goal.fixture.paged-recovery-{index}"),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    }
+}
+
+fn start_agent_session(
+    client: &mut TestClient,
+    wake_id: actingcommand_contract::AgentWakeId,
+) -> AgentSessionId {
+    let request = client.agent_request(RuntimeOperation::StartAgentSession { wake_id });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    context.status().session_id()
+}
+
+fn record_agent_response(
+    client: &mut TestClient,
+    session_id: AgentSessionId,
+    disposition: AgentResponseDisposition,
+    answer: &str,
+) {
+    let response = AgentSessionResponse::new(
+        session_id,
+        disposition,
+        answer,
+        unix_ms_now().expect("clock"),
+    )
+    .expect("agent response");
+    let request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    assert!(matches!(
+        client.send(&request).result(),
+        Some(RuntimeResult::AgentResponseRecorded { .. })
+    ));
+}
+
+// Workflow #381 R4a: the Agent Dispatcher's startup read pages each folded type instead of
+// reading the whole Ledger. With every Agent record type and both wake sources spread between
+// many unrelated events, every page size rebuilds the state the whole-ledger fold built.
+#[test]
+fn agent_dispatcher_paged_recovery_matches_the_whole_ledger_fold() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    for index in 0..6_u64 {
+        record_unrelated_client_actions(&mut client, 40);
+        let kind = match index % 3 {
+            0 => PolicyPlanningSignalKind::TimelineReached,
+            1 => PolicyPlanningSignalKind::GoalMissed,
+            _ => PolicyPlanningSignalKind::DriftPredicted,
+        };
+        host.record_policy_planning_signal(wake_signal(index, kind))
+            .expect("planning signal");
+    }
+    let wake_ids = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    )
+    .iter()
+    .map(|event| {
+        let ProjectionPayload::Full(payload) = &event.payload else {
+            panic!("expected forensic wake payload")
+        };
+        let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+            panic!("expected agent wake payload")
+        };
+        payload.wake().wake_id()
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(wake_ids.len(), 4, "two timeline and two drift signals wake");
+
+    let completed = start_agent_session(&mut client, wake_ids[0]);
+    record_unrelated_client_actions(&mut client, 20);
+    record_agent_response(
+        &mut client,
+        completed,
+        AgentResponseDisposition::Completed,
+        "fake_sidecar_completed",
+    );
+    record_unrelated_client_actions(&mut client, 20);
+    let escalated = start_agent_session(&mut client, wake_ids[1]);
+    record_unrelated_client_actions(&mut client, 20);
+    let request = client.agent_request(RuntimeOperation::ResumeAgentSession {
+        session_id: escalated,
+    });
+    assert!(matches!(
+        client.send(&request).result(),
+        Some(RuntimeResult::AgentSessionObserved { .. })
+    ));
+    record_unrelated_client_actions(&mut client, 20);
+    record_agent_response(
+        &mut client,
+        escalated,
+        AgentResponseDisposition::NeedsHuman,
+        "fake_sidecar_failed",
+    );
+    record_unrelated_client_actions(&mut client, 20);
+    let retried = start_agent_session(&mut client, wake_ids[2]);
+    record_unrelated_client_actions(&mut client, 20);
+    record_agent_response(
+        &mut client,
+        retried,
+        AgentResponseDisposition::RetryableFailure,
+        "fake_sidecar_failed",
+    );
+    record_unrelated_client_actions(&mut client, 20);
+
+    let whole = host
+        .recover_agent_dispatcher_for_test(None)
+        .expect("whole-ledger fold");
+    assert_ne!(
+        whole,
+        crate::agent_dispatcher::AgentDispatcherState::default()
+    );
+    assert!(whole.has_live_obligations(), "the fourth wake is pending");
+    for page_events in [1, 2, 3, crate::recovery_read::RECOVERY_PAGE_EVENTS] {
+        assert_eq!(
+            host.recover_agent_dispatcher_for_test(Some(page_events))
+                .expect("paged recovery"),
+            whole,
+            "page size {page_events}"
+        );
+    }
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+// Workflow #381 R4a / R6 gate (a read count, not a wall clock): on a Ledger with more unrelated
+// events than two recovery pages, the writer commands from the fact store recovery to the end
+// of the Agent Dispatcher recovery include no whole-Ledger query, and none returns more than
+// one recovery page of events.
+#[test]
+fn startup_recovery_reads_bounded_pages_and_no_whole_ledger_query() {
+    let page_events = u64::try_from(crate::recovery_read::RECOVERY_PAGE_EVENTS).expect("page size");
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let agent_config = AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    record_unrelated_client_actions(&mut client, 2 * crate::recovery_read::RECOVERY_PAGE_EVENTS);
+    host.record_policy_planning_signal(wake_signal(0, PolicyPlanningSignalKind::TimelineReached))
+        .expect("planning signal");
+    drop(client);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime");
+    let recovery = reopened.startup_recovery_for_test();
+    for (step, millis) in [
+        ("fact_store", recovery.fact_store_ms),
+        ("monitor_registry", recovery.monitor_registry_ms),
+        ("policy_host", recovery.policy_host_ms),
+        ("policy_dispatches", recovery.policy_dispatches_ms),
+        ("policy_outcomes", recovery.policy_outcomes_ms),
+        ("approvals", recovery.approvals_ms),
+        ("runtime_state", recovery.runtime_state_ms),
+        ("agent_dispatcher", recovery.agent_dispatcher_ms),
+        ("recovery", recovery.recovery_ms),
+        (
+            "connection_longest_wait",
+            recovery.connection_longest_wait_ms,
+        ),
+    ] {
+        assert!(millis.is_some(), "{step} was not timed");
+    }
+    assert!(recovery.writer.commands > 0);
+    assert!(recovery.writer.longest.is_some());
+    assert!(
+        recovery.writer.largest_read_events > 0,
+        "the recovery read the Ledger"
+    );
+    assert!(
+        recovery.writer.largest_read_events <= page_events,
+        "one recovery read returned {} events",
+        recovery.writer.largest_read_events
+    );
+    assert_eq!(
+        recovery.writer.whole_ledger_queries, 0,
+        "a recovery read queried the whole Ledger"
+    );
+    reopened.close().expect("close reopened runtime");
+}

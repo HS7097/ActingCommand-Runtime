@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStoreError, ArtifactStoreResult, ArtifactUseGuard};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ArtifactFailureStage, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactMaterial,
     ArtifactMaterialAccumulator, ArtifactPayloadDraft, ArtifactReference, ArtifactStoreIssuer,
@@ -200,9 +203,9 @@ impl ArtifactStream {
         }
         self.write_all(bytes).map_err(|error| {
             self.failure.clone().unwrap_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_write_failed",
-                    "write_artifact_stream",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactWriteFailed.code(),
+                    StoreLocation::WriteArtifactStream.location(),
                     error.to_string(),
                 )
             })
@@ -234,9 +237,9 @@ impl ArtifactStream {
                 self.failure.map_or(Ok(()), Err)
             }
             Err(error) => {
-                let cleanup = ArtifactStoreError::fatal(
-                    "artifact_cleanup_failed",
-                    "cleanup_artifact_temp",
+                let cleanup = ArtifactStoreError::new(
+                    StoreCode::ArtifactCleanupFailed.code(),
+                    StoreLocation::CleanupArtifactTemp.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
@@ -329,9 +332,9 @@ impl Write for ArtifactStream {
         result.map_err(|error| {
             std::io::Error::other(
                 self.fail(
-                    ArtifactStoreError::fatal(
-                        "artifact_write_failed",
-                        "write_artifact_stream",
+                    ArtifactStoreError::new(
+                        SharedCode::ArtifactWriteFailed.code(),
+                        StoreLocation::WriteArtifactStream.location(),
                         error.to_string(),
                     )
                     .with_raw_os_error(error.raw_os_error()),
@@ -360,32 +363,32 @@ pub struct ArtifactStore {
 impl ArtifactStore {
     pub fn open(root: impl AsRef<Path>) -> ArtifactStoreResult<Self> {
         fs::create_dir_all(root.as_ref()).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_root_failed",
-                "open_artifact_store",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactRootFailed.code(),
+                StoreLocation::OpenArtifactStore.location(),
                 error.to_string(),
             )
         })?;
         let root = root.as_ref().canonicalize().map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_root_failed",
-                "canonicalize_artifact_root",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactRootFailed.code(),
+                StoreLocation::CanonicalizeArtifactRoot.location(),
                 error.to_string(),
             )
         })?;
         Ok(Self {
             root,
             artifacts: ArtifactStoreIssuer::new().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_issuer_failed",
-                    "open_artifact_store",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactIssuerFailed.code(),
+                    StoreLocation::OpenArtifactStore.location(),
                     error.to_string(),
                 )
             })?,
             events: IdentifierIssuer::new().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "open_artifact_store",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    StoreLocation::OpenArtifactStore.location(),
                     error.to_string(),
                 )
             })?,
@@ -404,9 +407,9 @@ impl ArtifactStore {
         admission: Arc<dyn ArtifactCapacityAdmission>,
     ) -> ArtifactStoreResult<()> {
         self.capacity.set(admission).map_err(|_| {
-            ArtifactStoreError::fatal(
-                "capacity_admission_already_installed",
-                "install_capacity_admission",
+            ArtifactStoreError::new(
+                StoreCode::CapacityAdmissionAlreadyInstalled.code(),
+                StoreLocation::InstallCapacityAdmission.location(),
                 "capacity owner cannot be replaced",
             )
         })
@@ -415,9 +418,9 @@ impl ArtifactStore {
     #[cfg(feature = "capture")]
     pub(crate) fn inherit_capacity(&self, source: &Self) -> ArtifactStoreResult<()> {
         let admission = source.capacity.get().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "capacity_owner_missing",
-                "admit_artifact_bytes",
+            ArtifactStoreError::new(
+                SharedCode::CapacityOwnerMissing.code(),
+                StoreLocation::AdmitArtifactBytes.location(),
                 "artifact writes require the committed capacity owner",
             )
         })?;
@@ -444,16 +447,16 @@ impl ArtifactStore {
         deadline: std::time::Instant,
     ) -> ArtifactStoreResult<VerifiedArtifactReference> {
         if reference.byte_count > max_bytes || std::time::Instant::now() >= deadline {
-            return Err(ArtifactStoreError::fatal(
-                "artifact_restore_budget_exceeded",
-                "restore_recovery_artifact",
+            return Err(ArtifactStoreError::new(
+                StoreCode::ArtifactRestoreBudgetExceeded.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
                 "bounded restore budget exhausted",
             ));
         }
         let source_root = source_root.canonicalize().map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_root_failed",
-                "restore_recovery_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactRootFailed.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
                 error.to_string(),
             )
         })?;
@@ -468,29 +471,41 @@ impl ArtifactStore {
             )
         };
         let _writer = self.writer.lock().map_err(|_| {
-            ArtifactStoreError::fatal(
-                "artifact_writer_poisoned",
-                "restore_recovery_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactWriterPoisoned.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
                 "artifact writer lock is poisoned",
             )
         })?;
-        let path = safe_object_path(
-            &self.root,
-            reference.object_key().ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_object_key_missing",
-                    "restore_recovery_artifact",
-                    "object key missing",
-                )
-            })?,
-        )?;
+        let object_key = reference.object_key().ok_or_else(|| {
+            ArtifactStoreError::new(
+                SharedCode::ArtifactObjectKeyMissing.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
+                "object key missing",
+            )
+        })?;
+        // Workflow #375 R5d: a frame found in the source's `kept\` lands at the same `kept\`
+        // path in the target, which is verified there and put into the target's kept map.
+        let relative = source.resolved_relative_path().to_path_buf();
+        let kept = relative != Path::new(object_key);
+        let path = safe_object_path(&self.root, relative.as_path())?;
+        let finish_kept = |verified: VerifiedArtifactReference| -> ArtifactStoreResult<_> {
+            verify_file(&path, verified.reference())?;
+            if let Some(object_file) = Path::new(object_key)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+            {
+                crate::kept::remember(&self.root, object_file, path.clone());
+            }
+            Ok(verified)
+        };
         if path.exists() {
             let mut buffer = [0; 65_536];
             loop {
                 if std::time::Instant::now() >= deadline {
-                    return Err(ArtifactStoreError::fatal(
-                        "artifact_restore_budget_exceeded",
-                        "restore_recovery_artifact",
+                    return Err(ArtifactStoreError::new(
+                        StoreCode::ArtifactRestoreBudgetExceeded.code(),
+                        StoreLocation::RestoreRecoveryArtifact.location(),
                         "restore deadline exhausted",
                     ));
                 }
@@ -498,20 +513,23 @@ impl ArtifactStore {
                     break;
                 }
             }
-            source.finish()?;
+            let verified = source.finish()?;
+            if kept {
+                return finish_kept(verified);
+            }
             return self.verify_recovery_reference(reference);
         }
         let parent = path.parent().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "artifact_path_invalid",
-                "restore_recovery_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactPathInvalid.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
                 "object parent missing",
             )
         })?;
         fs::create_dir_all(parent).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_directory_failed",
-                "restore_recovery_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactDirectoryFailed.code(),
+                StoreLocation::RestoreRecoveryArtifact.location(),
                 error.to_string(),
             )
         })?;
@@ -522,18 +540,18 @@ impl ArtifactStore {
                 .create_new(true)
                 .open(&temporary)
                 .map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        "artifact_write_failed",
-                        "restore_recovery_artifact",
+                    ArtifactStoreError::new(
+                        SharedCode::ArtifactWriteFailed.code(),
+                        StoreLocation::RestoreRecoveryArtifact.location(),
                         error.to_string(),
                     )
                 })?;
             let mut buffer = [0; 65_536];
             loop {
                 if std::time::Instant::now() >= deadline {
-                    return Err(ArtifactStoreError::fatal(
-                        "artifact_restore_budget_exceeded",
-                        "restore_recovery_artifact",
+                    return Err(ArtifactStoreError::new(
+                        StoreCode::ArtifactRestoreBudgetExceeded.code(),
+                        StoreLocation::RestoreRecoveryArtifact.location(),
                         "restore deadline exhausted",
                     ));
                 }
@@ -542,24 +560,27 @@ impl ArtifactStore {
                     break;
                 }
                 destination.write_all(&buffer[..read]).map_err(|error| {
-                    ArtifactStoreError::fatal(
-                        "artifact_write_failed",
-                        "restore_recovery_artifact",
+                    ArtifactStoreError::new(
+                        SharedCode::ArtifactWriteFailed.code(),
+                        StoreLocation::RestoreRecoveryArtifact.location(),
                         error.to_string(),
                     )
                 })?;
             }
             let verified = source.finish()?;
             destination.sync_all().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_sync_failed",
-                    "restore_recovery_artifact",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactSyncFailed.code(),
+                    StoreLocation::RestoreRecoveryArtifact.location(),
                     error.to_string(),
                 )
             })?;
             drop(destination);
             verify_file(&temporary, verified.reference())?;
             publish_temp(&temporary, &path)?;
+            if kept {
+                return finish_kept(verified);
+            }
             self.verify_recovery_reference(reference)
         })();
         result.map_err(|error| cleanup_temp(&temporary, error))
@@ -573,9 +594,9 @@ impl ArtifactStore {
         policy: ArtifactIssuePolicy,
     ) -> ArtifactStoreResult<ArtifactStream> {
         if context.created_at_unix_ms == 0 {
-            return Err(ArtifactStoreError::fatal(
-                "artifact_issue_failed",
-                "begin_artifact_stream",
+            return Err(ArtifactStoreError::new(
+                StoreCode::ArtifactIssueFailed.code(),
+                StoreLocation::BeginArtifactStream.location(),
                 "artifact timestamp must be positive",
             ));
         }
@@ -588,9 +609,9 @@ impl ArtifactStore {
             .create_new(true)
             .open(&temp_path)
             .map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_write_failed",
-                    "create_artifact_temp",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactWriteFailed.code(),
+                    StoreLocation::CreateArtifactTemp.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
@@ -620,40 +641,40 @@ impl ArtifactStore {
             return Err(stream.fail(error));
         }
         if stream.root != self.root {
-            return Err(stream.fail(ArtifactStoreError::fatal(
-                "artifact_path_invalid",
-                "seal_artifact_stream",
+            return Err(stream.fail(ArtifactStoreError::new(
+                StoreCode::ArtifactPathInvalid.code(),
+                StoreLocation::SealArtifactStream.location(),
                 "stream belongs to another artifact root",
             )));
         }
         let material = (|| {
             let file = stream.file.as_mut().ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_write_failed",
-                    "seal_artifact_stream",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactWriteFailed.code(),
+                    StoreLocation::SealArtifactStream.location(),
                     "artifact stream is closed",
                 )
             })?;
             file.sync_all().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_sync_failed",
-                    "sync_artifact_temp",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactSyncFailed.code(),
+                    StoreLocation::SyncArtifactTemp.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
             })?;
             file.rewind().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_verify_failed",
-                    "rewind_artifact_temp",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactVerifyFailed.code(),
+                    StoreLocation::RewindArtifactTemp.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
             })?;
             ArtifactMaterial::read_from(file).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_verify_failed",
-                    "read_artifact_for_verification",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactVerifyFailed.code(),
+                    StoreLocation::ReadArtifactForVerification.location(),
                     error.to_string(),
                 )
                 .with_raw_os_error(error.raw_os_error())
@@ -662,9 +683,9 @@ impl ArtifactStore {
         .map_err(|error| stream.fail(error))?;
         let written = std::mem::take(&mut stream.material).finish();
         if material.byte_count() != written.byte_count() || material.sha256() != written.sha256() {
-            return Err(stream.fail(ArtifactStoreError::fatal(
-                "artifact_hash_mismatch",
-                "seal_artifact_stream",
+            return Err(stream.fail(ArtifactStoreError::new(
+                StoreCode::ArtifactHashMismatch.code(),
+                StoreLocation::SealArtifactStream.location(),
                 "staged bytes do not match the written stream",
             )));
         }
@@ -678,9 +699,9 @@ impl ArtifactStore {
                 stream.policy,
             )
             .map_err(|error| {
-                stream.fail(ArtifactStoreError::fatal(
-                    "artifact_issue_failed",
-                    "seal_artifact_stream",
+                stream.fail(ArtifactStoreError::new(
+                    StoreCode::ArtifactIssueFailed.code(),
+                    StoreLocation::SealArtifactStream.location(),
                     error.to_string(),
                 ))
             })?;
@@ -690,18 +711,18 @@ impl ArtifactStore {
             crate::usage::publication_guard(&self.root, &issued.reference().project(true))
                 .map_err(|error| stream.fail(error))?;
         let _writer = self.writer.lock().map_err(|_| {
-            stream.fail(ArtifactStoreError::fatal(
-                "artifact_writer_poisoned",
-                "store_artifact",
+            stream.fail(ArtifactStoreError::new(
+                StoreCode::ArtifactWriterPoisoned.code(),
+                StoreLocation::StoreArtifact.location(),
                 "artifact writer lock is poisoned",
             ))
         })?;
         // Already-written bytes drain through the owner retained when this stream opened.
         let Some(admission) = stream.capacity.clone() else {
             stream.context.capacity = None;
-            return Err(stream.fail(ArtifactStoreError::fatal(
-                "capacity_owner_missing",
-                "admit_artifact_bytes",
+            return Err(stream.fail(ArtifactStoreError::new(
+                SharedCode::CapacityOwnerMissing.code(),
+                StoreLocation::AdmitArtifactBytes.location(),
                 "artifact writes require the committed capacity owner",
             )));
         };
@@ -713,16 +734,16 @@ impl ArtifactStore {
         stream.file.take();
         let publication = (|| {
             let parent = path.parent().ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_path_invalid",
-                    "store_artifact",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactPathInvalid.code(),
+                    StoreLocation::StoreArtifact.location(),
                     "artifact object has no parent directory",
                 )
             })?;
             fs::create_dir_all(parent).map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_directory_failed",
-                    "store_artifact",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactDirectoryFailed.code(),
+                    StoreLocation::StoreArtifact.location(),
                     error.to_string(),
                 )
             })?;
@@ -777,9 +798,9 @@ impl ArtifactStore {
                 request.policy,
             )
             .map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "artifact_issue_failed",
-                    "store_artifact",
+                ArtifactStoreError::new(
+                    StoreCode::ArtifactIssueFailed.code(),
+                    StoreLocation::StoreArtifact.location(),
                     error.to_string(),
                 )
             })?;
@@ -802,9 +823,9 @@ impl ArtifactStore {
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<StoredArtifact> {
         let _writer = self.writer.lock().map_err(|_| {
-            ArtifactStoreError::fatal(
-                "artifact_writer_poisoned",
-                "store_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactWriterPoisoned.code(),
+                StoreLocation::StoreArtifact.location(),
                 "artifact writer lock is poisoned",
             )
         })?;
@@ -915,10 +936,10 @@ impl ArtifactStore {
         open_projected_stream(&self.root, projected)?
             .finish()
             .map_err(|error| {
-                if error.code() == "artifact_hash_mismatch" {
-                    ArtifactStoreError::fatal(
-                        "artifact_verify_failed",
-                        "verify_recovery_artifact",
+                if error.code() == StoreCode::ArtifactHashMismatch.as_str() {
+                    ArtifactStoreError::new(
+                        SharedCode::ArtifactVerifyFailed.code(),
+                        StoreLocation::VerifyRecoveryArtifact.location(),
                         error.detail(),
                     )
                     .with_secondary(&error)
@@ -935,24 +956,24 @@ impl ArtifactStore {
         reference: &ArtifactReference,
     ) -> ArtifactStoreResult<()> {
         let parent = final_path.parent().ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "artifact_path_invalid",
-                "store_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactPathInvalid.code(),
+                StoreLocation::StoreArtifact.location(),
                 "artifact object has no parent directory",
             )
         })?;
         fs::create_dir_all(parent).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_directory_failed",
-                "store_artifact",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactDirectoryFailed.code(),
+                StoreLocation::StoreArtifact.location(),
                 error.to_string(),
             )
             .with_raw_os_error(error.raw_os_error())
         })?;
         if final_path.exists() {
-            return Err(ArtifactStoreError::fatal(
-                "artifact_collision",
-                "store_artifact",
+            return Err(ArtifactStoreError::new(
+                StoreCode::ArtifactCollision.code(),
+                StoreLocation::StoreArtifact.location(),
                 "artifact object key already exists",
             ));
         }
@@ -977,9 +998,9 @@ impl ArtifactStore {
     ) -> ArtifactStoreResult<()> {
         let draft = EventDraft::new(
             self.events.mint_event_id().map_err(|error| {
-                ArtifactStoreError::fatal(
-                    "event_issuer_failed",
-                    "append_artifact_event",
+                ArtifactStoreError::new(
+                    SharedCode::EventIssuerFailed.code(),
+                    StoreLocation::AppendArtifactEvent.location(),
                     error.to_string(),
                 )
             })?,
@@ -1025,9 +1046,9 @@ fn admit_bytes(
 ) -> ArtifactStoreResult<()> {
     let Some(admission) = admission else {
         context.capacity = None;
-        return Err(ArtifactStoreError::fatal(
-            "capacity_owner_missing",
-            "admit_artifact_bytes",
+        return Err(ArtifactStoreError::new(
+            SharedCode::CapacityOwnerMissing.code(),
+            StoreLocation::AdmitArtifactBytes.location(),
             "artifact writes require the committed capacity owner",
         ));
     };
@@ -1059,12 +1080,20 @@ pub struct ArtifactReader {
     file: File,
     _use_guard: ArtifactUseGuard,
     reference: ProjectedArtifactReference,
+    /// The opened file below the store root: the object key, or its `kept\` path.
+    relative: PathBuf,
     material: ArtifactMaterialAccumulator,
     verified: Option<VerifiedArtifactReference>,
     failure: Option<ArtifactStoreError>,
 }
 
 impl ArtifactReader {
+    /// Workflow #375 R5d: the file this reader opened, relative to the store root: the object
+    /// key, or the `kept\<date>\<leaf>\<file>` path of a frame the cleaner moved.
+    pub fn resolved_relative_path(&self) -> &Path {
+        &self.relative
+    }
+
     pub fn read_chunk(&mut self, buffer: &mut [u8]) -> ArtifactStoreResult<usize> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -1088,24 +1117,24 @@ impl ArtifactReader {
             .unwrap_or(usize::MAX)
             .min(buffer.len());
         let count = self.file.read(&mut buffer[..limit]).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_read_failed",
-                "read_projected_artifact",
+            ArtifactStoreError::new(
+                SharedCode::ArtifactReadFailed.code(),
+                StoreLocation::ReadProjectedArtifact.location(),
                 error.to_string(),
             )
             .with_io_error(&error)
         })?;
         self.material.update(&buffer[..count]).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_verify_failed",
-                "read_projected_artifact",
+            ArtifactStoreError::new(
+                SharedCode::ArtifactVerifyFailed.code(),
+                StoreLocation::ReadProjectedArtifact.location(),
                 error.to_string(),
             )
         })?;
         if self.material.byte_count() > self.reference.byte_count {
-            return Err(ArtifactStoreError::fatal(
-                "artifact_hash_mismatch",
-                "verify_projected_artifact",
+            return Err(ArtifactStoreError::new(
+                StoreCode::ArtifactHashMismatch.code(),
+                StoreLocation::VerifyProjectedArtifact.location(),
                 "artifact exceeds its published byte count",
             ));
         }
@@ -1115,17 +1144,17 @@ impl ArtifactReader {
             self.verified = Some(
                 ArtifactStoreIssuer::new()
                     .map_err(|error| {
-                        ArtifactStoreError::fatal(
-                            "artifact_issuer_failed",
-                            "verify_projected_read_only",
+                        ArtifactStoreError::new(
+                            StoreCode::ArtifactIssuerFailed.code(),
+                            StoreLocation::VerifyProjectedReadOnly.location(),
                             error.to_string(),
                         )
                     })?
                     .verify_existing_material(self.reference.clone(), material)
                     .map_err(|error| {
-                        ArtifactStoreError::fatal(
-                            "artifact_verify_failed",
-                            "verify_projected_read_only",
+                        ArtifactStoreError::new(
+                            SharedCode::ArtifactVerifyFailed.code(),
+                            StoreLocation::VerifyProjectedReadOnly.location(),
                             error.to_string(),
                         )
                     })?,
@@ -1139,9 +1168,9 @@ impl ArtifactReader {
         let mut buffer = [0_u8; 65_536];
         while self.read_chunk(&mut buffer)? != 0 {}
         self.verified.ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "artifact_verify_failed",
-                "verify_projected_read_only",
+            ArtifactStoreError::new(
+                SharedCode::ArtifactVerifyFailed.code(),
+                StoreLocation::VerifyProjectedReadOnly.location(),
                 "artifact did not reach a verified EOF",
             )
         })
@@ -1187,9 +1216,9 @@ impl ArtifactReader {
                 bytes
                     .try_reserve_exact(capacity - bytes.len())
                     .map_err(|error| {
-                        ArtifactStoreError::fatal(
-                            "artifact_read_allocation_failed",
-                            "read_projected_artifact_complete",
+                        ArtifactStoreError::new(
+                            StoreCode::ArtifactReadAllocationFailed.code(),
+                            StoreLocation::ReadProjectedArtifactComplete.location(),
                             error.to_string(),
                         )
                     })?;
@@ -1202,9 +1231,9 @@ impl ArtifactReader {
         let verified = self.finish()?;
         material_read_deadline(deadline)?;
         if bytes.len() != expected_length {
-            return Err(ArtifactStoreError::fatal(
-                "artifact_verify_failed",
-                "read_projected_artifact_complete",
+            return Err(ArtifactStoreError::new(
+                SharedCode::ArtifactVerifyFailed.code(),
+                StoreLocation::ReadProjectedArtifactComplete.location(),
                 "complete material length differs from its verified reference",
             ));
         }
@@ -1226,9 +1255,9 @@ impl ArtifactReader {
                         .contains(&requested_length)
             })
             .ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_read_range_invalid",
-                    "read_projected_artifact_range",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactReadRangeInvalid.code(),
+                    ContractLocation::ReadProjectedArtifactRange.location(),
                     "range exceeds its committed material identity",
                 )
             })?
@@ -1244,9 +1273,9 @@ impl ArtifactReader {
                 break;
             }
             let next = position.checked_add(count as u64).ok_or_else(|| {
-                ArtifactStoreError::fatal(
-                    "artifact_read_range_invalid",
-                    "read_projected_artifact_range",
+                ArtifactStoreError::new(
+                    SharedCode::ArtifactReadRangeInvalid.code(),
+                    ContractLocation::ReadProjectedArtifactRange.location(),
                     "read position overflow",
                 )
             })?;
@@ -1328,41 +1357,108 @@ pub fn open_projected_stream(
     reference: &ProjectedArtifactReference,
 ) -> ArtifactStoreResult<ArtifactReader> {
     reference.validate().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_reference_invalid",
-            "read_projected_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactReferenceInvalid.code(),
+            StoreLocation::ReadProjectedArtifact.location(),
             error.to_string(),
         )
     })?;
     let object_key = reference.object_key().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "artifact_object_key_missing",
-            "read_projected_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            StoreLocation::ReadProjectedArtifact.location(),
             "projected artifact reference does not include an object key",
         )
     })?;
     let root = root.as_ref().canonicalize().map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_root_failed",
-            "read_projected_artifact",
+        ArtifactStoreError::new(
+            StoreCode::ArtifactRootFailed.code(),
+            StoreLocation::ReadProjectedArtifact.location(),
             error.to_string(),
         )
         .with_io_error(&error)
     })?;
     let path = safe_object_path(&root, object_key)?;
-    let file = File::open(path).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_read_failed",
-            "read_projected_artifact",
+    // Workflow #375 R5d: the cleaner holds a frame for a moment while it removes or moves it,
+    // so a busy open (os error 32 or 33, or a held lock) is retried, the original path and
+    // then the kept lookup, up to 3 times 20 ms apart.
+    let mut retries = 0;
+    loop {
+        match open_material(&root, reference, object_key, &path) {
+            Err(error) if error.is_busy() && retries < READ_BUSY_RETRIES => {
+                retries += 1;
+                std::thread::sleep(READ_BUSY_PAUSE);
+            }
+            opened => return opened,
+        }
+    }
+}
+
+const READ_BUSY_RETRIES: u32 = 3;
+const READ_BUSY_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The object at its key, or else (Workflow #375 R5d) the frame the cleaner moved into
+/// `kept\`, found by its artifact id. A frame in neither place is `artifact_read_failed`
+/// with `NotFound`, which readers report as missing.
+fn open_material(
+    root: &Path,
+    reference: &ProjectedArtifactReference,
+    object_key: &str,
+    path: &Path,
+) -> ArtifactStoreResult<ArtifactReader> {
+    let read_failed = |error: std::io::Error| {
+        ArtifactStoreError::new(
+            SharedCode::ArtifactReadFailed.code(),
+            StoreLocation::ReadProjectedArtifact.location(),
             error.to_string(),
         )
         .with_io_error(&error)
-    })?;
-    let use_guard = crate::usage::reader_guard(&root, reference, &file)?;
+    };
+    let (file, relative) = match File::open(path) {
+        Ok(file) => (file, PathBuf::from(object_key)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let object_file = Path::new(object_key)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str);
+            let kept = match object_file {
+                Some(object_file) => crate::kept::find(root, object_file)?,
+                None => None,
+            };
+            let Some(kept) = kept else {
+                return Err(read_failed(error));
+            };
+            match File::open(&kept) {
+                Ok(file) => {
+                    let relative = kept
+                        .strip_prefix(root)
+                        .map_err(|_| {
+                            ArtifactStoreError::new(
+                                StoreCode::ArtifactPathInvalid.code(),
+                                StoreLocation::ReadProjectedArtifact.location(),
+                                "kept frame outside the store root",
+                            )
+                        })?
+                        .to_path_buf();
+                    (file, relative)
+                }
+                // Gone since the lookup: the frame is missing.
+                Err(kept_error) if kept_error.kind() == std::io::ErrorKind::NotFound => {
+                    if let Some(object_file) = object_file {
+                        crate::kept::forget(root, object_file);
+                    }
+                    return Err(read_failed(error));
+                }
+                Err(kept_error) => return Err(read_failed(kept_error)),
+            }
+        }
+        Err(error) => return Err(read_failed(error)),
+    };
+    let use_guard = crate::usage::reader_guard(root, reference, &file)?;
     Ok(ArtifactReader {
         file,
         _use_guard: use_guard,
         reference: reference.clone(),
+        relative,
         material: ArtifactMaterialAccumulator::default(),
         verified: None,
         failure: None,
@@ -1394,8 +1490,11 @@ pub fn verify_projected_read_only(
     open_projected_stream(root, reference)?.finish()
 }
 
-pub(crate) fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
-    let relative = Path::new(object_key);
+pub(crate) fn safe_object_path(
+    root: &Path,
+    object_key: impl AsRef<Path>,
+) -> ArtifactStoreResult<PathBuf> {
+    let relative = object_key.as_ref();
     if relative.is_absolute()
         || relative.components().any(|component| {
             !matches!(component, Component::Normal(_)) && !matches!(component, Component::CurDir)
@@ -1404,17 +1503,17 @@ pub(crate) fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreRe
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
     {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_path_invalid",
-            "resolve_artifact_path",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactPathInvalid.code(),
+            StoreLocation::ResolveArtifactPath.location(),
             "artifact object key is not a safe relative path",
         ));
     }
     let path = root.join(relative);
     if !path.starts_with(root) || path == root {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_path_invalid",
-            "resolve_artifact_path",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactPathInvalid.code(),
+            StoreLocation::ResolveArtifactPath.location(),
             "artifact object key escapes the store root",
         ));
     }
@@ -1426,9 +1525,9 @@ fn temporary_path(final_path: &Path) -> ArtifactStoreResult<PathBuf> {
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "artifact_path_invalid",
-                "create_artifact_temp_path",
+            ArtifactStoreError::new(
+                StoreCode::ArtifactPathInvalid.code(),
+                StoreLocation::CreateArtifactTempPath.location(),
                 "artifact filename is not valid UTF-8",
             )
         })?;
@@ -1453,25 +1552,25 @@ fn write_synced_with(
         .create_new(true)
         .open(path)
         .map_err(|error| {
-            ArtifactStoreError::fatal(
-                "artifact_write_failed",
-                "create_artifact_temp",
+            ArtifactStoreError::new(
+                SharedCode::ArtifactWriteFailed.code(),
+                StoreLocation::CreateArtifactTemp.location(),
                 error.to_string(),
             )
             .with_raw_os_error(error.raw_os_error())
         })?;
     file.write_all(bytes).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_write_failed",
-            "write_artifact_temp",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactWriteFailed.code(),
+            StoreLocation::WriteArtifactTemp.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
     })?;
     sync(&file).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_sync_failed",
-            "sync_artifact_temp",
+        ArtifactStoreError::new(
+            StoreCode::ArtifactSyncFailed.code(),
+            StoreLocation::SyncArtifactTemp.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
@@ -1482,9 +1581,9 @@ fn publish_temp(temp_path: &Path, final_path: &Path) -> ArtifactStoreResult<()> 
     // Runtime owns one artifact-store writer per state root; the store mutex makes this
     // no-overwrite check and same-filesystem rename indivisible relative to its writers.
     if final_path.exists() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_collision",
-            "publish_artifact",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactCollision.code(),
+            StoreLocation::PublishArtifact.location(),
             "artifact object key already exists",
         ));
     }
@@ -1497,9 +1596,9 @@ fn publish_temp_with(
     rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> ArtifactStoreResult<()> {
     rename(temp_path, final_path).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_publish_failed",
-            "publish_artifact",
+        ArtifactStoreError::new(
+            StoreCode::ArtifactPublishFailed.code(),
+            StoreLocation::PublishArtifact.location(),
             error.to_string(),
         )
         .with_raw_os_error(error.raw_os_error())
@@ -1508,23 +1607,23 @@ fn publish_temp_with(
 
 fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResult<()> {
     let mut file = File::open(path).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_verify_failed",
-            "open_artifact_for_verification",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactVerifyFailed.code(),
+            StoreLocation::OpenArtifactForVerification.location(),
             error.to_string(),
         )
     })?;
     let material = ArtifactMaterial::read_from(&mut file).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "artifact_verify_failed",
-            "read_artifact_for_verification",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactVerifyFailed.code(),
+            StoreLocation::ReadArtifactForVerification.location(),
             error.to_string(),
         )
     })?;
     if material.byte_count() != reference.byte_count() || material.sha256() != reference.sha256() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_hash_mismatch",
-            "verify_artifact",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactHashMismatch.code(),
+            StoreLocation::VerifyArtifact.location(),
             "artifact byte count or SHA-256 does not match issued metadata",
         ));
     }
@@ -1536,9 +1635,9 @@ fn verify_projected_material(
     reference: &ProjectedArtifactReference,
 ) -> ArtifactStoreResult<()> {
     if material.byte_count() != reference.byte_count() || material.sha256() != reference.sha256() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_hash_mismatch",
-            "verify_projected_artifact",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactHashMismatch.code(),
+            StoreLocation::VerifyProjectedArtifact.location(),
             "artifact byte count or SHA-256 does not match projected metadata",
         ));
     }
@@ -1547,16 +1646,16 @@ fn verify_projected_material(
 
 fn verify_bytes(bytes: &[u8], reference: &ArtifactReference) -> ArtifactStoreResult<()> {
     let byte_count = u64::try_from(bytes.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "artifact_verify_failed",
-            "verify_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactVerifyFailed.code(),
+            StoreLocation::VerifyArtifact.location(),
             "artifact byte count exceeds u64",
         )
     })?;
     if byte_count != reference.byte_count() || canonical_sha256(bytes) != reference.sha256() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_hash_mismatch",
-            "verify_artifact",
+        return Err(ArtifactStoreError::new(
+            StoreCode::ArtifactHashMismatch.code(),
+            StoreLocation::VerifyArtifact.location(),
             "artifact byte count or SHA-256 does not match issued metadata",
         ));
     }
@@ -1575,20 +1674,16 @@ pub(crate) fn canonical_sha256(bytes: &[u8]) -> String {
 }
 
 fn cleanup_temp(path: &Path, error: ArtifactStoreError) -> ArtifactStoreError {
-    cleanup_path(path, "cleanup_artifact_temp", error)
+    cleanup_path(path, StoreLocation::CleanupArtifactTemp.location(), error)
 }
 
-fn cleanup_path(
-    path: &Path,
-    operation: &'static str,
-    error: ArtifactStoreError,
-) -> ArtifactStoreError {
+fn cleanup_path(path: &Path, operation: Location, error: ArtifactStoreError) -> ArtifactStoreError {
     match fs::remove_file(path) {
         Ok(()) => error,
         Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => error,
         Err(remove_error) => error.with_secondary(
-            &ArtifactStoreError::fatal(
-                "artifact_cleanup_failed",
+            &ArtifactStoreError::new(
+                StoreCode::ArtifactCleanupFailed.code(),
                 operation,
                 remove_error.to_string(),
             )

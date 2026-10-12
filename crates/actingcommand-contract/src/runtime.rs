@@ -12,6 +12,8 @@
 //! }
 //! ```
 
+use crate::codes::{RuntimeContractCode, SharedCode};
+use crate::outcome::Code;
 use crate::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
@@ -43,6 +45,11 @@ mod saved_artifact_ocr;
 pub use saved_artifact_ocr::*;
 mod material_read;
 pub use material_read::*;
+// Workflow #389 U-1: the request table and the package load/unload shapes.
+mod interface;
+pub use interface::*;
+mod pack_registry;
+pub use pack_registry::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -79,7 +86,7 @@ pub const MAX_GOVERNANCE_CLIENT_VERSION_BYTES: usize = 32;
 /// Closed bounds of `PauseScheduling.drain_timeout_ms` (Workflow #191 ps1).
 pub const MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS: u64 = 1_000;
 pub const MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS: u64 = 600_000;
-/// Bound of a scheduling pause `reason_code` (`[a-z0-9_.-]`).
+/// Bound of a scheduling pause reason `pause_reason` (`[a-z0-9_.-]`).
 pub const MAX_SCHEDULING_PAUSE_REASON_BYTES: usize = 64;
 /// How long an instance pause waits, once its drain timeout expired, for the runs it asked to
 /// stop to reach their next checkpoint; past it the pause fails and its gate is lifted.
@@ -88,6 +95,15 @@ pub const SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS: u64 = 30_000;
 /// capture prime): a client waits this long plus its IO timeout for the receipt of an instance
 /// `ResumeScheduling` or a `SelfCheckInstance` (Workflow #191 h2).
 pub const CONNECTION_PREPARATION_WAIT_MS: u64 = 30_000;
+/// Workflow #369 Q-2: how long the reconnect of an instance `ResumeScheduling`, and a
+/// `SelfCheckInstance`, wait for their turn in the instance's queue before the request is
+/// refused `lease_queue_expired`. A client adds it to `CONNECTION_PREPARATION_WAIT_MS` and its
+/// IO timeout for the receipt of either (W-3).
+pub const CONNECTION_PREPARATION_CLAIM_WAIT_MS: u64 = 3_000;
+/// Workflow #369 Q-2: how long a `SafeReset` or an `ApplicationLifecycle` command waits for its
+/// turn in the instance's queue before it is refused `lease_queue_expired`. A client adds it to
+/// the receipt wait of either (W-3).
+pub const INPUT_LIFECYCLE_CLAIM_WAIT_MS: u64 = 3_000;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
     "actingcommand.runtime.planning-document.v1";
 pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;
@@ -99,15 +115,15 @@ pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeContractError {
-    code: &'static str,
+    code: Code,
 }
 
 impl RuntimeContractError {
-    pub(crate) const fn new(code: &'static str) -> Self {
-        Self { code }
+    pub(crate) fn new(code: impl Into<Code>) -> Self {
+        Self { code: code.into() }
     }
 
-    pub const fn code(self) -> &'static str {
+    pub const fn code(self) -> Code {
         self.code
     }
 }
@@ -157,8 +173,9 @@ impl RuntimePlanningDocument {
     where
         T: Serialize,
     {
-        let document = serde_json::to_value(value)
-            .map_err(|_| RuntimeContractError::new("planning_document_encode_failed"))?;
+        let document = serde_json::to_value(value).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::PlanningDocumentEncodeFailed)
+        })?;
         let bytes = planning_document_bytes(&document)?;
         let envelope = Self {
             schema_version: RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION.to_owned(),
@@ -175,20 +192,23 @@ impl RuntimePlanningDocument {
         T: DeserializeOwned,
     {
         self.validate_kind(expected)?;
-        serde_json::from_value(self.document.clone())
-            .map_err(|_| RuntimeContractError::new("planning_document_decode_failed"))
+        serde_json::from_value(self.document.clone()).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::PlanningDocumentDecodeFailed)
+        })
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.schema_version != RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION {
             return Err(RuntimeContractError::new(
-                "unsupported_planning_document_schema",
+                RuntimeContractCode::UnsupportedPlanningDocumentSchema,
             ));
         }
         let bytes = planning_document_bytes(&self.document)?;
         let expected = format!("sha256:{:x}", Sha256::digest(bytes));
         if self.sha256 != expected {
-            return Err(RuntimeContractError::new("planning_document_hash_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::PlanningDocumentHashMismatch,
+            ));
         }
         Ok(())
     }
@@ -199,7 +219,9 @@ impl RuntimePlanningDocument {
     ) -> RuntimeContractResult<()> {
         self.validate()?;
         if self.kind != expected {
-            return Err(RuntimeContractError::new("planning_document_kind_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::PlanningDocumentKindMismatch,
+            ));
         }
         Ok(())
     }
@@ -249,12 +271,14 @@ impl RuntimeStrategicReportRequest {
         self.report
             .validate_kind(RuntimePlanningDocumentKind::StrategicReport)?;
         if self.evidence.is_empty() || self.evidence.len() > MAX_RUNTIME_STRATEGIC_EVIDENCE {
-            return Err(RuntimeContractError::new("invalid_strategic_evidence"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidStrategicEvidence,
+            ));
         }
         for reference in &self.evidence {
-            reference
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_strategic_evidence"))?;
+            reference.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidStrategicEvidence)
+            })?;
         }
         Ok(())
     }
@@ -299,7 +323,9 @@ impl RuntimePolicyInputIdentity {
                         .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
             });
         if self.ledger_position == 0 || !valid_snapshot_id {
-            return Err(RuntimeContractError::new("invalid_policy_input_identity"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidPolicyInputIdentity,
+            ));
         }
         Ok(())
     }
@@ -415,7 +441,7 @@ impl RuntimeMaintenanceQuery {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         for value in [&self.instance_id, &self.task_id, &self.fact_key] {
-            validate_bounded_text(value, 512, "invalid_maintenance_query")?;
+            validate_bounded_text(value, 512, RuntimeContractCode::InvalidMaintenanceQuery)?;
         }
         if self.as_of_ledger_position == 0
             || self.as_of_unix_ms == 0
@@ -425,7 +451,9 @@ impl RuntimeMaintenanceQuery {
                 FactScope::Instance { instance_id } if instance_id != &self.instance_id
             )
         {
-            return Err(RuntimeContractError::new("invalid_maintenance_query"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidMaintenanceQuery,
+            ));
         }
         self.trend_policy
             .validate_kind(RuntimePlanningDocumentKind::MaintenanceTrendPolicy)
@@ -489,46 +517,56 @@ impl RuntimeStrategicPlanResult {
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.report
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+        self.report.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidStrategicPlanResult)
+        })?;
         if self.report.kind() != ArtifactKind::StrategyReport
             || self.report.object_key().is_none()
             || self.report.redaction_state() == ArtifactRedactionState::Pending
             || self.proposal.is_some() != self.preview.is_some()
         {
-            return Err(RuntimeContractError::new("invalid_strategic_plan_result"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidStrategicPlanResult,
+            ));
         }
         self.projection
             .validate_kind(RuntimePlanningDocumentKind::StrategicProjection)?;
         if let Some(proposal) = &self.proposal {
-            proposal
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+            proposal.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidStrategicPlanResult)
+            })?;
         }
         if let Some(preview) = &self.preview {
-            preview
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+            preview.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidStrategicPlanResult)
+            })?;
         }
         if let (Some(proposal), Some(preview)) = (&self.proposal, &self.preview)
             && proposal.proposal_id() != preview.proposal_id()
         {
-            return Err(RuntimeContractError::new("invalid_strategic_plan_result"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidStrategicPlanResult,
+            ));
         }
         let mut byte_count = self.projection.byte_count()?;
         if let Some(proposal) = &self.proposal {
             byte_count = byte_count
                 .checked_add(planning_result_bytes(proposal.as_ref())?)
-                .ok_or_else(|| RuntimeContractError::new("planning_response_size_invalid"))?;
+                .ok_or_else(|| {
+                    RuntimeContractError::new(RuntimeContractCode::PlanningResponseSizeInvalid)
+                })?;
         }
         if let Some(preview) = &self.preview {
             byte_count = byte_count
                 .checked_add(planning_result_bytes(preview)?)
-                .ok_or_else(|| RuntimeContractError::new("planning_response_size_invalid"))?;
+                .ok_or_else(|| {
+                    RuntimeContractError::new(RuntimeContractCode::PlanningResponseSizeInvalid)
+                })?;
         }
         if byte_count > MAX_RUNTIME_PLANNING_RESPONSE_BYTES {
-            return Err(RuntimeContractError::new("planning_response_size_invalid"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::PlanningResponseSizeInvalid,
+            ));
         }
         Ok(())
     }
@@ -552,12 +590,17 @@ impl RuntimeStrategicPlanResult {
 
 fn planning_document_bytes(document: &serde_json::Value) -> RuntimeContractResult<Vec<u8>> {
     if !document.is_object() {
-        return Err(RuntimeContractError::new("planning_document_not_object"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::PlanningDocumentNotObject,
+        ));
     }
-    let bytes = serde_json::to_vec(document)
-        .map_err(|_| RuntimeContractError::new("planning_document_encode_failed"))?;
+    let bytes = serde_json::to_vec(document).map_err(|_| {
+        RuntimeContractError::new(RuntimeContractCode::PlanningDocumentEncodeFailed)
+    })?;
     if bytes.is_empty() || bytes.len() > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES {
-        return Err(RuntimeContractError::new("planning_document_size_invalid"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::PlanningDocumentSizeInvalid,
+        ));
     }
     Ok(bytes)
 }
@@ -565,7 +608,7 @@ fn planning_document_bytes(document: &serde_json::Value) -> RuntimeContractResul
 fn planning_result_bytes(value: &impl Serialize) -> RuntimeContractResult<usize> {
     serde_json::to_vec(value)
         .map(|bytes| bytes.len())
-        .map_err(|_| RuntimeContractError::new("planning_result_encode_failed"))
+        .map_err(|_| RuntimeContractError::new(SharedCode::PlanningResultEncodeFailed))
 }
 
 fn validate_planning_documents(
@@ -574,12 +617,14 @@ fn validate_planning_documents(
     let mut total = 0_usize;
     for (document, kind) in documents {
         document.validate_kind(*kind)?;
-        total = total
-            .checked_add(document.byte_count()?)
-            .ok_or_else(|| RuntimeContractError::new("planning_request_size_invalid"))?;
+        total = total.checked_add(document.byte_count()?).ok_or_else(|| {
+            RuntimeContractError::new(RuntimeContractCode::PlanningRequestSizeInvalid)
+        })?;
     }
     if total > MAX_RUNTIME_PLANNING_REQUEST_BYTES {
-        return Err(RuntimeContractError::new("planning_request_size_invalid"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::PlanningRequestSizeInvalid,
+        ));
     }
     Ok(())
 }
@@ -600,7 +645,9 @@ impl InputFrameReference {
             || self.width > i32::MAX as u32
             || self.height > i32::MAX as u32
         {
-            return Err(RuntimeContractError::new("input_frame_dimensions_invalid"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InputFrameDimensionsInvalid,
+            ));
         }
         Ok(())
     }
@@ -694,15 +741,19 @@ impl InputAction {
                     || y2.checked_sub(*brake_distance_px) != Some(*y3)
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_segmented_swipe_contract",
+                        RuntimeContractCode::InvalidSegmentedSwipeContract,
                     ));
                 }
                 Ok(())
             }
-            Self::Key { key } => validate_bounded_text(key, MAX_INPUT_KEY_BYTES, "invalid_key"),
-            Self::Text { text } => {
-                validate_bounded_text(text, MAX_INPUT_TEXT_BYTES, "invalid_input_text")
+            Self::Key { key } => {
+                validate_bounded_text(key, MAX_INPUT_KEY_BYTES, RuntimeContractCode::InvalidKey)
             }
+            Self::Text { text } => validate_bounded_text(
+                text,
+                MAX_INPUT_TEXT_BYTES,
+                RuntimeContractCode::InvalidInputText,
+            ),
             Self::Reset => Ok(()),
         }
     }
@@ -820,7 +871,9 @@ impl LeaseToken {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.expires_at_monotonic_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_lease_expiry"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLeaseExpiry,
+            ));
         }
         Ok(())
     }
@@ -923,7 +976,9 @@ impl LeaseQueuePolicy {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.timeout_ms == 0 || self.timeout_ms > MAX_LEASE_QUEUE_TIMEOUT_MS {
-            return Err(RuntimeContractError::new("invalid_lease_queue_timeout"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLeaseQueueTimeout,
+            ));
         }
         Ok(())
     }
@@ -971,7 +1026,9 @@ impl LeaseQueueStatus {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.position == 0 || self.deadline_monotonic_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_lease_queue_status"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidLeaseQueueStatus,
+            ));
         }
         Ok(())
     }
@@ -1037,7 +1094,9 @@ impl ReadonlyFrame {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.width == 0 || self.height == 0 {
-            return Err(RuntimeContractError::new("invalid_frame_dimensions"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidFrameDimensions,
+            ));
         }
         Ok(())
     }
@@ -1072,7 +1131,9 @@ impl ReadonlyObservation {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.width == 0 || self.height == 0 {
-            return Err(RuntimeContractError::new("invalid_observation_dimensions"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidObservationDimensions,
+            ));
         }
         if self.artifact.validate().is_err()
             || self.artifact.object_key().is_none()
@@ -1082,7 +1143,9 @@ impl ReadonlyObservation {
             || self.artifact.redaction_state() == ArtifactRedactionState::Pending
             || self.artifact.byte_count() > MAX_READONLY_OBSERVATION_ARTIFACT_BYTES
         {
-            return Err(RuntimeContractError::new("invalid_observation_artifact"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidObservationArtifact,
+            ));
         }
         Ok(())
     }
@@ -1144,7 +1207,9 @@ impl CaptureSequenceSpec {
             || self.interval_ms > MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS
             || self.planned_wait_ms()? > MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS
         {
-            return Err(RuntimeContractError::new("invalid_capture_sequence_spec"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidCaptureSequenceSpec,
+            ));
         }
         Ok(())
     }
@@ -1160,7 +1225,9 @@ impl CaptureSequenceSpec {
     pub fn planned_wait_ms(&self) -> RuntimeContractResult<u64> {
         u64::from(self.frame_count.saturating_sub(1))
             .checked_mul(self.interval_ms)
-            .ok_or_else(|| RuntimeContractError::new("capture_sequence_wait_overflow"))
+            .ok_or_else(|| {
+                RuntimeContractError::new(RuntimeContractCode::CaptureSequenceWaitOverflow)
+            })
     }
 }
 
@@ -1185,7 +1252,7 @@ impl CaptureSequence {
         self.spec.validate()?;
         if self.observations.len() != usize::from(self.spec.frame_count()) {
             return Err(RuntimeContractError::new(
-                "invalid_capture_sequence_observation_count",
+                RuntimeContractCode::InvalidCaptureSequenceObservationCount,
             ));
         }
         let mut artifact_ids = BTreeSet::new();
@@ -1194,11 +1261,13 @@ impl CaptureSequence {
             observation.validate()?;
             let artifact = observation.artifact();
             let frame_id = artifact.frame_id().ok_or_else(|| {
-                RuntimeContractError::new("invalid_capture_sequence_artifact_identity")
+                RuntimeContractError::new(
+                    RuntimeContractCode::InvalidCaptureSequenceArtifactIdentity,
+                )
             })?;
             if !artifact_ids.insert(artifact.artifact_id) || !frame_ids.insert(*frame_id) {
                 return Err(RuntimeContractError::new(
-                    "duplicate_capture_sequence_artifact_identity",
+                    RuntimeContractCode::DuplicateCaptureSequenceArtifactIdentity,
                 ));
             }
         }
@@ -1256,7 +1325,9 @@ impl InstanceStuckRecovery {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if !(1..=Self::MAX_COOLDOWN_SECS).contains(&self.cooldown_secs) {
-            return Err(RuntimeContractError::new("invalid_stuck_recovery_cooldown"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidStuckRecoveryCooldown,
+            ));
         }
         Ok(())
     }
@@ -1338,7 +1409,7 @@ impl RuntimeInstanceStatus {
             validate_bounded_text(
                 game_id,
                 MAX_STATUS_GAME_ID_BYTES,
-                "invalid_runtime_status_game",
+                RuntimeContractCode::InvalidRuntimeStatusGame,
             )?;
         }
         if let Some(pause) = &self.pause {
@@ -1346,14 +1417,18 @@ impl RuntimeInstanceStatus {
         }
         if self.capabilities.is_some() && self.backend_provenance.is_none() {
             return Err(RuntimeContractError::new(
-                "runtime_capabilities_provenance_missing",
+                RuntimeContractCode::RuntimeCapabilitiesProvenanceMissing,
             ));
         }
         if (self.destructive_step_active || self.preempt_requested) && !self.lease_active {
-            return Err(RuntimeContractError::new("invalid_runtime_instance_status"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeInstanceStatus,
+            ));
         }
         if self.lease_active && self.takeover_cooldown_active {
-            return Err(RuntimeContractError::new("invalid_runtime_instance_status"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeInstanceStatus,
+            ));
         }
         Ok(())
     }
@@ -1462,9 +1537,9 @@ pub struct RuntimeControlPlaneStatus {
 
 impl RuntimeControlPlaneStatus {
     pub fn with_source(mut self, source: crate::RuntimeStateSource) -> RuntimeContractResult<Self> {
-        source
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_state_source"))?;
+        source.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+        })?;
         self.source = Some(source);
         Ok(self)
     }
@@ -1502,9 +1577,9 @@ impl RuntimeControlPlaneStatus {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if let Some(source) = &self.source {
-            source
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_runtime_state_source"))?;
+            source.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+            })?;
         }
         if let Some(pause) = &self.scheduling_pause {
             pause.validate()?;
@@ -1518,7 +1593,9 @@ impl RuntimeControlPlaneStatus {
                 || !instance_ids.insert(instance.instance_id)
                 || previous_alias.is_some_and(|previous| previous >= instance.instance_alias())
             {
-                return Err(RuntimeContractError::new("invalid_runtime_status_registry"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidRuntimeStatusRegistry,
+                ));
             }
             previous_alias = Some(instance.instance_alias());
         }
@@ -1574,7 +1651,7 @@ impl SchedulingPauseExpectation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.revision == 0 {
             return Err(RuntimeContractError::new(
-                "invalid_scheduling_pause_expectation",
+                RuntimeContractCode::InvalidSchedulingPauseExpectation,
             ));
         }
         Ok(())
@@ -1664,7 +1741,7 @@ impl SchedulingResumeSelfCheck {
                 .is_some_and(|code| validate_scheduling_pause_reason(code).is_err())
         {
             return Err(RuntimeContractError::new(
-                "invalid_scheduling_resume_selfcheck",
+                RuntimeContractCode::InvalidSchedulingResumeSelfcheck,
             ));
         }
         Ok(())
@@ -1686,15 +1763,17 @@ pub enum InstancePauseStage {
 #[serde(deny_unknown_fields)]
 pub struct SchedulingPauseState {
     pub revision: u64,
-    pub reason_code: String,
+    pub pause_reason: SchedulingPauseReason,
     pub since_unix_ms: u64,
 }
 
 impl SchedulingPauseState {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        validate_scheduling_pause_reason(&self.reason_code)?;
+        validate_scheduling_pause_reason(self.pause_reason.as_str())?;
         if self.revision == 0 || self.since_unix_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_scheduling_pause_state"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSchedulingPauseState,
+            ));
         }
         Ok(())
     }
@@ -1705,32 +1784,72 @@ impl SchedulingPauseState {
 #[serde(deny_unknown_fields)]
 pub struct InstancePauseState {
     pub revision: u64,
-    pub reason_code: String,
+    pub pause_reason: SchedulingPauseReason,
     pub since_unix_ms: u64,
     pub stage: InstancePauseStage,
 }
 
 impl InstancePauseState {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        validate_scheduling_pause_reason(&self.reason_code)?;
+        validate_scheduling_pause_reason(self.pause_reason.as_str())?;
         if self.revision == 0 || self.since_unix_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_scheduling_pause_state"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSchedulingPauseState,
+            ));
         }
         Ok(())
     }
 }
 
-/// A scheduling pause reason is a closed code: `1..=64` bytes of `[a-z0-9_.-]`.
-pub fn validate_scheduling_pause_reason(reason_code: &str) -> RuntimeContractResult<()> {
-    if reason_code.is_empty()
-        || reason_code.len() > MAX_SCHEDULING_PAUSE_REASON_BYTES
-        || !reason_code.bytes().all(|byte| {
+/// A scheduling pause reason is a name the operator or the Runtime chose (the `pause_reason`
+/// key, type `name`; Workflow #378 A-9): `1..=64` bytes of `[a-z0-9_.-]`.
+pub fn validate_scheduling_pause_reason(value: &str) -> RuntimeContractResult<()> {
+    if value.is_empty()
+        || value.len() > MAX_SCHEDULING_PAUSE_REASON_BYTES
+        || !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
         })
     {
-        return Err(RuntimeContractError::new("invalid_scheduling_pause_reason"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidSchedulingPauseReason,
+        ));
     }
     Ok(())
+}
+
+/// The reason of a scheduling pause (`pause_reason`, Workflow #378 A-9): a validated name, never
+/// a free string. It is built only through [`SchedulingPauseReason::new`] or by decoding, and
+/// both apply [`validate_scheduling_pause_reason`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct SchedulingPauseReason(String);
+
+impl SchedulingPauseReason {
+    pub fn new(value: impl Into<String>) -> RuntimeContractResult<Self> {
+        let value = value.into();
+        validate_scheduling_pause_reason(&value)?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SchedulingPauseReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SchedulingPauseReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(|error| serde::de::Error::custom(error.code()))
+    }
 }
 
 /// One instance an instance discovery query reported. `bound_alias` is the registered
@@ -1779,9 +1898,9 @@ impl RuntimeInstanceDiscovery {
     }
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.source
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_state_source"))?;
+        self.source.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+        })?;
         Self::validate_instances(&self.instances)
     }
 
@@ -1797,7 +1916,9 @@ impl RuntimeInstanceDiscovery {
                 || instance.instance_name.len() > crate::MAX_DISCOVERED_INSTANCE_NAME_BYTES
                 || previous.is_some_and(|index| index >= instance.instance_index)
             {
-                return Err(RuntimeContractError::new("invalid_instance_discovery"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidInstanceDiscovery,
+                ));
             }
             if let Some(alias) = &instance.bound_alias {
                 validate_instance_alias(alias)?;
@@ -1933,12 +2054,16 @@ impl RuntimeDebugEvent {
             RuntimeDebugPhase::Requested | RuntimeDebugPhase::Progress
         ) && self.effect_disposition != EffectDisposition::NotPerformed
         {
-            return Err(RuntimeContractError::new("invalid_runtime_debug_event"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeDebugEvent,
+            ));
         }
         if self.phase == RuntimeDebugPhase::Progress
             && self.operation != RuntimeDebugOperation::LabRun
         {
-            return Err(RuntimeContractError::new("invalid_runtime_debug_event"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeDebugEvent,
+            ));
         }
         Ok(())
     }
@@ -1986,7 +2111,7 @@ impl ResourceAuthoringEvent {
             &self.changed_paths,
             self.failure_code.as_deref(),
         )
-        .map_err(|_| RuntimeContractError::new("invalid_resource_authoring_event"))
+        .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidResourceAuthoringEvent))
     }
 
     pub const fn phase(&self) -> ResourceAuthoringPhase {
@@ -2027,7 +2152,7 @@ impl ReadonlyObservationOutcome {
                 captured_frame: Some(frame),
             } => frame.validate(),
             Self::Failed { .. } => Err(RuntimeContractError::new(
-                "invalid_observation_failure_context",
+                RuntimeContractCode::InvalidObservationFailureContext,
             )),
         }
     }
@@ -2058,11 +2183,13 @@ impl PackageDebugRequest {
             || self.package_path.len() > MAX_DEBUG_PACKAGE_PATH_BYTES
             || self.package_path.contains('\0')
         {
-            return Err(RuntimeContractError::new("invalid_debug_package_path"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidDebugPackagePath,
+            ));
         }
         self.expected_sha256
             .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_debug_package_hash"))
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidDebugPackageHash))
     }
 
     pub fn package_path(&self) -> &str {
@@ -2110,12 +2237,12 @@ impl ContainedTaskRecoveryBinding {
             || self.package_path.contains('\0')
         {
             return Err(RuntimeContractError::new(
-                "invalid_contained_task_recovery_path",
+                RuntimeContractCode::InvalidContainedTaskRecoveryPath,
             ));
         }
-        self.expected_sha256
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_contained_task_recovery_hash"))
+        self.expected_sha256.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidContainedTaskRecoveryHash)
+        })
     }
 
     pub fn package_path(&self) -> &str {
@@ -2175,17 +2302,19 @@ impl ContainedTaskRequest {
             || self.package_path.len() > MAX_CONTAINED_TASK_PATH_BYTES
             || self.package_path.contains('\0')
         {
-            return Err(RuntimeContractError::new("invalid_contained_task_path"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidContainedTaskPath,
+            ));
         }
-        self.expected_sha256
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))?;
+        self.expected_sha256.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidContainedTaskHash)
+        })?;
         if let Some(recovery) = &self.recovery {
             recovery.validate()?;
         }
         if !(1..=Self::MAX_RESPONSE_DEADLINE_MS).contains(&self.response_deadline_ms) {
             return Err(RuntimeContractError::new(
-                "invalid_contained_task_response_deadline",
+                RuntimeContractCode::InvalidContainedTaskResponseDeadline,
             ));
         }
         Ok(())
@@ -2263,7 +2392,9 @@ impl RuntimeEvidenceExportRequest {
             || self.output_path.len() > MAX_EVIDENCE_OUTPUT_PATH_BYTES
             || self.output_path.contains('\0')
         {
-            return Err(RuntimeContractError::new("invalid_evidence_output_path"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidEvidenceOutputPath,
+            ));
         }
         Ok(())
     }
@@ -2349,10 +2480,14 @@ impl RuntimeEvidenceExportSummary {
             || self.normalized_output_path.len() > MAX_EVIDENCE_OUTPUT_PATH_BYTES
             || self.normalized_output_path.contains('\0')
         {
-            return Err(RuntimeContractError::new("invalid_evidence_output_path"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidEvidenceOutputPath,
+            ));
         }
         if self.zip_byte_count == 0 {
-            return Err(RuntimeContractError::new("invalid_evidence_zip_count"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidEvidenceZipCount,
+            ));
         }
         let accounted = self
             .screenshot_counts
@@ -2361,7 +2496,7 @@ impl RuntimeEvidenceExportSummary {
             .and_then(|count| count.checked_add(self.screenshot_counts.persisted));
         if accounted.is_none_or(|count| count > self.screenshot_counts.captured) {
             return Err(RuntimeContractError::new(
-                "invalid_evidence_screenshot_counts",
+                RuntimeContractCode::InvalidEvidenceScreenshotCounts,
             ));
         }
         if self.archive.kind() != ArtifactKind::EvidenceArchive
@@ -2371,7 +2506,7 @@ impl RuntimeEvidenceExportSummary {
             || self.archive.correlation_id != Some(self.correlation_id)
         {
             return Err(RuntimeContractError::new(
-                "invalid_evidence_archive_reference",
+                RuntimeContractCode::InvalidEvidenceArchiveReference,
             ));
         }
         if self.terminal_receipt.sequence == 0
@@ -2380,16 +2515,17 @@ impl RuntimeEvidenceExportSummary {
             || self.terminal_receipt.event_type != terminal_event_type(self.task_outcome)
         {
             return Err(RuntimeContractError::new(
-                "invalid_evidence_terminal_receipt",
+                RuntimeContractCode::InvalidEvidenceTerminalReceipt,
             ));
         }
         validate_canonical_sha256(&self.zip_sha256)
-            .map_err(|_| RuntimeContractError::new("invalid_evidence_zip_hash"))?;
-        validate_canonical_sha256(&self.manifest_sha256)
-            .map_err(|_| RuntimeContractError::new("invalid_evidence_manifest_hash"))?;
-        self.archive
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_evidence_archive_reference"))
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidEvidenceZipHash))?;
+        validate_canonical_sha256(&self.manifest_sha256).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidEvidenceManifestHash)
+        })?;
+        self.archive.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidEvidenceArchiveReference)
+        })
     }
 
     pub const fn correlation_id(&self) -> CorrelationId {
@@ -2512,11 +2648,13 @@ impl PackageDebugSummary {
             || self.resident_bytes == 0
             || self.task_count == 0
         {
-            return Err(RuntimeContractError::new("invalid_debug_package_summary"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidDebugPackageSummary,
+            ));
         }
         self.verified_sha256
             .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_debug_package_summary"))
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidDebugPackageSummary))
     }
 
     pub fn task_id(&self) -> &str {
@@ -2588,13 +2726,13 @@ impl RuntimeSubscriptionRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         self.query
             .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidEventQueryBounds))?;
         if self.wait_ms > MAX_RUNTIME_SUBSCRIPTION_WAIT_MS
             || self.max_events == 0
             || self.max_events > MAX_RUNTIME_SUBSCRIPTION_EVENTS
         {
             return Err(RuntimeContractError::new(
-                "invalid_runtime_subscription_request",
+                RuntimeContractCode::InvalidRuntimeSubscriptionRequest,
             ));
         }
         Ok(())
@@ -2659,11 +2797,12 @@ impl RuntimeEventQueryCursor {
             || self.after_sequence > self.snapshot_ledger_position
         {
             return Err(RuntimeContractError::new(
-                "invalid_runtime_event_query_cursor",
+                RuntimeContractCode::InvalidRuntimeEventQueryCursor,
             ));
         }
-        validate_canonical_sha256(&self.query_fingerprint)
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_cursor"))
+        validate_canonical_sha256(&self.query_fingerprint).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeEventQueryCursor)
+        })
     }
 
     pub fn matches(
@@ -2707,7 +2846,7 @@ impl RuntimeEventQueryPageRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.limit == 0 || self.limit > MAX_RUNTIME_EVENT_QUERY_EVENTS {
             return Err(RuntimeContractError::new(
-                "invalid_runtime_event_query_page",
+                RuntimeContractCode::InvalidRuntimeEventQueryPage,
             ));
         }
         if let Some(cursor) = &self.cursor {
@@ -2717,7 +2856,7 @@ impl RuntimeEventQueryPageRequest {
                 .is_some_and(|position| position != cursor.snapshot_ledger_position())
             {
                 return Err(RuntimeContractError::new(
-                    "invalid_runtime_event_query_snapshot",
+                    SharedCode::InvalidRuntimeEventQuerySnapshot,
                 ));
             }
         }
@@ -2777,8 +2916,9 @@ impl RuntimeEventQueryPage {
         has_more: bool,
         next_cursor: Option<RuntimeEventQueryCursor>,
     ) -> RuntimeContractResult<Self> {
-        let returned_count = u16::try_from(events.len())
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_page"))?;
+        let returned_count = u16::try_from(events.len()).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeEventQueryPage)
+        })?;
         let page = Self {
             events,
             snapshot_ledger_position,
@@ -2802,27 +2942,29 @@ impl RuntimeEventQueryPage {
             || (self.events.is_empty() && self.has_more)
         {
             return Err(RuntimeContractError::new(
-                "invalid_runtime_event_query_page",
+                RuntimeContractCode::InvalidRuntimeEventQueryPage,
             ));
         }
         let mut previous = 0;
         for event in &self.events {
             if event.sequence <= previous || event.sequence > self.snapshot_ledger_position {
                 return Err(RuntimeContractError::new(
-                    "invalid_runtime_event_query_page",
+                    RuntimeContractCode::InvalidRuntimeEventQueryPage,
                 ));
             }
             previous = event.sequence;
             let mut artifacts = std::collections::BTreeSet::new();
             for observation in &event.artifact_evictions {
                 observation.validate().map_err(|_| {
-                    RuntimeContractError::new("invalid_runtime_artifact_eviction_observation")
+                    RuntimeContractError::new(
+                        RuntimeContractCode::InvalidRuntimeArtifactEvictionObservation,
+                    )
                 })?;
                 if observation.through_sequence > self.snapshot_ledger_position
                     || !artifacts.insert(observation.artifact_id)
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_runtime_artifact_eviction_observation",
+                        RuntimeContractCode::InvalidRuntimeArtifactEvictionObservation,
                     ));
                 }
             }
@@ -2833,7 +2975,7 @@ impl RuntimeEventQueryPage {
                 || self.events.last().map(|event| event.sequence) != Some(cursor.after_sequence)
             {
                 return Err(RuntimeContractError::new(
-                    "invalid_runtime_event_query_page",
+                    RuntimeContractCode::InvalidRuntimeEventQueryPage,
                 ));
             }
         }
@@ -2854,12 +2996,12 @@ impl RuntimeEventQueryPage {
                             .contains(&crate::LedgerPageLimit::ResponseBytes)))
             {
                 return Err(RuntimeContractError::new(
-                    "invalid_runtime_event_read_scope",
+                    RuntimeContractCode::InvalidRuntimeEventReadScope,
                 ));
             }
         } else if !self.run_recovery.is_empty() {
             return Err(RuntimeContractError::new(
-                "invalid_runtime_event_read_scope",
+                RuntimeContractCode::InvalidRuntimeEventReadScope,
             ));
         }
         let mut runs = std::collections::BTreeSet::new();
@@ -2874,7 +3016,9 @@ impl RuntimeEventQueryPage {
                     && (group.evidence.is_empty()
                         || group.evidence.iter().any(|item| item.success.is_none())))
             {
-                return Err(RuntimeContractError::new("invalid_runtime_event_recovery"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidRuntimeEventRecovery,
+                ));
             }
             let mut previous_failure = 0;
             for item in &group.evidence {
@@ -2886,16 +3030,19 @@ impl RuntimeEventQueryPage {
                             || success.event_id == item.failure.event_id
                     })
                 {
-                    return Err(RuntimeContractError::new("invalid_runtime_event_recovery"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidRuntimeEventRecovery,
+                    ));
                 }
                 previous_failure = item.failure.sequence;
             }
         }
-        let encoded = serde_json::to_vec(self)
-            .map_err(|_| RuntimeContractError::new("runtime_event_query_page_encode_failed"))?;
+        let encoded = serde_json::to_vec(self).map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::RuntimeEventQueryPageEncodeFailed)
+        })?;
         if encoded.len() > MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES {
             return Err(RuntimeContractError::new(
-                "runtime_event_query_response_too_large",
+                SharedCode::RuntimeEventQueryResponseTooLarge,
             ));
         }
         Ok(())
@@ -2952,8 +3099,9 @@ fn event_query_fingerprint(
     query
         .validate()
         .map_err(|error| RuntimeContractError::new(error.code()))?;
-    let bytes = serde_json::to_vec(&(query, profile))
-        .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
+    let bytes = serde_json::to_vec(&(query, profile)).map_err(|_| {
+        RuntimeContractError::new(RuntimeContractCode::RuntimeEventQueryFingerprintFailed)
+    })?;
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
@@ -2976,12 +3124,16 @@ impl RuntimeEventBatch {
         if self.events.len() > usize::from(MAX_RUNTIME_SUBSCRIPTION_EVENTS)
             || self.events.is_empty() != self.timed_out
         {
-            return Err(RuntimeContractError::new("invalid_runtime_event_batch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeEventBatch,
+            ));
         }
         let mut previous = 0;
         for event in &self.events {
             if event.sequence <= previous || event.sequence > self.next_cursor.after_sequence {
-                return Err(RuntimeContractError::new("invalid_runtime_event_batch"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidRuntimeEventBatch,
+                ));
             }
             previous = event.sequence;
         }
@@ -3098,7 +3250,7 @@ pub enum RuntimeOperation {
     /// both scopes, used only by `Instance`) or are asked to stop at their next checkpoint.
     PauseScheduling {
         scope: SchedulingPauseScope,
-        reason_code: String,
+        pause_reason: SchedulingPauseReason,
         drain_timeout_ms: u64,
     },
     /// Lifts the matching scheduling pause; same origin gate as `PauseScheduling`. With
@@ -3221,6 +3373,36 @@ pub enum RuntimeOperation {
     ResourceTargetView {
         instance_alias: String,
     },
+    // Workflow #389 U-1: the shapes of the unified interface's new request kinds. Each slice
+    // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
+    /// Binds this connection to its channel, once, right after `Health` (section 3.2; U-2).
+    /// `via` names the counter that handed a Lab request over, on the Lab channel only.
+    BindChannel {
+        channel: RuntimeChannel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        via: Option<ChannelVia>,
+    },
+    /// The upgrade state (section 3.6, install-control revision 2; U-4): the installer's
+    /// instruction family for an upgrade. `target` is the Runtime it is meant for, as in
+    /// `InstallTransition`.
+    UpgradeState {
+        target: RuntimeShutdownTarget,
+        action: crate::UpgradeStateAction,
+    },
+    /// Reads the phase of one upgrade state from memory and records nothing (section 3.6; U-4).
+    UpgradeStateStatus {
+        transition_id: String,
+    },
+    /// Puts one package into the loaded-package table, in memory only (section 6; U-3).
+    LoadPack {
+        entry: PackLoadEntry,
+    },
+    /// Takes one entry out of the loaded-package table, stopping first the runs that use it,
+    /// and answers once they ended and reset or after `wait_ms` (section 6.4; U-3).
+    UnloadPack {
+        key: PackRegistryKey,
+        wait_ms: u64,
+    },
 }
 
 impl RuntimeOperation {
@@ -3290,43 +3472,49 @@ impl RuntimeOperation {
             | Self::CancelQueuedLease { .. }
             | Self::CancelContainedTask { .. } => Ok(()),
             Self::QueryEvents { query, page, .. } => {
-                query
-                    .validate()
-                    .map_err(|_| RuntimeContractError::new("invalid_event_query_bounds"))?;
+                query.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidEventQueryBounds)
+                })?;
                 page.validate()
             }
             Self::ReadMaterial { request } => request.validate(),
-            Self::ProjectInterface { request } => request
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
+            Self::ProjectInterface { request } => request.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidProjectInterfaceRequest)
+            }),
             Self::ProjectPolicyInputIdentity {
                 as_of_ledger_position,
             } => {
                 if *as_of_ledger_position == 0 {
-                    return Err(RuntimeContractError::new("invalid_policy_input_position"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPolicyInputPosition,
+                    ));
                 }
                 Ok(())
             }
             Self::SubscribeEvents { request } => request.validate(),
-            Self::RegisterDiagnosticSignature { definition } => definition
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_signature_definition")),
-            Self::MatchDiagnosticSignatures { request } => request
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_signature_match_request")),
-            Self::RetireDiagnosticSignature { registration } => registration
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_signature_registration")),
+            Self::RegisterDiagnosticSignature { definition } => {
+                definition.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidSignatureDefinition)
+                })
+            }
+            Self::MatchDiagnosticSignatures { request } => request.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidSignatureMatchRequest)
+            }),
+            Self::RetireDiagnosticSignature { registration } => {
+                registration.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidSignatureRegistration)
+                })
+            }
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::RecordDebugEvent { event } => event.validate(),
             Self::ReleaseLabPin { target } => target
                 .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_lab_pin_release_target")),
+                .map_err(|_| RuntimeContractError::new(SharedCode::InvalidLabPinReleaseTarget)),
             Self::RecordClientAction { action } => action
                 .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_client_action")),
+                .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidClientAction)),
             Self::PublishFact { record } => record
                 .validate()
                 .map_err(|error| RuntimeContractError::new(error.code())),
@@ -3334,27 +3522,29 @@ impl RuntimeOperation {
                 .validate()
                 .map_err(|error| RuntimeContractError::new(error.code())),
             Self::DeclareGovernanceIdentity { card } => card.validate(),
-            Self::RecordApprovalDecision { decision } => decision
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
+            Self::RecordApprovalDecision { decision } => decision.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidApprovalDecision)
+            }),
             Self::StartAgentSession { .. }
             | Self::ResumeAgentSession { .. }
             | Self::AgentSessionStatus { .. } => Ok(()),
             Self::RecordAgentResponse { response } => response
                 .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_agent_response")),
+                .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidAgentResponse)),
             Self::PrepareStrategicReport { request } => request.validate(),
             Self::ProjectPolicyForward { request } => request.validate(),
             Self::AssessPredictiveMaintenance { query } => query.validate(),
-            Self::CompileProposal { proposal } | Self::PromoteProposal { proposal } => proposal
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_catalog_proposal")),
+            Self::CompileProposal { proposal } | Self::PromoteProposal { proposal } => {
+                proposal.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidCatalogProposal)
+                })
+            }
             Self::ApplyResourceTargets { document_json } => {
                 if document_json.is_empty()
                     || document_json.len() > crate::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
                 {
                     return Err(RuntimeContractError::new(
-                        "resource_targets_document_invalid",
+                        SharedCode::ResourceTargetsDocumentInvalid,
                     ));
                 }
                 Ok(())
@@ -3373,9 +3563,9 @@ impl RuntimeOperation {
                 policy,
             } => {
                 validate_instance_alias(instance_alias)?;
-                policy
-                    .validate()
-                    .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_policy"))
+                policy.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeMonitorPolicy)
+                })
             }
             Self::QueueLease {
                 instance_alias,
@@ -3387,16 +3577,16 @@ impl RuntimeOperation {
             }
             Self::PauseScheduling {
                 scope,
-                reason_code,
+                pause_reason,
                 drain_timeout_ms,
             } => {
                 scope.validate()?;
-                validate_scheduling_pause_reason(reason_code)?;
+                validate_scheduling_pause_reason(pause_reason.as_str())?;
                 if !(MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS..=MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS)
                     .contains(drain_timeout_ms)
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_scheduling_pause_drain_timeout",
+                        RuntimeContractCode::InvalidSchedulingPauseDrainTimeout,
                     ));
                 }
                 Ok(())
@@ -3451,6 +3641,17 @@ impl RuntimeOperation {
             } => {
                 validate_instance_alias(instance_alias)?;
                 request.validate()
+            }
+            // Workflow #389 U-1. No channel judgement here (section 3.1): the binding rules (one
+            // binding per connection, `via` on the Lab channel only) are U-2's, and the
+            // package entries' checks come with U-3's `pack_registry_` codes.
+            Self::BindChannel { .. } | Self::LoadPack { .. } | Self::UnloadPack { .. } => Ok(()),
+            Self::UpgradeState { target, action } => {
+                target.validate()?;
+                action.validate()
+            }
+            Self::UpgradeStateStatus { transition_id } => {
+                crate::installation::validate_transition_id(transition_id)
             }
         }
     }
@@ -3591,6 +3792,11 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ApplyResourceTargets(<document>)"
             }
             Self::ResourceTargetView { .. } => "RuntimeOperation::ResourceTargetView(<redacted>)",
+            Self::BindChannel { .. } => "RuntimeOperation::BindChannel(<channel>)",
+            Self::UpgradeState { .. } => "RuntimeOperation::UpgradeState(<transition>)",
+            Self::UpgradeStateStatus { .. } => "RuntimeOperation::UpgradeStateStatus(<transition>)",
+            Self::LoadPack { .. } => "RuntimeOperation::LoadPack(<redacted>)",
+            Self::UnloadPack { .. } => "RuntimeOperation::UnloadPack(<redacted>)",
         })
     }
 }
@@ -3635,13 +3841,19 @@ impl RuntimeRequest {
 
     pub fn validate(&self) -> RuntimeContractResult<ValidatedRuntimeRequest<'_>> {
         if self.schema_version != RUNTIME_REQUEST_SCHEMA_VERSION {
-            return Err(RuntimeContractError::new("unsupported_request_schema"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::UnsupportedRequestSchema,
+            ));
         }
         if self.submitted_at_unix_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_request_timestamp"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRequestTimestamp,
+            ));
         }
         if !valid_client_origin(self.actor, self.source) {
-            return Err(RuntimeContractError::new("invalid_client_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidClientOrigin,
+            ));
         }
         // Shutdown is only ever requested, never forced: the person at the console (Ui) or the
         // operator (Cli) may ask; the host still decides and stops at its own pace.
@@ -3651,7 +3863,9 @@ impl RuntimeRequest {
                 (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
             )
         {
-            return Err(RuntimeContractError::new("invalid_shutdown_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidShutdownOrigin,
+            ));
         }
         if matches!(self.operation, RuntimeOperation::InstallTransition { .. })
             && !matches!(
@@ -3660,7 +3874,7 @@ impl RuntimeRequest {
             )
         {
             return Err(RuntimeContractError::new(
-                "invalid_install_transition_origin",
+                RuntimeContractCode::InvalidInstallTransitionOrigin,
             ));
         }
         if matches!(
@@ -3669,7 +3883,7 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new(
-                "invalid_resource_authoring_origin",
+                RuntimeContractCode::InvalidResourceAuthoringOrigin,
             ));
         }
         if matches!(
@@ -3679,7 +3893,9 @@ impl RuntimeRequest {
                 | RuntimeOperation::RetireDiagnosticSignature { .. }
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
-            return Err(RuntimeContractError::new("invalid_signature_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSignatureOrigin,
+            ));
         }
         if matches!(
             self.operation,
@@ -3689,14 +3905,18 @@ impl RuntimeRequest {
                 | RuntimeOperation::RecognizeArtifact { .. }
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
-            return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeDebugOrigin,
+            ));
         }
         if matches!(
             self.operation,
             RuntimeOperation::DebugPackage { .. } | RuntimeOperation::ExportEvidence { .. }
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
-            return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeDebugOrigin,
+            ));
         }
         // A governance identity card may be declared by the person (Ui) or the operator (Cli);
         // approval decisions stay person-only.
@@ -3705,14 +3925,18 @@ impl RuntimeRequest {
             RuntimeOperation::DeclareGovernanceIdentity { .. }
         ) && !valid_governance_declaration_origin(self.actor, self.source)
         {
-            return Err(RuntimeContractError::new("invalid_governance_origin"));
+            return Err(RuntimeContractError::new(
+                SharedCode::InvalidGovernanceOrigin,
+            ));
         }
         if matches!(
             self.operation,
             RuntimeOperation::RecordApprovalDecision { .. }
         ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
         {
-            return Err(RuntimeContractError::new("invalid_governance_origin"));
+            return Err(RuntimeContractError::new(
+                SharedCode::InvalidGovernanceOrigin,
+            ));
         }
         // Only an explicit person (Ui) or operator (Cli) request may drive the emulator, spawn
         // its discovery tool or reconnect it for a self-check; Adapter/Agent origins are
@@ -3726,7 +3950,9 @@ impl RuntimeRequest {
             (self.actor, self.source),
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
         ) {
-            return Err(RuntimeContractError::new("invalid_emulator_control_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidEmulatorControlOrigin,
+            ));
         }
         // Only the person (Ui) or the operator (Cli) may pause or resume scheduling; no
         // scheduler, agent or Lab path can stop or restart dispatch by itself.
@@ -3737,7 +3963,9 @@ impl RuntimeRequest {
             (self.actor, self.source),
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
         ) {
-            return Err(RuntimeContractError::new("invalid_scheduling_pause_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSchedulingPauseOrigin,
+            ));
         }
         // Fact publication (Workflow #308 slice 4a-2): an observation whose every key is a
         // manual priority offset may also come from the person (Ui) or the operator (Cli);
@@ -3760,7 +3988,9 @@ impl RuntimeRequest {
                 .filter(|key| crate::priority_offset_task_id(key).is_some())
                 .count();
             if offsets > 0 && offsets < keys.len() {
-                return Err(RuntimeContractError::new("fact_origin_mixed"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::FactOriginMixed,
+                ));
             }
             let agent = (self.actor, self.source) == (EventActor::Agent, EventSource::Adapter);
             let person = matches!(
@@ -3768,7 +3998,9 @@ impl RuntimeRequest {
                 (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
             );
             if !(agent || (offsets > 0 && person)) {
-                return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidAgentDispatcherOrigin,
+                ));
             }
         }
         if matches!(
@@ -3786,7 +4018,9 @@ impl RuntimeRequest {
                 | RuntimeOperation::ApplyResourceTargets { .. }
         ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
         {
-            return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidAgentDispatcherOrigin,
+            ));
         }
         self.operation.validate()?;
         Ok(ValidatedRuntimeRequest { request: self })
@@ -3946,9 +4180,15 @@ impl ContainedTaskCancellationReason {
     /// `RecoveredAfterRestart`.
     pub fn from_failure_code(failure_code: Option<&str>) -> Self {
         match failure_code {
-            Some("contained_task_deadline_exceeded") => Self::DeadlineExceeded,
-            Some("contained_task_cancelled") => Self::ClientRequested,
-            Some("contained_task_paused") => Self::PausedByOperator,
+            Some(code) if code == RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str() => {
+                Self::DeadlineExceeded
+            }
+            Some(code) if code == RuntimeErrorCode::ContainedTaskCancelled.as_str() => {
+                Self::ClientRequested
+            }
+            Some(code) if code == RuntimeErrorCode::ContainedTaskPaused.as_str() => {
+                Self::PausedByOperator
+            }
             _ => Self::RecoveredAfterRestart,
         }
     }
@@ -3989,12 +4229,12 @@ impl ContainedTaskCancellationStatus {
             Self::Pending {
                 deadline_monotonic_ms,
             } if *deadline_monotonic_ms == 0 => Err(RuntimeContractError::new(
-                "invalid_contained_task_cancellation_status",
+                RuntimeContractCode::InvalidContainedTaskCancellationStatus,
             )),
             Self::RecoveryRequired {
                 deadline_monotonic_ms: Some(0),
             } => Err(RuntimeContractError::new(
-                "invalid_contained_task_cancellation_status",
+                RuntimeContractCode::InvalidContainedTaskCancellationStatus,
             )),
             Self::Terminal {
                 deadline_monotonic_ms,
@@ -4010,7 +4250,7 @@ impl ContainedTaskCancellationStatus {
                 || (*outcome == TaskOutcome::Cancelled) != reason.is_some() =>
             {
                 Err(RuntimeContractError::new(
-                    "invalid_contained_task_cancellation_status",
+                    RuntimeContractCode::InvalidContainedTaskCancellationStatus,
                 ))
             }
             _ => Ok(()),
@@ -4018,44 +4258,9 @@ impl ContainedTaskCancellationStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeErrorCode {
-    RuntimeBusy,
-    RuntimeOwnerMismatch,
-    InvalidRequest,
-    RuntimeUnavailable,
-    RuntimeFatal,
-    OwnerConflict,
-    ProtocolInvalid,
-    InstanceUnknown,
-    LeaseBusy,
-    LeaseCooldown,
-    LeaseExpired,
-    LeaseMissing,
-    StaleOwnerEpoch,
-    LeaseMismatch,
-    QueueFull,
-    QueueExpired,
-    QueueMissing,
-    QueueConnectionMismatch,
-    TransferNotSafe,
-    InstanceMismatch,
-    HolderMismatch,
-    ConnectionMismatch,
-    ReadonlyCapabilityInvalid,
-    CaptureFailed,
-    RecognitionFailed,
-    BackendOpenFailed,
-    BackendOperationFailed,
-    PackageInvalid,
-    EvidenceExportFailed,
-    LedgerFailure,
-    ContainedTaskDeadlineExceeded,
-    ContainedTaskBusy,
-    ContainedTaskCancelled,
-    ContainedTaskPaused,
-}
+/// The Runtime's wire error codes are a registry of their own (Workflow #378 A2a,
+/// `crate::codes`); this path keeps naming them.
+pub use crate::codes::RuntimeErrorCode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4125,7 +4330,9 @@ impl RuntimeErrorProjection {
                     byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
                 })
             {
-                return Err(RuntimeContractError::new("invalid_host_failure"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidHostFailure,
+                ));
             }
         }
         Ok(())
@@ -4423,6 +4630,39 @@ pub enum RuntimeResult {
     ResourceTargetView {
         view: Box<crate::ResourceTargetView>,
     },
+    // Workflow #389 U-1: the results of the new request kinds; the slices that add their
+    // behaviour answer with them.
+    /// `BindChannel`: the connection's channel, as bound (U-2).
+    ChannelBound {
+        channel: RuntimeChannel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        via: Option<ChannelVia>,
+    },
+    /// `UpgradeState`: the transition after the step, its ticket included (U-4). An accepted
+    /// `enter` answers drained, having accepted its own shutdown; `cancel` answers aborted;
+    /// `leave` answers released.
+    UpgradeState {
+        status: crate::InstallTransitionStatus,
+    },
+    /// `UpgradeStateStatus`: the transition's current phase (U-4).
+    UpgradeStateStatus {
+        status: crate::InstallTransitionStatus,
+    },
+    /// `LoadPack`: the entry now in the table (U-3). For a procedure binding,
+    /// `named_by_catalog` says whether a task of the catalog names it: a binding no task names
+    /// loads, but nothing uses it.
+    PackLoaded {
+        key: PackRegistryKey,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        named_by_catalog: Option<bool>,
+    },
+    /// `UnloadPack`: the entry left the table (U-3); the runs it stopped, and how many
+    /// admitted dispatches of it were withdrawn.
+    PackUnloaded {
+        key: PackRegistryKey,
+        stopped_runs: Vec<PackUnloadStoppedRun>,
+        withdrawn_dispatches: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4456,11 +4696,13 @@ impl RuntimeReceipt {
         failure: RuntimeMaterialReadFailure,
     ) -> RuntimeContractResult<()> {
         let Some(RuntimeResult::MaterialRead { result }) = &mut self.result else {
-            return Err(RuntimeContractError::new("material_read_result_missing"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::MaterialReadResultMissing,
+            ));
         };
         if result.failure.is_some() {
             return Err(RuntimeContractError::new(
-                "material_read_failure_already_recorded",
+                RuntimeContractCode::MaterialReadFailureAlreadyRecorded,
             ));
         }
         result.chunk = None;
@@ -4479,7 +4721,9 @@ impl RuntimeReceipt {
     ) -> RuntimeContractResult<Self> {
         if !matches!(request.operation(), RuntimeOperation::ReadMaterial { request } if request.as_ref() == &result.request)
         {
-            return Err(RuntimeContractError::new("material_read_request_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::MaterialReadRequestMismatch,
+            ));
         }
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
@@ -4607,7 +4851,9 @@ impl RuntimeReceipt {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.schema_version != RUNTIME_RECEIPT_SCHEMA_VERSION {
-            return Err(RuntimeContractError::new("unsupported_receipt_schema"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::UnsupportedReceiptSchema,
+            ));
         }
         let success_state = matches!(
             self.state,
@@ -4630,14 +4876,18 @@ impl RuntimeReceipt {
             && !recorded_material_failure
             && success_state != (self.result.is_some() && self.error.is_none())
         {
-            return Err(RuntimeContractError::new("invalid_receipt_outcome"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidReceiptOutcome,
+            ));
         }
         if !recorded_lab_failure
             && !recorded_material_failure
             && !success_state
             && (self.error.is_none() || self.result.is_some())
         {
-            return Err(RuntimeContractError::new("invalid_receipt_outcome"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidReceiptOutcome,
+            ));
         }
         if self.state == RuntimeReceiptState::Observed
             && !matches!(
@@ -4645,10 +4895,14 @@ impl RuntimeReceipt {
                 Some(RuntimeResult::ContainedPageObserved { .. })
             )
         {
-            return Err(RuntimeContractError::new("invalid_observation_receipt"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidObservationReceipt,
+            ));
         }
         if self.terminal.is_some_and(|terminal| terminal.sequence == 0) {
-            return Err(RuntimeContractError::new("invalid_terminal_event"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidTerminalEvent,
+            ));
         }
         if let Some(error) = &self.error {
             error.validate()?;
@@ -4671,14 +4925,14 @@ impl RuntimeReceipt {
                 || self.result.is_some()
             {
                 return Err(RuntimeContractError::new(
-                    "invalid_resource_declaration_receipt",
+                    RuntimeContractCode::InvalidResourceDeclarationReceipt,
                 ));
             }
             rejection.validate().map_err(RuntimeContractError::new)?;
         }
         if self.resource_declaration.is_none() && self.resource_declaration_event.is_some() {
             return Err(RuntimeContractError::new(
-                "invalid_resource_declaration_receipt",
+                RuntimeContractCode::InvalidResourceDeclarationReceipt,
             ));
         }
         if let Some(rejection) = &self.resource_targets_rejection {
@@ -4692,7 +4946,7 @@ impl RuntimeReceipt {
                 || self.resource_declaration.is_some()
             {
                 return Err(RuntimeContractError::new(
-                    "invalid_resource_targets_receipt",
+                    RuntimeContractCode::InvalidResourceTargetsReceipt,
                 ));
             }
             rejection.validate()?;
@@ -4708,20 +4962,24 @@ impl RuntimeReceipt {
                 if self.state != result.receipt_state()
                     || result.failure.as_ref().map(|failure| &failure.error) != self.error.as_ref()
                 {
-                    return Err(RuntimeContractError::new("invalid_material_read_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidMaterialReadReceipt,
+                    ));
                 }
             }
             Some(
                 RuntimeResult::SignatureRegistered { registration }
                 | RuntimeResult::SignatureRetired { registration },
             ) => {
-                registration
-                    .validate()
-                    .map_err(|_| RuntimeContractError::new("invalid_signature_receipt"))?;
+                registration.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidSignatureReceipt)
+                })?;
                 let terminal = self
                     .terminal
                     .filter(|_| self.state == RuntimeReceiptState::Completed)
-                    .ok_or_else(|| RuntimeContractError::new("invalid_signature_receipt"))?;
+                    .ok_or_else(|| {
+                        RuntimeContractError::new(RuntimeContractCode::InvalidSignatureReceipt)
+                    })?;
                 if matches!(
                     &self.result,
                     Some(RuntimeResult::SignatureRegistered { .. })
@@ -4729,37 +4987,50 @@ impl RuntimeReceipt {
                     if terminal.event_id != registration.event_id
                         || terminal.sequence != registration.sequence
                     {
-                        return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                        return Err(RuntimeContractError::new(
+                            RuntimeContractCode::InvalidSignatureReceipt,
+                        ));
                     }
                 } else if terminal.sequence <= registration.sequence {
-                    return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidSignatureReceipt,
+                    ));
                 }
             }
             Some(RuntimeResult::SignaturesMatched { page }) => {
-                page.validate()
-                    .map_err(|_| RuntimeContractError::new("invalid_signature_receipt"))?;
+                page.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidSignatureReceipt)
+                })?;
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal.is_none_or(|terminal| {
                         terminal.sequence <= page.catalog.observed_through_sequence
                     })
                 {
-                    return Err(RuntimeContractError::new("invalid_signature_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidSignatureReceipt,
+                    ));
                 }
             }
             Some(RuntimeResult::ShutdownAccepted { target }) => {
                 target.validate()?;
                 if self.state != RuntimeReceiptState::Admitted || self.terminal.is_none() {
-                    return Err(RuntimeContractError::new("invalid_shutdown_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidShutdownReceipt,
+                    ));
                 }
             }
             Some(RuntimeResult::InstallTransition { status }) => {
                 status.validate()?;
                 if self.state != RuntimeReceiptState::Completed {
                     return Err(RuntimeContractError::new(
-                        "invalid_install_transition_receipt",
+                        RuntimeContractCode::InvalidInstallTransitionReceipt,
                     ));
                 }
             }
+            Some(
+                RuntimeResult::UpgradeState { status }
+                | RuntimeResult::UpgradeStateStatus { status },
+            ) => status.validate()?,
             Some(RuntimeResult::Status { status }) => status.validate()?,
             Some(RuntimeResult::InstancesDiscovered { discovery }) => discovery.validate()?,
             Some(RuntimeResult::SchedulingPaused {
@@ -4773,7 +5044,7 @@ impl RuntimeReceipt {
                     || drained.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_scheduling_pause_receipt",
+                        RuntimeContractCode::InvalidSchedulingPauseReceipt,
                     ));
                 }
             }
@@ -4788,7 +5059,7 @@ impl RuntimeReceipt {
                     || selfcheck.is_some() != matches!(scope, SchedulingPauseScope::Instance { .. })
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_scheduling_pause_receipt",
+                        RuntimeContractCode::InvalidSchedulingPauseReceipt,
                     ));
                 }
                 if let Some(selfcheck) = selfcheck {
@@ -4802,26 +5073,28 @@ impl RuntimeReceipt {
                 validate_instance_alias(instance_alias)?;
                 if self.state != RuntimeReceiptState::Completed {
                     return Err(RuntimeContractError::new(
-                        "invalid_instance_selfcheck_receipt",
+                        RuntimeContractCode::InvalidInstanceSelfcheckReceipt,
                     ));
                 }
                 selfcheck.validate()?;
             }
-            Some(RuntimeResult::ProjectInterface { response }) => response
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,
+            Some(RuntimeResult::ProjectInterface { response }) => {
+                response.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidProjectInterfaceResponse)
+                })?
+            }
             Some(RuntimeResult::PolicyInputIdentityProjected { identity }) => {
                 identity.validate()?
             }
-            Some(RuntimeResult::MonitorStatus { status }) => status
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
+            Some(RuntimeResult::MonitorStatus { status }) => status.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeMonitorStatus)
+            })?,
             Some(
                 RuntimeResult::MonitorConfigured { status }
                 | RuntimeResult::MonitorCleared { status },
-            ) => status
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
+            ) => status.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeMonitorStatus)
+            })?,
             Some(
                 RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
             ) => status.validate()?,
@@ -4834,7 +5107,9 @@ impl RuntimeReceipt {
                         .terminal
                         .is_some_and(|end| end.sequence <= result.verified.sequence)
                 {
-                    return Err(RuntimeContractError::new("invalid_artifact_ocr_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidArtifactOcrReceipt,
+                    ));
                 }
             }
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
@@ -4843,7 +5118,7 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ContainedPageObserved { observation }) => {
                 if self.state != RuntimeReceiptState::Observed || self.terminal.is_none() {
                     return Err(RuntimeContractError::new(
-                        "invalid_page_observation_receipt",
+                        RuntimeContractCode::InvalidPageObservationReceipt,
                     ));
                 }
                 observation.validate()?;
@@ -4859,7 +5134,9 @@ impl RuntimeReceipt {
                         && self.state != RuntimeReceiptState::Completed)
                     || (operation.record.failure.is_some() && !recorded_lab_failure)
                 {
-                    return Err(RuntimeContractError::new("invalid_lab_operation_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidLabOperationReceipt,
+                    ));
                 }
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
@@ -4880,7 +5157,9 @@ impl RuntimeReceipt {
                     .as_deref()
                     .is_some_and(|value| value.is_empty() || value.len() > 256) =>
             {
-                return Err(RuntimeContractError::new("invalid_contained_task_result"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidContainedTaskResult,
+                ));
             }
             Some(RuntimeResult::ContainedTaskCancelled {
                 response_deadline_monotonic_ms,
@@ -4888,28 +5167,34 @@ impl RuntimeReceipt {
             }) if self.state != RuntimeReceiptState::Cancelled
                 || response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) =>
             {
-                return Err(RuntimeContractError::new("invalid_contained_task_result"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidContainedTaskResult,
+                ));
             }
             Some(RuntimeResult::ContainedTaskCancellation { status, .. }) => status.validate()?,
             Some(RuntimeResult::LabPinReleased { release }) => {
-                release
-                    .validate()
-                    .map_err(|_| RuntimeContractError::new("invalid_lab_pin_release_receipt"))?;
+                release.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidLabPinReleaseReceipt)
+                })?;
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal != Some(release.released)
                 {
-                    return Err(RuntimeContractError::new("invalid_lab_pin_release_receipt"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidLabPinReleaseReceipt,
+                    ));
                 }
             }
             Some(
                 RuntimeResult::AgentSessionOpened { context }
                 | RuntimeResult::AgentSessionObserved { context },
-            ) => context
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_agent_session_context"))?,
-            Some(RuntimeResult::AgentResponseRecorded { status }) => status
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_agent_session_status"))?,
+            ) => context.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidAgentSessionContext)
+            })?,
+            Some(RuntimeResult::AgentResponseRecorded { status }) => {
+                status.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidAgentSessionStatus)
+                })?
+            }
             Some(RuntimeResult::StrategicPlanPrepared { plan }) => plan.validate()?,
             Some(RuntimeResult::PolicyForwardProjected { projection }) => {
                 projection.validate_kind(RuntimePlanningDocumentKind::ForwardProjection)?
@@ -4917,12 +5202,16 @@ impl RuntimeReceipt {
             Some(RuntimeResult::PredictiveMaintenanceAssessed { assessment }) => {
                 assessment.validate_kind(RuntimePlanningDocumentKind::MaintenanceAssessmentV2)?
             }
-            Some(RuntimeResult::ProposalEvaluated { preview }) => preview
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_proposal_preview"))?,
-            Some(RuntimeResult::ProposalPromoted { promotion }) => promotion
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_proposal_promotion"))?,
+            Some(RuntimeResult::ProposalEvaluated { preview }) => {
+                preview.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidProposalPreview)
+                })?
+            }
+            Some(RuntimeResult::ProposalPromoted { promotion }) => {
+                promotion.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidProposalPromotion)
+                })?
+            }
             Some(RuntimeResult::ResourceTargetsApplied { applied }) => {
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal
@@ -4932,7 +5221,7 @@ impl RuntimeReceipt {
                         })
                 {
                     return Err(RuntimeContractError::new(
-                        "invalid_resource_targets_receipt",
+                        RuntimeContractCode::InvalidResourceTargetsReceipt,
                     ));
                 }
                 applied.validate()?;
@@ -4940,7 +5229,7 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ResourceTargetView { view }) => {
                 if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
                     return Err(RuntimeContractError::new(
-                        "invalid_resource_target_view_receipt",
+                        RuntimeContractCode::InvalidResourceTargetViewReceipt,
                     ));
                 }
                 view.validate()?;
@@ -4998,7 +5287,9 @@ pub struct RuntimeShutdownTarget {
 impl RuntimeShutdownTarget {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.pid == 0 || self.started_at_unix_ms == 0 {
-            return Err(RuntimeContractError::new("invalid_shutdown_target"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidShutdownTarget,
+            ));
         }
         Ok(())
     }
@@ -5042,14 +5333,18 @@ impl RuntimeInfo {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.schema_version != RUNTIME_INFO_SCHEMA_VERSION {
-            return Err(RuntimeContractError::new("unsupported_runtime_info_schema"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::UnsupportedRuntimeInfoSchema,
+            ));
         }
         let host = self
             .host
             .parse::<IpAddr>()
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_host"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeHost))?;
         if self.pid == 0 || self.port == 0 || self.started_at_unix_ms == 0 || !host.is_loopback() {
-            return Err(RuntimeContractError::new("invalid_runtime_info"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeInfo,
+            ));
         }
         Ok(())
     }
@@ -5059,7 +5354,7 @@ impl RuntimeInfo {
         let host = self
             .host
             .parse::<IpAddr>()
-            .map_err(|_| RuntimeContractError::new("invalid_runtime_host"))?;
+            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeHost))?;
         Ok(SocketAddr::new(host, self.port))
     }
 
@@ -5086,14 +5381,18 @@ impl RuntimeInfo {
 
 fn validate_point(x: i32, y: i32) -> RuntimeContractResult<()> {
     if x < 0 || y < 0 {
-        return Err(RuntimeContractError::new("invalid_input_coordinate"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidInputCoordinate,
+        ));
     }
     Ok(())
 }
 
 fn validate_duration(duration_ms: u64) -> RuntimeContractResult<()> {
     if !(1..=MAX_INPUT_DURATION_MS).contains(&duration_ms) {
-        return Err(RuntimeContractError::new("invalid_input_duration"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidInputDuration,
+        ));
     }
     Ok(())
 }
@@ -5104,7 +5403,9 @@ fn validate_sha256_hex(value: &str) -> RuntimeContractResult<()> {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(RuntimeContractError::new("invalid_sha256"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidSha256,
+        ));
     }
     Ok(())
 }
@@ -5112,7 +5413,7 @@ fn validate_sha256_hex(value: &str) -> RuntimeContractResult<()> {
 fn validate_canonical_sha256(value: &str) -> RuntimeContractResult<()> {
     value
         .strip_prefix("sha256:")
-        .ok_or_else(|| RuntimeContractError::new("invalid_sha256"))
+        .ok_or_else(|| RuntimeContractError::new(RuntimeContractCode::InvalidSha256))
         .and_then(validate_sha256_hex)
 }
 
@@ -5130,7 +5431,7 @@ pub fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {
         || value.len() > MAX_INSTANCE_ALIAS_BYTES
         || value.chars().any(char::is_control)
     {
-        return Err(RuntimeContractError::new("invalid_instance_alias"));
+        return Err(RuntimeContractError::new(SharedCode::InvalidInstanceAlias));
     }
     Ok(())
 }
@@ -5162,12 +5463,13 @@ impl GovernanceIdentityCard {
                 || version.chars().any(char::is_control))
         {
             return Err(RuntimeContractError::new(
-                "invalid_governance_client_version",
+                RuntimeContractCode::InvalidGovernanceClientVersion,
             ));
         }
         if let Some(instance) = &self.instance {
-            validate_instance_alias(instance)
-                .map_err(|_| RuntimeContractError::new("invalid_governance_instance"))?;
+            validate_instance_alias(instance).map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidGovernanceInstance)
+            })?;
         }
         Ok(())
     }
@@ -5181,7 +5483,9 @@ pub fn validate_governance_client(client: &str) -> RuntimeContractResult<()> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
-        return Err(RuntimeContractError::new("invalid_governance_client"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidGovernanceClient,
+        ));
     }
     Ok(())
 }
@@ -5202,7 +5506,7 @@ const MAX_STATUS_GAME_ID_BYTES: usize = 128;
 fn validate_bounded_text(
     value: &str,
     max_bytes: usize,
-    code: &'static str,
+    code: impl Into<Code>,
 ) -> RuntimeContractResult<()> {
     if value.is_empty()
         || value.len() > max_bytes

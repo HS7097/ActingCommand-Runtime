@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStoreError, ArtifactStoreResult};
+use actingcommand_contract::codes::SharedCode;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -21,9 +23,9 @@ impl ScreenshotNameAllocator {
     pub fn new(directory: impl AsRef<Path>) -> ArtifactStoreResult<Self> {
         let directory = directory.as_ref().to_path_buf();
         std::fs::create_dir_all(&directory).map_err(|error| {
-            ArtifactStoreError::fatal(
-                "screenshot_directory_failed",
-                "create_screenshot_directory",
+            ArtifactStoreError::new(
+                StoreCode::ScreenshotDirectoryFailed.code(),
+                StoreLocation::CreateScreenshotDirectory.location(),
                 error.to_string(),
             )
         })?;
@@ -59,9 +61,9 @@ impl ScreenshotNameAllocator {
             self.reserved.insert(candidate.clone());
             return Ok(candidate);
         }
-        Err(ArtifactStoreError::fatal(
-            "screenshot_name_exhausted",
-            "allocate_screenshot_name",
+        Err(ArtifactStoreError::new(
+            StoreCode::ScreenshotNameExhausted.code(),
+            StoreLocation::AllocateScreenshotName.location(),
             "all same-millisecond screenshot suffixes are occupied",
         ))
     }
@@ -69,32 +71,32 @@ impl ScreenshotNameAllocator {
 
 fn screenshot_timestamp(timestamp_unix_ms: u64) -> ArtifactStoreResult<String> {
     if timestamp_unix_ms == 0 {
-        return Err(ArtifactStoreError::fatal(
-            "invalid_artifact_timestamp",
-            "format_screenshot_name",
+        return Err(ArtifactStoreError::new(
+            SharedCode::InvalidArtifactTimestamp.code(),
+            StoreLocation::FormatScreenshotName.location(),
             "timestamp_unix_ms must be positive",
         ));
     }
     let nanos = i128::from(timestamp_unix_ms)
         .checked_mul(1_000_000)
         .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "invalid_artifact_timestamp",
-                "format_screenshot_name",
+            ArtifactStoreError::new(
+                SharedCode::InvalidArtifactTimestamp.code(),
+                StoreLocation::FormatScreenshotName.location(),
                 "timestamp_unix_ms exceeds supported range",
             )
         })?;
     let timestamp = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "invalid_artifact_timestamp",
-            "format_screenshot_name",
+        ArtifactStoreError::new(
+            SharedCode::InvalidArtifactTimestamp.code(),
+            StoreLocation::FormatScreenshotName.location(),
             error.to_string(),
         )
     })?;
     timestamp.format(SCREENSHOT_TIMESTAMP).map_err(|error| {
-        ArtifactStoreError::fatal(
-            "invalid_artifact_timestamp",
-            "format_screenshot_name",
+        ArtifactStoreError::new(
+            SharedCode::InvalidArtifactTimestamp.code(),
+            StoreLocation::FormatScreenshotName.location(),
             error.to_string(),
         )
     })

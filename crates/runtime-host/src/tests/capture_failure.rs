@@ -407,7 +407,10 @@ fn capture_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.operation(), "capture");
     assert_eq!(detail.message(), "injected capture failure");
     assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
-    let runtime_error = RuntimeHostError::execution("execute_capture_backend", &kernel_error);
+    let runtime_error = RuntimeHostError::execution(
+        crate::codes::HostLocation::ExecuteCaptureBackend,
+        &kernel_error,
+    );
     assert_eq!(runtime_error.diagnostic_detail(), Some(detail));
     assert!(
         !format!("{kernel_error:?} {kernel_error} {runtime_error:?} {runtime_error}")

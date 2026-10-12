@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict, GovernancePeer,
     valid_governance_declaration_origin,
@@ -19,22 +22,25 @@ impl HostShared {
             || request.source() != EventSource::Ui
             || !lock(
                 &self.governance_connections,
-                "authorize_approval_connection",
+                HostLocation::AuthorizeApprovalConnection,
             )?
             .contains(&connection_id)
         {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "governance_authority_required",
-                    "record_approval_decision",
+                    HostCode::GovernanceAuthorityRequired,
+                    ContractLocation::RecordApprovalDecision,
                     RuntimeErrorCode::InvalidRequest,
                 ),
                 RuntimeReceiptState::Denied,
                 None,
             ));
         }
-        let _gate = lock(&self.governance_write_gate, "record_approval_decision")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let _gate = lock(
+            &self.governance_write_gate,
+            ContractLocation::RecordApprovalDecision,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
             .map_err(RequestFailure::poison_without_terminal)?;
         if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
@@ -42,16 +48,16 @@ impl HostShared {
             else {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
-                        "approval_replay_payload_mismatch",
-                        "record_approval_decision",
+                        HostCode::ApprovalReplayPayloadMismatch,
+                        ContractLocation::RecordApprovalDecision,
                         RuntimeErrorCode::RuntimeFatal,
                     ),
                 ));
             };
             if payload.decision() != decision {
                 return Err(client_fact_conflict(
-                    "approval_replay_conflict",
-                    "record_approval_decision",
+                    HostCode::ApprovalReplayConflict,
+                    ContractLocation::RecordApprovalDecision,
                 ));
             }
             return Ok(OperationSuccess {
@@ -69,11 +75,14 @@ impl HostShared {
         let work = approvals
             .prepare_decision(decision)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let fact_gate = lock(&self.fact_write_gate, "append_approval_transaction")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let fact_gate = lock(
+            &self.fact_write_gate,
+            HostLocation::AppendApprovalTransaction,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         if self.lifecycle_append_failed.load(Ordering::Acquire) {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "append_approval_transaction",
+                HostLocation::AppendApprovalTransaction,
             )));
         }
         let links = validated.event_links(None, None, None);
@@ -139,8 +148,8 @@ impl HostShared {
     ) -> RuntimeHostResult<BTreeMap<String, ApprovalDecisionRecord>> {
         if approval_ids.len() > MAX_APPROVAL_REFS {
             return Err(RuntimeHostError::request(
-                "approval_read_ids_exceeded",
-                "read_latest_approval_decisions",
+                HostCode::ApprovalReadIdsExceeded,
+                HostLocation::ReadLatestApprovalDecisions,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
@@ -150,7 +159,7 @@ impl HostShared {
         // Recovery rewrites derived State rows, so it shares the gate of every other recovery.
         let _gate = lock(
             &self.governance_write_gate,
-            "read_latest_approval_decisions",
+            HostLocation::ReadLatestApprovalDecisions,
         )?;
         let approvals = match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
             Ok(approvals) => approvals,
@@ -179,10 +188,11 @@ impl HostShared {
         &self,
         generation: &CatalogGeneration,
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
-        let lineage = lock(self.policy()?, "read_policy_catalog_lineage")?
+        let lineage = lock(self.policy()?, HostLocation::ReadPolicyCatalogLineage)?
             .lineage()
             .clone();
-        let approvals = self.recover_approval_projection("read_superseded_catalog_approvals")?;
+        let approvals =
+            self.recover_approval_projection(HostLocation::ReadSupersededCatalogApprovals)?;
         Ok(approvals.superseded_catalog_approvals(&lineage, generation))
     }
 
@@ -197,12 +207,13 @@ impl HostShared {
     ) -> RuntimeHostResult<crate::catalog_plan::CatalogApprovalPlan> {
         if approval_ids.len() > MAX_APPROVAL_REFS {
             return Err(RuntimeHostError::request(
-                "approval_read_ids_exceeded",
-                "plan_policy_catalog_approvals",
+                HostCode::ApprovalReadIdsExceeded,
+                HostLocation::PlanPolicyCatalogApprovals,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
-        let approvals = self.recover_approval_projection("plan_policy_catalog_approvals")?;
+        let approvals =
+            self.recover_approval_projection(HostLocation::PlanPolicyCatalogApprovals)?;
         crate::catalog_plan::plan_catalog_approvals(
             Some(&approvals),
             lineage,
@@ -215,7 +226,7 @@ impl HostShared {
     /// gate (recovery rewrites derived State rows); a fatal failure poisons the Runtime.
     fn recover_approval_projection(
         &self,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<ApprovalProjection> {
         if let Some(error) = self.fatal.current()? {
             return Err(error);
@@ -247,22 +258,25 @@ impl HostShared {
     ) -> Result<OperationSuccess, RequestFailure> {
         if card.validate().is_err() {
             return Err(governance_identity_denied(
-                "invalid_governance_identity_card",
+                SharedCode::InvalidGovernanceIdentityCard,
                 None,
             ));
         }
         if !valid_governance_declaration_origin(request.actor(), request.source()) {
             return Err(governance_identity_denied(
-                "invalid_governance_origin",
+                SharedCode::InvalidGovernanceOrigin,
                 None,
             ));
         }
-        let _gate = lock(&self.governance_write_gate, "declare_governance_identity")
-            .map_err(RequestFailure::poison_without_terminal)?;
+        let _gate = lock(
+            &self.governance_write_gate,
+            ContractLocation::DeclareGovernanceIdentity,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
         let instance_id = match card.instance.as_deref() {
             Some(alias) => lock(
                 &self.registered_instances,
-                "resolve_governance_identity_instance",
+                HostLocation::ResolveGovernanceIdentityInstance,
             )?
             .values()
             .find(|instance| instance.instance_alias == alias)
@@ -282,8 +296,11 @@ impl HostShared {
             GovernanceIdentityVerdict::Refused {
                 code: GovernanceIdentityRefusal::InstanceUnknown,
             }
-        } else if lock(&self.governance_connections, "read_governance_connection")?
-            .contains(&connection_id)
+        } else if lock(
+            &self.governance_connections,
+            HostLocation::ReadGovernanceConnection,
+        )?
+        .contains(&connection_id)
         {
             GovernanceIdentityVerdict::Refused {
                 code: GovernanceIdentityRefusal::AlreadyDeclared,
@@ -309,21 +326,18 @@ impl HostShared {
             ),
         )?;
         if let GovernanceIdentityVerdict::Refused { code } = verdict {
-            return Err(governance_identity_denied(
-                code.as_str(),
-                Some(terminal(&persisted)),
-            ));
+            return Err(governance_identity_denied(code, Some(terminal(&persisted))));
         }
         if !lock(
             &self.governance_connections,
-            "declare_governance_connection",
+            HostLocation::DeclareGovernanceConnection,
         )?
         .insert(connection_id)
         {
             return Err(RequestFailure::poison(
                 RuntimeHostError::fatal(
-                    "governance_connection_state_conflict",
-                    "declare_governance_identity",
+                    HostCode::GovernanceConnectionStateConflict,
+                    ContractLocation::DeclareGovernanceIdentity,
                     RuntimeErrorCode::RuntimeFatal,
                 ),
                 Some(terminal(&persisted)),
@@ -338,13 +352,13 @@ impl HostShared {
 }
 
 fn governance_identity_denied(
-    code: &'static str,
+    code: impl Into<Code>,
     terminal: Option<TerminalEvent>,
 ) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             code,
-            "declare_governance_identity",
+            ContractLocation::DeclareGovernanceIdentity,
             RuntimeErrorCode::InvalidRequest,
         ),
         RuntimeReceiptState::Denied,

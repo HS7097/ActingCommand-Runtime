@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::error::{PpocrFailureSource, RuntimeFailureRelation};
 use actingcommand_artifact_store::ArtifactStream;
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     PPOCR_MAX_REPORT_JSON_BYTES, PpocrDiagnostics, PpocrNodePlacementDiagnostic,
     SavedArtifactOcrSource,
@@ -104,8 +107,8 @@ pub(super) fn attach_ppocr_source(
         }
         Err(cause) => {
             let mut secondary = RuntimeHostError::fatal(
-                "ppocr_original_error_encode_failed",
-                "archive_ppocr_diagnostic",
+                HostCode::PpocrOriginalErrorEncodeFailed,
+                HostLocation::ArchivePpocrDiagnostic,
                 RuntimeErrorCode::RuntimeFatal,
             );
             secondary.lifecycle.ppocr_message = Some(cause.to_string());
@@ -115,14 +118,14 @@ pub(super) fn attach_ppocr_source(
 }
 
 pub(super) fn task_ppocr_failure(
-    code: &'static str,
+    code: impl Into<Code>,
     message: String,
     reports: &PpocrDiagnostics,
 ) -> RuntimeHostError {
     attach_ppocr_failure(
         RuntimeHostError::request(
             code,
-            "run_contained_task",
+            ContractLocation::RunContainedTask,
             RuntimeErrorCode::BackendOperationFailed,
         ),
         reports,
@@ -228,11 +231,11 @@ impl HostShared {
             let result = (|| {
                 report.validate().map_err(|message| {
                     RuntimeHostError::fatal(
-                        "ppocr_diagnostic_invalid",
-                        "archive_ppocr_diagnostic",
+                        HostCode::PpocrDiagnosticInvalid,
+                        HostLocation::ArchivePpocrDiagnostic,
                         RuntimeErrorCode::RuntimeFatal,
                     )
-                    .with_native_detail(message)
+                    .with_native_detail(message.to_string())
                 })?;
                 let timestamp = unix_ms_now()?;
                 let mut write_context = ArtifactWriteContext::new(
@@ -285,8 +288,8 @@ impl HostShared {
                 };
                 if let Err(message) = encoded {
                     let mut error = RuntimeHostError::fatal(
-                        "ppocr_diagnostic_write_failed",
-                        "archive_ppocr_diagnostic",
+                        HostCode::PpocrDiagnosticWriteFailed,
+                        HostLocation::ArchivePpocrDiagnostic,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                     .with_native_detail(message.clone());
@@ -310,10 +313,11 @@ impl HostShared {
                     .seal_stream(stream, &mut sink)
                     .map_err(|error| {
                         if error.code() == "artifact_event_append_failed" {
-                            ledger_error("archive_ppocr_diagnostic").with_complete_failure(
-                                RuntimeFailureRelation::DiagnosticArchive,
-                                ppocr_artifact_error(error),
-                            )
+                            ledger_error(HostLocation::ArchivePpocrDiagnostic)
+                                .with_complete_failure(
+                                    RuntimeFailureRelation::DiagnosticArchive,
+                                    ppocr_artifact_error(error),
+                                )
                         } else {
                             ppocr_artifact_error(error)
                         }
@@ -324,8 +328,8 @@ impl HostShared {
                     .is_none_or(|event| event.artifacts() != [artifact.reference().clone()])
                 {
                     return Err(RuntimeHostError::fatal(
-                        "ppocr_diagnostic_verified_event_missing",
-                        "archive_ppocr_diagnostic",
+                        HostCode::PpocrDiagnosticVerifiedEventMissing,
+                        HostLocation::ArchivePpocrDiagnostic,
                         RuntimeErrorCode::RuntimeFatal,
                     ));
                 }

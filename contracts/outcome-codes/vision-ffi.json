@@ -1,0 +1,44 @@
+{
+  "owner": "vision-ffi",
+  "codes": {
+    "vision_root_unavailable": {
+      "category": "error",
+      "owner": "vision-ffi",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A vision root's model listing cannot be used: the root or its models directory is unavailable. actingd's startup listing, its check-config and vision-provider-check refuse the root with it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "vision_models_empty": {
+      "category": "error",
+      "owner": "vision-ffi",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A vision root's model listing cannot be used: the models directory holds no model folder.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "vision_model_folder_invalid": {
+      "category": "error",
+      "owner": "vision-ffi",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

@@ -13,6 +13,10 @@
 //! that it did. A tie-break key whose value is unknown orders its candidate behind every
 //! candidate whose value is known, in either direction, and the candidate's verdict says so.
 //! Nothing is silently read as `false` or `0`.
+//!
+//! [`evaluate_collect`] is the collect option, the call a scheduling layer makes: the same
+//! gates and terms over the same inputs, but an unknown input is listed per candidate instead
+//! of being handled by the document's clauses, and nothing is selected.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -190,30 +194,7 @@ pub fn evaluate(
     now_unix_ms: u64,
 ) -> Result<SelectionDecision, SelectionError> {
     policy.validate()?;
-    if candidates.len() > MAX_CANDIDATES {
-        return Err(SelectionError::new(
-            SelectionErrorCode::LimitExceeded,
-            format!(
-                "{} candidates exceed the {MAX_CANDIDATES} limit",
-                candidates.len()
-            ),
-        ));
-    }
-    let mut seen = BTreeSet::new();
-    for candidate in candidates {
-        if candidate.candidate_id.is_empty() {
-            return Err(SelectionError::new(
-                SelectionErrorCode::MissingRequiredField,
-                "a candidate carries an empty candidate_id".to_owned(),
-            ));
-        }
-        if !seen.insert(candidate.candidate_id.as_str()) {
-            return Err(SelectionError::new(
-                SelectionErrorCode::DuplicateId,
-                format!("candidate `{}` appears twice", candidate.candidate_id),
-            ));
-        }
-    }
+    check_candidate_set(candidates)?;
 
     let policy_sha256 = canonical_sha256(policy)?;
     let input_sha256 = canonical_sha256(&EvaluationInput {
@@ -237,7 +218,7 @@ pub fn evaluate(
     // lists were read, even with no candidate at all.
     let lists = match read_lists(policy, facts, now_unix_ms) {
         Ok(lists) => lists,
-        Err((reason, detail)) => {
+        Err(ListUnreadable { reason, detail }) => {
             reasons.push(DecisionReason::new("selection.unknown", &detail));
             return Ok(finish(
                 policy,
@@ -252,21 +233,7 @@ pub fn evaluate(
             ));
         }
     };
-    let resolver = Resolver {
-        fields: policy
-            .fields
-            .iter()
-            .map(|declaration| (declaration.name.as_str(), &declaration.value_type))
-            .collect(),
-        facts: policy
-            .facts
-            .iter()
-            .map(|declaration| (declaration.fact_key.as_str(), declaration))
-            .collect(),
-        snapshot: facts,
-        lists,
-        now_unix_ms,
-    };
+    let resolver = Resolver::new(policy, facts, lists, now_unix_ms);
 
     let mut verdicts = Vec::with_capacity(candidates.len());
     let mut survivors: Vec<Ranked> = Vec::new();
@@ -393,6 +360,208 @@ pub fn evaluate(
     ))
 }
 
+/// One input a gate left undecided, or a term could not use, under [`evaluate_collect`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownInput {
+    /// The gate or term that met the input.
+    pub rule_id: String,
+    /// What it read: a fact key (`fact` source) or a candidate field name (`field` source).
+    pub input: ValueRef,
+    pub reason: UnknownReason,
+}
+
+/// One input a gate or term read as a known value, under [`evaluate_collect`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownInput {
+    pub input: ValueRef,
+    /// For a `fact` source, the last instant the read stays known: the record's own expiry or
+    /// its publication plus the document's `max_age_ms`, whichever comes first. `None` for a
+    /// candidate field, whose freshness only the caller knows.
+    pub known_until_unix_ms: Option<u64>,
+}
+
+/// Where one candidate ended up under [`evaluate_collect`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectedVerdict {
+    /// Every gate held and every term read a known value.
+    Scored { score_milli: i64 },
+    /// A gate's predicate was decided against the candidate.
+    GateRejected { gate_id: String },
+    /// A gate was left undecided or a term could not use its input. Every such input is
+    /// listed once, gates before terms, in document order.
+    Unknown { inputs: Vec<UnknownInput> },
+}
+
+/// One candidate's result under [`evaluate_collect`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedCandidate {
+    pub candidate_id: String,
+    pub verdict: CollectedVerdict,
+    /// Every input the candidate's gates and terms read as a known value, each once, in the
+    /// order they were read.
+    pub known_inputs: Vec<KnownInput>,
+}
+
+/// Evaluates every candidate under the collect option: the call a scheduling layer makes.
+///
+/// A gate or term that meets an unknown input neither ends the evaluation, nor drops the
+/// candidate, nor substitutes a value: the `on_unknown` clauses the document declares have no
+/// effect here. The candidate's verdict lists every unknown input instead, so the caller can
+/// treat each one. Evaluation goes on past an undecided gate so that every unknown input of
+/// the candidate is listed; a gate decided against it still rejects it, because the gates are
+/// a conjunction. Tie-break keys are not read. The document and the hashes are not involved:
+/// nothing is selected, and the result is one entry per candidate, in input order.
+///
+/// An `Err` means the same as for [`evaluate`]: the inputs could not be evaluated at all. A
+/// document that declares a record list is refused with `type_mismatch`: only a task's select
+/// step reads one, through [`evaluate`] and its up-front list check, and the scheduling consumer
+/// refuses such a document at catalog compile for the same reason.
+pub fn evaluate_collect(
+    policy: &SelectionPolicy,
+    candidates: &[Candidate],
+    facts: &SelectionFactSnapshot,
+    now_unix_ms: u64,
+) -> Result<Vec<CollectedCandidate>, SelectionError> {
+    policy.validate()?;
+    if policy.uses_record_lists() {
+        return Err(SelectionError::new(
+            SelectionErrorCode::TypeMismatch,
+            "value_type=record_list option=collect",
+        ));
+    }
+    check_candidate_set(candidates)?;
+    let resolver = Resolver::new(policy, facts, ListIndex::new(), now_unix_ms);
+    candidates
+        .iter()
+        .map(|candidate| collect_candidate(policy, candidate, &resolver))
+        .collect()
+}
+
+fn check_candidate_set(candidates: &[Candidate]) -> Result<(), SelectionError> {
+    if candidates.len() > MAX_CANDIDATES {
+        return Err(SelectionError::new(
+            SelectionErrorCode::LimitExceeded,
+            format!(
+                "{} candidates exceed the {MAX_CANDIDATES} limit",
+                candidates.len()
+            ),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for candidate in candidates {
+        if candidate.candidate_id.is_empty() {
+            return Err(SelectionError::new(
+                SelectionErrorCode::MissingRequiredField,
+                "a candidate carries an empty candidate_id".to_owned(),
+            ));
+        }
+        if !seen.insert(candidate.candidate_id.as_str()) {
+            return Err(SelectionError::new(
+                SelectionErrorCode::DuplicateId,
+                format!("candidate `{}` appears twice", candidate.candidate_id),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn collect_candidate(
+    policy: &SelectionPolicy,
+    candidate: &Candidate,
+    resolver: &Resolver<'_>,
+) -> Result<CollectedCandidate, SelectionError> {
+    let mut reads = Reads::recording();
+    let mut unknown = Vec::new();
+
+    for gate in &policy.gates {
+        let start = reads.unknown.len();
+        match truth(&gate.predicate, candidate, resolver, &mut reads) {
+            Truth::True => {}
+            Truth::False => {
+                return Ok(CollectedCandidate {
+                    candidate_id: candidate.candidate_id.clone(),
+                    verdict: CollectedVerdict::GateRejected {
+                        gate_id: gate.gate_id.clone(),
+                    },
+                    known_inputs: reads.known,
+                });
+            }
+            Truth::Unknown(_) => {
+                for (input, reason) in reads.unknown.drain(start..) {
+                    note_unknown(&mut unknown, &gate.gate_id, input, reason);
+                }
+            }
+        }
+        reads.unknown.truncate(start);
+    }
+
+    // The score only matters while every input is known; once one is not, the terms are read
+    // only to list their own unknown inputs.
+    let mut total = unknown.is_empty().then_some(0_i128);
+    for term in &policy.scoring {
+        let resolved = resolver
+            .read(&term.value, candidate)
+            .and_then(|value| transform(&term.transform, &value));
+        let transformed_milli = match resolved {
+            Ok(transformed_milli) => {
+                reads.record_known(resolver, &term.value);
+                transformed_milli
+            }
+            Err(reason) => {
+                note_unknown(&mut unknown, &term.term_id, term.value.clone(), reason);
+                total = None;
+                continue;
+            }
+        };
+        if let Some(sum) = total.as_mut() {
+            let product = i128::from(transformed_milli) * i128::from(term.weight_milli) / 1_000;
+            let contribution_milli = i64::try_from(product).map_err(|_| {
+                SelectionError::new(
+                    SelectionErrorCode::ArithmeticOverflow,
+                    format!("term `{}` overflows a 64-bit milli score", term.term_id),
+                )
+            })?;
+            *sum += i128::from(contribution_milli);
+        }
+    }
+
+    let verdict = if unknown.is_empty() {
+        let score_milli = i64::try_from(total.unwrap_or_default()).map_err(|_| {
+            SelectionError::new(
+                SelectionErrorCode::ArithmeticOverflow,
+                format!(
+                    "candidate `{}` overflows a 64-bit milli score",
+                    candidate.candidate_id
+                ),
+            )
+        })?;
+        CollectedVerdict::Scored { score_milli }
+    } else {
+        CollectedVerdict::Unknown { inputs: unknown }
+    };
+    Ok(CollectedCandidate {
+        candidate_id: candidate.candidate_id.clone(),
+        verdict,
+        known_inputs: reads.known,
+    })
+}
+
+fn note_unknown(
+    unknown: &mut Vec<UnknownInput>,
+    rule_id: &str,
+    input: ValueRef,
+    reason: UnknownReason,
+) {
+    let entry = UnknownInput {
+        rule_id: rule_id.to_owned(),
+        input,
+        reason,
+    };
+    if !unknown.contains(&entry) {
+        unknown.push(entry);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish(
     policy: &SelectionPolicy,
@@ -423,6 +592,13 @@ fn finish(
     }
 }
 
+/// Why the up-front list check failed: the typed reason of the `unknown` decision, and its
+/// detail, the list's fact key (and the key two rows share).
+pub(crate) struct ListUnreadable {
+    pub(crate) reason: UnknownReason,
+    pub(crate) detail: String,
+}
+
 /// The up-front list check. Every record list the document declares is read whole, in
 /// document order; then the rows each `keyed_fact` reference selects with its `where` are
 /// indexed by key. An unreadable list, or one key held by two selected rows, is the reason of
@@ -431,13 +607,16 @@ pub(crate) fn read_lists<'a>(
     policy: &'a SelectionPolicy,
     facts: &'a SelectionFactSnapshot,
     now_unix_ms: u64,
-) -> Result<ListIndex<'a>, (UnknownReason, String)> {
+) -> Result<ListIndex<'a>, ListUnreadable> {
     let mut lists = BTreeMap::new();
     for declaration in &policy.facts {
         if let ValueType::RecordList { key_column, .. } = &declaration.value_type {
             let rows = facts
                 .resolve_list(declaration, now_unix_ms)
-                .map_err(|reason| (reason, format!("fact_key={}", declaration.fact_key)))?;
+                .map_err(|reason| ListUnreadable {
+                    reason,
+                    detail: format!("fact_key={}", declaration.fact_key),
+                })?;
             lists.insert(declaration.fact_key.as_str(), (key_column.as_str(), rows));
         }
     }
@@ -455,7 +634,10 @@ pub(crate) fn read_lists<'a>(
         if index.contains_key(&reference) {
             continue;
         }
-        let malformed = || (UnknownReason::TypeMismatch, format!("fact_key={fact_key}"));
+        let malformed = || ListUnreadable {
+            reason: UnknownReason::TypeMismatch,
+            detail: format!("fact_key={fact_key}"),
+        };
         let &(key_column, rows) = lists.get(fact_key.as_str()).ok_or_else(malformed)?;
         let mut keyed = BTreeMap::new();
         for row in rows {
@@ -468,10 +650,10 @@ pub(crate) fn read_lists<'a>(
                 return Err(malformed());
             };
             if keyed.insert(key.as_str(), row).is_some() {
-                return Err((
-                    UnknownReason::TypeMismatch,
-                    format!("fact_key={fact_key} duplicated_key={key}"),
-                ));
+                return Err(ListUnreadable {
+                    reason: UnknownReason::TypeMismatch,
+                    detail: format!("fact_key={fact_key} duplicated_key={key}"),
+                });
             }
         }
         index.insert(reference, keyed);
@@ -487,7 +669,52 @@ struct Resolver<'a> {
     now_unix_ms: u64,
 }
 
-impl Resolver<'_> {
+impl<'a> Resolver<'a> {
+    fn new(
+        policy: &'a SelectionPolicy,
+        snapshot: &'a SelectionFactSnapshot,
+        lists: ListIndex<'a>,
+        now_unix_ms: u64,
+    ) -> Self {
+        Self {
+            fields: policy
+                .fields
+                .iter()
+                .map(|declaration| (declaration.name.as_str(), &declaration.value_type))
+                .collect(),
+            facts: policy
+                .facts
+                .iter()
+                .map(|declaration| (declaration.fact_key.as_str(), declaration))
+                .collect(),
+            snapshot,
+            lists,
+            now_unix_ms,
+        }
+    }
+
+    /// The last instant a `fact` read stays known: the record's own expiry or its publication
+    /// plus the document's `max_age_ms`, whichever comes first. A field has none here.
+    fn known_until(&self, reference: &ValueRef) -> Option<u64> {
+        let ValueRef::Fact { fact_key } = reference else {
+            return None;
+        };
+        let declared = self.facts.get(fact_key.as_str())?;
+        match self.snapshot.facts.get(fact_key)? {
+            crate::facts::SelectionFactEntry::Published {
+                published_at_unix_ms,
+                expires_at_unix_ms,
+                ..
+            } => {
+                let fresh_until = published_at_unix_ms.saturating_add(declared.max_age_ms);
+                Some(expires_at_unix_ms.map_or(fresh_until, |expiry| expiry.min(fresh_until)))
+            }
+            // A record list is never a known `fact` read: it resolves to `fact_not_scalar`.
+            crate::facts::SelectionFactEntry::Unusable { .. }
+            | crate::facts::SelectionFactEntry::RecordList { .. } => None,
+        }
+    }
+
     fn read(
         &self,
         reference: &ValueRef,
@@ -566,6 +793,51 @@ enum Truth {
     Unknown(UnknownReason),
 }
 
+/// The inputs one candidate's predicates read, kept only for [`evaluate_collect`].
+///
+/// `unknown` holds the unknown inputs of the predicate being decided. A conjunction or a
+/// disjunction that its known members decide drops the unknown inputs its members recorded,
+/// because they did not matter, so what is left when a gate stays undecided is exactly the
+/// set of inputs that left it undecided.
+struct Reads {
+    recording: bool,
+    known: Vec<KnownInput>,
+    unknown: Vec<(ValueRef, UnknownReason)>,
+}
+
+impl Reads {
+    fn recording() -> Self {
+        Self {
+            recording: true,
+            known: Vec::new(),
+            unknown: Vec::new(),
+        }
+    }
+
+    fn ignored() -> Self {
+        Self {
+            recording: false,
+            known: Vec::new(),
+            unknown: Vec::new(),
+        }
+    }
+
+    fn record_known(&mut self, resolver: &Resolver<'_>, input: &ValueRef) {
+        if self.recording && !self.known.iter().any(|known| known.input == *input) {
+            self.known.push(KnownInput {
+                input: input.clone(),
+                known_until_unix_ms: resolver.known_until(input),
+            });
+        }
+    }
+
+    fn record_unknown(&mut self, input: &ValueRef, reason: UnknownReason) {
+        if self.recording {
+            self.unknown.push((input.clone(), reason));
+        }
+    }
+}
+
 fn assess(
     policy: &SelectionPolicy,
     candidate: &Candidate,
@@ -581,8 +853,9 @@ fn assess(
         reasons: Vec::new(),
     };
 
+    let mut unrecorded = Reads::ignored();
     for gate in &policy.gates {
-        let (outcome, keep) = match truth(&gate.predicate, candidate, resolver) {
+        let (outcome, keep) = match truth(&gate.predicate, candidate, resolver, &mut unrecorded) {
             Truth::True => (GateOutcome::Passed, true),
             Truth::False => (GateOutcome::Failed, false),
             Truth::Unknown(reason) => match gate.on_unknown {
@@ -776,43 +1049,49 @@ fn truth(
     predicate: &crate::schema::Predicate,
     candidate: &Candidate,
     resolver: &Resolver<'_>,
+    reads: &mut Reads,
 ) -> Truth {
     use crate::schema::Predicate;
-    let integer = |reference: &ValueRef| match resolver.read(reference, candidate) {
-        Ok(ScalarValue::Integer(value)) => Ok(value),
-        Ok(_) => Err(UnknownReason::TypeMismatch),
-        Err(reason) => Err(reason),
-    };
     match predicate {
-        Predicate::IntegerAtLeast { value, threshold } => match integer(value) {
-            Ok(value) => bool_truth(value >= *threshold),
-            Err(reason) => Truth::Unknown(reason),
-        },
-        Predicate::IntegerAtMost { value, threshold } => match integer(value) {
-            Ok(value) => bool_truth(value <= *threshold),
-            Err(reason) => Truth::Unknown(reason),
-        },
-        Predicate::IntegerEquals { value, expected } => match integer(value) {
-            Ok(value) => bool_truth(value == *expected),
-            Err(reason) => Truth::Unknown(reason),
-        },
-        Predicate::BooleanEquals { value, expected } => match resolver.read(value, candidate) {
-            Ok(ScalarValue::Boolean(value)) => bool_truth(value == *expected),
-            Ok(_) => Truth::Unknown(UnknownReason::TypeMismatch),
-            Err(reason) => Truth::Unknown(reason),
-        },
-        Predicate::StringIn { value, allowed } => match resolver.read(value, candidate) {
-            Ok(ScalarValue::String(value)) => {
-                bool_truth(allowed.iter().any(|member| member == &value))
-            }
-            Ok(_) => Truth::Unknown(UnknownReason::TypeMismatch),
-            Err(reason) => Truth::Unknown(reason),
-        },
+        Predicate::IntegerAtLeast { value, threshold } => {
+            leaf(value, candidate, resolver, reads, |value| match value {
+                ScalarValue::Integer(value) => Some(*value >= *threshold),
+                _ => None,
+            })
+        }
+        Predicate::IntegerAtMost { value, threshold } => {
+            leaf(value, candidate, resolver, reads, |value| match value {
+                ScalarValue::Integer(value) => Some(*value <= *threshold),
+                _ => None,
+            })
+        }
+        Predicate::IntegerEquals { value, expected } => {
+            leaf(value, candidate, resolver, reads, |value| match value {
+                ScalarValue::Integer(value) => Some(*value == *expected),
+                _ => None,
+            })
+        }
+        Predicate::BooleanEquals { value, expected } => {
+            leaf(value, candidate, resolver, reads, |value| match value {
+                ScalarValue::Boolean(value) => Some(*value == *expected),
+                _ => None,
+            })
+        }
+        Predicate::StringIn { value, allowed } => {
+            leaf(value, candidate, resolver, reads, |value| match value {
+                ScalarValue::String(value) => Some(allowed.iter().any(|member| member == value)),
+                _ => None,
+            })
+        }
         Predicate::All { of } => {
+            let start = reads.unknown.len();
             let mut unknown = None;
             for inner in of {
-                match truth(inner, candidate, resolver) {
-                    Truth::False => return Truth::False,
+                match truth(inner, candidate, resolver, reads) {
+                    Truth::False => {
+                        reads.unknown.truncate(start);
+                        return Truth::False;
+                    }
                     Truth::Unknown(reason) => unknown = unknown.or(Some(reason)),
                     Truth::True => {}
                 }
@@ -820,21 +1099,49 @@ fn truth(
             unknown.map_or(Truth::True, Truth::Unknown)
         }
         Predicate::Any { of } => {
+            let start = reads.unknown.len();
             let mut unknown = None;
             for inner in of {
-                match truth(inner, candidate, resolver) {
-                    Truth::True => return Truth::True,
+                match truth(inner, candidate, resolver, reads) {
+                    Truth::True => {
+                        reads.unknown.truncate(start);
+                        return Truth::True;
+                    }
                     Truth::Unknown(reason) => unknown = unknown.or(Some(reason)),
                     Truth::False => {}
                 }
             }
             unknown.map_or(Truth::False, Truth::Unknown)
         }
-        Predicate::Not { of } => match truth(of, candidate, resolver) {
+        Predicate::Not { of } => match truth(of, candidate, resolver, reads) {
             Truth::True => Truth::False,
             Truth::False => Truth::True,
             Truth::Unknown(reason) => Truth::Unknown(reason),
         },
+    }
+}
+
+/// Decides one comparison: `decide` answers for a value of the type it compares, and `None`
+/// for any other type, which is a type mismatch.
+fn leaf(
+    reference: &ValueRef,
+    candidate: &Candidate,
+    resolver: &Resolver<'_>,
+    reads: &mut Reads,
+    decide: impl FnOnce(&ScalarValue) -> Option<bool>,
+) -> Truth {
+    let decided = resolver
+        .read(reference, candidate)
+        .and_then(|value| decide(&value).ok_or(UnknownReason::TypeMismatch));
+    match decided {
+        Ok(holds) => {
+            reads.record_known(resolver, reference);
+            bool_truth(holds)
+        }
+        Err(reason) => {
+            reads.record_unknown(reference, reason);
+            Truth::Unknown(reason)
+        }
     }
 }
 
@@ -1762,6 +2069,7 @@ mod tests {
             ("lib.rs", include_str!("lib.rs")),
             ("bound.rs", include_str!("bound.rs")),
             ("canonical.rs", include_str!("canonical.rs")),
+            ("codes.rs", include_str!("codes.rs")),
             ("evaluator.rs", include_str!("evaluator.rs")),
             ("facts.rs", include_str!("facts.rs")),
             ("schema.rs", include_str!("schema.rs")),

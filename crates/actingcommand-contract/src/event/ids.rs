@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::IdentifierIssuanceCode;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::error::Error;
@@ -195,14 +196,16 @@ pub struct IdentifierIssuer {
 
 impl IdentifierIssuer {
     pub fn new() -> Result<Self, IdentifierIssuanceError> {
-        let elapsed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| IdentifierIssuanceError::new("identifier_clock_invalid"))?;
+        let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
+            IdentifierIssuanceError::new(IdentifierIssuanceCode::IdentifierClockInvalid)
+        })?;
         let nonce = NEXT_ISSUER_NONCE
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
-            .map_err(|_| IdentifierIssuanceError::new("identifier_issuer_exhausted"))?;
+            .map_err(|_| {
+                IdentifierIssuanceError::new(IdentifierIssuanceCode::IdentifierIssuerExhausted)
+            })?;
         let nanos = elapsed.as_nanos();
         let folded_time = (nanos as u64) ^ ((nanos >> 64) as u64).rotate_left(17);
         let namespace =
@@ -219,7 +222,9 @@ impl IdentifierIssuer {
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
-            .map_err(|_| IdentifierIssuanceError::new("identifier_sequence_exhausted"))?;
+            .map_err(|_| {
+                IdentifierIssuanceError::new(IdentifierIssuanceCode::IdentifierSequenceExhausted)
+            })?;
         let mut bytes = [0_u8; 16];
         bytes[..8].copy_from_slice(&self.namespace.to_be_bytes());
         bytes[8..].copy_from_slice(&sequence.to_be_bytes());
@@ -235,19 +240,19 @@ impl fmt::Debug for IdentifierIssuer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdentifierIssuanceError {
-    code: &'static str,
+    code: crate::outcome::Code,
 }
 
 impl IdentifierIssuanceError {
-    const fn new(code: &'static str) -> Self {
-        Self { code }
+    fn new(code: impl Into<crate::outcome::Code>) -> Self {
+        Self { code: code.into() }
     }
 
-    pub(crate) const fn contract_invalid() -> Self {
-        Self::new("identifier_contract_invalid")
+    pub(crate) fn contract_invalid() -> Self {
+        Self::new(IdentifierIssuanceCode::IdentifierContractInvalid)
     }
 
-    pub const fn code(self) -> &'static str {
+    pub const fn code(self) -> crate::outcome::Code {
         self.code
     }
 }

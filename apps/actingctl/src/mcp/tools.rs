@@ -12,6 +12,8 @@ use super::operator;
 use super::protocol::Era;
 use super::runs;
 use super::runtime::RuntimeAccess;
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Code;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -147,28 +149,56 @@ pub(super) struct ToolError(Box<ToolErrorBody>);
 
 struct ToolErrorBody {
     class: &'static str,
-    code: String,
+    code: ToolCode,
     message: String,
     blocked_by: Option<String>,
     details: Map<String, Value>,
 }
 
+/// The code a tool error answers with.
+pub(super) enum ToolCode {
+    /// A code this server emits.
+    Emitted(Code),
+    /// A code passed on as another program or the Runtime reported it: actinglab's envelope
+    /// error, a job's stored error and the Runtime's material read failure, which A5's
+    /// `{class, outcome}` relays as links. It also carries actingctl's own dynamic family
+    /// `material_<state>` (a material read without a failure): a code that carries the read
+    /// state, which A5 splits into one fixed code with a `material_state` value instead of
+    /// relaying it.
+    Relayed { relayed_code: String },
+}
+
+impl ToolCode {
+    /// The code's spelling.
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Emitted(code) => code.as_str(),
+            Self::Relayed { relayed_code } => relayed_code,
+        }
+    }
+}
+
 impl ToolError {
     pub(super) fn new(
         class: &'static str,
-        code: impl Into<String>,
+        code: impl Into<Code>,
         message: impl Into<String>,
     ) -> Self {
+        Self::coded(class, ToolCode::Emitted(code.into()), message)
+    }
+
+    /// An error with this code, emitted or relayed.
+    pub(super) fn coded(class: &'static str, code: ToolCode, message: impl Into<String>) -> Self {
         Self(Box::new(ToolErrorBody {
             class,
-            code: code.into(),
+            code,
             message: message.into(),
             blocked_by: None,
             details: Map::new(),
         }))
     }
 
-    pub(super) fn usage(code: &str, message: impl Into<String>) -> Self {
+    pub(super) fn usage(code: impl Into<Code>, message: impl Into<String>) -> Self {
         Self::new("usage", code, message)
     }
 
@@ -183,8 +213,17 @@ impl ToolError {
         self
     }
 
-    pub(super) fn code(&self) -> &str {
-        &self.0.code
+    /// The code this server emitted; `None` for a relayed one.
+    pub(super) fn code(&self) -> Option<Code> {
+        match &self.0.code {
+            ToolCode::Emitted(code) => Some(*code),
+            ToolCode::Relayed { .. } => None,
+        }
+    }
+
+    /// The spelling of the code, emitted or relayed, as the error's JSON carries it.
+    pub(super) fn code_spelling(&self) -> &str {
+        self.0.code.as_str()
     }
 
     /// One member of the details, when present.
@@ -196,7 +235,7 @@ impl ToolError {
     pub(super) fn to_value(&self) -> Value {
         json!({
             "class": self.0.class,
-            "code": self.0.code,
+            "code": self.0.code.as_str(),
             "message": self.0.message,
             "blocked_by": self.0.blocked_by,
             "details": self.0.details,
@@ -212,7 +251,7 @@ impl ToolError {
         let body = *self.0;
         json!({
             "class": body.class,
-            "code": body.code,
+            "code": body.code.as_str(),
             "message": body.message,
             "blocked_by": body.blocked_by,
             "details": body.details,
@@ -232,7 +271,7 @@ impl ToolError {
     pub(super) fn into_warning(self) -> Value {
         let body = *self.0;
         json!({
-            "code": body.code,
+            "code": body.code.as_str(),
             "message": body.message,
             "blocked_by": body.blocked_by,
             "details": body.details,
@@ -299,8 +338,11 @@ impl<'a> Arguments<'a> {
 }
 
 pub(super) fn invalid_argument(field: &str, reason: &str) -> ToolError {
-    ToolError::usage("arguments_invalid", format!("argument {field} {reason}"))
-        .with_detail("field", json!(field))
+    ToolError::usage(
+        ActingctlCode::ArgumentsInvalid,
+        format!("argument {field} {reason}"),
+    )
+    .with_detail("field", json!(field))
 }
 
 /// One row of the tool table.
@@ -323,7 +365,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, reason_code}, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {code, message}} (code runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {code, message}} (code runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -359,7 +401,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_get_run",
         title: "Run status",
         tier: Tier::Observer,
-        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example LeaseBusy, class safety) in job.outcome.error. Another job handle of this process (ac_pause, ac_resume, ac_emulator, ac_stop_run or a Lab tool) answers {handle, job {kind, phase, warnings, outcome}}; a job handle this process does not hold answers handle_unknown.",
+        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example QueueExpired, class safety, after a wait for a busy instance) in job.outcome.error. Another job handle of this process (ac_pause, ac_resume, ac_emulator, ac_stop_run or a Lab tool) answers {handle, job {kind, phase, warnings, outcome}}; a job handle this process does not hold answers handle_unknown.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -439,7 +481,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_run_pack",
         title: "Run a task package",
         tier: Tier::Operator,
-        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: a busy instance comes back in ac_get_run's job.outcome.error as the Runtime's LeaseBusy or ContainedTaskBusy, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.outcome.error as the Runtime's QueueExpired (lease_queue_expired), class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -451,7 +493,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_stop_run",
         title: "Stop a run",
         tier: Tier::Operator,
-        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example LeaseBusy) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
+        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example QueueExpired) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -487,7 +529,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_emulator",
         title: "Emulator control",
         tier: Tier::Operator,
-        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 230 s: within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
+        description: "Starts, stops or restarts one instance's emulator through the Runtime (action start, stop or restart), as actingctl emulator does; the Runtime takes it only from an operator origin. stop and restart end whatever runs on that emulator. It can take up to 235 s (a restart, a stop and then a start, up to 445 s): within the call budget the answer is {controlled}, otherwise {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id.",
         read_only: false,
         destructive: true,
         idempotent: false,
@@ -720,7 +762,7 @@ pub(super) fn list_markdown() -> String {
 pub(super) fn tier_not_enabled(tool: &ToolDef) -> ToolError {
     ToolError::new(
         "safety",
-        "tier_not_enabled",
+        ActingctlCode::TierNotEnabled,
         format!(
             "{} belongs to tier {}, which this server was not started with",
             tool.name,
@@ -738,7 +780,7 @@ pub(super) fn call_result(outcome: ToolOutcome, era: Era) -> Value {
     if !fits(&structured) {
         let payload_bytes = structured.to_string().len();
         structured = envelope(Err(ToolError::usage(
-            "output_budget_exceeded",
+            ActingctlCode::OutputBudgetExceeded,
             "the result is larger than the 24 KiB tool output budget; narrow the request or lower limit",
         )
         .with_detail("payload_bytes", json!(payload_bytes))));

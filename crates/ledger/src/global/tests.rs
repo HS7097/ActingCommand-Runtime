@@ -63,7 +63,7 @@ fn idle_writer_health_needs_no_command_sender_or_new_fact() {
 fn idle_writer_health_reports_exit_without_business_commands() {
     let temp = TempDir::new().expect("temp");
     let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
-    let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+    let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
     ledger
         .sender
         .as_ref()
@@ -171,7 +171,7 @@ fn store_open_failure_joins_waiting_writer() {
     let temp = TempDir::new().expect("temp");
     let error =
         GlobalLedger::open_with_store::<SegmentStore, _>(config(&temp, "writer-failed"), |_| {
-            Err(GlobalLedgerError::fatal(
+            Err(GlobalLedgerError::fatal_untyped(
                 "test_store_open_failed",
                 "open_test_store",
             ))
@@ -271,6 +271,12 @@ struct ScheduledRecoveryDrafts {
     recovered_warning_execution: actingcommand_contract::SanitizedEventDraft,
     recovered_fatal_execution: actingcommand_contract::SanitizedEventDraft,
     recovered_interrupted_execution: actingcommand_contract::SanitizedEventDraft,
+    /// #670 verification N-2: the start's recovered release (grant chain, `not_performed`)
+    /// after the run's terminal, the lease's expiry after it, and the interrupted settlement
+    /// timed at either.
+    recovered_release_after_terminal: actingcommand_contract::SanitizedEventDraft,
+    lease_expired_after_terminal: actingcommand_contract::SanitizedEventDraft,
+    interrupted_execution_after_terminal: actingcommand_contract::SanitizedEventDraft,
 }
 
 fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
@@ -316,6 +322,15 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
     let interrupted_release_links = lease_links
         .clone()
         .with_action_id(issuer.mint_action_id().expect("interrupted release action"));
+    let recovered_release_links = lease_links
+        .clone()
+        .with_action_id(issuer.mint_action_id().expect("recovered release action"));
+    let expiry_links = EventLinksDraft::default()
+        .with_instance_id(instance_id)
+        .with_request_id(issuer.mint_request_id().expect("sweep request id"))
+        .with_correlation_id(issuer.mint_correlation_id().expect("sweep correlation id"))
+        .with_lease_id(lease_id)
+        .with_action_id(issuer.mint_action_id().expect("expiry action"));
     let wrong_chain_task_release_links = EventLinksDraft::default()
         .with_instance_id(instance_id)
         .with_request_id(issuer.mint_request_id().expect("wrong request id"))
@@ -805,6 +820,66 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             )
             .into(),
         ),
+        recovered_release_after_terminal: sanitize(
+            1_752_147_200_450,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            recovered_release_links,
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        lease_expired_after_terminal: sanitize(
+            1_752_147_200_450,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            expiry_links,
+            LeasePayloadDraft::expired(
+                EventAction::LeaseExpire,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        interrupted_execution_after_terminal: sanitize(
+            1_752_147_200_450,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                PolicyExecutionEventData {
+                    decision_id: dispatch.decision_id.clone(),
+                    task_id: dispatch.task_id.clone(),
+                    instance_id: dispatch.instance_id.clone(),
+                    observed_at_unix_ms: 1_752_147_200_450,
+                    outcome: PolicyExecutionOutcome::Failed {
+                        failure: PolicyFailureRecord {
+                            perf_context: Box::new(PerformanceContext::unavailable(
+                                1_752_147_200_450,
+                            )),
+                            ..interrupted_failure.clone()
+                        },
+                    },
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
         recovered_interrupted_execution: sanitize(
             1_752_147_200_350,
             EventSeverity::Error,
@@ -954,10 +1029,15 @@ fn expect_recovered_execution_error(
     let error = reconcile_scheduled_settlement(&ledger, &draft)
         .expect_err("invalid recovery evidence must fail");
     assert_eq!(error.code(), expected_code);
-    assert!(error.is_fatal());
+    // Workflow #369 E3 (#670 verification N-1): a refusal of one run's settlement is not
+    // terminal; the writer keeps running for the next append.
+    assert!(!error.is_fatal(), "{error:?}");
+    ledger
+        .latest_sequence()
+        .expect("the writer still answers after a settlement refusal");
     ledger
         .close()
-        .expect_err("fatal recovery rejection terminates the ledger");
+        .expect("a settlement refusal leaves the writer running");
 }
 
 #[test]
@@ -1304,11 +1384,11 @@ fn recovered_policy_completion_requires_a_complete_local_chain() {
         error.code(),
         "scheduled_execution_recovery_intent_not_unique"
     );
-    assert!(error.is_fatal());
+    assert!(!error.is_fatal());
     first.close().expect("close first ledger");
     second
         .close()
-        .expect_err("fatal recovery rejection terminates the second ledger");
+        .expect("a settlement refusal leaves the second ledger's writer running");
 }
 
 #[test]
@@ -1325,10 +1405,10 @@ fn recovered_policy_completion_rejects_missing_execution_and_lease_facts() {
         error.code(),
         "scheduled_execution_recovery_release_not_unique"
     );
-    assert!(error.is_fatal());
+    assert!(!error.is_fatal());
     missing_execution
         .close()
-        .expect_err("fatal missing-execution rejection terminates the ledger");
+        .expect("a missing-execution refusal leaves the writer running");
 
     let missing_root = TempDir::new().expect("missing temp");
     let missing = GlobalLedger::open(config(&missing_root, "missing-writer")).expect("ledger");
@@ -1342,10 +1422,10 @@ fn recovered_policy_completion_rejects_missing_execution_and_lease_facts() {
         error.code(),
         "scheduled_execution_recovery_lease_not_unique"
     );
-    assert!(error.is_fatal());
+    assert!(!error.is_fatal());
     missing
         .close()
-        .expect_err("fatal missing-evidence rejection terminates the ledger");
+        .expect("a missing-evidence refusal leaves the writer running");
 }
 
 #[test]
@@ -1363,10 +1443,50 @@ fn recovered_policy_completion_rejects_duplicate_execution_evidence() {
         .expect_err("duplicate execution must fail");
 
     assert_eq!(error.code(), "scheduled_execution_recovery_not_unique");
-    assert!(error.is_fatal());
+    assert!(!error.is_fatal());
     ledger
         .close()
-        .expect_err("fatal duplicate rejection terminates the ledger");
+        .expect("a duplicate refusal leaves the writer running");
+}
+
+/// Coordinator ruling on #670 (R4; verification N-2): a run that has a terminal is settled
+/// from it, so the ledger refuses an interrupted settlement for it, in both shapes: a terminal
+/// before the start's recovered release (grant chain, `not_performed`), and a terminal before
+/// the end that ended its lease (here its expiry).
+#[test]
+fn interrupted_policy_execution_recovery_refuses_a_run_that_has_a_terminal() {
+    let release_root = TempDir::new().expect("recovered release temp");
+    let release = GlobalLedger::open(config(&release_root, "terminal-then-recovered-release"))
+        .expect("ledger");
+    let release_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&release, &release_drafts);
+    release
+        .append(release_drafts.task_failed_warning.clone())
+        .expect("task terminal");
+    release
+        .append(release_drafts.recovered_release_after_terminal.clone())
+        .expect("recovered release");
+    expect_recovered_execution_error(
+        release,
+        release_drafts.interrupted_execution_after_terminal,
+        "scheduled_execution_recovery_interruption_conflict",
+    );
+
+    let expiry_root = TempDir::new().expect("expiry temp");
+    let expiry = GlobalLedger::open(config(&expiry_root, "terminal-then-expiry")).expect("ledger");
+    let expiry_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&expiry, &expiry_drafts);
+    expiry
+        .append(expiry_drafts.task_failed_warning.clone())
+        .expect("task terminal");
+    expiry
+        .append(expiry_drafts.lease_expired_after_terminal.clone())
+        .expect("lease expiry");
+    expect_recovered_execution_error(
+        expiry,
+        expiry_drafts.interrupted_execution_after_terminal,
+        "scheduled_execution_recovery_interruption_conflict",
+    );
 }
 
 #[test]
@@ -1624,7 +1744,7 @@ mod subscription {
                 SubscriptionOptions::new(2).expect("subscription options"),
             )
             .expect("subscribe");
-        let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+        let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
         ledger
             .sender
             .as_ref()
@@ -1766,8 +1886,10 @@ mod subscription {
             liveness: Some(liveness),
         };
 
-        let terminal =
-            GlobalLedgerError::fatal("subscription_replay_invalid", "validate_replay_page");
+        let terminal = GlobalLedgerError::fatal(
+            LedgerCode::SubscriptionReplayInvalid.code(),
+            LedgerLocation::ValidateReplayPage.location(),
+        );
         assert_eq!(subscription.latch_terminal(terminal.clone()), terminal);
         assert!(weak.upgrade().is_none());
         assert_eq!(subscription.terminal_error, Some(terminal));
@@ -2676,3 +2798,10 @@ pub(super) mod sqlite_contract;
 mod sqlite_prefix;
 #[path = "tests/sqlite_selection.rs"]
 mod sqlite_selection;
+
+#[path = "tests/fixture.rs"]
+mod fixture;
+#[path = "tests/gate_l2.rs"]
+mod gate_l2;
+#[path = "tests/retention_events.rs"]
+mod retention_events;

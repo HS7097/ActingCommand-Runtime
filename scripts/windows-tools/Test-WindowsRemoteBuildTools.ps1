@@ -226,8 +226,11 @@ function New-ArtifactFixture {
         @(
             @{ name = 'actinglab.exe'; content = 'synthetic actinglab payload' },
             @{ name = 'actingledger.exe'; content = 'synthetic actingledger payload' },
-            @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
-            @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' }
+            @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' }
+        ) + @(
+            if ($ToolsLayout -ceq 'platform-tools-v2') {
+                @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' }
+            }
         ) + @(
             if ($ToolsLayout -ceq 'platform-tools-v3') {
                 @{ name = 'actingwatch.exe'; content = 'synthetic watchdog launcher payload' }
@@ -394,7 +397,7 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''actingwatch\.exe''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($retired in @(
@@ -465,7 +468,7 @@ try {
     $toolsJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsOutput -GhExecutable $fakeGh
     $tools = $toolsJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($tools.status -ceq 'PASS') -Message 'Tools artifact verification did not report PASS'
-    Assert-True -Condition (@($tools.verified_files).Count -eq 10) -Message 'Tools artifact verifier did not freeze exactly ten platform-tools-v3 payloads'
+    Assert-True -Condition (@($tools.verified_files).Count -eq 9) -Message 'Tools artifact verifier did not freeze exactly nine platform-tools-v3 payloads'
     $adbFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'platform-tools/adb.exe') -ErrorAction Stop
     Assert-True -Condition ($adbFixture.Length -gt 0) -Message 'Tools artifact platform-tools payload is missing or empty'
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll'))) -Message 'Tools artifact still carries the retired vision provider'

@@ -132,7 +132,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
         .output()
         .expect("request shutdown through ordinary CLI");
     assert!(!busy.status.success());
-    assert!(String::from_utf8_lossy(&busy.stderr).contains("RuntimeBusy"));
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("runtime_busy"));
     runtime.assert_alive();
     holder
         .release_lease(&token)
@@ -257,6 +257,85 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
             "close"
         ]
     );
+}
+
+/// Workflow #369 W-3 (review M-5): a task run that waits for its turn behind another client's
+/// hold prints no waiting line; once granted it ends with exactly one stdout JSON line.
+#[test]
+fn actingctl_task_run_that_waited_prints_exactly_one_stdout_json_line() {
+    let root = TempDir::new().expect("tempdir");
+    let frame = root.path().join("sealed.png");
+    support::write_sealed_frame(&frame);
+    let package = root.path().join("neutral-task.zip");
+    let expected_sha256 = write_neutral_contained_task_package(&package);
+    let mut runtime = support::RuntimeChild::spawn_for_instance(
+        root.path(),
+        "c4_runtime_child_process",
+        "neutral.instance",
+    );
+    runtime.wait_ready(root.path());
+    let holder = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("holder client");
+    let token = holder
+        .acquire_lease("neutral.instance")
+        .expect("another client holds the instance");
+
+    let run = Command::new(env!("CARGO_BIN_EXE_actingctl"))
+        .args([
+            "task-run",
+            "--state-root",
+            root.path().to_str().expect("state root"),
+            "--instance",
+            "neutral.instance",
+            "--package",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start actingctl task-run");
+    wait_until(Duration::from_secs(8), || {
+        !holder
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::SchedulerQueued),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query the run's queue entry")
+            .is_empty()
+    });
+    holder.release_lease(&token).expect("release the hold");
+    let output = run.wait_with_output().expect("actingctl task-run output");
+
+    assert!(
+        output.status.success(),
+        "actingctl task-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 stdout");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "stdout: {stdout}");
+    let document: Value = serde_json::from_str(lines[0]).expect("one JSON document");
+    assert_eq!(
+        document["receipt"]["result"]["kind"],
+        "contained_task_completed"
+    );
+    drop(holder);
+    runtime.assert_alive();
+    runtime.stop_clean();
 }
 
 #[test]

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{RuntimeContractCode, SharedCode};
 use crate::{
     ArtifactEvictionDisposition, ArtifactEvictionObservation, ArtifactId, LedgerEventPosition,
     Sensitivity,
@@ -49,7 +50,9 @@ impl RuntimeMaterialReadRequest {
                 .is_none()
             || !(1..=MAX_RUNTIME_MATERIAL_REPLY_BYTES).contains(&self.max_reply_bytes)
         {
-            return Err(RuntimeContractError::new("invalid_material_read_request"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidMaterialReadRequest,
+            ));
         }
         Ok(())
     }
@@ -67,7 +70,9 @@ pub fn validate_material_read_selection(
         || byte_count == 0
         || !material_hash(sha256)
     {
-        return Err(RuntimeContractError::new("invalid_material_read_request"));
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidMaterialReadRequest,
+        ));
     }
     Ok(())
 }
@@ -100,9 +105,9 @@ pub struct RuntimeMaterialReadSource {
 
 impl RuntimeMaterialReadSource {
     pub fn validate_for(&self, request: &RuntimeMaterialReadRequest) -> RuntimeContractResult<()> {
-        self.reference
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_material_read_reference"))?;
+        self.reference.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidMaterialReadReference)
+        })?;
         if self.reference.object_key.is_some()
             || self.reference.artifact_id != request.artifact_id
             || self.reference.byte_count != request.byte_count
@@ -121,17 +126,19 @@ impl RuntimeMaterialReadSource {
                 .expected_correlation_id
                 .is_some_and(|id| self.correlation_id != Some(id))
         {
-            return Err(RuntimeContractError::new("material_read_source_mismatch"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::MaterialReadSourceMismatch,
+            ));
         }
         if let Some(eviction) = &self.eviction {
-            eviction
-                .validate()
-                .map_err(|_| RuntimeContractError::new("invalid_material_read_retention"))?;
+            eviction.validate().map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidMaterialReadRetention)
+            })?;
             if eviction.artifact_id != request.artifact_id
                 || eviction.through_sequence > self.availability_through
             {
                 return Err(RuntimeContractError::new(
-                    "material_read_retention_mismatch",
+                    RuntimeContractCode::MaterialReadRetentionMismatch,
                 ));
             }
         }
@@ -219,20 +226,20 @@ impl RuntimeMaterialReadResult {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                 {
-                    return Err(RuntimeContractError::new("invalid_material_read_failure"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidMaterialReadFailure,
+                    ));
                 }
             }
         }
         match self.state {
             RuntimeMaterialReadState::Verified => {
-                let source = self
-                    .source
-                    .as_ref()
-                    .ok_or_else(|| RuntimeContractError::new("material_read_source_missing"))?;
-                let chunk = self
-                    .chunk
-                    .as_ref()
-                    .ok_or_else(|| RuntimeContractError::new("material_read_chunk_missing"))?;
+                let source = self.source.as_ref().ok_or_else(|| {
+                    RuntimeContractError::new(RuntimeContractCode::MaterialReadSourceMissing)
+                })?;
+                let chunk = self.chunk.as_ref().ok_or_else(|| {
+                    RuntimeContractError::new(RuntimeContractCode::MaterialReadChunkMissing)
+                })?;
                 let expected_length = u64::from(self.request.requested_length)
                     .min(self.request.byte_count - self.request.offset);
                 if source.eviction.is_some()
@@ -245,12 +252,16 @@ impl RuntimeMaterialReadResult {
                     || chunk.sha256 != self.request.sha256
                     || chunk.is_last != (chunk.offset + expected_length == chunk.total_length)
                 {
-                    return Err(RuntimeContractError::new("invalid_verified_material_chunk"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidVerifiedMaterialChunk,
+                    ));
                 }
             }
             RuntimeMaterialReadState::NotProvided => {
                 if self.chunk.is_some() || self.limit.is_none() {
-                    return Err(RuntimeContractError::new("invalid_material_read_limit"));
+                    return Err(RuntimeContractError::new(
+                        SharedCode::InvalidMaterialReadLimit,
+                    ));
                 }
                 let disposition = self
                     .source
@@ -285,12 +296,16 @@ impl RuntimeMaterialReadResult {
                     None => false,
                 };
                 if !valid {
-                    return Err(RuntimeContractError::new("material_read_limit_mismatch"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::MaterialReadLimitMismatch,
+                    ));
                 }
             }
             _ => {
                 if self.chunk.is_some() || self.failure.is_none() || self.limit.is_some() {
-                    return Err(RuntimeContractError::new("invalid_failed_material_read"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidFailedMaterialRead,
+                    ));
                 }
             }
         }

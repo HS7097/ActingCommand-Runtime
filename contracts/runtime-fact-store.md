@@ -465,11 +465,14 @@ the backend self-check facts (source `device-proxy` or `capture`).
     reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the
     `env_overrides` subsystem's reason names every set but ignored variable as
     `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,
-    "Environment overrides").
+    "Environment overrides"). With a `policy` section, Workflow #397 adds
+    `policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
+    `policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, actingd's own
+    policy monitor settings as assembly resolved them, each `explicit` when the file named it.
 
 - `host.scheduling_pause` (Workflow #361 B1) — runtime scope, `record_list`,
   no lifetime: the operator's held scheduling pauses, one row per pause
-  (`scope`, `instance_alias`, `reason_code`, `since_unix_ms`,
+  (`scope`, `instance_alias`, `pause_reason`, `since_unix_ms`,
   `set_in_owner_epoch`, `restored_from_owner_epoch`), recorded before every
   pause or resume changes the gate and again by the start that restores them
   (`contracts/scheduling-pause.md`, "Persistence, no expiry").
@@ -495,7 +498,15 @@ internal). For one physical instance, under its admission guard:
    active lease `lease_busy`, the takeover cooldown `lease_cooldown`, a queue)
    skips the instance: one `runtime.failed` record with lifecycle stage
    `runtime.lifecycle.connection_preparation` names the instance and the code,
-   and its availability is withdrawn.
+   and its availability is withdrawn. An instance resume's reconnect and a
+   `SelfCheckInstance` take no dedicated lease (Workflow #369 S5): each first
+   waits, without the admission guard, for its operator claim
+   (`ResumeReconnect`, `SelfCheck`; drain capacity, no bound-endpoint or
+   performance-control check) in the instance's one queue for at most
+   `CONNECTION_PREPARATION_CLAIM_WAIT_MS` (3 s), under the request's own links.
+   Not granted in time, the request is refused `lease_queue_expired` and no
+   phase runs; granted, the phase runs on the claim's key, under the admission
+   guard for its device steps only.
 2. **Opens.** The preparation phase closes a retained session before it
    connects, so the self-check covers every required entry (Workflow #191 h3:
    a read-only observe keeping its capture session open without a lease is the
@@ -513,7 +524,8 @@ internal). For one physical instance, under its admission guard:
 3. **Keep and release.** When the self-check passed its opens, the session
    stays open for the instance's next leases (Workflow #191 H: the session
    belongs to the instance and only an external command disconnects it) and the
-   preparation lease is released (`lease.released`). After a failed open, or for
+   preparation lease, or a resume's or self-check's claim key, is released
+   (`lease.released`). After a failed open, or for
    an instance outside the multi-Nemu gate (`read-session-resource-close.md`,
    "Device session lifetime"), the session is first closed through the fenced
    close path and the lease is released once the close is confirmed. The
@@ -547,12 +559,14 @@ is returned as an error; every other failure leaves the instance unavailable.
   preparation does not fail the completed control action. The stuck-recovery
   emulator-restart rung drives the same path.
 - **Instance resume** — `ResumeScheduling { Instance }` reconnects through the
-  preparation phase (`scheduling-pause.md`, "Resume").
+  preparation phase on its reconnect claim's key, granted before the gate is
+  lifted (`scheduling-pause.md`, "Resume").
 - **`SelfCheckInstance { instance_alias }`** — the operator's manual reconnect
   and self-check of one physical instance (`actingctl selfcheck <alias>`,
   origin gate User+Ui or Cli+Cli, `invalid_emulator_control_origin` otherwise),
-  answered with `RuntimeResult::InstanceSelfChecked { instance_alias,
-  selfcheck }`.
+  on its own `SelfCheck` claim's key (a claim not granted within 3 s refuses it
+  `lease_queue_expired`), answered with `RuntimeResult::InstanceSelfChecked {
+  instance_alias, selfcheck }`.
 
 Fixture instances and providers without a device endpoint are not prepared by
 the automatic triggers.

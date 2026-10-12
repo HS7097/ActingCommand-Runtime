@@ -11,6 +11,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod artifacts;
+pub mod codes;
 pub mod ffi;
 pub mod models;
 
@@ -22,6 +23,7 @@ pub use actingcommand_contract::{
     PpocrNodePlacementDiagnostic, validate_ppocr_call_diagnostics,
 };
 pub use artifacts::*;
+pub use codes::VisionListingCode;
 pub use ffi::*;
 pub use models::*;
 use serde::{Deserialize, Serialize};

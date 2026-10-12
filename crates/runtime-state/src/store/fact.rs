@@ -46,16 +46,18 @@ impl PreparedFactProjection {
             *self
                 .applied
                 .lock()
-                .map_err(|_| fact_error("fact_projection_work_poisoned"))? = Some(event.clone());
+                .map_err(|_| fact_error(StateCode::FactProjectionWorkPoisoned.code()))? =
+                Some(event.clone());
             return Ok(());
         }
         if current != self.baseline {
-            return Err(fact_error("fact_tombstone_projection_changed"));
+            return Err(fact_error(StateCode::FactTombstoneProjectionChanged.code()));
         }
         *self
             .applied
             .lock()
-            .map_err(|_| fact_error("fact_projection_work_poisoned"))? = Some(event.clone());
+            .map_err(|_| fact_error(StateCode::FactProjectionWorkPoisoned.code()))? =
+            Some(event.clone());
         let entry = self.store.write_projection_in_transaction(
             transaction.sql(),
             FACT_TOMBSTONE_NAMESPACE,
@@ -79,7 +81,7 @@ impl PreparedFactProjection {
         let applied = self
             .applied
             .lock()
-            .map_err(|_| fact_error("fact_projection_work_poisoned"))?;
+            .map_err(|_| fact_error(StateCode::FactProjectionWorkPoisoned.code()))?;
         if let (Some(entry), Some(event)) = (&current, applied.as_ref())
             && entry.ledger_sequence() == event.sequence()
             && entry.payload() == self.payload
@@ -97,7 +99,7 @@ impl PreparedFactProjection {
 
     fn require_owner(&self, transaction: &RuntimeTransaction<'_, '_>) -> RuntimeStateResult<()> {
         if !transaction.belongs_to(&self.store.database) {
-            return Err(fact_error("state_transaction_owner_mismatch"));
+            return Err(fact_error(StateCode::StateTransactionOwnerMismatch.code()));
         }
         Ok(())
     }
@@ -109,7 +111,7 @@ impl PreparedFactProjection {
         query_projection_entry(transaction.sql(), FACT_TOMBSTONE_NAMESPACE, &self.key)?
             .map(|row| {
                 self.store
-                    .validate_projection_row(row, "apply_fact_projection")
+                    .validate_projection_row(row, StateLocation::ApplyFactProjection.location())
             })
             .transpose()
     }
@@ -124,12 +126,14 @@ impl RuntimeStateStore {
         trigger: PersistedEvent,
     ) -> RuntimeStateResult<PreparedFactProjection> {
         let key = fact_tombstone_key(&data.scope, &data.key, &data.source_snapshot_id)?;
-        let payload =
-            serde_json::to_vec(data).map_err(|_| fact_error("fact_projection_encode_failed"))?;
+        let payload = serde_json::to_vec(data)
+            .map_err(|_| fact_error(StateCode::FactProjectionEncodeFailed.code()))?;
         validate_projection_input(FACT_TOMBSTONE_NAMESPACE, &key, 1, &payload)?;
         let baseline = self.read_projection_entry(FACT_TOMBSTONE_NAMESPACE, &key)?;
         if baseline.is_some() {
-            return Err(fact_error("fact_tombstone_projection_source_unproven"));
+            return Err(fact_error(
+                StateCode::FactTombstoneProjectionSourceUnproven.code(),
+            ));
         }
         Ok(PreparedFactProjection {
             store: Arc::clone(self),
@@ -150,18 +154,23 @@ impl RuntimeStateStore {
         event: &PersistedEvent,
     ) -> RuntimeStateResult<()> {
         require_entry(entry, event)?;
-        let mut connection = self.connection("verify_fact_projection")?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| fact_sql_error("begin_fact_verification", &error))?;
+        let mut connection = self.connection(StateLocation::VerifyFactProjection.location())?;
+        let transaction = connection.transaction().map_err(|error| {
+            fact_sql_error(StateLocation::BeginFactVerification.location(), &error)
+        })?;
         let scope = self.database.borrow_transaction(&transaction);
         verify_original(&self.database, &scope, event)?;
         let current =
             query_projection_entry(&transaction, FACT_TOMBSTONE_NAMESPACE, entry.entry_key())?
-                .map(|row| self.validate_projection_row(row, "verify_fact_projection"))
+                .map(|row| {
+                    self.validate_projection_row(
+                        row,
+                        StateLocation::VerifyFactProjection.location(),
+                    )
+                })
                 .transpose()?;
         if current.as_ref() != Some(entry) {
-            return Err(fact_error("fact_tombstone_projection_changed"));
+            return Err(fact_error(StateCode::FactTombstoneProjectionChanged.code()));
         }
         Ok(())
     }
@@ -175,7 +184,9 @@ impl RuntimeStateStore {
         let mut previous = 0;
         for event in events {
             if event.sequence() <= previous {
-                return Err(fact_error("fact_projection_history_order_invalid"));
+                return Err(fact_error(
+                    StateCode::FactProjectionHistoryOrderInvalid.code(),
+                ));
             }
             previous = event.sequence();
             match event.payload() {
@@ -199,16 +210,23 @@ impl RuntimeStateStore {
                             data.key.clone(),
                             data.source_snapshot_id.clone(),
                         ))
-                        .ok_or_else(|| fact_error("fact_invalidation_publication_missing"))?;
-                    let trigger = originals
-                        .get(&data.invalidated_by_event_id)
-                        .ok_or_else(|| fact_error("fact_invalidation_trigger_missing"))?;
+                        .ok_or_else(|| {
+                            fact_error(StateCode::FactInvalidationPublicationMissing.code())
+                        })?;
+                    let trigger =
+                        originals
+                            .get(&data.invalidated_by_event_id)
+                            .ok_or_else(|| {
+                                fact_error(StateCode::FactInvalidationTriggerMissing.code())
+                            })?;
                     verify_sources(data, source, trigger, event)?;
                     let key = fact_tombstone_key(&data.scope, &data.key, &data.source_snapshot_id)?;
                     if let Some(prior) = latest.insert(key, event)
                         && !matches!(prior.payload(), EventPayload::Fact(FactPayload::Invalidated(value)) if value.invalidation() == data)
                     {
-                        return Err(fact_error("fact_invalidation_identity_conflict"));
+                        return Err(fact_error(
+                            SharedCode::FactInvalidationIdentityConflict.code(),
+                        ));
                     }
                     facts.insert(event.sequence(), (event, *source, *trigger));
                 }
@@ -216,10 +234,10 @@ impl RuntimeStateStore {
             }
             originals.insert(*event.event_id(), event);
         }
-        let mut connection = self.connection("recover_fact_projections")?;
+        let mut connection = self.connection(StateLocation::RecoverFactProjections.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| fact_sql_error("begin_fact_recovery", &error))?;
+            .map_err(|error| fact_sql_error(StateLocation::BeginFactRecovery.location(), &error))?;
         let work = (|| {
             let scope = self.database.borrow_transaction(&transaction);
             for (event, published, trigger) in facts.values() {
@@ -229,28 +247,35 @@ impl RuntimeStateStore {
             }
             let keys = {
                 let mut statement = transaction.prepare("SELECT entry_key FROM projection_entries WHERE namespace=?1 ORDER BY entry_key")
-                    .map_err(|error| fact_sql_error("read_fact_projection_keys", &error))?;
+                    .map_err(|error| fact_sql_error(StateLocation::ReadFactProjectionKeys.location(), &error))?;
                 statement
                     .query_map([FACT_TOMBSTONE_NAMESPACE], |row| row.get::<_, String>(0))
-                    .map_err(|error| fact_sql_error("read_fact_projection_keys", &error))?
+                    .map_err(|error| {
+                        fact_sql_error(StateLocation::ReadFactProjectionKeys.location(), &error)
+                    })?
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|error| fact_sql_error("read_fact_projection_keys", &error))?
+                    .map_err(|error| {
+                        fact_sql_error(StateLocation::ReadFactProjectionKeys.location(), &error)
+                    })?
             };
             for key in keys {
                 let row = query_projection_entry(&transaction, FACT_TOMBSTONE_NAMESPACE, &key)?
-                    .ok_or_else(|| fact_error("fact_tombstone_projection_missing"))?;
-                let entry = self.validate_projection_row(row, "recover_fact_projections")?;
-                let (event, _, _) = facts
-                    .get(&entry.ledger_sequence())
-                    .ok_or_else(|| fact_error("fact_tombstone_projection_source_unproven"))?;
+                    .ok_or_else(|| fact_error(SharedCode::FactTombstoneProjectionMissing.code()))?;
+                let entry = self.validate_projection_row(
+                    row,
+                    StateLocation::RecoverFactProjections.location(),
+                )?;
+                let (event, _, _) = facts.get(&entry.ledger_sequence()).ok_or_else(|| {
+                    fact_error(StateCode::FactTombstoneProjectionSourceUnproven.code())
+                })?;
                 require_entry(&entry, event)?;
             }
             for (key, event) in latest {
                 let EventPayload::Fact(FactPayload::Invalidated(value)) = event.payload() else {
-                    return Err(fact_error("fact_projection_payload_mismatch"));
+                    return Err(fact_error(StateCode::FactProjectionPayloadMismatch.code()));
                 };
                 let payload = serde_json::to_vec(value.invalidation())
-                    .map_err(|_| fact_error("fact_projection_encode_failed"))?;
+                    .map_err(|_| fact_error(StateCode::FactProjectionEncodeFailed.code()))?;
                 let entry = self.write_projection_in_transaction(
                     &transaction,
                     FACT_TOMBSTONE_NAMESPACE,
@@ -266,12 +291,12 @@ impl RuntimeStateStore {
         if let Err(original) = work {
             return match transaction.rollback() {
                 Ok(()) => Err(original),
-                Err(rollback) => Err(fact_error("fact_projection_rollback_failed")
+                Err(rollback) => Err(fact_error(StateCode::FactProjectionRollbackFailed.code())
                     .with_detail(format!("primary={original}; rollback={rollback}"))),
             };
         }
         transaction.commit().map_err(|error| {
-            fact_sql_error("commit_fact_recovery", &error)
+            fact_sql_error(StateLocation::CommitFactRecovery.location(), &error)
                 .with_detail(format!("commit_outcome=unknown; primary={error}"))
         })?;
         Ok(())
@@ -284,25 +309,27 @@ pub fn fact_tombstone_key(
     snapshot: &str,
 ) -> RuntimeStateResult<String> {
     let identity = serde_json::to_vec(&(scope, key, snapshot))
-        .map_err(|_| fact_error("fact_tombstone_identity_encode_failed"))?;
+        .map_err(|_| fact_error(StateCode::FactTombstoneIdentityEncodeFailed.code()))?;
     Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 fn require_entry(entry: &ProjectionEntry, event: &PersistedEvent) -> RuntimeStateResult<()> {
     require_fact_origin(event, EventType::FactInvalidated)?;
     let EventPayload::Fact(FactPayload::Invalidated(value)) = event.payload() else {
-        return Err(fact_error("fact_projection_payload_mismatch"));
+        return Err(fact_error(StateCode::FactProjectionPayloadMismatch.code()));
     };
     let data = value.invalidation();
     let key = fact_tombstone_key(&data.scope, &data.key, &data.source_snapshot_id)?;
-    let payload =
-        serde_json::to_vec(data).map_err(|_| fact_error("fact_projection_encode_failed"))?;
+    let payload = serde_json::to_vec(data)
+        .map_err(|_| fact_error(StateCode::FactProjectionEncodeFailed.code()))?;
     if entry.namespace() != FACT_TOMBSTONE_NAMESPACE
         || entry.entry_key() != key
         || entry.ledger_sequence() != event.sequence()
         || entry.payload() != payload
     {
-        return Err(fact_error("fact_tombstone_projection_source_mismatch"));
+        return Err(fact_error(
+            SharedCode::FactTombstoneProjectionSourceMismatch.code(),
+        ));
     }
     Ok(())
 }
@@ -322,10 +349,12 @@ fn verify_sources(
         || published.sequence() >= trigger.sequence()
         || trigger.sequence() >= event.sequence()
     {
-        return Err(fact_error("fact_invalidation_source_mismatch"));
+        return Err(fact_error(
+            SharedCode::FactInvalidationSourceMismatch.code(),
+        ));
     }
     let EventPayload::Fact(FactPayload::Published(value)) = published.payload() else {
-        return Err(fact_error("fact_projection_payload_mismatch"));
+        return Err(fact_error(StateCode::FactProjectionPayloadMismatch.code()));
     };
     let input = matches!(
         trigger.event_type(),
@@ -346,7 +375,9 @@ fn verify_sources(
                 && record.invalidate_on.contains(&trigger.event_type())
         })
     {
-        return Err(fact_error("fact_invalidation_target_mismatch"));
+        return Err(fact_error(
+            SharedCode::FactInvalidationTargetMismatch.code(),
+        ));
     }
     Ok(())
 }
@@ -357,7 +388,7 @@ fn require_fact_origin(event: &PersistedEvent, event_type: EventType) -> Runtime
         || event.origin().actor() != EventActor::Runtime
         || event.origin().module() != OriginModule::FactStore
     {
-        return Err(fact_error("fact_projection_origin_invalid"));
+        return Err(fact_error(StateCode::FactProjectionOriginInvalid.code()));
     }
     Ok(())
 }
@@ -368,14 +399,19 @@ fn verify_original(
     event: &PersistedEvent,
 ) -> RuntimeStateResult<()> {
     actingcommand_ledger::verify_transaction_event(database, scope, event).map_err(|error| {
-        fact_error(error.code()).with_detail(format!("{error}; detail={:?}", error.detail()))
+        RuntimeStateError::relayed_fatal(
+            error.code(),
+            StateLocation::PersistFactProjection.as_str(),
+        )
+        .with_detail(format!("{error}; detail={:?}", error.detail()))
     })
 }
 
-fn fact_error(code: &'static str) -> RuntimeStateError {
-    fatal(code, "persist_fact_projection")
+fn fact_error(code: Code) -> RuntimeStateError {
+    fatal(code, StateLocation::PersistFactProjection.location())
 }
 
-fn fact_sql_error(operation: &'static str, error: &rusqlite::Error) -> RuntimeStateError {
-    fatal("fact_projection_transaction_failed", operation).with_detail(error.to_string())
+fn fact_sql_error(operation: Location, error: &rusqlite::Error) -> RuntimeStateError {
+    fatal(StateCode::FactProjectionTransactionFailed.code(), operation)
+        .with_detail(error.to_string())
 }

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ArtifactFailureCause, ArtifactFailureRecord, ArtifactFailureStage, ArtifactId,
     LifecycleNativeDetail, MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES,
@@ -9,6 +12,10 @@ use std::fmt;
 
 pub type ArtifactStoreResult<T> = Result<T, ArtifactStoreError>;
 
+/// A store failure. Every code and location the store raises is registered (`StoreCode`,
+/// `StoreLocation`, shared contract entries) and built with [`ArtifactStoreError::new`]; the
+/// error keeps their spellings because the runtime host also builds store errors with its own
+/// codes ([`ArtifactStoreError::fatal`]) until slice A2b registers them (Workflow #378).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactStoreError {
     code: &'static str,
@@ -24,6 +31,13 @@ pub struct ArtifactStoreError {
 }
 
 impl ArtifactStoreError {
+    /// A fatal store failure with a registered code and location.
+    pub fn new(code: Code, operation: Location, detail: impl Into<String>) -> Self {
+        Self::fatal(code.as_str(), operation.as_str(), detail)
+    }
+
+    /// A fatal store failure named by the runtime host, which builds store errors with its own
+    /// codes and operations (and relays other errors' codes) until slice A2b registers them.
     pub fn fatal(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
@@ -56,9 +70,9 @@ impl ArtifactStoreError {
     }
 
     pub(crate) fn capacity_refused(decision: actingcommand_contract::CapacityDecision) -> Self {
-        let mut error = Self::fatal(
-            "capacity_admission_refused",
-            "admit_artifact_bytes",
+        let mut error = Self::new(
+            SharedCode::CapacityAdmissionRefused.code(),
+            StoreLocation::AdmitArtifactBytes.location(),
             "committed capacity facts do not permit these new bytes",
         );
         error.fatal = false;
@@ -67,9 +81,9 @@ impl ArtifactStoreError {
     }
 
     pub(crate) fn frame_workspace_refused() -> Self {
-        let mut error = Self::fatal(
-            "frame_workspace_unavailable",
-            "admit_frame_workspace",
+        let mut error = Self::new(
+            SharedCode::FrameWorkspaceUnavailable.code(),
+            StoreLocation::AdmitFrameWorkspace.location(),
             "the existing memory budget cannot reserve this frame's encoding workspace",
         );
         error.fatal = false;
@@ -91,18 +105,31 @@ impl ArtifactStoreError {
         self.io_error_kind
     }
 
+    /// Workflow #375 R5d: the same failure, without stopping the Runtime.
+    pub(crate) fn non_fatal(mut self) -> Self {
+        self.fatal = false;
+        self
+    }
+
+    /// Workflow #375 R5d: the file or its use lock is held by someone else right now (os error
+    /// 32 or 33, or a held lock), so the operation may succeed if tried again.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.raw_os_error, Some(32 | 33))
+            || self.io_error_kind == Some(std::io::ErrorKind::WouldBlock)
+    }
+
     /// Workflow #375: the artifact's file could not be opened because it does not exist
     /// (`artifact_read_failed` with `NotFound`), such as a frame deleted by hand. A reader
     /// reports such material as missing instead of failing.
     pub fn is_material_missing(&self) -> bool {
-        self.code == "artifact_read_failed"
+        self.code == SharedCode::ArtifactReadFailed.as_str()
             && self.io_error_kind == Some(std::io::ErrorKind::NotFound)
     }
 
     pub(crate) fn read_budget_exceeded() -> Self {
-        let mut error = Self::fatal(
-            "artifact_read_budget_exceeded",
-            "read_projected_artifact_range",
+        let mut error = Self::new(
+            StoreCode::ArtifactReadBudgetExceeded.code(),
+            ContractLocation::ReadProjectedArtifactRange.location(),
             "cooperative material read budget expired",
         );
         error.fatal = false;
@@ -110,9 +137,9 @@ impl ArtifactStoreError {
     }
 
     pub(crate) fn read_material_limit_exceeded() -> Self {
-        let mut error = Self::fatal(
-            "artifact_read_material_limit",
-            "read_projected_artifact_complete",
+        let mut error = Self::new(
+            StoreCode::ArtifactReadMaterialLimit.code(),
+            StoreLocation::ReadProjectedArtifactComplete.location(),
             "complete material exceeds its explicit owned-buffer bound",
         );
         error.fatal = false;
@@ -138,15 +165,27 @@ impl ArtifactStoreError {
     }
 
     pub fn usage(detail: impl Into<String>) -> Self {
-        Self::fatal("frame_store_usage", "frame_store", detail)
+        Self::new(
+            StoreCode::FrameStoreUsage.code(),
+            StoreLocation::FrameStore.location(),
+            detail,
+        )
     }
 
     pub fn package_invalid(detail: impl Into<String>) -> Self {
-        Self::fatal("frame_store_invalid", "frame_store", detail)
+        Self::new(
+            StoreCode::FrameStoreInvalid.code(),
+            StoreLocation::FrameStore.location(),
+            detail,
+        )
     }
 
     pub fn device(detail: impl Into<String>) -> Self {
-        Self::fatal("frame_store_device", "frame_store", detail)
+        Self::new(
+            StoreCode::FrameStoreDevice.code(),
+            StoreLocation::FrameStore.location(),
+            detail,
+        )
     }
 
     #[cfg(feature = "capture")]

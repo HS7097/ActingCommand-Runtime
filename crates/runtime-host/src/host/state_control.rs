@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{StatePayload, StatePayloadDraft};
 use actingcommand_ledger::{
     GlobalLedgerError, LedgerTransactionWork, TransactionStateObservation, TransactionWorkError,
@@ -17,7 +21,7 @@ impl HostShared {
         sources: &ReleaseArtifactSources,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         let result = (|| {
-            let _gate = lock(&self.state_write_gate, "stage_release_set")?;
+            let _gate = lock(&self.state_write_gate, HostLocation::StageReleaseSet)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -36,9 +40,9 @@ impl HostShared {
                     ReleasePayloadDraft::staged(manifest.clone(), AuditInput::new()),
                 )?;
                 let draft = self.events.sanitize(draft)?;
-                let fact_gate = lock(&self.fact_write_gate, "stage_release_set")?;
+                let fact_gate = lock(&self.fact_write_gate, HostLocation::StageReleaseSet)?;
                 if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                    return Err(ledger_error("stage_release_set"));
+                    return Err(ledger_error(HostLocation::StageReleaseSet));
                 }
                 let outcome = self
                     .ledger
@@ -79,7 +83,7 @@ impl HostShared {
         release_id: &str,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         let result = (|| {
-            let _gate = lock(&self.state_write_gate, "switch_release_set")?;
+            let _gate = lock(&self.state_write_gate, HostLocation::SwitchReleaseSet)?;
             if let Some(error) = self.fatal.current()? {
                 return Err(error);
             }
@@ -229,12 +233,18 @@ pub(super) fn reconcile_runtime_state(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
+    // Workflow #381 R4a: the recorded migrations through one position, in bounded pages.
     let migrated = ledger
-        .query(EventQuery {
-            event_type: Some(EventType::StateMigrated),
-            ..EventQuery::default()
+        .latest_sequence()
+        .and_then(|through| {
+            read_event_types(
+                ledger,
+                &[EventType::StateMigrated],
+                through,
+                RECOVERY_PAGE_EVENTS,
+            )
         })
-        .map_err(|_| ledger_error("query_state_migrations"))?
+        .map_err(|_| ledger_error(HostLocation::QueryStateMigrations))?
         .into_iter()
         .filter_map(|event| match event.payload() {
             EventPayload::State(StatePayload::Migrated(payload)) => {
@@ -253,8 +263,8 @@ pub(super) fn reconcile_runtime_state(
         if migration.state_key() == actingcommand_runtime_state::CATALOG_ACTIVE_STATE_KEY {
             if !migrated.contains(migration.migration_id()) {
                 return Err(RuntimeHostError::fatal(
-                    "catalog_migration_source_missing",
-                    "reconcile_runtime_state",
+                    HostCode::CatalogMigrationSourceMissing,
+                    HostLocation::ReconcileRuntimeState,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -288,7 +298,7 @@ fn append_runtime_state_event(
     let draft = events.sanitize(draft)?;
     ledger
         .append(draft)
-        .map_err(|_| ledger_error("append_runtime_state_event"))
+        .map_err(|_| ledger_error(HostLocation::AppendRuntimeStateEvent))
 }
 
 pub(super) fn reconcile_release_state(
@@ -307,7 +317,7 @@ pub(super) fn reconcile_release_state(
     {
         let migration = work
             .migration()
-            .ok_or_else(|| release_recovery_error("release_boundary_migration_missing"))?
+            .ok_or_else(|| release_recovery_error(SharedCode::ReleaseBoundaryMigrationMissing))?
             .clone();
         let draft = release_draft(
             events,
@@ -333,7 +343,9 @@ pub(super) fn reconcile_release_state(
                 data.transition_id(),
             ),
             ReleaseBaselineMember::Pointer { .. } => {
-                return Err(release_recovery_error("release_recovery_member_invalid"));
+                return Err(release_recovery_error(
+                    HostCode::ReleaseRecoveryMemberInvalid,
+                ));
             }
         };
         let fact = find_release_fact(ledger, event_type, |event| {
@@ -356,7 +368,9 @@ pub(super) fn reconcile_release_state(
                     transition_payload(&data.recovered_for_ledger())
                 }
                 ReleaseBaselineMember::Pointer { .. } => {
-                    return Err(release_recovery_error("release_recovery_member_invalid"));
+                    return Err(release_recovery_error(
+                        HostCode::ReleaseRecoveryMemberInvalid,
+                    ));
                 }
             };
             ledger
@@ -384,13 +398,15 @@ pub(super) fn reconcile_release_state(
     visit_release_facts(ledger, EventType::ReleaseTransitionIntent, |intent| {
         let EventPayload::Release(ReleasePayload::TransitionIntent(value)) = intent.payload()
         else {
-            return Err(release_recovery_error("release_intent_payload_invalid"));
+            return Err(release_recovery_error(
+                HostCode::ReleaseIntentPayloadInvalid,
+            ));
         };
         if intent.origin().source() != EventSource::Runtime
             || intent.origin().module() != OriginModule::Runtime
             || intent.origin().actor() != EventActor::Runtime
         {
-            return Err(release_recovery_error("release_intent_origin_invalid"));
+            return Err(release_recovery_error(HostCode::ReleaseIntentOriginInvalid));
         }
         let expected_type = match value.transition().kind() {
             ReleaseTransitionKind::Activate => EventType::ReleaseActivated,
@@ -415,14 +431,16 @@ pub(super) fn reconcile_release_state(
             (Some(outcome), None) => {
                 if outcome.sequence() <= intent.sequence() {
                     return Err(release_recovery_error(
-                        "release_intent_outcome_order_invalid",
+                        HostCode::ReleaseIntentOutcomeOrderInvalid,
                     ));
                 }
                 let EventPayload::Release(
                     ReleasePayload::Activated(data) | ReleasePayload::RolledBack(data),
                 ) = outcome.payload()
                 else {
-                    return Err(release_recovery_error("release_outcome_payload_invalid"));
+                    return Err(release_recovery_error(
+                        HostCode::ReleaseOutcomePayloadInvalid,
+                    ));
                 };
                 if data.transition() == value.transition() {
                     let target = match value.transition().kind() {
@@ -432,9 +450,13 @@ pub(super) fn reconcile_release_state(
                     actingcommand_ledger::critical::validate_release_transaction_outcome(
                         target, intent, &outcome, true,
                     )
-                    .map_err(|_| release_recovery_error("release_outcome_identity_mismatch"))?;
+                    .map_err(|_| {
+                        release_recovery_error(HostCode::ReleaseOutcomeIdentityMismatch)
+                    })?;
                 } else if data.transition() != &value.transition().recovered_for_ledger() {
-                    return Err(release_recovery_error("release_outcome_identity_mismatch"));
+                    return Err(release_recovery_error(
+                        HostCode::ReleaseOutcomeIdentityMismatch,
+                    ));
                 }
                 state
                     .verify_release_committed_fact(&outcome)
@@ -448,7 +470,7 @@ pub(super) fn reconcile_release_state(
                     || !matches!(failure.payload(), EventPayload::Release(ReleasePayload::TransitionFailed(failed)) if failed.transition() == value.transition())
                 {
                     return Err(release_recovery_error(
-                        "release_transition_effect_unresolved",
+                        HostCode::ReleaseTransitionEffectUnresolved,
                     ));
                 }
                 let target = match value.transition().kind() {
@@ -458,11 +480,11 @@ pub(super) fn reconcile_release_state(
                 actingcommand_ledger::critical::validate_release_transaction_outcome(
                     target, intent, &failure, false,
                 )
-                .map_err(|_| release_recovery_error("release_failure_identity_mismatch"))?;
+                .map_err(|_| release_recovery_error(HostCode::ReleaseFailureIdentityMismatch))?;
                 Ok(())
             }
             _ => Err(release_recovery_error(
-                "release_transition_effect_unresolved",
+                HostCode::ReleaseTransitionEffectUnresolved,
             )),
         }
     })
@@ -492,7 +514,9 @@ fn visit_release_facts(
         }
         for event in &page {
             if event.sequence() <= after || event.sequence() > through {
-                return Err(release_recovery_error("release_recovery_cursor_invalid"));
+                return Err(release_recovery_error(
+                    HostCode::ReleaseRecoveryCursorInvalid,
+                ));
             }
             visit(event)?;
             after = event.sequence();
@@ -509,7 +533,9 @@ fn find_release_fact(
     visit_release_facts(ledger, event_type, |event| {
         if matches(event) {
             if found.is_some() {
-                return Err(release_recovery_error("release_fact_identity_conflict"));
+                return Err(release_recovery_error(
+                    HostCode::ReleaseFactIdentityConflict,
+                ));
             }
             found = Some(event.clone());
         }
@@ -573,9 +599,9 @@ fn release_work_error(
 
 fn release_rejection_error(error: &TransactionWorkError) -> RuntimeHostError {
     let mapped = if error.fatal {
-        RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+        RuntimeHostError::relayed_fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
     } else {
-        RuntimeHostError::request(
+        RuntimeHostError::relayed_request(
             error.code,
             error.operation,
             RuntimeErrorCode::InvalidRequest,
@@ -593,7 +619,7 @@ fn release_transaction_error(error: GlobalLedgerError) -> RuntimeHostError {
 }
 
 fn release_ledger_error(error: GlobalLedgerError) -> RuntimeHostError {
-    RuntimeHostError::fatal(
+    RuntimeHostError::relayed_fatal(
         error.code(),
         error.operation(),
         RuntimeErrorCode::LedgerFailure,
@@ -606,17 +632,17 @@ fn release_failure_error(
     failure: impl std::fmt::Display,
 ) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "release_failure_fact_undurable",
-        "switch_release_set",
+        HostCode::ReleaseFailureFactUndurable,
+        HostLocation::SwitchReleaseSet,
         RuntimeErrorCode::LedgerFailure,
     )
     .with_native_detail(format!("original={original:?}; failure={failure}"))
 }
 
-fn release_recovery_error(code: &'static str) -> RuntimeHostError {
+fn release_recovery_error(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
-        "reconcile_release_state",
+        HostLocation::ReconcileReleaseState,
         RuntimeErrorCode::RuntimeFatal,
     )
 }

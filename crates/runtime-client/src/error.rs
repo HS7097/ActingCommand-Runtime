@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{ClientCode, ClientLocation};
+use actingcommand_contract::outcome::{Code, Location, VocabularyToken};
 use actingcommand_contract::{
     CorrelationId, OwnerEpoch, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
     RuntimeReceipt, RuntimeRequest,
@@ -40,33 +42,38 @@ impl RuntimeClientErrorClass {
 
 /// Client failures raised after the request frame was written, without an error projection:
 /// an unread, unconfirmed, or mismatched receipt.
-const UNCERTAIN_AFTER_SEND_CODES: &[&str] = &[
-    "runtime_receipt_header_failed",
-    "runtime_receipt_read_failed",
-    "runtime_receipt_frame_invalid",
-    "runtime_receipt_decode_failed",
-    "runtime_receipt_timeout",
-    "runtime_read_timeout_restore_failed",
-    "runtime_receipt_invalid",
-    "runtime_receipt_identity_mismatch",
-    "runtime_result_missing",
-    "runtime_result_unexpected",
-    "runtime_shutdown_receipt_unconfirmed",
-    "install_transition_receipt_unconfirmed",
-    "material_read_receipt_selection_mismatch",
-    "runtime_scheduling_resume_unconfirmed",
+const UNCERTAIN_AFTER_SEND_CODES: &[ClientCode] = &[
+    ClientCode::RuntimeReceiptHeaderFailed,
+    ClientCode::RuntimeReceiptReadFailed,
+    ClientCode::RuntimeReceiptFrameInvalid,
+    ClientCode::RuntimeReceiptDecodeFailed,
+    ClientCode::RuntimeReceiptTimeout,
+    ClientCode::RuntimeReadTimeoutRestoreFailed,
+    ClientCode::RuntimeReceiptInvalid,
+    ClientCode::RuntimeReceiptIdentityMismatch,
+    ClientCode::RuntimeResultMissing,
+    ClientCode::RuntimeResultUnexpected,
+    ClientCode::RuntimeShutdownReceiptUnconfirmed,
+    ClientCode::InstallTransitionReceiptUnconfirmed,
+    ClientCode::MaterialReadReceiptSelectionMismatch,
+    ClientCode::RuntimeSchedulingResumeUnconfirmed,
 ];
 
 /// Client conclusions that settle a request whose receipt never arrived (Workflow #338 R4, R5):
 /// the same owner, reached again, shows the request was not performed.
-const SETTLED_WITHOUT_RECEIPT_CODES: &[&str] = &["runtime_operation_unsupported"];
+const SETTLED_WITHOUT_RECEIPT_CODES: &[ClientCode] = &[ClientCode::RuntimeOperationUnsupported];
 
 /// The client codes of a contained run's own cancelled receipt (`run_contained_task`).
-const CONTAINED_TASK_STOPPED_CODES: &[&str] = &[
-    "runtime_contained_task_cancelled",
-    "runtime_contained_task_paused",
-    "runtime_contained_task_response_timeout",
+const CONTAINED_TASK_STOPPED_CODES: &[ClientCode] = &[
+    ClientCode::RuntimeContainedTaskCancelled,
+    ClientCode::RuntimeContainedTaskPaused,
+    ClientCode::RuntimeContainedTaskResponseTimeout,
 ];
+
+/// Whether `code` is one of `codes`.
+fn listed(codes: &[ClientCode], code: Code) -> bool {
+    codes.iter().any(|listed| listed.code() == code)
+}
 
 const fn runtime_error_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass {
     use RuntimeClientErrorClass::{Device, Runtime, Safety, Usage};
@@ -151,8 +158,8 @@ impl RuntimeReceiptHeaderIo {
 /// Redacted local transport or typed Runtime rejection error.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeClientError {
-    code: &'static str,
-    operation: &'static str,
+    code: Code,
+    operation: Location,
     projection: Option<Box<RuntimeErrorProjection>>,
     related: Option<Box<RuntimeClientError>>,
     committed_receipt: Option<Box<RuntimeReceipt>>,
@@ -161,11 +168,11 @@ pub struct RuntimeClientError {
 }
 
 impl RuntimeClientError {
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
-    pub const fn operation(&self) -> &'static str {
+    pub const fn operation(&self) -> Location {
         self.operation
     }
 
@@ -201,7 +208,7 @@ impl RuntimeClientError {
         }
         match self.projection.as_deref() {
             Some(projection) => runtime_error_class(projection.code),
-            None if CONTAINED_TASK_STOPPED_CODES.contains(&self.code) => {
+            None if listed(CONTAINED_TASK_STOPPED_CODES, self.code) => {
                 RuntimeClientErrorClass::Device
             }
             None => RuntimeClientErrorClass::Runtime,
@@ -212,14 +219,17 @@ impl RuntimeClientError {
     /// settles its own request; a later or underlying related failure does not make that
     /// request's effect unknown.
     fn is_uncertain(&self) -> bool {
-        if self.committed_receipt.is_some() || SETTLED_WITHOUT_RECEIPT_CODES.contains(&self.code) {
+        if self.committed_receipt.is_some() || listed(SETTLED_WITHOUT_RECEIPT_CODES, self.code) {
             return false;
         }
         let own = self.projection.is_none()
-            && (UNCERTAIN_AFTER_SEND_CODES.contains(&self.code)
-                || self.code.starts_with("runtime_contained_task_recovery_")
-                || (self.code == "runtime_owner_epoch_changed"
-                    && self.operation != "connect_runtime"));
+            && (listed(UNCERTAIN_AFTER_SEND_CODES, self.code)
+                || self
+                    .code
+                    .as_str()
+                    .starts_with("runtime_contained_task_recovery_")
+                || (self.code == ClientCode::RuntimeOwnerEpochChanged.code()
+                    && self.operation != ClientLocation::ConnectRuntime.location()));
         own || self
             .related
             .as_deref()
@@ -281,10 +291,10 @@ impl RuntimeClientError {
         self
     }
 
-    pub(crate) const fn fatal(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> Self {
         Self {
-            code,
-            operation,
+            code: code.into(),
+            operation: operation.into(),
             projection: None,
             related: None,
             committed_receipt: None,
@@ -293,10 +303,13 @@ impl RuntimeClientError {
         }
     }
 
-    pub(crate) fn rejected(operation: &'static str, projection: RuntimeErrorProjection) -> Self {
+    pub(crate) fn rejected(
+        operation: impl Into<Location>,
+        projection: RuntimeErrorProjection,
+    ) -> Self {
         Self {
-            code: "runtime_request_rejected",
-            operation,
+            code: ClientCode::RuntimeRequestRejected.code(),
+            operation: operation.into(),
             projection: Some(Box::new(projection)),
             related: None,
             committed_receipt: None,
@@ -306,14 +319,14 @@ impl RuntimeClientError {
     }
 
     pub(crate) fn after_commit(
-        code: &'static str,
-        operation: &'static str,
+        code: impl Into<Code>,
+        operation: impl Into<Location>,
         receipt: RuntimeReceipt,
         related: RuntimeClientError,
     ) -> Self {
         Self {
-            code,
-            operation,
+            code: code.into(),
+            operation: operation.into(),
             projection: None,
             related: Some(Box::new(related)),
             committed_receipt: Some(Box::new(receipt)),
@@ -366,11 +379,13 @@ impl fmt::Display for RuntimeClientError {
             Some(projection) => {
                 write!(
                     formatter,
-                    "runtime client error {} during {} with runtime code {:?}",
-                    self.code, self.operation, projection.code
+                    "runtime client error {} during {} with runtime code {}",
+                    self.code,
+                    self.operation,
+                    projection.code.as_str()
                 )?;
                 if let Some(receipt) = self.received_receipt() {
-                    write!(formatter, " state={:?}", receipt.state())?;
+                    write!(formatter, " state={}", receipt.state().token())?;
                 }
                 write!(formatter, " fatal={}", projection.fatal)?;
                 if let Some(retry_after_ms) = projection.retry_after_ms {

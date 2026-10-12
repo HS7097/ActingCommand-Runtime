@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::RuntimeContractCode;
 use crate::page_projection::PageProjection;
 
 pub const ONLINE_OBSERVATION_SCHEMA: &str = "actingcommand.runtime.contained-page-observation.v1";
@@ -43,7 +44,7 @@ impl ContainedObservationRequest {
             || self.package_path.contains('\0')
         {
             return Err(RuntimeContractError::new(
-                "invalid_observation_package_path",
+                RuntimeContractCode::InvalidObservationPackagePath,
             ));
         }
         self.expected_sha256.validate()?;
@@ -55,7 +56,9 @@ impl ContainedObservationRequest {
                     || self.targets[..index].contains(target)
             })
         {
-            return Err(RuntimeContractError::new("invalid_observation_targets"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidObservationTargets,
+            ));
         }
         Ok(())
     }
@@ -101,7 +104,9 @@ impl ObservationFacts {
         if self.rows.len() < MAX_OBSERVATION_FACT_ITEMS {
             self.rows.push(row);
             if serde_json::to_vec(self)
-                .map_err(|_| RuntimeContractError::new("observation_fact_encode_failed"))?
+                .map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::ObservationFactEncodeFailed)
+                })?
                 .len()
                 <= MAX_OBSERVATION_FACT_BYTES - 256
             {
@@ -120,11 +125,15 @@ impl ObservationFacts {
             || self.omitted_target_evaluation_count > self.target_evaluation_count
             || self.truncated != (self.omitted_count != 0)
             || serde_json::to_vec(self)
-                .map_err(|_| RuntimeContractError::new("observation_fact_encode_failed"))?
+                .map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::ObservationFactEncodeFailed)
+                })?
                 .len()
                 > MAX_OBSERVATION_FACT_BYTES
         {
-            return Err(RuntimeContractError::new("invalid_observation_facts"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidObservationFacts,
+            ));
         }
         Ok(())
     }
@@ -172,9 +181,9 @@ pub struct ContainedPageObservation {
 impl ContainedPageObservation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         self.frame.validate()?;
-        self.artifact
-            .validate()
-            .map_err(|_| RuntimeContractError::new("invalid_page_observation_artifact"))?;
+        self.artifact.validate().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidPageObservationArtifact)
+        })?;
         self.facts.validate()?;
         self.expected_package_sha256.validate()?;
         if self.expected_package_sha256 != self.actual_package_sha256
@@ -197,12 +206,11 @@ impl ContainedPageObservation {
                 }
         {
             return Err(RuntimeContractError::new(
-                "invalid_contained_page_observation",
+                RuntimeContractCode::InvalidContainedPageObservation,
             ));
         }
-        self.projection
-            .clone()
-            .verify_transport()
-            .map_err(|_| RuntimeContractError::new("invalid_page_projection_content"))
+        self.projection.clone().verify_transport().map_err(|_| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidPageProjectionContent)
+        })
     }
 }

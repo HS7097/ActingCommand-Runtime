@@ -97,7 +97,7 @@ pub fn segmented_swipe_capability_error() -> DeviceError {
         )
         .with_diagnostic_context(
             "input_backend",
-            "segmented_swipe",
+            crate::DeviceLocation::SegmentedSwipe.as_str(),
             crate::DeviceErrorSensitivity::Internal,
         )
         .with_diagnostic_message(

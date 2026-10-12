@@ -4,9 +4,9 @@
 //! counterexamples that show each check catches a break.
 
 use actingcommand_outcome_guard::catalog::{RELEASE_SCHEMA_VERSION, check_snapshot};
-use actingcommand_outcome_guard::source::{ChannelScope, Check, inspect_channels};
+use actingcommand_outcome_guard::source::{ChannelScope, Check, inspect_channels, scan_file};
 use actingcommand_outcome_guard::{
-    ALLOW_LIST, Workspace, check_channels, check_contract, check_keys, check_naming,
+    ALLOW_LIST, ScannedFile, Workspace, check_channels, check_contract, check_keys, check_naming,
     check_registries, load_workspace, workspace_members, workspace_root,
 };
 use std::collections::BTreeSet;
@@ -198,6 +198,68 @@ fn g8_reports_an_unowned_prefix_and_a_reserved_prefix() {
     assert_reported("G8", &violations, "prefix setup_ is reserved for the UI");
 }
 
+/// #378 A2b (board comment 6108644961, spec amendment A-1..A-4: `setup_` and `console_` are the
+/// UI's): a Runtime entry under a UI prefix is refused even when a longer domain that lists its
+/// owner also matches it.
+#[test]
+fn gate_g8_reports_a_ui_prefix_under_a_longer_runtime_domain() {
+    let mut changed = changed_workspace();
+    let catalog = changed.catalog.as_mut().expect("the catalog loads");
+    let mut entry = catalog
+        .codes
+        .get("runtime_restart_required")
+        .cloned()
+        .expect("the runtime-host fragment lists runtime_restart_required");
+    entry.insert("owner".to_owned(), serde_json::Value::from("runtime-host"));
+    catalog.domains.insert(
+        "setup_wizard_".to_owned(),
+        serde_json::json!(["runtime-host"]),
+    );
+    catalog
+        .codes
+        .insert("setup_wizard_step_failed".to_owned(), entry);
+    assert_reported(
+        "G8",
+        &check_naming(&changed),
+        "code setup_wizard_step_failed: the prefix setup_ is reserved for the UI",
+    );
+}
+
+/// #378 A2b (board comment 6108644961, spec amendment A-1..A-4: UI-only keys live only in the
+/// UI's table): a `setup_` or `console_` key is reported in the catalog key table and in
+/// `outcome_keys!` alike, never skipped.
+#[test]
+fn gate_g7_reports_ui_prefixed_keys_on_either_side() {
+    let mut changed = changed_workspace();
+    let catalog = changed.catalog.as_mut().expect("the catalog loads");
+    catalog.keys.insert(
+        "setup_step".to_owned(),
+        serde_json::json!({"type": "token", "description": "A UI-only key."}),
+    );
+    let table = changed
+        .files
+        .iter_mut()
+        .filter(|file| file.member == "crates/actingcommand-contract")
+        .find_map(|file| file.scan.facts.key_tables.first_mut())
+        .expect("the contract holds the outcome_keys! table");
+    table.push(actingcommand_outcome_guard::source::KeyLine {
+        name: "console_view".to_owned(),
+        kind: "token".to_owned(),
+        fields: Vec::new(),
+    });
+    let violations = check_keys(&changed);
+    assert_reported(
+        "G7",
+        &violations,
+        "G7 catalog key setup_step: the setup_ and console_ prefixes are the UI's",
+    );
+    assert_reported(
+        "G7",
+        &violations,
+        "G7 outcome_keys! key console_view: the setup_ and console_ prefixes are the UI's",
+    );
+}
+
 #[test]
 fn g9_reports_a_stale_merged_file_and_a_changed_settled_entry() {
     let mut changed = changed_workspace();
@@ -234,4 +296,73 @@ fn g9_reports_a_stale_merged_file_and_a_changed_settled_entry() {
         "settled foreign_os_error changed its category",
     );
     assert_reported("G9", &violations, "gained the required key raw_source");
+}
+
+/// #378 A2a T6 (a, b) (brief-a2a.md; model-378 §16 A-9 :631; A1 acceptance carry-over 3): a
+/// `Result` whose error is a tuple or an array holding a string type is a G2 finding, and so is
+/// a non-test `include!`; a tuple of numbers and an `include!` in a test module are not.
+#[test]
+fn gate_g2_reports_string_tuple_and_array_errors_and_a_non_test_include() {
+    let registered = BTreeSet::new();
+    let source = r#"
+        fn pair() -> Result<(), (&'static str, &'static str)> { Ok(()) }
+        fn listed() -> Result<(), [String; 2]> { Ok(()) }
+        fn counted() -> Result<(), (u64, u64)> { Ok(()) }
+        include!("generated.rs");
+        #[cfg(test)]
+        mod tests { include!("fixtures.rs"); }
+    "#;
+    let findings = inspect_channels(
+        source,
+        ChannelScope {
+            registered: &registered,
+            outcome_module: false,
+        },
+    )
+    .expect("parse the counterexample");
+    let mut details = findings
+        .iter()
+        .filter(|finding| finding.check == Check::G2)
+        .map(|finding| finding.detail.as_str())
+        .collect::<Vec<_>>();
+    details.sort_unstable();
+    assert_eq!(
+        details,
+        [
+            "include! pulls in source the guard cannot see",
+            "listed returns a Result whose error is a string",
+            "pair returns a Result whose error is a string",
+        ],
+        "{findings:#?}"
+    );
+}
+
+/// #378 A2a T6 (c) (brief-a2a.md; model-378 §16 A-9 :631; A1 acceptance carry-over 3): an
+/// `outcome_codes!` invocation that does not parse registers nothing and is a G1 error, never
+/// skipped.
+#[test]
+fn gate_g1_reports_a_registry_invocation_that_does_not_parse() {
+    let source = r#"
+        actingcommand_contract::outcome_codes! {
+            pub enum BrokenCode {
+                EntryMissing => "registry_entry_missing",
+                EntryUncategorised => "registry_entry_uncategorised"
+            }
+        }
+    "#;
+    let scan = scan_file(source, None).expect("the file itself parses");
+    assert!(scan.facts.registries.is_empty(), "{:#?}", scan.facts);
+    assert_eq!(scan.facts.errors.len(), 1, "{:#?}", scan.facts);
+    let path = "crates/actingcommand-contract/src/broken_registry.rs";
+    let mut changed = changed_workspace();
+    changed.files.push(ScannedFile {
+        member: "crates/actingcommand-contract".to_owned(),
+        path: path.to_owned(),
+        scan,
+    });
+    assert_reported(
+        "G1",
+        &check_registries(&changed),
+        &format!("G1 {path}: line 2: outcome_codes! does not parse"),
+    );
 }

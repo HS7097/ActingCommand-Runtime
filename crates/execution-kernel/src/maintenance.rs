@@ -3,7 +3,9 @@
 //! Read-only package qualifications and the shared prerequisite-chain predicate. All facts
 //! originate from PreparedContainedTask; callers retain material loading and execution.
 
+use crate::codes::ExecutionKernelCode;
 use crate::{ContainedTaskError, PreparedContainedTask};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{BundleIndexV3, MaintenanceUse, PackageRef};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -189,11 +191,11 @@ impl PrerequisiteChain {
         bound: bool,
     ) -> Result<(), ContainedTaskError> {
         let code = if !bound {
-            Some("contained_task_prerequisite_unbound")
+            Some(ExecutionKernelCode::ContainedTaskPrerequisiteUnbound.code())
         } else if !self.visited.insert(link.package_id.clone()) {
-            Some("contained_task_prerequisite_cycle")
+            Some(ExecutionKernelCode::ContainedTaskPrerequisiteCycle.code())
         } else if !link.return_home && self.declared >= MAX_PREREQUISITE_DEPTH {
-            Some("contained_task_prerequisite_depth_exceeded")
+            Some(ExecutionKernelCode::ContainedTaskPrerequisiteDepthExceeded.code())
         } else {
             None
         };
@@ -213,7 +215,7 @@ impl PrerequisiteChain {
     ) -> Result<(), ContainedTaskError> {
         if package.package_id != link.package_id {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_prerequisite_mismatch",
+                ExecutionKernelCode::ContainedTaskPrerequisiteMismatch.code(),
                 link.detail(&format!(" declared_package_id={}", package.package_id)),
             ));
         }
@@ -224,7 +226,7 @@ impl PrerequisiteChain {
             false,
         ) {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_prerequisite_incompatible",
+                SharedCode::ContainedTaskPrerequisiteIncompatible.code(),
                 link.detail(&format!(" reason={reason}")),
             ));
         }
@@ -238,7 +240,7 @@ impl PrerequisiteChain {
     pub fn finish(&self) -> Result<(), ContainedTaskError> {
         if self.layers > 0 && self.steps > MAX_GATED_STEPS {
             return Err(ContainedTaskError::with_detail(
-                "contained_task_prerequisite_step_limit",
+                SharedCode::ContainedTaskPrerequisiteStepLimit.code(),
                 format!("maximum_executed_steps={}", self.steps),
             ));
         }
@@ -253,8 +255,12 @@ pub fn validate_bundle_maintenance(
     index: &BundleIndexV3,
     packages: &[TaskPackageDescriptor],
 ) -> Result<(), ContainedTaskError> {
-    let invalid =
-        |detail: String| ContainedTaskError::with_detail("bundle_maintenance_invalid", detail);
+    let invalid = |detail: String| {
+        ContainedTaskError::with_detail(
+            ExecutionKernelCode::BundleMaintenanceInvalid.code(),
+            detail,
+        )
+    };
     index
         .validate()
         .map_err(|error| invalid(error.to_string()))?;

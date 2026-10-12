@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{RuntimeStateError, RuntimeStateResult};
+use crate::{RuntimeStateError, RuntimeStateResult, StateCode, StateLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ReleaseTransitionData, ReleaseTransitionKind, RuntimeReleaseSet, StateMigrationData,
     StateRecoveryAction, StateTransitionStatus, StateValidationResult,
@@ -251,15 +253,15 @@ impl PreparedCatalogState {
     ) -> RuntimeStateResult<CatalogStateObservation> {
         if !scope.belongs_to(&self.store.database) {
             return Err(fatal(
-                "state_transaction_owner_mismatch",
-                "observe_catalog_state",
+                StateCode::StateTransactionOwnerMismatch.code(),
+                StateLocation::ObserveCatalogState.location(),
             ));
         }
         let connection = scope.sql();
         let current = query_document(connection, CATALOG_ACTIVE_STATE_KEY)?
             .map(|row| {
                 self.store
-                    .validate_document_row(row, "observe_catalog_state")
+                    .validate_document_row(row, StateLocation::ObserveCatalogState.location())
             })
             .transpose()?;
         let highest: Option<i64> = connection
@@ -268,7 +270,12 @@ impl PreparedCatalogState {
                 [CATALOG_ACTIVE_STATE_KEY],
                 |row| row.get(0),
             )
-            .map_err(|_| fatal("state_document_query_failed", "observe_catalog_state"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateDocumentQueryFailed.code(),
+                    StateLocation::ObserveCatalogState.location(),
+                )
+            })?;
         if highest.and_then(|value| u64::try_from(value).ok())
             != current.as_ref().map(|value| value.revision())
         {
@@ -278,11 +285,14 @@ impl PreparedCatalogState {
             let history =
                 query_document_revision(connection, CATALOG_ACTIVE_STATE_KEY, document.revision())?
                     .ok_or_else(|| {
-                        fatal("state_document_history_missing", "observe_catalog_state")
+                        fatal(
+                            StateCode::StateDocumentHistoryMissing.code(),
+                            StateLocation::ObserveCatalogState.location(),
+                        )
                     })?;
             if self
                 .store
-                .validate_document_row(history, "observe_catalog_state")?
+                .validate_document_row(history, StateLocation::ObserveCatalogState.location())?
                 != *document
             {
                 return Ok(CatalogStateObservation::Unknown);
@@ -292,7 +302,7 @@ impl PreparedCatalogState {
             query_migration(connection, data.migration_id())?
                 .map(|row| {
                     self.store
-                        .validate_migration_row(&row, "observe_catalog_state")
+                        .validate_migration_row(&row, StateLocation::ObserveCatalogState.location())
                         .map(|value| value.data)
                 })
                 .transpose()?
@@ -335,14 +345,14 @@ impl PreparedCatalogState {
     ) -> RuntimeStateResult<()> {
         if !scope.belongs_to(&self.store.database) {
             return Err(fatal(
-                "state_transaction_owner_mismatch",
-                "apply_catalog_state",
+                StateCode::StateTransactionOwnerMismatch.code(),
+                StateLocation::ApplyCatalogState.location(),
             ));
         }
         let transaction = scope.sql();
         if let Some(current) = query_document(transaction, CATALOG_ACTIVE_STATE_KEY)? {
             self.store
-                .validate_document_row(current, "apply_catalog_state")?;
+                .validate_document_row(current, StateLocation::ApplyCatalogState.location())?;
         }
         match &self.migration {
             Some(migration) => {
@@ -355,8 +365,8 @@ impl PreparedCatalogState {
                 )?;
                 if actual != *migration {
                     return Err(fatal(
-                        "state_migration_identity_conflict",
-                        "apply_catalog_state",
+                        StateCode::StateMigrationIdentityConflict.code(),
+                        StateLocation::ApplyCatalogState.location(),
                     ));
                 }
             }
@@ -378,8 +388,8 @@ fn reject_catalog_key(state_key: &str) -> RuntimeStateResult<()> {
     release::reject_release_key(state_key)?;
     if state_key == CATALOG_ACTIVE_STATE_KEY {
         return Err(request(
-            "catalog_state_owner_required",
-            "write_state_document",
+            StateCode::CatalogStateOwnerRequired.code(),
+            ContractLocation::WriteStateDocument.location(),
         ));
     }
     Ok(())
@@ -392,29 +402,33 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<StateDocument> {
         if data.state_key() != CATALOG_ACTIVE_STATE_KEY {
             return Err(request(
-                "catalog_migration_identity_invalid",
-                "read_catalog_migration",
+                StateCode::CatalogMigrationIdentityInvalid.code(),
+                StateLocation::ReadCatalogMigration.location(),
             ));
         }
-        let connection = self.connection("read_catalog_migration")?;
-        let stored = query_migration(&connection, data.migration_id())?
-            .ok_or_else(|| fatal("state_migration_record_missing", "read_catalog_migration"))?;
+        let connection = self.connection(StateLocation::ReadCatalogMigration.location())?;
+        let stored = query_migration(&connection, data.migration_id())?.ok_or_else(|| {
+            fatal(
+                StateCode::StateMigrationRecordMissing.code(),
+                StateLocation::ReadCatalogMigration.location(),
+            )
+        })?;
         if self
-            .validate_migration_row(&stored, "read_catalog_migration")?
+            .validate_migration_row(&stored, StateLocation::ReadCatalogMigration.location())?
             .data
             != *data
         {
             return Err(fatal(
-                "state_migration_identity_conflict",
-                "read_catalog_migration",
+                StateCode::StateMigrationIdentityConflict.code(),
+                StateLocation::ReadCatalogMigration.location(),
             ));
         }
         let row = connection.query_row(
             "SELECT state_key, schema_version, revision, payload, payload_sha256, previous_payload_sha256, integrity_tag FROM state_document_history WHERE state_key=?1 AND schema_version=?2 AND payload_sha256=?3 ORDER BY revision LIMIT 1",
             params![CATALOG_ACTIVE_STATE_KEY, data.to_schema_version(), data.payload_sha256()], map_document_row,
-        ).optional().map_err(|_| fatal("state_document_query_failed", "read_catalog_migration"))?
-            .ok_or_else(|| fatal("state_migration_state_missing", "read_catalog_migration"))?;
-        self.validate_document_row(row, "read_catalog_migration")
+        ).optional().map_err(|_| fatal(StateCode::StateDocumentQueryFailed.code(), StateLocation::ReadCatalogMigration.location()))?
+            .ok_or_else(|| fatal(StateCode::StateMigrationStateMissing.code(), StateLocation::ReadCatalogMigration.location()))?;
+        self.validate_document_row(row, StateLocation::ReadCatalogMigration.location())
     }
 
     pub fn prepare_catalog_write(
@@ -425,7 +439,10 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<PreparedCatalogState> {
         validate_document_input(CATALOG_ACTIVE_STATE_KEY, schema_version, payload)?;
         if payload.len() > MAX_CATALOG_STATE_BYTES {
-            return Err(request("catalog_state_too_large", "prepare_catalog_state"));
+            return Err(request(
+                StateCode::CatalogStateTooLarge.code(),
+                StateLocation::PrepareCatalogState.location(),
+            ));
         }
         Ok(PreparedCatalogState {
             store: Arc::clone(self),
@@ -445,11 +462,14 @@ impl RuntimeStateStore {
         payload: &[u8],
     ) -> RuntimeStateResult<PreparedCatalogState> {
         let mut prepared = self.prepare_catalog_write(to_schema_version, payload, None)?;
-        validate_version(from_schema_version, "prepare_catalog_migration")?;
+        validate_version(
+            from_schema_version,
+            StateLocation::PrepareCatalogMigration.location(),
+        )?;
         if from_schema_version == to_schema_version {
             return Err(request(
-                "state_migration_schema_unchanged",
-                "migrate_state_document",
+                StateCode::StateMigrationSchemaUnchanged.code(),
+                StateLocation::MigrateStateDocument.location(),
             ));
         }
         let hash = sha256(payload);
@@ -468,9 +488,14 @@ impl RuntimeStateStore {
                 StateValidationResult::Passed,
                 StateRecoveryAction::ImportedLegacy,
             )
-            .map_err(|_| request("state_migration_invalid", "migrate_state_document"))?,
+            .map_err(|_| {
+                request(
+                    StateCode::StateMigrationInvalid.code(),
+                    StateLocation::MigrateStateDocument.location(),
+                )
+            })?,
         );
-        let connection = self.connection("prepare_catalog_migration")?;
+        let connection = self.connection(StateLocation::PrepareCatalogMigration.location())?;
         prepared.migration_baseline = query_migration(
             &connection,
             prepared
@@ -480,7 +505,7 @@ impl RuntimeStateStore {
                 .migration_id(),
         )?
         .map(|row| {
-            self.validate_migration_row(&row, "prepare_catalog_migration")
+            self.validate_migration_row(&row, StateLocation::PrepareCatalogMigration.location())
                 .map(|value| value.data)
         })
         .transpose()?;
@@ -524,11 +549,15 @@ impl RuntimeStateStore {
         deadline: std::time::Instant,
     ) -> RuntimeStateResult<String> {
         self.validate_all()?;
-        let mut connection = self.connection("snapshot_state_for_maintenance")?;
+        let mut connection =
+            self.connection(StateLocation::SnapshotStateForMaintenance.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|error| {
-                RuntimeStateError::maintenance_sql("snapshot_state_for_maintenance", &error)
+                RuntimeStateError::maintenance_sql(
+                    StateLocation::SnapshotStateForMaintenance.location(),
+                    &error,
+                )
             })?;
         let mut digest = Sha256::new();
         let mut bytes = 0_u64;
@@ -547,7 +576,10 @@ impl RuntimeStateStore {
             let columns = transaction
                 .prepare(&format!("SELECT * FROM {table}"))
                 .map_err(|error| {
-                    RuntimeStateError::maintenance_sql("inspect_state_columns", &error)
+                    RuntimeStateError::maintenance_sql(
+                        StateLocation::InspectStateColumns.location(),
+                        &error,
+                    )
                 })?
                 .column_count();
             let ordering = (1..=columns)
@@ -557,19 +589,31 @@ impl RuntimeStateStore {
             let mut statement = transaction
                 .prepare(&format!("SELECT * FROM {table} ORDER BY {ordering}"))
                 .map_err(|error| {
-                    RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                    RuntimeStateError::maintenance_sql(
+                        StateLocation::ReadStateSnapshot.location(),
+                        &error,
+                    )
                 })?;
             let mut rows = statement.query([]).map_err(|error| {
-                RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                RuntimeStateError::maintenance_sql(
+                    StateLocation::ReadStateSnapshot.location(),
+                    &error,
+                )
             })?;
             while let Some(row) = rows.next().map_err(|error| {
-                RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                RuntimeStateError::maintenance_sql(
+                    StateLocation::ReadStateSnapshot.location(),
+                    &error,
+                )
             })? {
                 digest.update(b"row");
                 for index in 0..columns {
                     use rusqlite::types::ValueRef;
                     let value = row.get_ref(index).map_err(|error| {
-                        RuntimeStateError::maintenance_sql("read_state_snapshot", &error)
+                        RuntimeStateError::maintenance_sql(
+                            StateLocation::ReadStateSnapshot.location(),
+                            &error,
+                        )
                     })?;
                     let length = match value {
                         ValueRef::Null => {
@@ -599,24 +643,30 @@ impl RuntimeStateStore {
                             value.len() as u64
                         }
                     };
-                    bytes = bytes
-                        .checked_add(length)
-                        .ok_or_else(|| fatal("state_snapshot_too_large", "read_state_snapshot"))?;
+                    bytes = bytes.checked_add(length).ok_or_else(|| {
+                        fatal(
+                            StateCode::StateSnapshotTooLarge.code(),
+                            StateLocation::ReadStateSnapshot.location(),
+                        )
+                    })?;
                     limits.check(bytes, 0, deadline)?;
                 }
             }
         }
         transaction.commit().map_err(|error| {
-            RuntimeStateError::maintenance_sql("snapshot_state_for_maintenance", &error)
+            RuntimeStateError::maintenance_sql(
+                StateLocation::SnapshotStateForMaintenance.location(),
+                &error,
+            )
         })?;
         Ok(format!("sha256:{:x}", digest.finalize()))
     }
 
     pub fn read_json_document(&self, state_key: &str) -> RuntimeStateResult<Option<StateDocument>> {
         validate_state_key(state_key)?;
-        let connection = self.connection("read_state_document")?;
+        let connection = self.connection(StateLocation::ReadStateDocument.location())?;
         let row = query_document(&connection, state_key)?;
-        row.map(|row| self.validate_document_row(row, "read_state_document"))
+        row.map(|row| self.validate_document_row(row, StateLocation::ReadStateDocument.location()))
             .transpose()
     }
 
@@ -627,9 +677,11 @@ impl RuntimeStateStore {
         entry_key: &str,
     ) -> RuntimeStateResult<Option<ProjectionEntry>> {
         validate_projection_identity(namespace, entry_key)?;
-        let connection = self.connection("read_projection_entry")?;
+        let connection = self.connection(StateLocation::ReadProjectionEntry.location())?;
         query_projection_entry(&connection, namespace, entry_key)?
-            .map(|row| self.validate_projection_row(row, "read_projection_entry"))
+            .map(|row| {
+                self.validate_projection_row(row, StateLocation::ReadProjectionEntry.location())
+            })
             .transpose()
     }
 
@@ -644,30 +696,35 @@ impl RuntimeStateStore {
         release::reject_release_namespace(namespace)?;
         if namespace == FACT_TOMBSTONE_NAMESPACE {
             return Err(request(
-                "fact_projection_owner_required",
-                "write_projection_entry",
+                StateCode::FactProjectionOwnerRequired.code(),
+                StateLocation::WriteProjectionEntry.location(),
             ));
         }
         if namespace == APPROVAL_PROJECTION_NAMESPACE {
             return Err(request(
-                "approval_projection_owner_required",
-                "write_projection_entry",
+                StateCode::ApprovalProjectionOwnerRequired.code(),
+                StateLocation::WriteProjectionEntry.location(),
             ));
         }
         if namespace == PLANNING_SIGNAL_PROJECTION_NAMESPACE
             || namespace == DETECTION_QUOTA_PROJECTION_NAMESPACE
         {
             return Err(request(
-                "planning_projection_owner_required",
-                "write_projection_entry",
+                StateCode::PlanningProjectionOwnerRequired.code(),
+                StateLocation::WriteProjectionEntry.location(),
             ));
         }
         validate_projection_input(namespace, entry_key, ledger_sequence, payload)?;
         let payload_sha256 = sha256(payload);
-        let mut connection = self.connection("write_projection_entry")?;
+        let mut connection = self.connection(StateLocation::WriteProjectionEntry.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "write_projection_entry"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::WriteProjectionEntry.location(),
+                )
+            })?;
         let entry = self.write_projection_in_transaction(
             &transaction,
             namespace,
@@ -676,9 +733,12 @@ impl RuntimeStateStore {
             payload,
             &payload_sha256,
         )?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
+        transaction.commit().map_err(|_| {
+            fatal(
+                StateCode::StateTransactionCommitFailed.code(),
+                StateLocation::WriteProjectionEntry.location(),
+            )
+        })?;
         Ok(entry)
     }
 
@@ -693,19 +753,22 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<ProjectionEntry> {
         let sqlite_sequence = sqlite_integer(
             ledger_sequence,
-            "projection_sequence_overflow",
-            "write_projection_entry",
+            StateCode::ProjectionSequenceOverflow.code(),
+            StateLocation::WriteProjectionEntry.location(),
         )?;
         if let Some(existing) = query_projection_entry(transaction, namespace, entry_key)? {
-            let existing = self.validate_projection_row(existing, "write_projection_entry")?;
+            let existing = self.validate_projection_row(
+                existing,
+                StateLocation::WriteProjectionEntry.location(),
+            )?;
             if existing.ledger_sequence > ledger_sequence {
                 return Ok(existing);
             }
             if existing.ledger_sequence == ledger_sequence {
                 if existing.payload_sha256 != payload_sha256 || existing.payload != payload {
                     return Err(fatal(
-                        "projection_entry_sequence_conflict",
-                        "write_projection_entry",
+                        StateCode::ProjectionEntrySequenceConflict.code(),
+                        StateLocation::WriteProjectionEntry.location(),
                     ));
                 }
                 return Ok(existing);
@@ -741,7 +804,12 @@ impl RuntimeStateStore {
                     integrity_tag
                 ],
             )
-            .map_err(|_| fatal("projection_entry_write_failed", "write_projection_entry"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::ProjectionEntryWriteFailed.code(),
+                    StateLocation::WriteProjectionEntry.location(),
+                )
+            })?;
         Ok(ProjectionEntry {
             namespace: namespace.to_owned(),
             entry_key: entry_key.to_owned(),
@@ -760,10 +828,15 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<StateDocument> {
         reject_catalog_key(state_key)?;
         validate_document_input(state_key, schema_version, payload)?;
-        let mut connection = self.connection("write_state_document")?;
+        let mut connection = self.connection(ContractLocation::WriteStateDocument.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "write_state_document"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    ContractLocation::WriteStateDocument.location(),
+                )
+            })?;
         let result = self.write_document_in_transaction(
             &transaction,
             state_key,
@@ -771,9 +844,12 @@ impl RuntimeStateStore {
             payload,
             expected_payload_sha256,
         )?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "write_state_document"))?;
+        transaction.commit().map_err(|_| {
+            fatal(
+                StateCode::StateTransactionCommitFailed.code(),
+                ContractLocation::WriteStateDocument.location(),
+            )
+        })?;
         Ok(result)
     }
 
@@ -789,7 +865,10 @@ impl RuntimeStateStore {
         let payload_sha256 = sha256(payload);
         let current = query_document(transaction, state_key)?;
         if current.as_ref().map(|row| row.payload_sha256.as_str()) != expected_payload_sha256 {
-            return Err(request("state_document_changed", "write_state_document"));
+            return Err(request(
+                SharedCode::StateDocumentChanged.code(),
+                ContractLocation::WriteStateDocument.location(),
+            ));
         }
         if let Some(current) = current.as_ref().filter(|row| {
             row.schema_version == schema_version && row.payload_sha256 == payload_sha256
@@ -803,12 +882,18 @@ impl RuntimeStateStore {
                 previous_payload_sha256: current.previous_payload_sha256.clone(),
                 integrity_tag: current.integrity_tag.clone(),
             };
-            return self.validate_document_row(current, "write_state_document");
+            return self
+                .validate_document_row(current, ContractLocation::WriteStateDocument.location());
         }
         let revision = current
             .as_ref()
             .map_or(Ok(1_u64), |row| row.revision.checked_add(1).ok_or(()))
-            .map_err(|()| fatal("state_revision_overflow", "write_state_document"))?;
+            .map_err(|()| {
+                fatal(
+                    StateCode::StateRevisionOverflow.code(),
+                    ContractLocation::WriteStateDocument.location(),
+                )
+            })?;
         let previous = current.map(|row| row.payload_sha256);
         let integrity_tag = self.document_integrity_tag(
             state_key,
@@ -847,17 +932,25 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<StateMigrationData> {
         reject_catalog_key(state_key)?;
         validate_document_input(state_key, to_schema_version, payload)?;
-        validate_version(from_schema_version, "migrate_state_document")?;
+        validate_version(
+            from_schema_version,
+            StateLocation::MigrateStateDocument.location(),
+        )?;
         if from_schema_version == to_schema_version {
             return Err(request(
-                "state_migration_schema_unchanged",
-                "migrate_state_document",
+                StateCode::StateMigrationSchemaUnchanged.code(),
+                StateLocation::MigrateStateDocument.location(),
             ));
         }
-        let mut connection = self.connection("migrate_state_document")?;
+        let mut connection = self.connection(StateLocation::MigrateStateDocument.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "migrate_state_document"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::MigrateStateDocument.location(),
+                )
+            })?;
         let result = self.migrate_document_in_transaction(
             &transaction,
             state_key,
@@ -865,9 +958,12 @@ impl RuntimeStateStore {
             to_schema_version,
             payload,
         )?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "migrate_state_document"))?;
+        transaction.commit().map_err(|_| {
+            fatal(
+                StateCode::StateTransactionCommitFailed.code(),
+                StateLocation::MigrateStateDocument.location(),
+            )
+        })?;
         Ok(result)
     }
 
@@ -880,11 +976,14 @@ impl RuntimeStateStore {
         payload: &[u8],
     ) -> RuntimeStateResult<StateMigrationData> {
         validate_document_input(state_key, to_schema_version, payload)?;
-        validate_version(from_schema_version, "migrate_state_document")?;
+        validate_version(
+            from_schema_version,
+            StateLocation::MigrateStateDocument.location(),
+        )?;
         if from_schema_version == to_schema_version {
             return Err(request(
-                "state_migration_schema_unchanged",
-                "migrate_state_document",
+                StateCode::StateMigrationSchemaUnchanged.code(),
+                StateLocation::MigrateStateDocument.location(),
             ));
         }
         let payload_sha256 = sha256(payload);
@@ -903,23 +1002,32 @@ impl RuntimeStateStore {
             StateValidationResult::Passed,
             StateRecoveryAction::ImportedLegacy,
         )
-        .map_err(|_| request("state_migration_invalid", "migrate_state_document"))?;
-        let data_json = serde_json::to_vec(&data)
-            .map_err(|_| fatal("state_migration_encode_failed", "migrate_state_document"))?;
+        .map_err(|_| {
+            request(
+                StateCode::StateMigrationInvalid.code(),
+                StateLocation::MigrateStateDocument.location(),
+            )
+        })?;
+        let data_json = serde_json::to_vec(&data).map_err(|_| {
+            fatal(
+                StateCode::StateMigrationEncodeFailed.code(),
+                StateLocation::MigrateStateDocument.location(),
+            )
+        })?;
         let current = query_document(transaction, state_key)?;
         let existing_migration = query_migration(transaction, data.migration_id())?;
         match current {
             Some(current) if current.payload_sha256 != payload_sha256 => {
                 return Err(fatal(
-                    "state_migration_content_conflict",
-                    "migrate_state_document",
+                    StateCode::StateMigrationContentConflict.code(),
+                    StateLocation::MigrateStateDocument.location(),
                 ));
             }
             None => {
                 if existing_migration.is_some() {
                     return Err(fatal(
-                        "state_migration_state_missing",
-                        "migrate_state_document",
+                        StateCode::StateMigrationStateMissing.code(),
+                        StateLocation::MigrateStateDocument.location(),
                     ));
                 }
                 let integrity_tag = self.document_integrity_tag(
@@ -944,14 +1052,16 @@ impl RuntimeStateStore {
             Some(current) if current.schema_version == from_schema_version => {
                 if existing_migration.is_some() {
                     return Err(fatal(
-                        "state_migration_state_conflict",
-                        "migrate_state_document",
+                        StateCode::StateMigrationStateConflict.code(),
+                        StateLocation::MigrateStateDocument.location(),
                     ));
                 }
-                let revision = current
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| fatal("state_revision_overflow", "migrate_state_document"))?;
+                let revision = current.revision.checked_add(1).ok_or_else(|| {
+                    fatal(
+                        StateCode::StateRevisionOverflow.code(),
+                        StateLocation::MigrateStateDocument.location(),
+                    )
+                })?;
                 let integrity_tag = self.document_integrity_tag(
                     state_key,
                     to_schema_version,
@@ -973,20 +1083,26 @@ impl RuntimeStateStore {
             }
             Some(current) if current.schema_version == to_schema_version => {
                 let existing = existing_migration.as_ref().ok_or_else(|| {
-                    fatal("state_migration_record_missing", "migrate_state_document")
+                    fatal(
+                        StateCode::StateMigrationRecordMissing.code(),
+                        StateLocation::MigrateStateDocument.location(),
+                    )
                 })?;
-                let existing = self.validate_migration_row(existing, "migrate_state_document")?;
+                let existing = self.validate_migration_row(
+                    existing,
+                    StateLocation::MigrateStateDocument.location(),
+                )?;
                 if existing.data != data {
                     return Err(fatal(
-                        "state_migration_identity_conflict",
-                        "migrate_state_document",
+                        StateCode::StateMigrationIdentityConflict.code(),
+                        StateLocation::MigrateStateDocument.location(),
                     ));
                 }
             }
             Some(_) => {
                 return Err(fatal(
-                    "state_migration_schema_conflict",
-                    "migrate_state_document",
+                    StateCode::StateMigrationSchemaConflict.code(),
+                    StateLocation::MigrateStateDocument.location(),
                 ));
             }
         }
@@ -1001,7 +1117,12 @@ impl RuntimeStateStore {
                      (migration_id, data_json, integrity_tag) VALUES (?1, ?2, ?3)",
                     params![migration_id, data_json, integrity_tag],
                 )
-                .map_err(|_| fatal("state_migration_write_failed", "migrate_state_document"))?;
+                .map_err(|_| {
+                    fatal(
+                        StateCode::StateMigrationWriteFailed.code(),
+                        StateLocation::MigrateStateDocument.location(),
+                    )
+                })?;
         }
         Ok(data)
     }
@@ -1016,33 +1137,54 @@ impl RuntimeStateStore {
         validate_state_key(state_key)?;
         if target_revision == 0 {
             return Err(request(
-                "state_rollback_revision_invalid",
-                "rollback_state_document",
+                StateCode::StateRollbackRevisionInvalid.code(),
+                StateLocation::RollbackStateDocument.location(),
             ));
         }
-        let mut connection = self.connection("rollback_state_document")?;
+        let mut connection = self.connection(StateLocation::RollbackStateDocument.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "rollback_state_document"))?;
-        let current = query_document(&transaction, state_key)?
-            .ok_or_else(|| request("state_document_missing", "rollback_state_document"))?;
-        let current = self.validate_document_row(current, "rollback_state_document")?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::RollbackStateDocument.location(),
+                )
+            })?;
+        let current = query_document(&transaction, state_key)?.ok_or_else(|| {
+            request(
+                StateCode::StateDocumentMissing.code(),
+                StateLocation::RollbackStateDocument.location(),
+            )
+        })?;
+        let current =
+            self.validate_document_row(current, StateLocation::RollbackStateDocument.location())?;
         if current.payload_sha256() != expected_payload_sha256 {
-            return Err(request("state_document_changed", "rollback_state_document"));
+            return Err(request(
+                SharedCode::StateDocumentChanged.code(),
+                StateLocation::RollbackStateDocument.location(),
+            ));
         }
         if target_revision >= current.revision() {
             return Err(request(
-                "state_rollback_revision_not_older",
-                "rollback_state_document",
+                StateCode::StateRollbackRevisionNotOlder.code(),
+                StateLocation::RollbackStateDocument.location(),
             ));
         }
         let target = query_document_revision(&transaction, state_key, target_revision)?
-            .ok_or_else(|| request("state_rollback_revision_missing", "rollback_state_document"))?;
-        let target = self.validate_document_row(target, "rollback_state_document")?;
-        let revision = current
-            .revision()
-            .checked_add(1)
-            .ok_or_else(|| fatal("state_revision_overflow", "rollback_state_document"))?;
+            .ok_or_else(|| {
+                request(
+                    StateCode::StateRollbackRevisionMissing.code(),
+                    StateLocation::RollbackStateDocument.location(),
+                )
+            })?;
+        let target =
+            self.validate_document_row(target, StateLocation::RollbackStateDocument.location())?;
+        let revision = current.revision().checked_add(1).ok_or_else(|| {
+            fatal(
+                StateCode::StateRevisionOverflow.code(),
+                StateLocation::RollbackStateDocument.location(),
+            )
+        })?;
         let integrity_tag = self.document_integrity_tag(
             state_key,
             target.schema_version(),
@@ -1061,9 +1203,12 @@ impl RuntimeStateStore {
             Some(current.payload_sha256()),
             &integrity_tag,
         )?;
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "rollback_state_document"))?;
+        transaction.commit().map_err(|_| {
+            fatal(
+                StateCode::StateTransactionCommitFailed.code(),
+                StateLocation::RollbackStateDocument.location(),
+            )
+        })?;
         Ok(StateDocument {
             state_key: state_key.to_owned(),
             schema_version: target.schema_version().to_owned(),
@@ -1075,13 +1220,18 @@ impl RuntimeStateStore {
     }
 
     pub fn migrations(&self) -> RuntimeStateResult<Vec<StateMigrationData>> {
-        let connection = self.connection("read_state_migrations")?;
+        let connection = self.connection(StateLocation::ReadStateMigrations.location())?;
         let mut statement = connection
             .prepare(
                 "SELECT migration_id, data_json, integrity_tag
                  FROM state_migrations ORDER BY migration_id",
             )
-            .map_err(|_| fatal("state_migration_query_failed", "read_state_migrations"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateMigrationQueryFailed.code(),
+                    StateLocation::ReadStateMigrations.location(),
+                )
+            })?;
         let rows = statement
             .query_map([], |row| {
                 Ok(MigrationRow {
@@ -1090,11 +1240,20 @@ impl RuntimeStateStore {
                     integrity_tag: row.get(2)?,
                 })
             })
-            .map_err(|_| fatal("state_migration_query_failed", "read_state_migrations"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateMigrationQueryFailed.code(),
+                    StateLocation::ReadStateMigrations.location(),
+                )
+            })?;
         rows.map(|row| {
-            let row =
-                row.map_err(|_| fatal("state_migration_read_failed", "read_state_migrations"))?;
-            self.validate_migration_row(&row, "read_state_migrations")
+            let row = row.map_err(|_| {
+                fatal(
+                    StateCode::StateMigrationReadFailed.code(),
+                    StateLocation::ReadStateMigrations.location(),
+                )
+            })?;
+            self.validate_migration_row(&row, StateLocation::ReadStateMigrations.location())
                 .map(|row| row.data)
         })
         .collect()
@@ -1106,15 +1265,25 @@ impl RuntimeStateStore {
         sources: &ReleaseArtifactSources,
     ) -> RuntimeStateResult<StagedRelease> {
         self.require_legacy_release_writer()?;
-        manifest
-            .validate()
-            .map_err(|_| request("release_manifest_invalid", "stage_release"))?;
+        manifest.validate().map_err(|_| {
+            request(
+                StateCode::ReleaseManifestInvalid.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
         self.publish_release_artifacts(&manifest, sources)?;
-        let manifest_json = serde_json::to_vec(&manifest)
-            .map_err(|_| fatal("release_manifest_encode_failed", "stage_release"))?;
+        let manifest_json = serde_json::to_vec(&manifest).map_err(|_| {
+            fatal(
+                StateCode::ReleaseManifestEncodeFailed.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
         let manifest_sha256 = manifest.manifest_sha256();
         if manifest_sha256 != sha256_release_manifest(&manifest_json, manifest.release_id()) {
-            return Err(fatal("release_manifest_hash_mismatch", "stage_release"));
+            return Err(fatal(
+                StateCode::ReleaseManifestHashMismatch.code(),
+                StateLocation::StageRelease.location(),
+            ));
         }
         let integrity_tag = self.integrity_tag(
             "release-generation-v1",
@@ -1124,10 +1293,15 @@ impl RuntimeStateStore {
                 manifest_json.as_slice(),
             ],
         );
-        let mut connection = self.connection("stage_release")?;
+        let mut connection = self.connection(StateLocation::StageRelease.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| fatal("state_transaction_begin_failed", "stage_release"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::StageRelease.location(),
+                )
+            })?;
         self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
         let created = transaction
             .execute(
@@ -1141,22 +1315,36 @@ impl RuntimeStateStore {
                     integrity_tag
                 ],
             )
-            .map_err(|_| fatal("release_generation_write_failed", "stage_release"))?
+            .map_err(|_| {
+                fatal(
+                    StateCode::ReleaseGenerationWriteFailed.code(),
+                    StateLocation::StageRelease.location(),
+                )
+            })?
             == 1;
         if !created {
-            let existing = query_release(&transaction, manifest.release_id())?
-                .ok_or_else(|| fatal("release_generation_missing", "stage_release"))?;
-            let existing = self.validate_release_row(existing, "stage_release")?;
+            let existing =
+                query_release(&transaction, manifest.release_id())?.ok_or_else(|| {
+                    fatal(
+                        StateCode::ReleaseGenerationMissing.code(),
+                        StateLocation::StageRelease.location(),
+                    )
+                })?;
+            let existing =
+                self.validate_release_row(existing, StateLocation::StageRelease.location())?;
             if existing != manifest {
                 return Err(fatal(
-                    "release_generation_identity_conflict",
-                    "stage_release",
+                    StateCode::ReleaseGenerationIdentityConflict.code(),
+                    StateLocation::StageRelease.location(),
                 ));
             }
         }
-        transaction
-            .commit()
-            .map_err(|_| fatal("state_transaction_commit_failed", "stage_release"))?;
+        transaction.commit().map_err(|_| {
+            fatal(
+                StateCode::StateTransactionCommitFailed.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
         Ok(StagedRelease { manifest, created })
     }
 
@@ -1164,9 +1352,12 @@ impl RuntimeStateStore {
         &self,
         key: &ReleaseArtifactKey,
     ) -> RuntimeStateResult<ResolvedReleaseArtifact> {
-        let active = self
-            .active_release()?
-            .ok_or_else(|| request("release_active_missing", "resolve_release_artifact"))?;
+        let active = self.active_release()?.ok_or_else(|| {
+            request(
+                StateCode::ReleaseActiveMissing.code(),
+                StateLocation::ResolveReleaseArtifact.location(),
+            )
+        })?;
         let content_sha256 = match key {
             ReleaseArtifactKey::Runtime => active.manifest.runtime_content_sha256(),
             ReleaseArtifactKey::Ui => active.manifest.ui_content_sha256(),
@@ -1176,10 +1367,22 @@ impl RuntimeStateStore {
                 .iter()
                 .find(|resource| resource.resource_id() == resource_id)
                 .map(|resource| resource.content_sha256())
-                .ok_or_else(|| request("release_resource_unknown", "resolve_release_artifact"))?,
+                .ok_or_else(|| {
+                    request(
+                        StateCode::ReleaseResourceUnknown.code(),
+                        StateLocation::ResolveReleaseArtifact.location(),
+                    )
+                })?,
         };
-        let path = self.release_blob_path(content_sha256, "resolve_release_artifact")?;
-        verify_release_blob(&path, content_sha256, "resolve_release_artifact")?;
+        let path = self.release_blob_path(
+            content_sha256,
+            StateLocation::ResolveReleaseArtifact.location(),
+        )?;
+        verify_release_blob(
+            &path,
+            content_sha256,
+            StateLocation::ResolveReleaseArtifact.location(),
+        )?;
         Ok(ResolvedReleaseArtifact {
             release_id: active.manifest.release_id().to_owned(),
             content_sha256: content_sha256.to_owned(),
@@ -1188,7 +1391,7 @@ impl RuntimeStateStore {
     }
 
     pub fn release_generations(&self) -> RuntimeStateResult<Vec<RuntimeReleaseSet>> {
-        let connection = self.connection("read_release_generations")?;
+        let connection = self.connection(StateLocation::ReadReleaseGenerations.location())?;
         let mut statement = connection
             .prepare(
                 "SELECT release_id, manifest_json, manifest_sha256, integrity_tag
@@ -1196,38 +1399,52 @@ impl RuntimeStateStore {
             )
             .map_err(|_| {
                 fatal(
-                    "release_generation_query_failed",
-                    "read_release_generations",
+                    StateCode::ReleaseGenerationQueryFailed.code(),
+                    StateLocation::ReadReleaseGenerations.location(),
                 )
             })?;
         let rows = statement.query_map([], map_release_row).map_err(|_| {
             fatal(
-                "release_generation_query_failed",
-                "read_release_generations",
+                StateCode::ReleaseGenerationQueryFailed.code(),
+                StateLocation::ReadReleaseGenerations.location(),
             )
         })?;
         rows.map(|row| {
             self.validate_release_row(
                 row.map_err(|_| {
-                    fatal("release_generation_read_failed", "read_release_generations")
+                    fatal(
+                        StateCode::ReleaseGenerationReadFailed.code(),
+                        StateLocation::ReadReleaseGenerations.location(),
+                    )
                 })?,
-                "read_release_generations",
+                StateLocation::ReadReleaseGenerations.location(),
             )
         })
         .collect()
     }
 
     pub fn active_release(&self) -> RuntimeStateResult<Option<ActiveRelease>> {
-        let mut connection = self.connection("read_active_release")?;
+        let mut connection = self.connection(StateLocation::ReadActiveRelease.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| fatal("state_transaction_begin_failed", "read_active_release"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::ReadActiveRelease.location(),
+                )
+            })?;
         self.verify_release_read_sources(&self.database.borrow_transaction(&transaction))?;
-        let active = self.read_active_release_metadata(&transaction, "read_active_release")?;
+        let active = self.read_active_release_metadata(
+            &transaction,
+            StateLocation::ReadActiveRelease.location(),
+        )?;
         drop(transaction);
         drop(connection);
         if let Some(active) = &active {
-            self.verify_release_artifacts(active.manifest(), "read_active_release")?;
+            self.verify_release_artifacts(
+                active.manifest(),
+                StateLocation::ReadActiveRelease.location(),
+            )?;
         }
         Ok(active)
     }
@@ -1237,33 +1454,41 @@ impl RuntimeStateStore {
         kind: ReleaseTransitionKind,
         release_id: &str,
     ) -> RuntimeStateResult<ReleaseTransitionPreview> {
-        let connection = self.connection("preview_release_transition")?;
-        let target = query_release(&connection, release_id)?
-            .ok_or_else(|| request("release_generation_unknown", "preview_release_transition"))?;
-        let target = self.validate_release_row(target, "preview_release_transition")?;
-        let current = self.read_active_release(&connection, "preview_release_transition")?;
+        let connection = self.connection(StateLocation::PreviewReleaseTransition.location())?;
+        let target = query_release(&connection, release_id)?.ok_or_else(|| {
+            request(
+                StateCode::ReleaseGenerationUnknown.code(),
+                StateLocation::PreviewReleaseTransition.location(),
+            )
+        })?;
+        let target =
+            self.validate_release_row(target, StateLocation::PreviewReleaseTransition.location())?;
+        let current = self.read_active_release(
+            &connection,
+            StateLocation::PreviewReleaseTransition.location(),
+        )?;
         let previous_release_id = current
             .as_ref()
             .map(|active| active.manifest.release_id().to_owned());
         if previous_release_id.as_deref() == Some(release_id) {
             return Err(request(
-                "release_already_active",
-                "preview_release_transition",
+                StateCode::ReleaseAlreadyActive.code(),
+                StateLocation::PreviewReleaseTransition.location(),
             ));
         }
         if kind == ReleaseTransitionKind::Rollback {
             let Some(current) = &current else {
                 return Err(request(
-                    "release_rollback_without_active",
-                    "preview_release_transition",
+                    StateCode::ReleaseRollbackWithoutActive.code(),
+                    StateLocation::PreviewReleaseTransition.location(),
                 ));
             };
             if !was_release_active(&connection, release_id)?
                 && current.previous_release_id() != Some(release_id)
             {
                 return Err(request(
-                    "release_rollback_target_not_active_history",
-                    "preview_release_transition",
+                    StateCode::ReleaseRollbackTargetNotActiveHistory.code(),
+                    StateLocation::PreviewReleaseTransition.location(),
                 ));
             }
         }
@@ -1272,8 +1497,8 @@ impl RuntimeStateStore {
             .map_or(Ok(1_u64), |active| active.revision.checked_add(1).ok_or(()))
             .map_err(|()| {
                 fatal(
-                    "release_pointer_revision_overflow",
-                    "preview_release_transition",
+                    StateCode::ReleasePointerRevisionOverflow.code(),
+                    StateLocation::PreviewReleaseTransition.location(),
                 )
             })?;
         let transition_id = release_transition_id(
@@ -1292,7 +1517,12 @@ impl RuntimeStateStore {
             target.manifest_sha256(),
             StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
         )
-        .map_err(|_| request("release_transition_invalid", "preview_release_transition"))?;
+        .map_err(|_| {
+            request(
+                StateCode::ReleaseTransitionInvalid.code(),
+                StateLocation::PreviewReleaseTransition.location(),
+            )
+        })?;
         Ok(ReleaseTransitionPreview { data })
     }
 
@@ -1301,29 +1531,37 @@ impl RuntimeStateStore {
         preview: &ReleaseTransitionPreview,
     ) -> RuntimeStateResult<ActiveRelease> {
         self.require_legacy_release_writer()?;
-        preview
-            .data
-            .validate()
-            .map_err(|_| request("release_transition_invalid", "commit_release_transition"))?;
-        let mut connection = self.connection("commit_release_transition")?;
+        preview.data.validate().map_err(|_| {
+            request(
+                StateCode::ReleaseTransitionInvalid.code(),
+                StateLocation::CommitReleaseTransition.location(),
+            )
+        })?;
+        let mut connection = self.connection(StateLocation::CommitReleaseTransition.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| {
                 fatal(
-                    "state_transaction_begin_failed",
-                    "commit_release_transition",
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::CommitReleaseTransition.location(),
                 )
             })?;
         self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))?;
-        let current = self.read_active_release(&transaction, "commit_release_transition")?;
+        let current = self.read_active_release(
+            &transaction,
+            StateLocation::CommitReleaseTransition.location(),
+        )?;
         let active = self.apply_release_transition_metadata(&transaction, preview)?;
         if current.as_ref().map(ActiveRelease::manifest) != Some(active.manifest()) {
-            self.verify_release_artifacts(active.manifest(), "commit_release_transition")?;
+            self.verify_release_artifacts(
+                active.manifest(),
+                StateLocation::CommitReleaseTransition.location(),
+            )?;
         }
         transaction.commit().map_err(|_| {
             fatal(
-                "state_transaction_commit_failed",
-                "commit_release_transition",
+                StateCode::StateTransactionCommitFailed.code(),
+                StateLocation::CommitReleaseTransition.location(),
             )
         })?;
         Ok(active)
@@ -1336,26 +1574,33 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<ActiveRelease> {
         if let Some(existing) = query_release_transition(transaction, preview.data.transition_id())?
         {
-            let existing =
-                self.validate_release_transition_row(&existing, "commit_release_transition")?;
+            let existing = self.validate_release_transition_row(
+                &existing,
+                StateLocation::CommitReleaseTransition.location(),
+            )?;
             if existing != preview.data {
                 return Err(fatal(
-                    "release_transition_identity_conflict",
-                    "commit_release_transition",
+                    StateCode::ReleaseTransitionIdentityConflict.code(),
+                    StateLocation::CommitReleaseTransition.location(),
                 ));
             }
             let active = self
-                .read_active_release_metadata(transaction, "commit_release_transition")?
+                .read_active_release_metadata(
+                    transaction,
+                    StateLocation::CommitReleaseTransition.location(),
+                )?
                 .ok_or_else(|| {
                     fatal(
-                        "release_pointer_missing_after_transition",
-                        "commit_release_transition",
+                        StateCode::ReleasePointerMissingAfterTransition.code(),
+                        StateLocation::CommitReleaseTransition.location(),
                     )
                 })?;
             return Ok(active);
         }
-        let current =
-            self.read_active_release_metadata(transaction, "commit_release_transition")?;
+        let current = self.read_active_release_metadata(
+            transaction,
+            StateLocation::CommitReleaseTransition.location(),
+        )?;
         let expected_revision = current
             .as_ref()
             .map_or(Some(1), |active| active.revision.checked_add(1));
@@ -1364,17 +1609,22 @@ impl RuntimeStateStore {
             || expected_revision != Some(preview.data.pointer_revision())
         {
             return Err(request(
-                "release_pointer_changed",
-                "commit_release_transition",
+                StateCode::ReleasePointerChanged.code(),
+                StateLocation::CommitReleaseTransition.location(),
             ));
         }
-        let target = query_release(transaction, preview.data.release_id())?
-            .ok_or_else(|| request("release_generation_unknown", "commit_release_transition"))?;
-        let target = self.validate_release_metadata(target, "commit_release_transition")?;
+        let target = query_release(transaction, preview.data.release_id())?.ok_or_else(|| {
+            request(
+                StateCode::ReleaseGenerationUnknown.code(),
+                StateLocation::CommitReleaseTransition.location(),
+            )
+        })?;
+        let target = self
+            .validate_release_metadata(target, StateLocation::CommitReleaseTransition.location())?;
         if target.manifest_sha256() != preview.data.manifest_sha256() {
             return Err(fatal(
-                "release_transition_manifest_changed",
-                "commit_release_transition",
+                StateCode::ReleaseTransitionManifestChanged.code(),
+                StateLocation::CommitReleaseTransition.location(),
             ));
         }
         if preview.data.kind() == ReleaseTransitionKind::Rollback
@@ -1385,14 +1635,14 @@ impl RuntimeStateStore {
                 != Some(preview.data.release_id())
         {
             return Err(request(
-                "release_rollback_target_not_active_history",
-                "commit_release_transition",
+                StateCode::ReleaseRollbackTargetNotActiveHistory.code(),
+                StateLocation::CommitReleaseTransition.location(),
             ));
         }
         let pointer_revision = sqlite_integer(
             preview.data.pointer_revision(),
-            "release_pointer_revision_overflow",
-            "commit_release_transition",
+            StateCode::ReleasePointerRevisionOverflow.code(),
+            StateLocation::CommitReleaseTransition.location(),
         )?;
         let pointer_tag = self.pointer_integrity_tag(
             preview.data.pointer_revision(),
@@ -1413,8 +1663,8 @@ impl RuntimeStateStore {
             )
             .map_err(|_| {
                 fatal(
-                    "release_pointer_history_write_failed",
-                    "commit_release_transition",
+                    StateCode::ReleasePointerHistoryWriteFailed.code(),
+                    StateLocation::CommitReleaseTransition.location(),
                 )
             })?;
         transaction
@@ -1434,11 +1684,16 @@ impl RuntimeStateStore {
                     pointer_tag
                 ],
             )
-            .map_err(|_| fatal("release_pointer_write_failed", "commit_release_transition"))?;
+            .map_err(|_| {
+                fatal(
+                    StateCode::ReleasePointerWriteFailed.code(),
+                    StateLocation::CommitReleaseTransition.location(),
+                )
+            })?;
         let data_json = serde_json::to_vec(&preview.data).map_err(|_| {
             fatal(
-                "release_transition_encode_failed",
-                "commit_release_transition",
+                StateCode::ReleaseTransitionEncodeFailed.code(),
+                StateLocation::CommitReleaseTransition.location(),
             )
         })?;
         let transition_tag = self.integrity_tag(
@@ -1456,8 +1711,8 @@ impl RuntimeStateStore {
             )
             .map_err(|_| {
                 fatal(
-                    "release_transition_write_failed",
-                    "commit_release_transition",
+                    StateCode::ReleaseTransitionWriteFailed.code(),
+                    StateLocation::CommitReleaseTransition.location(),
                 )
             })?;
         Ok(ActiveRelease {
@@ -1468,7 +1723,7 @@ impl RuntimeStateStore {
     }
 
     pub fn release_transitions(&self) -> RuntimeStateResult<Vec<ReleaseTransitionData>> {
-        let connection = self.connection("read_release_transitions")?;
+        let connection = self.connection(StateLocation::ReadReleaseTransitions.location())?;
         let mut statement = connection
             .prepare(
                 "SELECT transition_id, data_json, integrity_tag
@@ -1476,8 +1731,8 @@ impl RuntimeStateStore {
             )
             .map_err(|_| {
                 fatal(
-                    "release_transition_query_failed",
-                    "read_release_transitions",
+                    StateCode::ReleaseTransitionQueryFailed.code(),
+                    StateLocation::ReadReleaseTransitions.location(),
                 )
             })?;
         let rows = statement
@@ -1490,20 +1745,27 @@ impl RuntimeStateStore {
             })
             .map_err(|_| {
                 fatal(
-                    "release_transition_query_failed",
-                    "read_release_transitions",
+                    StateCode::ReleaseTransitionQueryFailed.code(),
+                    StateLocation::ReadReleaseTransitions.location(),
                 )
             })?;
         rows.map(|row| {
-            let row = row
-                .map_err(|_| fatal("release_transition_read_failed", "read_release_transitions"))?;
-            self.validate_release_transition_row(&row, "read_release_transitions")
+            let row = row.map_err(|_| {
+                fatal(
+                    StateCode::ReleaseTransitionReadFailed.code(),
+                    StateLocation::ReadReleaseTransitions.location(),
+                )
+            })?;
+            self.validate_release_transition_row(
+                &row,
+                StateLocation::ReadReleaseTransitions.location(),
+            )
         })
         .collect()
     }
 
     fn validate_all(&self) -> RuntimeStateResult<()> {
-        let connection = self.connection("validate_runtime_state")?;
+        let connection = self.connection(StateLocation::ValidateRuntimeState.location())?;
         validate_document_tables(self, &connection)?;
         validate_projection_entries(self, &connection)?;
         validate_pointer_tables(self, &connection)?;
@@ -1517,7 +1779,7 @@ impl RuntimeStateStore {
     fn read_active_release(
         &self,
         connection: &Connection,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<Option<ActiveRelease>> {
         let active = self.read_active_release_metadata(connection, operation)?;
         if let Some(active) = &active {
@@ -1529,7 +1791,7 @@ impl RuntimeStateStore {
     fn read_active_release_metadata(
         &self,
         connection: &Connection,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<Option<ActiveRelease>> {
         let pointer = query_pointer(connection)?;
         let Some(pointer) = pointer else {
@@ -1537,7 +1799,7 @@ impl RuntimeStateStore {
         };
         self.validate_pointer_row(&pointer, operation)?;
         let manifest = query_release(connection, &pointer.release_id)?
-            .ok_or_else(|| fatal("release_pointer_target_missing", operation))?;
+            .ok_or_else(|| fatal(StateCode::ReleasePointerTargetMissing.code(), operation))?;
         let manifest = self.validate_release_metadata(manifest, operation)?;
         Ok(Some(ActiveRelease {
             revision: pointer.revision,
@@ -1549,10 +1811,10 @@ impl RuntimeStateStore {
     fn validate_document_row(
         &self,
         row: DocumentRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<StateDocument> {
         validate_document_input(&row.state_key, &row.schema_version, &row.payload)
-            .map_err(|_| fatal("state_document_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::StateDocumentInvalid.code(), operation))?;
         if row.revision == 0
             || row.payload_sha256 != sha256(&row.payload)
             || row.integrity_tag
@@ -1565,7 +1827,10 @@ impl RuntimeStateStore {
                     row.previous_payload_sha256.as_deref(),
                 )
         {
-            return Err(fatal("state_document_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::StateDocumentIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(StateDocument {
             state_key: row.state_key,
@@ -1580,7 +1845,7 @@ impl RuntimeStateStore {
     fn validate_projection_row(
         &self,
         row: ProjectionRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<ProjectionEntry> {
         validate_projection_input(
             &row.namespace,
@@ -1588,7 +1853,7 @@ impl RuntimeStateStore {
             row.ledger_sequence,
             &row.payload,
         )
-        .map_err(|_| fatal("projection_entry_invalid", operation))?;
+        .map_err(|_| fatal(StateCode::ProjectionEntryInvalid.code(), operation))?;
         let sequence = row.ledger_sequence.to_be_bytes();
         if row.payload_sha256 != sha256(&row.payload)
             || row.integrity_tag
@@ -1603,7 +1868,10 @@ impl RuntimeStateStore {
                     ],
                 )
         {
-            return Err(fatal("projection_entry_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::ProjectionEntryIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(ProjectionEntry {
             namespace: row.namespace,
@@ -1617,12 +1885,12 @@ impl RuntimeStateStore {
     fn validate_migration_row(
         &self,
         row: &MigrationRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<ValidatedMigration> {
         let data = serde_json::from_slice::<StateMigrationData>(&row.data_json)
-            .map_err(|_| fatal("state_migration_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::StateMigrationInvalid.code(), operation))?;
         data.validate()
-            .map_err(|_| fatal("state_migration_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::StateMigrationInvalid.code(), operation))?;
         if data.migration_id() != row.migration_id
             || row.integrity_tag
                 != self.integrity_tag(
@@ -1630,7 +1898,10 @@ impl RuntimeStateStore {
                     &[row.migration_id.as_bytes(), row.data_json.as_slice()],
                 )
         {
-            return Err(fatal("state_migration_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::StateMigrationIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(ValidatedMigration { data })
     }
@@ -1638,7 +1909,7 @@ impl RuntimeStateStore {
     fn validate_release_row(
         &self,
         row: ReleaseRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<RuntimeReleaseSet> {
         let manifest = self.validate_release_metadata(row, operation)?;
         self.verify_release_artifacts(&manifest, operation)?;
@@ -1648,13 +1919,13 @@ impl RuntimeStateStore {
     fn validate_release_metadata(
         &self,
         row: ReleaseRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<RuntimeReleaseSet> {
         let manifest = serde_json::from_slice::<RuntimeReleaseSet>(&row.manifest_json)
-            .map_err(|_| fatal("release_manifest_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::ReleaseManifestInvalid.code(), operation))?;
         manifest
             .validate()
-            .map_err(|_| fatal("release_manifest_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::ReleaseManifestInvalid.code(), operation))?;
         if manifest.release_id() != row.release_id
             || manifest.manifest_sha256() != row.manifest_sha256
             || row.manifest_sha256 != sha256_release_manifest(&row.manifest_json, &row.release_id)
@@ -1668,7 +1939,10 @@ impl RuntimeStateStore {
                     ],
                 )
         {
-            return Err(fatal("release_generation_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::ReleaseGenerationIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(manifest)
     }
@@ -1685,8 +1959,8 @@ impl RuntimeStateStore {
             .collect::<BTreeSet<_>>();
         if sources.resources.keys().cloned().collect::<BTreeSet<_>>() != expected_resources {
             return Err(request(
-                "release_artifact_sources_mismatch",
-                "stage_release",
+                StateCode::ReleaseArtifactSourcesMismatch.code(),
+                StateLocation::StageRelease.location(),
             ));
         }
         self.publish_release_artifact(sources.runtime(), manifest.runtime_content_sha256())?;
@@ -1695,7 +1969,12 @@ impl RuntimeStateStore {
             let source = sources
                 .resources
                 .get(resource.resource_id())
-                .ok_or_else(|| request("release_artifact_sources_mismatch", "stage_release"))?;
+                .ok_or_else(|| {
+                    request(
+                        StateCode::ReleaseArtifactSourcesMismatch.code(),
+                        StateLocation::StageRelease.location(),
+                    )
+                })?;
             self.publish_release_artifact(source, resource.content_sha256())?;
         }
         Ok(())
@@ -1706,14 +1985,26 @@ impl RuntimeStateStore {
         source: &Path,
         expected_sha256: &str,
     ) -> RuntimeStateResult<()> {
-        let destination = self.release_blob_path(expected_sha256, "stage_release")?;
+        let destination =
+            self.release_blob_path(expected_sha256, StateLocation::StageRelease.location())?;
         if destination.exists() {
-            return verify_release_blob(&destination, expected_sha256, "stage_release");
+            return verify_release_blob(
+                &destination,
+                expected_sha256,
+                StateLocation::StageRelease.location(),
+            );
         }
-        require_release_regular_file(source, "release_artifact_source_invalid", "stage_release")?;
-        let digest = expected_sha256
-            .strip_prefix("sha256:")
-            .ok_or_else(|| request("release_artifact_hash_invalid", "stage_release"))?;
+        require_release_regular_file(
+            source,
+            StateCode::ReleaseArtifactSourceInvalid.code(),
+            StateLocation::StageRelease.location(),
+        )?;
+        let digest = expected_sha256.strip_prefix("sha256:").ok_or_else(|| {
+            request(
+                StateCode::ReleaseArtifactHashInvalid.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
         let temporary = self.release_blobs.join(format!(
             ".{digest}.{}.{}.tmp",
             std::process::id(),
@@ -1728,20 +2019,31 @@ impl RuntimeStateStore {
             Ok(()) => sync_state_directory(&self.release_blobs)?,
             Err(_) if destination.exists() => {
                 remove_release_temporary(&temporary)?;
-                verify_release_blob(&destination, expected_sha256, "stage_release")?;
+                verify_release_blob(
+                    &destination,
+                    expected_sha256,
+                    StateLocation::StageRelease.location(),
+                )?;
             }
             Err(_) => {
                 remove_release_temporary(&temporary)?;
-                return Err(fatal("release_artifact_publish_failed", "stage_release"));
+                return Err(fatal(
+                    StateCode::ReleaseArtifactPublishFailed.code(),
+                    StateLocation::StageRelease.location(),
+                ));
             }
         }
-        verify_release_blob(&destination, expected_sha256, "stage_release")
+        verify_release_blob(
+            &destination,
+            expected_sha256,
+            StateLocation::StageRelease.location(),
+        )
     }
 
     fn verify_release_artifacts(
         &self,
         manifest: &RuntimeReleaseSet,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<()> {
         for content_sha256 in std::iter::once(manifest.runtime_content_sha256())
             .chain(std::iter::once(manifest.ui_content_sha256()))
@@ -1761,7 +2063,7 @@ impl RuntimeStateStore {
     fn release_blob_path(
         &self,
         content_sha256: &str,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<PathBuf> {
         let digest = content_sha256
             .strip_prefix("sha256:")
@@ -1771,14 +2073,14 @@ impl RuntimeStateStore {
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             })
-            .ok_or_else(|| request("release_artifact_hash_invalid", operation))?;
+            .ok_or_else(|| request(StateCode::ReleaseArtifactHashInvalid.code(), operation))?;
         Ok(self.release_blobs.join(digest))
     }
 
     fn validate_pointer_row(
         &self,
         row: &PointerRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<()> {
         if row.revision == 0
             || row.previous_release_id.as_deref() == Some(row.release_id.as_str())
@@ -1789,7 +2091,10 @@ impl RuntimeStateStore {
                     row.previous_release_id.as_deref(),
                 )
         {
-            return Err(fatal("release_pointer_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::ReleasePointerIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(())
     }
@@ -1797,12 +2102,12 @@ impl RuntimeStateStore {
     fn validate_release_transition_row(
         &self,
         row: &TransitionRow,
-        operation: &'static str,
+        operation: Location,
     ) -> RuntimeStateResult<ReleaseTransitionData> {
         let data = serde_json::from_slice::<ReleaseTransitionData>(&row.data_json)
-            .map_err(|_| fatal("release_transition_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::ReleaseTransitionInvalid.code(), operation))?;
         data.validate()
-            .map_err(|_| fatal("release_transition_invalid", operation))?;
+            .map_err(|_| fatal(StateCode::ReleaseTransitionInvalid.code(), operation))?;
         if data.transition_id() != row.transition_id
             || row.integrity_tag
                 != self.integrity_tag(
@@ -1810,7 +2115,10 @@ impl RuntimeStateStore {
                     &[row.transition_id.as_bytes(), row.data_json.as_slice()],
                 )
         {
-            return Err(fatal("release_transition_integrity_mismatch", operation));
+            return Err(fatal(
+                StateCode::ReleaseTransitionIntegrityMismatch.code(),
+                operation,
+            ));
         }
         Ok(data)
     }
@@ -1859,10 +2167,7 @@ impl RuntimeStateStore {
         self.database.integrity_tag(domain, fields)
     }
 
-    fn connection(
-        &self,
-        operation: &'static str,
-    ) -> RuntimeStateResult<MutexGuard<'_, Connection>> {
+    fn connection(&self, operation: Location) -> RuntimeStateResult<MutexGuard<'_, Connection>> {
         self.database.connection(operation).map_err(Into::into)
     }
 }
@@ -1929,7 +2234,12 @@ fn query_document(
             map_document_row,
         )
         .optional()
-        .map_err(|_| fatal("state_document_query_failed", "query_state_document"))
+        .map_err(|_| {
+            fatal(
+                StateCode::StateDocumentQueryFailed.code(),
+                StateLocation::QueryStateDocument.location(),
+            )
+        })
 }
 
 fn query_projection_entry(
@@ -1954,7 +2264,12 @@ fn query_projection_entry(
             },
         )
         .optional()
-        .map_err(|_| fatal("projection_entry_query_failed", "query_projection_entry"))
+        .map_err(|_| {
+            fatal(
+                StateCode::ProjectionEntryQueryFailed.code(),
+                StateLocation::QueryProjectionEntry.location(),
+            )
+        })
 }
 
 fn query_document_revision(
@@ -1964,8 +2279,8 @@ fn query_document_revision(
 ) -> RuntimeStateResult<Option<DocumentRow>> {
     let revision = sqlite_integer(
         revision,
-        "state_revision_overflow",
-        "query_state_document_revision",
+        StateCode::StateRevisionOverflow.code(),
+        StateLocation::QueryStateDocumentRevision.location(),
     )?;
     connection
         .query_row(
@@ -1978,8 +2293,8 @@ fn query_document_revision(
         .optional()
         .map_err(|_| {
             fatal(
-                "state_history_query_failed",
-                "query_state_document_revision",
+                StateCode::StateHistoryQueryFailed.code(),
+                StateLocation::QueryStateDocumentRevision.location(),
             )
         })
 }
@@ -2007,7 +2322,11 @@ fn insert_document_revision(
     previous_payload_sha256: Option<&str>,
     integrity_tag: &str,
 ) -> RuntimeStateResult<()> {
-    let revision = sqlite_integer(revision, "state_revision_overflow", "write_state_document")?;
+    let revision = sqlite_integer(
+        revision,
+        StateCode::StateRevisionOverflow.code(),
+        ContractLocation::WriteStateDocument.location(),
+    )?;
     transaction
         .execute(
             "INSERT INTO state_document_history
@@ -2024,7 +2343,12 @@ fn insert_document_revision(
                 integrity_tag
             ],
         )
-        .map_err(|_| fatal("state_history_write_failed", "write_state_document"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::StateHistoryWriteFailed.code(),
+                ContractLocation::WriteStateDocument.location(),
+            )
+        })?;
     transaction
         .execute(
             "INSERT INTO state_documents
@@ -2048,7 +2372,12 @@ fn insert_document_revision(
                 integrity_tag
             ],
         )
-        .map_err(|_| fatal("state_document_write_failed", "write_state_document"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::StateDocumentWriteFailed.code(),
+                ContractLocation::WriteStateDocument.location(),
+            )
+        })?;
     Ok(())
 }
 
@@ -2070,7 +2399,12 @@ fn query_migration(
             },
         )
         .optional()
-        .map_err(|_| fatal("state_migration_query_failed", "query_state_migration"))
+        .map_err(|_| {
+            fatal(
+                StateCode::StateMigrationQueryFailed.code(),
+                StateLocation::QueryStateMigration.location(),
+            )
+        })
 }
 
 fn query_release(
@@ -2087,8 +2421,8 @@ fn query_release(
         .optional()
         .map_err(|_| {
             fatal(
-                "release_generation_query_failed",
-                "query_release_generation",
+                StateCode::ReleaseGenerationQueryFailed.code(),
+                StateLocation::QueryReleaseGeneration.location(),
             )
         })
 }
@@ -2118,7 +2452,12 @@ fn query_pointer(connection: &Connection) -> RuntimeStateResult<Option<PointerRo
             },
         )
         .optional()
-        .map_err(|_| fatal("release_pointer_query_failed", "query_release_pointer"))
+        .map_err(|_| {
+            fatal(
+                StateCode::ReleasePointerQueryFailed.code(),
+                StateLocation::QueryReleasePointer.location(),
+            )
+        })
 }
 
 fn query_release_transition(
@@ -2141,8 +2480,8 @@ fn query_release_transition(
         .optional()
         .map_err(|_| {
             fatal(
-                "release_transition_query_failed",
-                "query_release_transition",
+                StateCode::ReleaseTransitionQueryFailed.code(),
+                StateLocation::QueryReleaseTransition.location(),
             )
         })
 }
@@ -2156,7 +2495,12 @@ fn was_release_active(connection: &Connection, release_id: &str) -> RuntimeState
             [release_id],
             |row| row.get::<_, bool>(0),
         )
-        .map_err(|_| fatal("release_history_query_failed", "query_release_history"))
+        .map_err(|_| {
+            fatal(
+                StateCode::ReleaseHistoryQueryFailed.code(),
+                StateLocation::QueryReleaseHistory.location(),
+            )
+        })
 }
 
 fn validate_document_tables(
@@ -2169,19 +2513,32 @@ fn validate_document_tables(
                     previous_payload_sha256, integrity_tag
              FROM state_document_history ORDER BY state_key, revision",
         )
-        .map_err(|_| fatal("state_history_query_failed", "validate_runtime_state"))?;
-    let rows = statement
-        .query_map([], map_document_row)
-        .map_err(|_| fatal("state_history_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::StateHistoryQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
+    let rows = statement.query_map([], map_document_row).map_err(|_| {
+        fatal(
+            StateCode::StateHistoryQueryFailed.code(),
+            StateLocation::ValidateRuntimeState.location(),
+        )
+    })?;
     let mut history = BTreeSet::new();
     for row in rows {
-        let row = row.map_err(|_| fatal("state_history_read_failed", "validate_runtime_state"))?;
+        let row = row.map_err(|_| {
+            fatal(
+                StateCode::StateHistoryReadFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
         history.insert((
             row.state_key.clone(),
             row.revision,
             row.payload_sha256.clone(),
         ));
-        store.validate_document_row(row, "validate_runtime_state")?;
+        store.validate_document_row(row, StateLocation::ValidateRuntimeState.location())?;
     }
     let mut statement = connection
         .prepare(
@@ -2189,23 +2546,36 @@ fn validate_document_tables(
                     previous_payload_sha256, integrity_tag
              FROM state_documents ORDER BY state_key",
         )
-        .map_err(|_| fatal("state_document_query_failed", "validate_runtime_state"))?;
-    let rows = statement
-        .query_map([], map_document_row)
-        .map_err(|_| fatal("state_document_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::StateDocumentQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
+    let rows = statement.query_map([], map_document_row).map_err(|_| {
+        fatal(
+            StateCode::StateDocumentQueryFailed.code(),
+            StateLocation::ValidateRuntimeState.location(),
+        )
+    })?;
     for row in rows {
-        let row = row.map_err(|_| fatal("state_document_read_failed", "validate_runtime_state"))?;
+        let row = row.map_err(|_| {
+            fatal(
+                StateCode::StateDocumentReadFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
         if !history.contains(&(
             row.state_key.clone(),
             row.revision,
             row.payload_sha256.clone(),
         )) {
             return Err(fatal(
-                "state_document_history_missing",
-                "validate_runtime_state",
+                StateCode::StateDocumentHistoryMissing.code(),
+                StateLocation::ValidateRuntimeState.location(),
             ));
         }
-        store.validate_document_row(row, "validate_runtime_state")?;
+        store.validate_document_row(row, StateLocation::ValidateRuntimeState.location())?;
     }
     Ok(())
 }
@@ -2219,7 +2589,12 @@ fn validate_projection_entries(
             "SELECT namespace, entry_key, ledger_sequence, payload, payload_sha256, integrity_tag
              FROM projection_entries ORDER BY namespace, entry_key",
         )
-        .map_err(|_| fatal("projection_entry_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::ProjectionEntryQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
     let rows = statement
         .query_map([], |row| {
             Ok(ProjectionRow {
@@ -2231,11 +2606,20 @@ fn validate_projection_entries(
                 integrity_tag: row.get(5)?,
             })
         })
-        .map_err(|_| fatal("projection_entry_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::ProjectionEntryQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
     for row in rows {
-        let row =
-            row.map_err(|_| fatal("projection_entry_read_failed", "validate_runtime_state"))?;
-        store.validate_projection_row(row, "validate_runtime_state")?;
+        let row = row.map_err(|_| {
+            fatal(
+                StateCode::ProjectionEntryReadFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
+        store.validate_projection_row(row, StateLocation::ValidateRuntimeState.location())?;
     }
     Ok(())
 }
@@ -2249,7 +2633,12 @@ fn validate_pointer_tables(
             "SELECT revision, release_id, previous_release_id, integrity_tag
              FROM release_pointer_history ORDER BY revision",
         )
-        .map_err(|_| fatal("release_history_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::ReleaseHistoryQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
     let rows = statement
         .query_map([], |row| {
             Ok(PointerRow {
@@ -2259,20 +2648,29 @@ fn validate_pointer_tables(
                 integrity_tag: row.get(3)?,
             })
         })
-        .map_err(|_| fatal("release_history_query_failed", "validate_runtime_state"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::ReleaseHistoryQueryFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
     let mut revisions = BTreeSet::new();
     for row in rows {
-        let row =
-            row.map_err(|_| fatal("release_history_read_failed", "validate_runtime_state"))?;
-        store.validate_pointer_row(&row, "validate_runtime_state")?;
+        let row = row.map_err(|_| {
+            fatal(
+                StateCode::ReleaseHistoryReadFailed.code(),
+                StateLocation::ValidateRuntimeState.location(),
+            )
+        })?;
+        store.validate_pointer_row(&row, StateLocation::ValidateRuntimeState.location())?;
         revisions.insert(row.revision);
     }
     if let Some(pointer) = query_pointer(connection)? {
-        store.validate_pointer_row(&pointer, "validate_runtime_state")?;
+        store.validate_pointer_row(&pointer, StateLocation::ValidateRuntimeState.location())?;
         if !revisions.contains(&pointer.revision) {
             return Err(fatal(
-                "release_pointer_history_missing",
-                "validate_runtime_state",
+                StateCode::ReleasePointerHistoryMissing.code(),
+                StateLocation::ValidateRuntimeState.location(),
             ));
         }
     }
@@ -2285,15 +2683,22 @@ fn validate_document_input(
     payload: &[u8],
 ) -> RuntimeStateResult<()> {
     validate_state_key(state_key)?;
-    validate_version(schema_version, "validate_state_document")?;
+    validate_version(
+        schema_version,
+        StateLocation::ValidateStateDocument.location(),
+    )?;
     if payload.is_empty() || payload.len() > MAX_STATE_DOCUMENT_BYTES {
         return Err(request(
-            "state_document_size_invalid",
-            "validate_state_document",
+            StateCode::StateDocumentSizeInvalid.code(),
+            StateLocation::ValidateStateDocument.location(),
         ));
     }
-    serde_json::from_slice::<serde_json::Value>(payload)
-        .map_err(|_| request("state_document_json_invalid", "validate_state_document"))?;
+    serde_json::from_slice::<serde_json::Value>(payload).map_err(|_| {
+        request(
+            StateCode::StateDocumentJsonInvalid.code(),
+            StateLocation::ValidateStateDocument.location(),
+        )
+    })?;
     Ok(())
 }
 
@@ -2306,7 +2711,10 @@ fn validate_state_key(value: &str) -> RuntimeStateResult<()> {
                 || matches!(byte, b'.' | b'_' | b':' | b'-')
         })
     {
-        return Err(request("state_key_invalid", "validate_state_key"));
+        return Err(request(
+            StateCode::StateKeyInvalid.code(),
+            StateLocation::ValidateStateKey.location(),
+        ));
     }
     Ok(())
 }
@@ -2326,8 +2734,8 @@ fn validate_projection_identity(namespace: &str, entry_key: &str) -> RuntimeStat
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
         return Err(request(
-            "projection_entry_identity_invalid",
-            "validate_projection_entry",
+            StateCode::ProjectionEntryIdentityInvalid.code(),
+            StateLocation::ValidateProjectionEntry.location(),
         ));
     }
     Ok(())
@@ -2342,27 +2750,27 @@ fn validate_projection_input(
     validate_projection_identity(namespace, entry_key)?;
     if ledger_sequence == 0 || payload.is_empty() || payload.len() > MAX_PROJECTION_ENTRY_BYTES {
         return Err(request(
-            "projection_entry_invalid",
-            "validate_projection_entry",
+            StateCode::ProjectionEntryInvalid.code(),
+            StateLocation::ValidateProjectionEntry.location(),
         ));
     }
     serde_json::from_slice::<serde_json::Value>(payload).map_err(|_| {
         request(
-            "projection_entry_payload_invalid",
-            "validate_projection_entry",
+            StateCode::ProjectionEntryPayloadInvalid.code(),
+            StateLocation::ValidateProjectionEntry.location(),
         )
     })?;
     Ok(())
 }
 
-fn validate_version(value: &str, operation: &'static str) -> RuntimeStateResult<()> {
+fn validate_version(value: &str, operation: Location) -> RuntimeStateResult<()> {
     if value.is_empty()
         || value.len() > 128
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
     {
-        return Err(request("state_version_invalid", operation));
+        return Err(request(StateCode::StateVersionInvalid.code(), operation));
     }
     Ok(())
 }
@@ -2372,8 +2780,12 @@ fn prepare_release_blob_store(root: &Path) -> RuntimeStateResult<PathBuf> {
     if path.exists() {
         require_regular_directory(&path)?;
     } else {
-        fs::create_dir(&path)
-            .map_err(|_| fatal("release_artifact_root_create_failed", "open_runtime_state"))?;
+        fs::create_dir(&path).map_err(|_| {
+            fatal(
+                StateCode::ReleaseArtifactRootCreateFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })?;
         require_regular_directory(&path)?;
         sync_state_directory(root)?;
     }
@@ -2385,33 +2797,54 @@ fn copy_and_hash_release_artifact(
     destination: &Path,
     expected_sha256: &str,
 ) -> RuntimeStateResult<()> {
-    let mut source =
-        File::open(source).map_err(|_| fatal("release_artifact_read_failed", "stage_release"))?;
+    let mut source = File::open(source).map_err(|_| {
+        fatal(
+            StateCode::ReleaseArtifactReadFailed.code(),
+            StateLocation::StageRelease.location(),
+        )
+    })?;
     let mut destination = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(destination)
-        .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+        .map_err(|_| {
+            fatal(
+                StateCode::ReleaseArtifactStageFailed.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = source
-            .read(&mut buffer)
-            .map_err(|_| fatal("release_artifact_read_failed", "stage_release"))?;
+        let read = source.read(&mut buffer).map_err(|_| {
+            fatal(
+                StateCode::ReleaseArtifactReadFailed.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
         if read == 0 {
             break;
         }
         digest.update(&buffer[..read]);
-        destination
-            .write_all(&buffer[..read])
-            .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+        destination.write_all(&buffer[..read]).map_err(|_| {
+            fatal(
+                StateCode::ReleaseArtifactStageFailed.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
     }
-    destination
-        .sync_all()
-        .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+    destination.sync_all().map_err(|_| {
+        fatal(
+            StateCode::ReleaseArtifactStageFailed.code(),
+            StateLocation::StageRelease.location(),
+        )
+    })?;
     let actual = format!("sha256:{:x}", digest.finalize());
     if actual != expected_sha256 {
-        return Err(fatal("release_artifact_hash_mismatch", "stage_release"));
+        return Err(fatal(
+            StateCode::ReleaseArtifactHashMismatch.code(),
+            StateLocation::StageRelease.location(),
+        ));
     }
     Ok(())
 }
@@ -2419,32 +2852,39 @@ fn copy_and_hash_release_artifact(
 fn verify_release_blob(
     path: &Path,
     expected_sha256: &str,
-    operation: &'static str,
+    operation: Location,
 ) -> RuntimeStateResult<()> {
-    require_release_regular_file(path, "release_artifact_unavailable", operation)?;
-    let mut file =
-        File::open(path).map_err(|_| fatal("release_artifact_read_failed", operation))?;
+    require_release_regular_file(
+        path,
+        StateCode::ReleaseArtifactUnavailable.code(),
+        operation,
+    )?;
+    let mut file = File::open(path)
+        .map_err(|_| fatal(StateCode::ReleaseArtifactReadFailed.code(), operation))?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|_| fatal("release_artifact_read_failed", operation))?;
+            .map_err(|_| fatal(StateCode::ReleaseArtifactReadFailed.code(), operation))?;
         if read == 0 {
             break;
         }
         digest.update(&buffer[..read]);
     }
     if format!("sha256:{:x}", digest.finalize()) != expected_sha256 {
-        return Err(fatal("release_artifact_hash_mismatch", operation));
+        return Err(fatal(
+            StateCode::ReleaseArtifactHashMismatch.code(),
+            operation,
+        ));
     }
     Ok(())
 }
 
 fn require_release_regular_file(
     path: &Path,
-    code: &'static str,
-    operation: &'static str,
+    code: Code,
+    operation: Location,
 ) -> RuntimeStateResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|_| fatal(code, operation))?;
     if !metadata.is_file() || is_link_or_reparse(&metadata) {
@@ -2457,15 +2897,25 @@ fn remove_release_temporary(path: &Path) -> RuntimeStateResult<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(fatal("release_artifact_cleanup_failed", "stage_release")),
+        Err(_) => Err(fatal(
+            StateCode::ReleaseArtifactCleanupFailed.code(),
+            StateLocation::StageRelease.location(),
+        )),
     }
 }
 
 fn require_regular_directory(path: &Path) -> RuntimeStateResult<()> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| fatal("state_root_inspect_failed", "open_runtime_state"))?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| {
+        fatal(
+            SharedCode::StateRootInspectFailed.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        )
+    })?;
     if !metadata.is_dir() || is_link_or_reparse(&metadata) {
-        return Err(fatal("state_root_unsafe", "open_runtime_state"));
+        return Err(fatal(
+            SharedCode::StateRootUnsafe.code(),
+            ContractLocation::OpenRuntimeState.location(),
+        ));
     }
     Ok(())
 }
@@ -2476,7 +2926,12 @@ fn sync_state_directory(path: &Path) -> RuntimeStateResult<()> {
         .read(true)
         .open(path)
         .and_then(|directory| directory.sync_all())
-        .map_err(|_| fatal("state_directory_sync_failed", "open_runtime_state"))
+        .map_err(|_| {
+            fatal(
+                SharedCode::StateDirectorySyncFailed.code(),
+                ContractLocation::OpenRuntimeState.location(),
+            )
+        })
 }
 
 #[cfg(not(unix))]
@@ -2564,11 +3019,7 @@ fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     })
 }
 
-fn sqlite_integer(
-    value: u64,
-    code: &'static str,
-    operation: &'static str,
-) -> RuntimeStateResult<i64> {
+fn sqlite_integer(value: u64, code: Code, operation: Location) -> RuntimeStateResult<i64> {
     i64::try_from(value).map_err(|_| fatal(code, operation))
 }
 
@@ -2577,11 +3028,11 @@ fn update_field(digest: &mut Sha256, field: &[u8]) {
     digest.update(field);
 }
 
-fn request(code: &'static str, operation: &'static str) -> RuntimeStateError {
+fn request(code: Code, operation: Location) -> RuntimeStateError {
     RuntimeStateError::request(code, operation)
 }
 
-fn fatal(code: &'static str, operation: &'static str) -> RuntimeStateError {
+fn fatal(code: Code, operation: Location) -> RuntimeStateError {
     RuntimeStateError::fatal(code, operation)
 }
 
@@ -2990,7 +3441,10 @@ mod tests {
             .stage_release(manifest.clone(), &sources)
             .expect("stage release");
         let runtime = store
-            .release_blob_path(manifest.runtime_content_sha256(), "test")
+            .release_blob_path(
+                manifest.runtime_content_sha256(),
+                StateLocation::ResolveReleaseArtifact.location(),
+            )
             .expect("runtime blob path");
         fs::remove_file(runtime).expect("remove runtime blob");
         let error = store
@@ -3088,7 +3542,7 @@ mod tests {
                 .expect("second preview");
             {
                 let connection = store
-                    .connection("inject_release_fault")
+                    .connection(StateLocation::CommitReleaseTransition.location())
                     .expect("connection");
                 connection
                     .execute_batch(&format!(
@@ -3265,6 +3719,93 @@ mod tests {
                 .expect("read state")
                 .expect("active state"),
             rollback
+        );
+    }
+
+    // Workflow #381 R4b gate: the release baseline's whole-chain check reads its own snapshot on
+    // a separate connection, so a Ledger writer append completes while that check's read
+    // transaction is still open (the hook runs inside it; no wall clock).
+    #[test]
+    fn release_baseline_check_never_blocks_a_ledger_append() {
+        use actingcommand_contract::{
+            AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction,
+            EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+            IdentifierIssuer, OriginModule,
+        };
+        let root = TempDir::new().expect("tempdir");
+        let database = Arc::new(
+            RuntimeStateStore::open_database(root.path(), b"release-snapshot-spec")
+                .expect("runtime database"),
+        );
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+            root.path(),
+            true,
+            limits,
+            limits.deadline().expect("maintenance deadline"),
+        )
+        .expect("empty Ledger maintenance");
+        maintenance
+            .initialize_empty(&database)
+            .expect("empty Ledger");
+        let ledger = Arc::new(
+            maintenance
+                .open_writer(Arc::clone(&database), "release-snapshot-spec".to_owned())
+                .expect("Ledger writer"),
+        );
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let fingerprinter =
+            actingcommand_ledger::Sha256SecretFingerprinter::new(b"release-snapshot-spec")
+                .expect("fingerprinter");
+        let draft = |timestamp_unix_ms: u64| {
+            EventDraft::new(
+                ids.mint_event_id().expect("event id"),
+                timestamp_unix_ms,
+                EventSeverity::Error,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                CommandPayloadDraft::rejected(
+                    EventAction::RuntimeStart,
+                    DiagnosticCode::CommandRejected,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("sanitized draft")
+        };
+        ledger.append(draft(1)).expect("first Ledger event");
+        let during_check = draft(2);
+        let appended = Arc::new(std::sync::Mutex::new(None));
+        let hook_ledger = Arc::clone(&ledger);
+        let hook_appended = Arc::clone(&appended);
+        release::BASELINE_SNAPSHOT_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                *hook_appended.lock().expect("append result") = Some(
+                    hook_ledger
+                        .append(during_check)
+                        .map(|event| event.sequence()),
+                );
+            }));
+        });
+        let store =
+            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
+        store
+            .prepare_release_boundary(None)
+            .expect("release boundary check");
+        let appended = appended
+            .lock()
+            .expect("append result")
+            .take()
+            .expect("the hook ran inside the check's read transaction");
+        assert_eq!(
+            appended.expect("the append completed while the check was open"),
+            2
         );
     }
 }

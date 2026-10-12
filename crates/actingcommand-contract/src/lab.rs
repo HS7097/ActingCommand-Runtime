@@ -2,6 +2,8 @@
 
 //! Stable protocol DTOs shared by the ActingLab application core and adapters.
 
+use crate::RuntimeErrorCode;
+use crate::codes::{LabErrorCode, ResourceDeclarationCode, SharedCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
@@ -128,16 +130,16 @@ pub struct ResourceDeclarationRejection {
 }
 
 impl ResourceDeclarationRejection {
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), crate::outcome::Code> {
         self.declared_package
             .validate()
-            .map_err(|_| "invalid_resource_declaration_identity")?;
+            .map_err(|_| ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code())?;
         if let Some(verified) = &self.verified_package {
             verified
                 .validate()
-                .map_err(|_| "invalid_resource_declaration_identity")?;
+                .map_err(|_| ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code())?;
             if verified != &self.declared_package {
-                return Err("invalid_resource_declaration_identity");
+                return Err(ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code());
             }
         }
         let bounded =
@@ -154,7 +156,7 @@ impl ResourceDeclarationRejection {
                 .as_deref()
                 .is_some_and(|value| !bounded(value, 128))
         {
-            return Err("invalid_resource_declaration_diagnostic");
+            return Err(ResourceDeclarationCode::InvalidResourceDeclarationDiagnostic.code());
         }
         Ok(())
     }
@@ -164,7 +166,7 @@ impl LabError {
     pub fn usage(message: impl Into<String>) -> Self {
         Self::new(
             LabErrorClass::UsageValidation,
-            "validation_failed",
+            SharedCode::ValidationFailed.as_str(),
             message,
             &[],
         )
@@ -173,7 +175,7 @@ impl LabError {
     pub fn package_invalid(message: impl Into<String>) -> Self {
         Self::new(
             LabErrorClass::UsageValidation,
-            "package_invalid",
+            RuntimeErrorCode::PackageInvalid.as_str(),
             message,
             &[],
         )
@@ -190,7 +192,7 @@ impl LabError {
     pub fn instance(message: impl Into<String>) -> Self {
         Self::new(
             LabErrorClass::DeviceInstance,
-            "instance_not_found",
+            LabErrorCode::InstanceNotFound.as_str(),
             message,
             &["instance"],
         )
@@ -199,7 +201,7 @@ impl LabError {
     pub fn device(message: impl Into<String>) -> Self {
         Self::new(
             LabErrorClass::DeviceInstance,
-            "device_error",
+            LabErrorCode::DeviceError.as_str(),
             message,
             &["device"],
         )
@@ -208,7 +210,7 @@ impl LabError {
     pub fn runtime_not_running(message: impl Into<String>) -> Self {
         Self::new(
             LabErrorClass::RuntimeUnavailable,
-            "runtime_not_running",
+            SharedCode::RuntimeNotRunning.as_str(),
             message,
             &["running_runtime"],
         )

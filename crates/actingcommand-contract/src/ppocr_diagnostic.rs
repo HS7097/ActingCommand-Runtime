@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::PpocrDiagnosticCode;
+use crate::outcome::Code;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 
 pub const PPOCR_DIAGNOSTIC_RESULT_SCHEMA: &str = "actingcommand.ppocr_diagnostic_result.v1";
@@ -17,6 +21,54 @@ pub const PPOCR_MAX_RESPONSE_BYTES: usize = 384 * 1024 * 1024;
 
 /// Reports owned by the current result/error, shared through typed conversion layers.
 pub type PpocrDiagnostics = Vec<Arc<PpocrNodePlacementDiagnostic>>;
+
+/// Why the contract refused a PPOCR node-placement report or a call's set of reports
+/// (Workflow #378 A2a): one registered code; its English is developer text only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PpocrDiagnosticError {
+    code: PpocrDiagnosticCode,
+}
+
+impl PpocrDiagnosticError {
+    const fn new(code: PpocrDiagnosticCode) -> Self {
+        Self { code }
+    }
+
+    pub const fn code(self) -> Code {
+        self.code.code()
+    }
+}
+
+impl fmt::Display for PpocrDiagnosticError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self.code {
+            PpocrDiagnosticCode::PpocrDiagnosticReportIdentityInvalid => {
+                "invalid PPOCR node-placement report identity or count"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticNodeSizeOverflow => {
+                "PPOCR node diagnostic size overflow"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticNodeDetailInvalid => {
+                "invalid PPOCR node-placement detail or source bound"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticJsonBoundOverflow => {
+                "PPOCR node or report JSON bound overflow"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticReportBudgetExceeded => {
+                "PPOCR report structure exceeds its JSON budget"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticReportCountExceeded => {
+                "PPOCR invocation produced more than two diagnostic reports"
+            }
+            PpocrDiagnosticCode::PpocrDiagnosticModelRepeated => {
+                "PPOCR invocation repeated a model diagnostic"
+            }
+        };
+        write!(formatter, "{}: {text}", self.code)
+    }
+}
+
+impl Error for PpocrDiagnosticError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +92,7 @@ pub struct PpocrNodePlacementDiagnostic {
 }
 
 impl PpocrNodePlacementDiagnostic {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), PpocrDiagnosticError> {
         if self.record_type != PPOCR_NODE_PLACEMENT_RECORD_TYPE
             || !matches!(self.model_role.as_str(), "recognizer" | "detector")
             || self.diagnostic_scope != "session_initialization_only"
@@ -48,14 +100,18 @@ impl PpocrNodePlacementDiagnostic {
             || self.nodes.len() > PPOCR_MAX_DIAGNOSTIC_NODES
             || self.cpu_assigned_node_count != self.nodes.len()
         {
-            return Err("invalid PPOCR node-placement report identity or count".to_string());
+            return Err(PpocrDiagnosticError::new(
+                PpocrDiagnosticCode::PpocrDiagnosticReportIdentityInvalid,
+            ));
         }
         for node in &self.nodes {
             let source_bytes = node
                 .node_name
                 .len()
                 .checked_add(node.operator_type.len())
-                .ok_or_else(|| "PPOCR node diagnostic size overflow".to_string())?;
+                .ok_or(PpocrDiagnosticError::new(
+                    PpocrDiagnosticCode::PpocrDiagnosticNodeSizeOverflow,
+                ))?;
             if node.node_name.is_empty()
                 || node.operator_type.is_empty()
                 || source_bytes > PPOCR_MAX_NODE_LOG_BYTES
@@ -63,7 +119,9 @@ impl PpocrNodePlacementDiagnostic {
                 || node.placement_reason != "unavailable"
                 || node.assigned_execution_provider != "CPUExecutionProvider"
             {
-                return Err("invalid PPOCR node-placement detail or source bound".to_string());
+                return Err(PpocrDiagnosticError::new(
+                    PpocrDiagnosticCode::PpocrDiagnosticNodeDetailInvalid,
+                ));
             }
         }
         // One source log is split into name/operator; JSON escapes each byte at most sixfold.
@@ -72,12 +130,18 @@ impl PpocrNodePlacementDiagnostic {
                 PPOCR_MAX_NODE_LOG_BYTES
                     .checked_mul(6)
                     .and_then(|bytes| bytes.checked_add(512))
-                    .ok_or_else(|| "PPOCR node JSON bound overflow".to_string())?,
+                    .ok_or(PpocrDiagnosticError::new(
+                        PpocrDiagnosticCode::PpocrDiagnosticJsonBoundOverflow,
+                    ))?,
             )
             .and_then(|bytes| bytes.checked_add(1024))
-            .ok_or_else(|| "PPOCR report JSON bound overflow".to_string())?;
+            .ok_or(PpocrDiagnosticError::new(
+                PpocrDiagnosticCode::PpocrDiagnosticJsonBoundOverflow,
+            ))?;
         if maximum > PPOCR_MAX_REPORT_JSON_BYTES {
-            return Err("PPOCR report structure exceeds its JSON budget".to_string());
+            return Err(PpocrDiagnosticError::new(
+                PpocrDiagnosticCode::PpocrDiagnosticReportBudgetExceeded,
+            ));
         }
         Ok(())
     }
@@ -85,9 +149,11 @@ impl PpocrNodePlacementDiagnostic {
 
 pub fn validate_ppocr_call_diagnostics(
     reports: &[Arc<PpocrNodePlacementDiagnostic>],
-) -> Result<(), String> {
+) -> Result<(), PpocrDiagnosticError> {
     if reports.len() > PPOCR_MAX_DIAGNOSTIC_REPORTS {
-        return Err("PPOCR invocation produced more than two diagnostic reports".to_string());
+        return Err(PpocrDiagnosticError::new(
+            PpocrDiagnosticCode::PpocrDiagnosticReportCountExceeded,
+        ));
     }
     for (index, report) in reports.iter().enumerate() {
         report.validate()?;
@@ -95,7 +161,9 @@ pub fn validate_ppocr_call_diagnostics(
             .iter()
             .any(|earlier| earlier.model_role == report.model_role)
         {
-            return Err("PPOCR invocation repeated a model diagnostic".to_string());
+            return Err(PpocrDiagnosticError::new(
+                PpocrDiagnosticCode::PpocrDiagnosticModelRepeated,
+            ));
         }
     }
     Ok(())

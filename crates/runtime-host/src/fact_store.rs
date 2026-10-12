@@ -2,7 +2,11 @@
 
 //! Ledger-rebuilt fact projection shared by policy and execution boundaries.
 
+use crate::codes::{HostCode, HostLocation};
+use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_pages};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
     FactInvalidationEventData, FactPayload, FactRecord, FactScalar as ContractFactScalar,
@@ -43,16 +47,18 @@ impl InputInvalidationBoundaries {
             EventType::InputFailed => 1,
             _ => return Ok(()),
         };
-        let instance = event
-            .links()
-            .instance_id()
-            .ok_or_else(|| fact_fatal("fact_input_scope_missing", "replay_fact_input_boundary"))?;
+        let instance = event.links().instance_id().ok_or_else(|| {
+            fact_fatal(
+                HostCode::FactInputScopeMissing,
+                HostLocation::ReplayFactInputBoundary,
+            )
+        })?;
         if !self.by_instance.contains_key(instance)
             && self.by_instance.len() >= actingcommand_policy::MAX_EVALUATION_INSTANCES
         {
             return Err(fact_fatal(
-                "fact_input_scope_capacity_exceeded",
-                "replay_fact_input_boundary",
+                HostCode::FactInputScopeCapacityExceeded,
+                HostLocation::ReplayFactInputBoundary,
             ));
         }
         let boundary = self.by_instance.entry(*instance).or_default();
@@ -75,8 +81,8 @@ impl InputInvalidationBoundaries {
                         && record.observed_at_unix_ms <= boundaries[index]
                     {
                         return Err(fact_request(
-                            "fact_observation_precedes_input",
-                            "publish_facts",
+                            HostCode::FactObservationPrecedesInput,
+                            ContractLocation::PublishFacts,
                         ));
                     }
                 }
@@ -258,13 +264,21 @@ pub(crate) fn fact_transaction_error(
 ) -> RuntimeHostError {
     if let Some(work) = error.rolled_back_work() {
         let mapped = if work.fatal {
-            RuntimeHostError::fatal(work.code, work.operation, RuntimeErrorCode::RuntimeFatal)
+            RuntimeHostError::relayed_fatal(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::RuntimeFatal,
+            )
         } else {
-            RuntimeHostError::request(work.code, work.operation, RuntimeErrorCode::InvalidRequest)
+            RuntimeHostError::relayed_request(
+                work.code,
+                work.operation,
+                RuntimeErrorCode::InvalidRequest,
+            )
         };
         mapped.with_native_detail(work.detail.clone())
     } else {
-        RuntimeHostError::fatal(
+        RuntimeHostError::relayed_fatal(
             error.code(),
             error.operation(),
             RuntimeErrorCode::LedgerFailure,
@@ -283,8 +297,8 @@ fn original_at(ledger: &GlobalLedger, sequence: u64) -> RuntimeHostResult<Persis
         .map_err(fact_transaction_error)?;
     if events.len() != 1 {
         return Err(fact_fatal(
-            "fact_projection_source_missing",
-            "read_fact_source",
+            HostCode::FactProjectionSourceMissing,
+            HostLocation::ReadFactSource,
         ));
     }
     Ok(events.remove(0))
@@ -306,7 +320,10 @@ impl HistoricalFactProjection {
                 self.input_boundaries
                     .check(payload.record(), payload.scope_instances())
                     .map_err(|_| {
-                        fact_fatal("fact_observation_precedes_input", "project_fact_history")
+                        fact_fatal(
+                            HostCode::FactObservationPrecedesInput,
+                            HostLocation::ProjectFactHistory,
+                        )
                     })?;
                 for record in payload.records() {
                     self.publish(record.clone(), event.sequence(), *event.event_id())?;
@@ -329,8 +346,8 @@ impl HistoricalFactProjection {
                 );
                 if self.invalidated.get(&identity) != Some(data) {
                     return Err(fact_fatal(
-                        "fact_invalidation_source_mismatch",
-                        "project_fact_history",
+                        SharedCode::FactInvalidationSourceMismatch,
+                        HostLocation::ProjectFactHistory,
                     ));
                 }
                 Ok(())
@@ -372,17 +389,20 @@ impl HistoricalFactProjection {
         sequence: u64,
         event_id: EventId,
     ) -> RuntimeHostResult<()> {
-        record
-            .validate()
-            .map_err(|_| fact_fatal("fact_record_invalid", "project_fact_history"))?;
+        record.validate().map_err(|_| {
+            fact_fatal(
+                HostCode::FactRecordInvalid,
+                HostLocation::ProjectFactHistory,
+            )
+        })?;
         let identity = (record.scope.clone(), record.key.clone());
         if self
             .invalidated
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
         {
             return Err(fact_fatal(
-                "fact_source_snapshot_republished",
-                "project_fact_history",
+                HostCode::FactSourceSnapshotRepublished,
+                HostLocation::ProjectFactHistory,
             ));
         }
         if let Some((existing, _, existing_event_id)) = self.active.get(&identity)
@@ -390,16 +410,16 @@ impl HistoricalFactProjection {
         {
             if existing != &record || existing_event_id != &event_id {
                 return Err(fact_fatal(
-                    "fact_source_snapshot_identity_conflict",
-                    "project_fact_history",
+                    HostCode::FactSourceSnapshotIdentityConflict,
+                    HostLocation::ProjectFactHistory,
                 ));
             }
             return Ok(());
         }
         if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
             return Err(fact_fatal(
-                "fact_store_capacity_exceeded",
-                "project_fact_history",
+                HostCode::FactStoreCapacityExceeded,
+                HostLocation::ProjectFactHistory,
             ));
         }
         self.active.insert(identity, (record, sequence, event_id));
@@ -412,14 +432,17 @@ impl HistoricalFactProjection {
         if let Some(existing) = self.invalidated.get(&invalidation_identity) {
             if existing != &data {
                 return Err(fact_fatal(
-                    "fact_invalidation_identity_conflict",
-                    "project_fact_history",
+                    SharedCode::FactInvalidationIdentityConflict,
+                    HostLocation::ProjectFactHistory,
                 ));
             }
             return Ok(());
         }
         let (active, _, _) = self.active.get(&identity).ok_or_else(|| {
-            fact_fatal("fact_invalidation_target_missing", "project_fact_history")
+            fact_fatal(
+                HostCode::FactInvalidationTargetMissing,
+                HostLocation::ProjectFactHistory,
+            )
         })?;
         if active.source_snapshot_id != data.source_snapshot_id
             || !active
@@ -427,8 +450,8 @@ impl HistoricalFactProjection {
                 .contains(&data.invalidated_by_event_type)
         {
             return Err(fact_fatal(
-                "fact_invalidation_target_mismatch",
-                "project_fact_history",
+                SharedCode::FactInvalidationTargetMismatch,
+                HostLocation::ProjectFactHistory,
             ));
         }
         self.active.remove(&identity);
@@ -474,13 +497,16 @@ impl InstanceFactStore {
         ledger: &GlobalLedger,
         ledger_position: u64,
     ) -> RuntimeHostResult<Vec<FactRecord>> {
-        let latest = ledger
-            .latest_sequence()
-            .map_err(|_| fact_fatal("fact_store_query_failed", "project_fact_history"))?;
+        let latest = ledger.latest_sequence().map_err(|_| {
+            fact_fatal(
+                HostCode::FactStoreQueryFailed,
+                HostLocation::ProjectFactHistory,
+            )
+        })?;
         if ledger_position == 0 || ledger_position > latest {
             return Err(fact_fatal(
-                "fact_ledger_position_invalid",
-                "project_fact_history",
+                HostCode::FactLedgerPositionInvalid,
+                HostLocation::ProjectFactHistory,
             ));
         }
         let events = ledger
@@ -488,7 +514,12 @@ impl InstanceFactStore {
                 to_sequence: Some(ledger_position),
                 ..EventQuery::default()
             })
-            .map_err(|_| fact_fatal("fact_store_query_failed", "project_fact_history"))?;
+            .map_err(|_| {
+                fact_fatal(
+                    HostCode::FactStoreQueryFailed,
+                    HostLocation::ProjectFactHistory,
+                )
+            })?;
         let mut projection = HistoricalFactProjection::default();
         for event in events {
             projection.replay(&event)?;
@@ -509,9 +540,23 @@ impl InstanceFactStore {
             last_sequence: 0,
             state,
         };
+        // Workflow #381 R4a: the whole Ledger through one position, in bounded pages.
         let events = ledger
-            .query(Default::default())
-            .map_err(|_| fact_fatal("fact_store_recovery_failed", "recover_fact_store"))?;
+            .latest_sequence()
+            .and_then(|through| {
+                read_pages(
+                    ledger,
+                    &EventQuery::default(),
+                    through,
+                    RECOVERY_PAGE_EVENTS,
+                )
+            })
+            .map_err(|_| {
+                fact_fatal(
+                    HostCode::FactStoreRecoveryFailed,
+                    HostLocation::RecoverFactStore,
+                )
+            })?;
         let mut history = HistoricalFactProjection::default();
         for event in &events {
             history.replay(event)?;
@@ -527,16 +572,23 @@ impl InstanceFactStore {
     }
 
     pub(crate) fn synchronize(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        let from_sequence = self
-            .last_sequence
-            .checked_add(1)
-            .ok_or_else(|| fact_fatal("fact_sequence_overflow", "synchronize_fact_store"))?;
+        let from_sequence = self.last_sequence.checked_add(1).ok_or_else(|| {
+            fact_fatal(
+                HostCode::FactSequenceOverflow,
+                HostLocation::SynchronizeFactStore,
+            )
+        })?;
         let events = ledger
             .query(EventQuery {
                 from_sequence: Some(from_sequence),
                 ..EventQuery::default()
             })
-            .map_err(|_| fact_fatal("fact_store_sync_failed", "synchronize_fact_store"))?;
+            .map_err(|_| {
+                fact_fatal(
+                    HostCode::FactStoreSyncFailed,
+                    HostLocation::SynchronizeFactStore,
+                )
+            })?;
         for event in events {
             self.replay_event(&event, ledger)?;
         }
@@ -568,8 +620,8 @@ impl InstanceFactStore {
     ) -> RuntimeHostResult<Self> {
         if position == 0 || position > ledger.latest_sequence().map_err(fact_transaction_error)? {
             return Err(fact_fatal(
-                "fact_ledger_position_invalid",
-                "project_fact_history",
+                HostCode::FactLedgerPositionInvalid,
+                HostLocation::ProjectFactHistory,
             ));
         }
         let mut history = HistoricalFactProjection::default();
@@ -578,7 +630,12 @@ impl InstanceFactStore {
                 to_sequence: Some(position),
                 ..EventQuery::default()
             })
-            .map_err(|_| fact_fatal("fact_history_read_failed", "project_fact_history"))?
+            .map_err(|_| {
+                fact_fatal(
+                    HostCode::FactHistoryReadFailed,
+                    HostLocation::ProjectFactHistory,
+                )
+            })?
         {
             history.replay(&event)?;
         }
@@ -588,10 +645,16 @@ impl InstanceFactStore {
             .map(|(identity, (record, sequence, event_id))| {
                 let scope_instances =
                     history.scope_instances.remove(&identity).ok_or_else(|| {
-                        fact_fatal("fact_scope_projection_missing", "project_fact_history")
+                        fact_fatal(
+                            HostCode::FactScopeProjectionMissing,
+                            HostLocation::ProjectFactHistory,
+                        )
                     })?;
                 let publisher = history.publishers.remove(&identity).ok_or_else(|| {
-                    fact_fatal("fact_publisher_projection_missing", "project_fact_history")
+                    fact_fatal(
+                        HostCode::FactPublisherProjectionMissing,
+                        HostLocation::ProjectFactHistory,
+                    )
                 })?;
                 Ok((
                     identity,
@@ -642,8 +705,8 @@ impl InstanceFactStore {
                         .all(|event| stored.record.invalidate_on.contains(event))
                 {
                     return Err(fact_request(
-                        "pool_fact_invalidation_binding_missing",
-                        "project_fact_pools",
+                        HostCode::PoolFactInvalidationBindingMissing,
+                        HostLocation::ProjectFactPools,
                     ));
                 }
             }
@@ -669,7 +732,10 @@ impl InstanceFactStore {
                 self.input_boundaries
                     .check(payload.record(), payload.scope_instances())
                     .map_err(|_| {
-                        fact_fatal("fact_observation_precedes_input", "replay_fact_event")
+                        fact_fatal(
+                            HostCode::FactObservationPrecedesInput,
+                            HostLocation::ReplayFactEvent,
+                        )
                     })?;
                 let mut complete = self.clone();
                 for record in payload.records() {
@@ -683,15 +749,17 @@ impl InstanceFactStore {
                         .is_some_and(|tombstone| tombstone.sequence <= event.sequence())
                     {
                         return Err(fact_fatal(
-                            "fact_source_snapshot_republished",
-                            "replay_fact_event",
+                            HostCode::FactSourceSnapshotRepublished,
+                            HostLocation::ReplayFactEvent,
                         ));
                     }
                     complete.commit_publish(record.clone(), event.sequence(), *event.event_id())?;
                     let stored = complete
                         .active
                         .get_mut(&(record.scope.clone(), record.key.clone()))
-                        .ok_or_else(|| fact_fatal("fact_commit_missing", "replay_fact_event"))?;
+                        .ok_or_else(|| {
+                            fact_fatal(HostCode::FactCommitMissing, HostLocation::ReplayFactEvent)
+                        })?;
                     stored.scope_instances = payload.scope_instances().to_vec();
                     stored.publisher = event.origin().actor();
                 }
@@ -703,12 +771,15 @@ impl InstanceFactStore {
                 let entry = self
                     .persisted_tombstone(ledger, &data.scope, &data.key, &data.source_snapshot_id)?
                     .ok_or_else(|| {
-                        fact_fatal("fact_tombstone_projection_missing", "replay_fact_event")
+                        fact_fatal(
+                            SharedCode::FactTombstoneProjectionMissing,
+                            HostLocation::ReplayFactEvent,
+                        )
                     })?;
                 if entry.data != *data || entry.sequence < event.sequence() {
                     return Err(fact_fatal(
-                        "fact_tombstone_projection_source_mismatch",
-                        "replay_fact_event",
+                        SharedCode::FactTombstoneProjectionSourceMismatch,
+                        HostLocation::ReplayFactEvent,
                     ));
                 }
                 let identity = (
@@ -728,7 +799,7 @@ impl InstanceFactStore {
                         },
                     );
                     self.trim_recent_tombstones()?;
-                    return self.advance(event.sequence(), "replay_fact_event");
+                    return self.advance(event.sequence(), HostLocation::ReplayFactEvent);
                 }
                 self.commit_invalidation(payload.invalidation().clone(), event.sequence())
             }
@@ -737,7 +808,7 @@ impl InstanceFactStore {
                 for invalidation in self.plan_invalidations(event) {
                     self.derive_invalidation(invalidation, event.sequence())?;
                 }
-                self.advance(event.sequence(), "replay_fact_event")
+                self.advance(event.sequence(), HostLocation::ReplayFactEvent)
             }
         }
     }
@@ -747,9 +818,9 @@ impl InstanceFactStore {
         record: &FactRecord,
         ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
-        record
-            .validate()
-            .map_err(|_| fact_request("fact_record_invalid", "publish_fact"))?;
+        record.validate().map_err(|_| {
+            fact_request(HostCode::FactRecordInvalid, ContractLocation::PublishFact)
+        })?;
         let identity = (record.scope.clone(), record.key.clone());
         if self
             .invalidated
@@ -764,8 +835,8 @@ impl InstanceFactStore {
                 .is_some()
         {
             return Err(fact_request(
-                "fact_source_snapshot_invalidated",
-                "publish_fact",
+                HostCode::FactSourceSnapshotInvalidated,
+                ContractLocation::PublishFact,
             ));
         }
         let Some(existing) = self.active.get(&identity) else {
@@ -774,16 +845,25 @@ impl InstanceFactStore {
                 .get(&identity)
                 .is_some_and(|latest| record.observed_at_unix_ms <= *latest)
             {
-                return Err(fact_request("fact_observation_not_newer", "publish_fact"));
+                return Err(fact_request(
+                    HostCode::FactObservationNotNewer,
+                    ContractLocation::PublishFact,
+                ));
             }
             if self.active.len() >= MAX_ACTIVE_FACTS {
-                return Err(fact_request("fact_store_capacity_exceeded", "publish_fact"));
+                return Err(fact_request(
+                    HostCode::FactStoreCapacityExceeded,
+                    ContractLocation::PublishFact,
+                ));
             }
             return Ok(None);
         };
         if existing.record.source_snapshot_id != record.source_snapshot_id {
             if record.observed_at_unix_ms <= existing.record.observed_at_unix_ms {
-                return Err(fact_request("fact_observation_not_newer", "publish_fact"));
+                return Err(fact_request(
+                    HostCode::FactObservationNotNewer,
+                    ContractLocation::PublishFact,
+                ));
             }
             return Ok(None);
         }
@@ -791,8 +871,8 @@ impl InstanceFactStore {
             return Ok(Some(existing.event_id));
         }
         Err(fact_fatal(
-            "fact_source_snapshot_identity_conflict",
-            "publish_fact",
+            HostCode::FactSourceSnapshotIdentityConflict,
+            ContractLocation::PublishFact,
         ))
     }
 
@@ -804,9 +884,12 @@ impl InstanceFactStore {
     ) -> RuntimeHostResult<()> {
         record
             .validate()
-            .map_err(|_| fact_fatal("fact_record_invalid", "commit_fact"))?;
+            .map_err(|_| fact_fatal(HostCode::FactRecordInvalid, HostLocation::CommitFact))?;
         if sequence == 0 {
-            return Err(fact_fatal("fact_sequence_invalid", "commit_fact"));
+            return Err(fact_fatal(
+                HostCode::FactSequenceInvalid,
+                HostLocation::CommitFact,
+            ));
         }
         let identity = (record.scope.clone(), record.key.clone());
         if self
@@ -814,23 +897,26 @@ impl InstanceFactStore {
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
         {
             return Err(fact_fatal(
-                "fact_source_snapshot_republished",
-                "commit_fact",
+                HostCode::FactSourceSnapshotRepublished,
+                HostLocation::CommitFact,
             ));
         }
         if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
-            return Err(fact_fatal("fact_store_capacity_exceeded", "commit_fact"));
+            return Err(fact_fatal(
+                HostCode::FactStoreCapacityExceeded,
+                HostLocation::CommitFact,
+            ));
         }
         if let Some(existing) = self.active.get(&identity)
             && existing.record.source_snapshot_id == record.source_snapshot_id
         {
             if existing.record != record || existing.event_id != event_id {
                 return Err(fact_fatal(
-                    "fact_source_snapshot_identity_conflict",
-                    "commit_fact",
+                    HostCode::FactSourceSnapshotIdentityConflict,
+                    HostLocation::CommitFact,
                 ));
             }
-            return self.advance(sequence, "commit_fact");
+            return self.advance(sequence, HostLocation::CommitFact);
         }
         self.active.insert(
             identity.clone(),
@@ -848,7 +934,7 @@ impl InstanceFactStore {
             .entry(identity)
             .and_modify(|latest| *latest = (*latest).max(observed))
             .or_insert(observed);
-        self.advance(sequence, "commit_fact")
+        self.advance(sequence, HostLocation::CommitFact)
     }
 
     pub(crate) fn preview_observation(
@@ -857,12 +943,18 @@ impl InstanceFactStore {
         now: u64,
         ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
-        observation
-            .validate()
-            .map_err(|_| fact_request("fact_observation_invalid", "publish_facts"))?;
+        observation.validate().map_err(|_| {
+            fact_request(
+                HostCode::FactObservationInvalid,
+                ContractLocation::PublishFacts,
+            )
+        })?;
         let first = &observation.records[0];
         if first.observed_at_unix_ms > now {
-            return Err(fact_request("fact_observation_in_future", "publish_facts"));
+            return Err(fact_request(
+                HostCode::FactObservationInFuture,
+                ContractLocation::PublishFacts,
+            ));
         }
         let mut reused = BTreeSet::new();
         let mut new_count = 0;
@@ -905,8 +997,8 @@ impl InstanceFactStore {
                 })
         {
             return Err(fact_request(
-                "fact_observation_incomplete_refresh",
-                "publish_facts",
+                HostCode::FactObservationIncompleteRefresh,
+                ContractLocation::PublishFacts,
             ));
         }
         if reused.len() > 1
@@ -915,14 +1007,14 @@ impl InstanceFactStore {
             || (reused.is_empty() && existing_members != 0)
         {
             return Err(fact_request(
-                "fact_observation_version_conflict",
-                "publish_facts",
+                HostCode::FactObservationVersionConflict,
+                ContractLocation::PublishFacts,
             ));
         }
         if self.latest_observed.len() + new_identities > MAX_ACTIVE_FACTS {
             return Err(fact_request(
-                "fact_store_capacity_exceeded",
-                "publish_facts",
+                HostCode::FactStoreCapacityExceeded,
+                ContractLocation::PublishFacts,
             ));
         }
         Ok(reused.into_iter().next())
@@ -975,21 +1067,21 @@ impl InstanceFactStore {
         );
         let existing = self.invalidated.get(&tombstone_key).ok_or_else(|| {
             fact_fatal(
-                "fact_generated_invalidation_missing",
-                "acknowledge_fact_invalidation",
+                HostCode::FactGeneratedInvalidationMissing,
+                HostLocation::AcknowledgeFactInvalidation,
             )
         })?;
         let identity = invalidation_identity(data);
         if existing.data != *data || !self.pending.contains_key(&identity) {
             return Err(fact_fatal(
-                "fact_generated_invalidation_mismatch",
-                "acknowledge_fact_invalidation",
+                HostCode::FactGeneratedInvalidationMismatch,
+                HostLocation::AcknowledgeFactInvalidation,
             ));
         }
         let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
             fact_fatal(
-                "fact_generated_invalidation_missing",
-                "acknowledge_fact_invalidation",
+                HostCode::FactGeneratedInvalidationMissing,
+                HostLocation::AcknowledgeFactInvalidation,
             )
         })?;
         tombstone.sequence = sequence;
@@ -1008,8 +1100,8 @@ impl InstanceFactStore {
             .get(&(data.scope.clone(), data.key.clone()))
             .ok_or_else(|| {
                 fact_fatal(
-                    "fact_invalidation_target_missing",
-                    "derive_fact_invalidation",
+                    HostCode::FactInvalidationTargetMissing,
+                    HostLocation::DeriveFactInvalidation,
                 )
             })?
             .sequence;
@@ -1036,27 +1128,27 @@ impl InstanceFactStore {
         if let Some(existing) = self.invalidated.get(&tombstone_key) {
             if existing.data != data {
                 return Err(fact_fatal(
-                    "fact_invalidation_identity_conflict",
-                    "commit_fact_invalidation",
+                    SharedCode::FactInvalidationIdentityConflict,
+                    HostLocation::CommitFactInvalidation,
                 ));
             }
             if persisted {
                 self.pending.remove(&invalidation_identity(&data));
                 let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
                     fact_fatal(
-                        "fact_invalidation_target_missing",
-                        "commit_fact_invalidation",
+                        HostCode::FactInvalidationTargetMissing,
+                        HostLocation::CommitFactInvalidation,
                     )
                 })?;
                 tombstone.sequence = sequence;
                 self.trim_recent_tombstones()?;
             }
-            return self.advance(sequence, "commit_fact_invalidation");
+            return self.advance(sequence, HostLocation::CommitFactInvalidation);
         }
         let active = self.active.get(&identity).ok_or_else(|| {
             fact_fatal(
-                "fact_invalidation_target_missing",
-                "commit_fact_invalidation",
+                HostCode::FactInvalidationTargetMissing,
+                HostLocation::CommitFactInvalidation,
             )
         })?;
         if active.record.source_snapshot_id != data.source_snapshot_id
@@ -1066,8 +1158,8 @@ impl InstanceFactStore {
                 .contains(&data.invalidated_by_event_type)
         {
             return Err(fact_fatal(
-                "fact_invalidation_target_mismatch",
-                "commit_fact_invalidation",
+                SharedCode::FactInvalidationTargetMismatch,
+                HostLocation::CommitFactInvalidation,
             ));
         }
         self.active.remove(&identity);
@@ -1085,7 +1177,7 @@ impl InstanceFactStore {
         if persisted {
             self.trim_recent_tombstones()?;
         }
-        self.advance(sequence, "commit_fact_invalidation")
+        self.advance(sequence, HostLocation::CommitFactInvalidation)
     }
 
     fn persisted_tombstone(
@@ -1108,13 +1200,18 @@ impl InstanceFactStore {
         self.state
             .verify_fact_projection_entry(&entry, &original)
             .map_err(fact_state_error)?;
-        let data = serde_json::from_slice::<FactInvalidationEventData>(entry.payload())
-            .map_err(|_| fact_fatal("fact_tombstone_projection_invalid", "read_fact_tombstone"))?;
+        let data =
+            serde_json::from_slice::<FactInvalidationEventData>(entry.payload()).map_err(|_| {
+                fact_fatal(
+                    HostCode::FactTombstoneProjectionInvalid,
+                    HostLocation::ReadFactTombstone,
+                )
+            })?;
         if &data.scope != scope || data.key != key || data.source_snapshot_id != source_snapshot_id
         {
             return Err(fact_fatal(
-                "fact_tombstone_projection_identity_mismatch",
-                "read_fact_tombstone",
+                HostCode::FactTombstoneProjectionIdentityMismatch,
+                HostLocation::ReadFactTombstone,
             ));
         }
         Ok(Some(InvalidationTombstone {
@@ -1137,8 +1234,8 @@ impl InstanceFactStore {
                 .map(|(identity, _)| identity.clone())
                 .ok_or_else(|| {
                     fact_fatal(
-                        "fact_tombstone_compaction_blocked",
-                        "compact_fact_tombstones",
+                        HostCode::FactTombstoneCompactionBlocked,
+                        HostLocation::CompactFactTombstones,
                     )
                 })?;
             self.invalidated.remove(&candidate);
@@ -1167,9 +1264,10 @@ impl InstanceFactStore {
         }
     }
 
-    fn advance(&mut self, sequence: u64, operation: &'static str) -> RuntimeHostResult<()> {
+    fn advance(&mut self, sequence: u64, operation: impl Into<Location>) -> RuntimeHostResult<()> {
+        let operation: Location = operation.into();
         if sequence == 0 || sequence < self.last_sequence {
-            return Err(fact_fatal("fact_sequence_invalid", operation));
+            return Err(fact_fatal(HostCode::FactSequenceInvalid, operation));
         }
         self.last_sequence = sequence;
         Ok(())
@@ -1213,13 +1311,13 @@ impl InstanceFactStore {
         context: InstanceFactContext,
         ledger_position: u64,
     ) -> RuntimeHostResult<InstanceFactSnapshot> {
-        context
-            .validate()
-            .map_err(|_| fact_request("fact_context_invalid", "read_fact_snapshot"))?;
+        context.validate().map_err(|_| {
+            fact_request(HostCode::FactContextInvalid, HostLocation::ReadFactSnapshot)
+        })?;
         if ledger_position == 0 {
             return Err(fact_fatal(
-                "fact_ledger_position_invalid",
-                "read_fact_snapshot",
+                HostCode::FactLedgerPositionInvalid,
+                HostLocation::ReadFactSnapshot,
             ));
         }
         let mut records = self
@@ -1240,9 +1338,12 @@ impl InstanceFactStore {
             context,
             records,
         };
-        snapshot
-            .validate()
-            .map_err(|_| fact_fatal("fact_snapshot_invalid", "read_fact_snapshot"))?;
+        snapshot.validate().map_err(|_| {
+            fact_fatal(
+                HostCode::FactSnapshotInvalid,
+                HostLocation::ReadFactSnapshot,
+            )
+        })?;
         Ok(snapshot)
     }
 
@@ -1257,7 +1358,7 @@ impl InstanceFactStore {
             resources,
             ledger_position,
             PolicyFactConflictDisposition::FatalInvariant,
-            "project_policy_facts",
+            HostLocation::ProjectPolicyFacts,
         )
     }
 
@@ -1272,7 +1373,7 @@ impl InstanceFactStore {
             resources,
             ledger_position,
             PolicyFactConflictDisposition::RejectCaller,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )
     }
 
@@ -1282,8 +1383,9 @@ impl InstanceFactStore {
         resources: &EvaluationResources,
         ledger_position: u64,
         conflict_disposition: PolicyFactConflictDisposition,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<EvaluationFacts> {
+        let operation: Location = operation.into();
         // Workflow #308 RT-S1a: a resource target policy is written only by its formal entry
         // into the store; neither the configuration nor a forward caller may supply one.
         if facts
@@ -1292,7 +1394,7 @@ impl InstanceFactStore {
             .any(|fact| fact.fact_key == RESOURCE_TARGETS_FACT_KEY)
         {
             return Err(RuntimeHostError::request(
-                "resource_targets_key_reserved",
+                HostCode::ResourceTargetsKeyReserved,
                 operation,
                 RuntimeErrorCode::InvalidRequest,
             ));
@@ -1333,10 +1435,10 @@ impl InstanceFactStore {
             if !seen.insert(policy_fact_identity(&scope, &fact_key)) {
                 return Err(match conflict_disposition {
                     PolicyFactConflictDisposition::FatalInvariant => {
-                        fact_fatal("policy_fact_authority_conflict", operation)
+                        fact_fatal(HostCode::PolicyFactAuthorityConflict, operation)
                     }
                     PolicyFactConflictDisposition::RejectCaller => RuntimeHostError::request(
-                        "policy_fact_authority_conflict",
+                        HostCode::PolicyFactAuthorityConflict,
                         operation,
                         RuntimeErrorCode::InvalidRequest,
                     ),
@@ -1421,8 +1523,9 @@ impl InstanceFactStore {
     pub(crate) fn active_priority_offsets(
         &self,
         contexts: &[InstanceFactContext],
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<Vec<ActivePriorityOffset>> {
+        let operation: Location = operation.into();
         let mut offsets = Vec::new();
         for stored in self.active.values() {
             let Some(task_id) = priority_offset_task_id(&stored.record.key) else {
@@ -1438,7 +1541,7 @@ impl InstanceFactStore {
                 .filter(|_| valid_priority_offset_task_id(task_id))
                 .ok_or_else(|| {
                     RuntimeHostError::request(
-                        "priority_offset_invalid",
+                        SharedCode::PriorityOffsetInvalid,
                         operation,
                         RuntimeErrorCode::InvalidRequest,
                     )
@@ -1602,8 +1705,12 @@ fn snapshot_id(
     ledger_position: u64,
     records: &[FactRecord],
 ) -> RuntimeHostResult<String> {
-    let bytes = serde_json::to_vec(&(context, ledger_position, records))
-        .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_fact_snapshot"))?;
+    let bytes = serde_json::to_vec(&(context, ledger_position, records)).map_err(|_| {
+        fact_fatal(
+            HostCode::FactSnapshotEncodeFailed,
+            HostLocation::HashFactSnapshot,
+        )
+    })?;
     Ok(format!("snapshot:fact:{:x}", Sha256::digest(bytes)))
 }
 
@@ -1645,15 +1752,20 @@ fn combined_policy_snapshot_id<T: serde::Serialize>(
             offset_identity,
         ))
     }
-    .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_policy_fact_snapshot"))?;
+    .map_err(|_| {
+        fact_fatal(
+            HostCode::FactSnapshotEncodeFailed,
+            HostLocation::HashPolicyFactSnapshot,
+        )
+    })?;
     Ok(format!("snapshot:policy-fact:{:x}", Sha256::digest(bytes)))
 }
 
-fn fact_request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fact_request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-fn fact_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fact_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 

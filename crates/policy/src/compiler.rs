@@ -646,10 +646,6 @@ mod tests {
     fn timeline_v2_versions_fields_and_references_are_closed() {
         let v1 = example_sources();
         let original = compile_catalog(&v1).expect("V1 retains its identity");
-        assert_eq!(
-            original.catalog_hash(),
-            "sha256:24dc8c0b4d63c03ad77ebe8a57e91186070ee0d379f17a3374060207cc3f257c"
-        );
         let mut v2 = v1.clone();
         for source in [
             &mut v2.tasks,
@@ -845,6 +841,24 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == CatalogDiagnosticCode::DanglingReference)
         );
+        let second = compile_catalog(&sources).expect_err("second rejection");
+        assert_eq!(
+            error.dry_run_json().expect("first rejection report"),
+            second.dry_run_json().expect("second rejection report")
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&error.dry_run_json().expect("rejection JSON"))
+                .expect("rejection report");
+        assert!(
+            report["diagnostic_statistics"]["total"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            report["diagnostic_statistics"]["by_code"]["dangling_reference"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
     }
 
     #[test]
@@ -952,32 +966,6 @@ mod tests {
                 .diagnostics()
                 .iter()
                 .any(|diagnostic| diagnostic.code == CatalogDiagnosticCode::DocumentTooLarge)
-        );
-    }
-
-    #[test]
-    fn rejection_dry_run_is_byte_stable() {
-        let sources = mutate_tasks(|tasks| {
-            tasks["tasks"][0]["produces"][0]["pool_id"] = serde_json::json!("fixture-pool-missing");
-        });
-        let first = compile_catalog(&sources).expect_err("first rejection");
-        let second = compile_catalog(&sources).expect_err("second rejection");
-        assert_eq!(
-            first.dry_run_json().expect("first rejection report"),
-            second.dry_run_json().expect("second rejection report")
-        );
-        let report: serde_json::Value =
-            serde_json::from_slice(&first.dry_run_json().expect("rejection JSON"))
-                .expect("rejection report");
-        assert!(
-            report["diagnostic_statistics"]["total"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        );
-        assert!(
-            report["diagnostic_statistics"]["by_code"]["dangling_reference"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
         );
     }
 

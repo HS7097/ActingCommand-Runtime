@@ -2,6 +2,7 @@
 
 //! Typed monitor vocabulary shared by Runtime and its disposable clients.
 
+use crate::codes::{MonitorDecisionCode, RuntimeContractCode, SharedCode};
 use crate::{
     ArtifactLinksDraft, EventLinksDraft, IdentifierIssuanceError, IdentifierIssuer,
     IssuedCorrelationId, IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId,
@@ -20,15 +21,15 @@ pub type MonitorDecisionResult<T> = Result<T, MonitorDecisionError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonitorDecisionError {
-    code: &'static str,
+    code: crate::outcome::Code,
 }
 
 impl MonitorDecisionError {
-    pub(crate) const fn new(code: &'static str) -> Self {
-        Self { code }
+    pub(crate) fn new(code: impl Into<crate::outcome::Code>) -> Self {
+        Self { code: code.into() }
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> crate::outcome::Code {
         self.code
     }
 }
@@ -79,10 +80,14 @@ impl MonitorObservation {
         validate_text(
             &self.expected_page,
             MAX_MONITOR_PAGE_BYTES,
-            "invalid_monitor_page",
+            MonitorDecisionCode::InvalidMonitorPage,
         )?;
         if let Some(current_page) = &self.current_page {
-            validate_text(current_page, MAX_MONITOR_PAGE_BYTES, "invalid_monitor_page")?;
+            validate_text(
+                current_page,
+                MAX_MONITOR_PAGE_BYTES,
+                MonitorDecisionCode::InvalidMonitorPage,
+            )?;
         }
         let valid = match self.diagnosis {
             MonitorDiagnosis::Healthy => self.current_page.as_deref() == Some(&self.expected_page),
@@ -95,7 +100,9 @@ impl MonitorObservation {
             | MonitorDiagnosis::CaptureUnavailable => self.current_page.is_none(),
         };
         if !valid {
-            return Err(MonitorDecisionError::new("invalid_monitor_observation"));
+            return Err(MonitorDecisionError::new(
+                MonitorDecisionCode::InvalidMonitorObservation,
+            ));
         }
         Ok(())
     }
@@ -215,7 +222,9 @@ impl MonitorDecision {
                 )
         );
         if !valid {
-            return Err(MonitorDecisionError::new("invalid_monitor_decision"));
+            return Err(MonitorDecisionError::new(
+                MonitorDecisionCode::InvalidMonitorDecision,
+            ));
         }
         Ok(())
     }
@@ -261,13 +270,13 @@ impl RuntimeMonitorPolicy {
             .contains(&self.interval_ms)
         {
             return Err(MonitorDecisionError::new(
-                "invalid_runtime_monitor_interval",
+                MonitorDecisionCode::InvalidRuntimeMonitorInterval,
             ));
         }
         validate_text(
             &self.expected_page,
             MAX_MONITOR_PAGE_BYTES,
-            "invalid_monitor_page",
+            MonitorDecisionCode::InvalidMonitorPage,
         )
     }
 
@@ -319,7 +328,9 @@ impl RuntimeMonitorState {
 
     pub fn validate(&self) -> MonitorDecisionResult<()> {
         if self.next_due_unix_ms == 0 {
-            return Err(MonitorDecisionError::new("invalid_runtime_monitor_state"));
+            return Err(MonitorDecisionError::new(
+                MonitorDecisionCode::InvalidRuntimeMonitorState,
+            ));
         }
         if let Some(decision) = &self.last_decision {
             decision.validate()?;
@@ -336,7 +347,9 @@ impl RuntimeMonitorState {
                 .is_some_and(|(started, completed)| started > 0 && completed >= started)
             && (self.last_decision.is_some() ^ self.last_error.is_some());
         if !no_previous_run && !completed_run {
-            return Err(MonitorDecisionError::new("invalid_runtime_monitor_state"));
+            return Err(MonitorDecisionError::new(
+                MonitorDecisionCode::InvalidRuntimeMonitorState,
+            ));
         }
         Ok(())
     }
@@ -412,21 +425,23 @@ impl RuntimeMonitorState {
             || started_at_unix_ms < self.next_due_unix_ms
             || completed_at_unix_ms < started_at_unix_ms
         {
-            return Err(MonitorDecisionError::new("invalid_runtime_monitor_state"));
+            return Err(MonitorDecisionError::new(
+                MonitorDecisionCode::InvalidRuntimeMonitorState,
+            ));
         }
-        let state = Self {
-            next_due_unix_ms: completed_at_unix_ms
-                .checked_add(interval_ms)
-                .ok_or_else(|| MonitorDecisionError::new("runtime_monitor_time_overflow"))?,
-            run_count: self
-                .run_count
-                .checked_add(1)
-                .ok_or_else(|| MonitorDecisionError::new("runtime_monitor_count_overflow"))?,
-            last_started_at_unix_ms: Some(started_at_unix_ms),
-            last_completed_at_unix_ms: Some(completed_at_unix_ms),
-            last_decision,
-            last_error,
-        };
+        let state =
+            Self {
+                next_due_unix_ms: completed_at_unix_ms.checked_add(interval_ms).ok_or_else(
+                    || MonitorDecisionError::new(MonitorDecisionCode::RuntimeMonitorTimeOverflow),
+                )?,
+                run_count: self.run_count.checked_add(1).ok_or_else(|| {
+                    MonitorDecisionError::new(MonitorDecisionCode::RuntimeMonitorCountOverflow)
+                })?,
+                last_started_at_unix_ms: Some(started_at_unix_ms),
+                last_completed_at_unix_ms: Some(completed_at_unix_ms),
+                last_decision,
+                last_error,
+            };
         state.validate()?;
         Ok(state)
     }
@@ -524,7 +539,7 @@ impl RuntimeMonitorInstanceStatus {
         validate_text(
             &self.instance_alias,
             MAX_INSTANCE_ALIAS_BYTES,
-            "invalid_instance_alias",
+            SharedCode::InvalidInstanceAlias,
         )?;
         match (&self.policy, &self.state) {
             (Some(policy), Some(state)) => {
@@ -533,7 +548,7 @@ impl RuntimeMonitorInstanceStatus {
             }
             (None, None) => Ok(()),
             _ => Err(MonitorDecisionError::new(
-                "invalid_runtime_monitor_instance_status",
+                MonitorDecisionCode::InvalidRuntimeMonitorInstanceStatus,
             )),
         }
     }
@@ -562,9 +577,9 @@ pub struct RuntimeMonitorRegistryStatus {
 
 impl RuntimeMonitorRegistryStatus {
     pub fn with_source(mut self, source: crate::RuntimeStateSource) -> MonitorDecisionResult<Self> {
-        source
-            .validate()
-            .map_err(|_| MonitorDecisionError::new("invalid_runtime_state_source"))?;
+        source.validate().map_err(|_| {
+            MonitorDecisionError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+        })?;
         self.source = Some(source);
         Ok(self)
     }
@@ -588,9 +603,9 @@ impl RuntimeMonitorRegistryStatus {
 
     pub fn validate(&self) -> MonitorDecisionResult<()> {
         if let Some(source) = &self.source {
-            source
-                .validate()
-                .map_err(|_| MonitorDecisionError::new("invalid_runtime_state_source"))?;
+            source.validate().map_err(|_| {
+                MonitorDecisionError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+            })?;
         }
         let mut aliases = BTreeSet::new();
         let mut previous_alias = None;
@@ -600,7 +615,7 @@ impl RuntimeMonitorRegistryStatus {
                 || previous_alias.is_some_and(|previous| previous >= instance.instance_alias())
             {
                 return Err(MonitorDecisionError::new(
-                    "invalid_runtime_monitor_registry",
+                    MonitorDecisionCode::InvalidRuntimeMonitorRegistry,
                 ));
             }
             previous_alias = Some(instance.instance_alias());
@@ -617,7 +632,11 @@ impl RuntimeMonitorRegistryStatus {
     }
 }
 
-fn validate_text(value: &str, max_bytes: usize, code: &'static str) -> MonitorDecisionResult<()> {
+fn validate_text(
+    value: &str,
+    max_bytes: usize,
+    code: impl Into<crate::outcome::Code>,
+) -> MonitorDecisionResult<()> {
     if value.is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         return Err(MonitorDecisionError::new(code));
     }
@@ -656,7 +675,8 @@ mod tests {
         assert_eq!(
             RuntimeMonitorPolicy::new(0, "home", false)
                 .expect_err("zero interval")
-                .code(),
+                .code()
+                .as_str(),
             "invalid_runtime_monitor_interval"
         );
     }
@@ -686,7 +706,8 @@ mod tests {
             scheduled
                 .completed(1_000, 99, 100, decision)
                 .expect_err("early run")
-                .code(),
+                .code()
+                .as_str(),
             "invalid_runtime_monitor_state"
         );
     }

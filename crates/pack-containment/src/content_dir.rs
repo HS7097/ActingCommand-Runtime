@@ -37,7 +37,9 @@ pub(super) fn snapshot(
         .flatten()
         .any(|name| name != expected.sha256)
     {
-        return Err(source_error("content_directory_name_mismatch"));
+        return Err(source_error(
+            PackContainmentCode::ContentDirectoryNameMismatch,
+        ));
     }
     let entries = read_content(locator, root, limits, deadline)?;
     let verified = verify(&entries, expected)?;
@@ -102,10 +104,13 @@ pub(super) fn verify(
 
 fn canonical_root(locator: &Path) -> ContainmentResult<PathBuf> {
     if !locator.is_absolute() {
-        return Err(source_error("content_directory_locator_not_absolute"));
+        return Err(source_error(
+            PackContainmentCode::ContentDirectoryLocatorNotAbsolute,
+        ));
     }
     // Links above the directory are resolved here; links inside it are rejected below.
-    fs::canonicalize(locator).map_err(|_| source_error("content_directory_missing"))
+    fs::canonicalize(locator)
+        .map_err(|_| source_error(PackContainmentCode::ContentDirectoryMissing))
 }
 
 /// Dispatches on what the canonical locator is: a directory is read file by file; a regular
@@ -116,23 +121,27 @@ fn read_content(
     limits: ContainmentLimits,
     deadline: Instant,
 ) -> ContainmentResult<BTreeMap<String, Vec<u8>>> {
-    let metadata =
-        fs::symlink_metadata(&root).map_err(|_| source_error("content_directory_missing"))?;
+    let metadata = fs::symlink_metadata(&root)
+        .map_err(|_| source_error(PackContainmentCode::ContentDirectoryMissing))?;
     if is_link(&metadata) {
-        return Err(source_error("content_directory_link_or_type"));
+        return Err(source_error(
+            PackContainmentCode::ContentDirectoryLinkOrType,
+        ));
     }
     if metadata.is_dir() {
         return read_entries(root, limits, deadline);
     }
     if !metadata.is_file() {
-        return Err(source_error("content_directory_not_directory"));
+        return Err(source_error(
+            PackContainmentCode::ContentDirectoryNotDirectory,
+        ));
     }
     let container = ContentContainer::from_locator(locator)
-        .ok_or_else(|| source_error("content_container_unsupported"))?;
+        .ok_or_else(|| source_error(PackContainmentCode::ContentContainerUnsupported))?;
     let bytes = read_regular(
         &root,
         limits.max_compressed_bytes,
-        "content_container_size_limit",
+        PackContainmentCode::ContentContainerSizeLimit.code(),
     )?;
     check_time(deadline)?;
     let entries = crate::container::expand(&bytes, container, limits, Some(deadline))?;
@@ -149,15 +158,16 @@ fn read_entries(
     let mut pending = vec![(root, String::new(), 0_usize)];
     while let Some((directory, prefix, depth)) = pending.pop() {
         check_time(deadline)?;
-        for entry in
-            fs::read_dir(&directory).map_err(|_| source_error("content_directory_read_failed"))?
+        for entry in fs::read_dir(&directory)
+            .map_err(|_| source_error(PackContainmentCode::ContentDirectoryReadFailed))?
         {
             check_time(deadline)?;
-            let entry = entry.map_err(|_| source_error("content_directory_read_failed"))?;
+            let entry =
+                entry.map_err(|_| source_error(PackContainmentCode::ContentDirectoryReadFailed))?;
             let name = entry.file_name();
             let name = name
                 .to_str()
-                .ok_or_else(|| source_error("content_directory_path_encoding"))?;
+                .ok_or_else(|| source_error(PackContainmentCode::ContentDirectoryPathEncoding))?;
             let relative = if prefix.is_empty() {
                 name.to_owned()
             } else {
@@ -165,23 +175,33 @@ fn read_entries(
             };
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path)
-                .map_err(|_| source_error("content_directory_read_failed"))?;
+                .map_err(|_| source_error(PackContainmentCode::ContentDirectoryReadFailed))?;
             if is_link(&metadata) {
-                return Err(source_error("content_directory_link_or_type"));
+                return Err(source_error(
+                    PackContainmentCode::ContentDirectoryLinkOrType,
+                ));
             }
             if metadata.is_dir() {
                 // Empty directories do not contribute; only their depth is bounded.
                 if depth >= MAX_DEPTH {
-                    return Err(source_error("content_directory_depth_limit"));
+                    return Err(source_error(
+                        PackContainmentCode::ContentDirectoryDepthLimit,
+                    ));
                 }
                 pending.push((path, relative, depth + 1));
                 continue;
             }
             if !metadata.is_file() {
-                return Err(source_error("content_directory_link_or_type"));
+                return Err(source_error(
+                    PackContainmentCode::ContentDirectoryLinkOrType,
+                ));
             }
             table.add(relative, |limit| {
-                read_regular(&path, limit, "content_directory_size_limit")
+                read_regular(
+                    &path,
+                    limit,
+                    PackContainmentCode::ContentDirectorySizeLimit.code(),
+                )
             })?;
         }
     }
@@ -216,7 +236,9 @@ impl EntryTable {
         read: impl FnOnce(u64) -> ContainmentResult<Vec<u8>>,
     ) -> ContainmentResult<()> {
         if self.entries.len() >= self.limits.max_entry_count {
-            return Err(source_error("content_directory_entry_limit"));
+            return Err(source_error(
+                PackContainmentCode::ContentDirectoryEntryLimit,
+            ));
         }
         if relative == "."
             || !safe_source_path(&relative)
@@ -224,10 +246,14 @@ impl EntryTable {
                 .split('/')
                 .any(|part| part.eq_ignore_ascii_case(".git"))
         {
-            return Err(source_error("content_directory_path_invalid"));
+            return Err(source_error(
+                PackContainmentCode::ContentDirectoryPathInvalid,
+            ));
         }
         if !self.folded.insert(relative.to_ascii_lowercase()) {
-            return Err(source_error("content_directory_case_collision"));
+            return Err(source_error(
+                PackContainmentCode::ContentDirectoryCaseCollision,
+            ));
         }
         if has_dangerous_extension(&relative) {
             return Err(ContainmentError::ForbiddenEntry { path: relative });
@@ -247,15 +273,17 @@ impl EntryTable {
             );
         let bytes = read(limit)?;
         if bytes.len() as u64 > limit {
-            return Err(source_error("content_directory_size_limit"));
+            return Err(source_error(PackContainmentCode::ContentDirectorySizeLimit));
         }
         if bytes.starts_with(LFS_POINTER) {
-            return Err(source_error("content_directory_lfs_pointer"));
+            return Err(source_error(
+                PackContainmentCode::ContentDirectoryLfsPointer,
+            ));
         }
         self.total = self
             .total
             .checked_add(bytes.len() as u64)
-            .ok_or_else(|| source_error("content_directory_size_limit"))?;
+            .ok_or_else(|| source_error(PackContainmentCode::ContentDirectorySizeLimit))?;
         self.entries.insert(relative, bytes);
         Ok(())
     }
@@ -275,7 +303,7 @@ fn entries_digest(entries: &BTreeMap<String, Vec<u8>>) -> String {
 
 pub(super) fn check_time(deadline: Instant) -> ContainmentResult<()> {
     if Instant::now() >= deadline {
-        return Err(source_error("content_directory_deadline"));
+        return Err(source_error(PackContainmentCode::ContentDirectoryDeadline));
     }
     Ok(())
 }
@@ -294,7 +322,7 @@ fn is_link(metadata: &fs::Metadata) -> bool {
 
 /// Opens the entry itself rather than a link target and reads at most `limit` bytes; more is
 /// `size_code`.
-fn read_regular(path: &Path, limit: u64, size_code: &'static str) -> ContainmentResult<Vec<u8>> {
+fn read_regular(path: &Path, limit: u64, size_code: Code) -> ContainmentResult<Vec<u8>> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
@@ -309,12 +337,14 @@ fn read_regular(path: &Path, limit: u64, size_code: &'static str) -> Containment
     }
     let file = options
         .open(path)
-        .map_err(|_| source_error("content_directory_open_failed"))?;
+        .map_err(|_| source_error(PackContainmentCode::ContentDirectoryOpenFailed))?;
     let metadata = file
         .metadata()
-        .map_err(|_| source_error("content_directory_read_failed"))?;
+        .map_err(|_| source_error(PackContainmentCode::ContentDirectoryReadFailed))?;
     if is_link(&metadata) || !metadata.is_file() {
-        return Err(source_error("content_directory_link_or_type"));
+        return Err(source_error(
+            PackContainmentCode::ContentDirectoryLinkOrType,
+        ));
     }
     if metadata.len() > limit {
         return Err(source_error(size_code));
@@ -322,7 +352,7 @@ fn read_regular(path: &Path, limit: u64, size_code: &'static str) -> Containment
     let mut bytes = Vec::new();
     file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|_| source_error("content_directory_read_failed"))?;
+        .map_err(|_| source_error(PackContainmentCode::ContentDirectoryReadFailed))?;
     if bytes.len() as u64 > limit {
         return Err(source_error(size_code));
     }

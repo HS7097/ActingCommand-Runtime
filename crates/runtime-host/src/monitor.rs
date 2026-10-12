@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::events::RuntimeEvents;
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     AuditInput, CommandPayloadDraft, EffectDisposition, EventAction, EventActor, EventQuery,
     EventSeverity, EventSource, MAX_MONITOR_IMPORT_BYTES, MAX_RUNTIME_OBSERVED_INSTANCES,
@@ -84,9 +86,9 @@ impl MonitorRegistry {
                             AuditInput::new(),
                         ),
                     )?;
-                    let recorded = ledger
-                        .append(events.sanitize(draft)?)
-                        .map_err(|_| monitor_ledger_error("record_monitor_restore_failure"))?;
+                    let recorded = ledger.append(events.sanitize(draft)?).map_err(|_| {
+                        monitor_ledger_error(HostLocation::RecordMonitorRestoreFailure)
+                    })?;
                     let _ = error
                         .diagnostics()
                         .recorded_event()
@@ -107,8 +109,8 @@ impl MonitorRegistry {
         let allowed_aliases = allowed_aliases.into_iter().collect::<BTreeSet<_>>();
         if allowed_aliases.len() > MAX_RUNTIME_OBSERVED_INSTANCES {
             return Err(monitor_error(
-                "invalid_monitor_instance_registry",
-                "open_monitor_registry",
+                HostCode::InvalidMonitorInstanceRegistry,
+                HostLocation::OpenMonitorRegistry,
             ));
         }
         let mut registry = Self {
@@ -122,7 +124,7 @@ impl MonitorRegistry {
         };
         let through = ledger
             .latest_sequence()
-            .map_err(|_| monitor_ledger_error("read_monitor_registry"))?;
+            .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
         let mut after = 0;
         while after < through {
             let page = ledger
@@ -135,7 +137,7 @@ impl MonitorRegistry {
                     through,
                     128,
                 )
-                .map_err(|_| monitor_ledger_error("read_monitor_registry"))?;
+                .map_err(|_| monitor_ledger_error(HostLocation::ReadMonitorRegistry))?;
             if page.is_empty() {
                 break;
             }
@@ -148,8 +150,8 @@ impl MonitorRegistry {
         if let Some(imported) = &registry.imported {
             if imported != &original {
                 return Err(monitor_error(
-                    "monitor_import_source_conflict",
-                    "open_monitor_registry",
+                    HostCode::MonitorImportSourceConflict,
+                    HostLocation::OpenMonitorRegistry,
                 ));
             }
         } else {
@@ -172,7 +174,7 @@ impl MonitorRegistry {
             )?;
             let event = ledger
                 .append(events.sanitize(draft)?)
-                .map_err(|_| monitor_ledger_error("import_monitor_registry"))?;
+                .map_err(|_| monitor_ledger_error(HostLocation::ImportMonitorRegistry))?;
             registry.apply(&event)?;
         }
         Ok(registry)
@@ -185,9 +187,12 @@ impl MonitorRegistry {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<MonitorUpdate> {
         self.require_allowed(instance_alias)?;
-        policy
-            .validate()
-            .map_err(|_| monitor_error("monitor_policy_invalid", "configure_monitor_policy"))?;
+        policy.validate().map_err(|_| {
+            monitor_error(
+                HostCode::MonitorPolicyInvalid,
+                HostLocation::ConfigureMonitorPolicy,
+            )
+        })?;
         if let Some(existing) = self.monitors.get(instance_alias)
             && existing.policy() == Some(&policy)
         {
@@ -199,10 +204,14 @@ impl MonitorRegistry {
                 None,
             );
         }
-        let state = RuntimeMonitorState::scheduled(now_unix_ms)
-            .map_err(|_| monitor_error("monitor_state_invalid", "configure_monitor_policy"))?;
+        let state = RuntimeMonitorState::scheduled(now_unix_ms).map_err(|_| {
+            monitor_error(
+                HostCode::MonitorStateInvalid,
+                HostLocation::ConfigureMonitorPolicy,
+            )
+        })?;
         let status = RuntimeMonitorInstanceStatus::configured(instance_alias, policy, state)
-            .map_err(|_| invalid_monitor_record("configure_monitor_policy"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::ConfigureMonitorPolicy))?;
         self.update(
             RuntimeMonitorChangeKind::Configure,
             status,
@@ -215,7 +224,7 @@ impl MonitorRegistry {
     pub(crate) fn prepare_clear(&self, instance_alias: &str) -> RuntimeHostResult<MonitorUpdate> {
         self.require_allowed(instance_alias)?;
         let status = RuntimeMonitorInstanceStatus::unconfigured(instance_alias)
-            .map_err(|_| invalid_monitor_record("clear_monitor_policy"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::ClearMonitorPolicy))?;
         self.update(
             RuntimeMonitorChangeKind::Clear,
             status,
@@ -235,7 +244,7 @@ impl MonitorRegistry {
             .map(|alias| self.instance_status(alias))
             .collect::<RuntimeHostResult<Vec<_>>>()?;
         RuntimeMonitorRegistryStatus::new(owner_epoch, instances)
-            .map_err(|_| invalid_monitor_record("read_monitor_status"))
+            .map_err(|_| invalid_monitor_record(HostLocation::ReadMonitorStatus))
     }
 
     pub(crate) fn due(
@@ -245,8 +254,8 @@ impl MonitorRegistry {
     ) -> RuntimeHostResult<Vec<DueMonitorProbe>> {
         if now_unix_ms == 0 || maximum == 0 {
             return Err(monitor_error(
-                "monitor_due_query_invalid",
-                "read_due_monitors",
+                HostCode::MonitorDueQueryInvalid,
+                HostLocation::ReadDueMonitors,
             ));
         }
         self.monitors
@@ -263,11 +272,11 @@ impl MonitorRegistry {
                     policy: status
                         .policy()
                         .cloned()
-                        .ok_or_else(|| invalid_monitor_record("read_due_monitors"))?,
+                        .ok_or_else(|| invalid_monitor_record(HostLocation::ReadDueMonitors))?,
                     state: status
                         .state()
                         .cloned()
-                        .ok_or_else(|| invalid_monitor_record("read_due_monitors"))?,
+                        .ok_or_else(|| invalid_monitor_record(HostLocation::ReadDueMonitors))?,
                     configuration_version: self.configuration_version(status.instance_alias()),
                 })
             })
@@ -289,7 +298,12 @@ impl MonitorRegistry {
                 completed_at_unix_ms,
                 decision,
             )
-            .map_err(|_| monitor_error("monitor_state_invalid", "complete_monitor_probe"))?;
+            .map_err(|_| {
+                monitor_error(
+                    HostCode::MonitorStateInvalid,
+                    HostLocation::CompleteMonitorProbe,
+                )
+            })?;
         self.finish_probe(probe, state)
     }
 
@@ -308,7 +322,12 @@ impl MonitorRegistry {
                 completed_at_unix_ms,
                 error,
             )
-            .map_err(|_| monitor_error("monitor_state_invalid", "fail_monitor_probe"))?;
+            .map_err(|_| {
+                monitor_error(
+                    HostCode::MonitorStateInvalid,
+                    HostLocation::FailMonitorProbe,
+                )
+            })?;
         self.finish_probe(probe, state)
     }
 
@@ -328,7 +347,7 @@ impl MonitorRegistry {
                 probe.policy.clone(),
                 state.clone(),
             )
-            .map_err(|_| invalid_monitor_record("finish_monitor_probe"))?
+            .map_err(|_| invalid_monitor_record(HostLocation::FinishMonitorProbe))?
         } else {
             current
         };
@@ -352,7 +371,12 @@ impl MonitorRegistry {
         let revision = self
             .revision
             .checked_add(u64::from(applied))
-            .ok_or_else(|| monitor_error("monitor_revision_overflow", "prepare_monitor_update"))?;
+            .ok_or_else(|| {
+                monitor_error(
+                    HostCode::MonitorRevisionOverflow,
+                    HostLocation::PrepareMonitorUpdate,
+                )
+            })?;
         let configuration_version = if applied && kind != RuntimeMonitorChangeKind::Probe {
             revision
         } else {
@@ -372,7 +396,7 @@ impl MonitorRegistry {
             }),
         };
         fact.validate()
-            .map_err(|_| invalid_monitor_record("prepare_monitor_update"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::PrepareMonitorUpdate))?;
         Ok(MonitorUpdate {
             changed: applied,
             fact,
@@ -392,16 +416,16 @@ impl MonitorRegistry {
             || event.origin().actor() != EventActor::Runtime
             || event.sequence() <= self.last_sequence
         {
-            return Err(invalid_monitor_record("replay_monitor_event"));
+            return Err(invalid_monitor_record(HostLocation::ReplayMonitorEvent));
         }
         fact.validate()
-            .map_err(|_| invalid_monitor_record("replay_monitor_event"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::ReplayMonitorEvent))?;
         match fact {
             RuntimeStateFact::MonitorImported { import, .. } => {
                 if self.imported.is_some() || self.revision != 0 {
                     return Err(monitor_error(
-                        "monitor_import_conflict",
-                        "replay_monitor_event",
+                        HostCode::MonitorImportConflict,
+                        HostLocation::ReplayMonitorEvent,
                     ));
                 }
                 for status in &import.instances {
@@ -416,7 +440,7 @@ impl MonitorRegistry {
             }
             RuntimeStateFact::MonitorChanged { change, .. } => {
                 if self.imported.is_none() || self.revision != change.previous_revision {
-                    return Err(invalid_monitor_record("replay_monitor_revision"));
+                    return Err(invalid_monitor_record(HostLocation::ReplayMonitorRevision));
                 }
                 let alias = change.status.instance_alias();
                 self.require_allowed(alias)?;
@@ -424,10 +448,14 @@ impl MonitorRegistry {
                 if (!change.applied || change.kind == RuntimeMonitorChangeKind::Probe)
                     && current_version != change.configuration_version
                 {
-                    return Err(invalid_monitor_record("replay_monitor_configuration"));
+                    return Err(invalid_monitor_record(
+                        HostLocation::ReplayMonitorConfiguration,
+                    ));
                 }
                 if !change.applied && self.instance_status(alias)? != change.status {
-                    return Err(invalid_monitor_record("replay_monitor_unchanged_state"));
+                    return Err(invalid_monitor_record(
+                        HostLocation::ReplayMonitorUnchangedState,
+                    ));
                 }
                 if change.applied {
                     if change.status.policy().is_some() {
@@ -457,14 +485,14 @@ impl MonitorRegistry {
             .get(alias)
             .cloned()
             .map_or_else(|| RuntimeMonitorInstanceStatus::unconfigured(alias), Ok)
-            .map_err(|_| invalid_monitor_record("read_monitor_status"))
+            .map_err(|_| invalid_monitor_record(HostLocation::ReadMonitorStatus))
     }
 
     fn require_allowed(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         if !self.allowed_aliases.contains(instance_alias) {
             return Err(monitor_error(
-                "monitor_instance_unknown",
-                "validate_monitor_instance",
+                HostCode::MonitorInstanceUnknown,
+                HostLocation::ValidateMonitorInstance,
             ));
         }
         Ok(())
@@ -486,29 +514,39 @@ fn read_legacy_snapshot(
         }
         Err(_) => {
             return Err(monitor_error(
-                "monitor_file_open_failed",
-                "read_monitor_registry",
+                HostCode::MonitorFileOpenFailed,
+                HostLocation::ReadMonitorRegistry,
             ));
         }
     };
     let length = file
         .metadata()
-        .map_err(|_| monitor_error("monitor_metadata_failed", "read_monitor_registry"))?
+        .map_err(|_| {
+            monitor_error(
+                HostCode::MonitorMetadataFailed,
+                HostLocation::ReadMonitorRegistry,
+            )
+        })?
         .len();
     if length > MAX_MONITOR_IMPORT_BYTES {
         return Err(monitor_error(
-            "monitor_journal_too_large",
-            "read_monitor_registry",
+            HostCode::MonitorJournalTooLarge,
+            HostLocation::ReadMonitorRegistry,
         ));
     }
     let mut content = Vec::new();
     file.take(MAX_MONITOR_IMPORT_BYTES + 1)
         .read_to_end(&mut content)
-        .map_err(|_| monitor_error("monitor_file_read_failed", "read_monitor_registry"))?;
+        .map_err(|_| {
+            monitor_error(
+                HostCode::MonitorFileReadFailed,
+                HostLocation::ReadMonitorRegistry,
+            )
+        })?;
     if content.len() as u64 != length {
         return Err(monitor_error(
-            "monitor_source_changed",
-            "read_monitor_registry",
+            HostCode::MonitorSourceChanged,
+            HostLocation::ReadMonitorRegistry,
         ));
     }
     let source = Some(RuntimeMonitorJournalSource {
@@ -523,23 +561,25 @@ fn read_legacy_snapshot(
         });
     }
     if content.last() != Some(&b'\n') {
-        return Err(invalid_monitor_record("read_monitor_registry"));
+        return Err(invalid_monitor_record(HostLocation::ReadMonitorRegistry));
     }
     let content = std::str::from_utf8(&content)
-        .map_err(|_| invalid_monitor_record("read_monitor_registry"))?;
+        .map_err(|_| invalid_monitor_record(HostLocation::ReadMonitorRegistry))?;
     let mut previous_revision = 0_u64;
     let mut last = None;
     for line in content.lines().filter(|line| !line.trim().is_empty()) {
         let record = serde_json::from_str::<MonitorRecord>(line)
-            .map_err(|_| invalid_monitor_record("read_monitor_registry"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::ReadMonitorRegistry))?;
         validate_record(&record, allowed_aliases)?;
         if previous_revision.checked_add(1) != Some(record.revision) {
-            return Err(invalid_monitor_record("validate_monitor_registry"));
+            return Err(invalid_monitor_record(
+                HostLocation::ValidateMonitorRegistry,
+            ));
         }
         previous_revision = record.revision;
         last = Some(record);
     }
-    let record = last.ok_or_else(|| invalid_monitor_record("read_monitor_registry"))?;
+    let record = last.ok_or_else(|| invalid_monitor_record(HostLocation::ReadMonitorRegistry))?;
     Ok(RuntimeMonitorImport {
         source,
         revision: record.revision,
@@ -552,41 +592,45 @@ fn validate_record(
     allowed_aliases: &BTreeSet<String>,
 ) -> RuntimeHostResult<()> {
     if record.schema_version != MONITOR_SCHEMA_VERSION || record.revision == 0 {
-        return Err(invalid_monitor_record("validate_monitor_registry"));
+        return Err(invalid_monitor_record(
+            HostLocation::ValidateMonitorRegistry,
+        ));
     }
     let mut previous_alias = None;
     let mut aliases = BTreeSet::new();
     for status in &record.monitors {
         status
             .validate()
-            .map_err(|_| invalid_monitor_record("validate_monitor_registry"))?;
+            .map_err(|_| invalid_monitor_record(HostLocation::ValidateMonitorRegistry))?;
         let alias = status.instance_alias();
         if status.policy().is_none()
             || !allowed_aliases.contains(alias)
             || !aliases.insert(alias)
             || previous_alias.is_some_and(|previous| previous >= alias)
         {
-            return Err(invalid_monitor_record("validate_monitor_registry"));
+            return Err(invalid_monitor_record(
+                HostLocation::ValidateMonitorRegistry,
+            ));
         }
         previous_alias = Some(alias);
     }
     Ok(())
 }
 
-fn monitor_error(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn monitor_error(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }
 
-fn monitor_ledger_error(operation: &'static str) -> RuntimeHostError {
+fn monitor_ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "monitor_ledger_failure",
+        HostCode::MonitorLedgerFailure,
         operation,
         RuntimeErrorCode::LedgerFailure,
     )
 }
 
-fn invalid_monitor_record(operation: &'static str) -> RuntimeHostError {
-    monitor_error("monitor_record_invalid", operation)
+fn invalid_monitor_record(operation: impl Into<Location>) -> RuntimeHostError {
+    monitor_error(HostCode::MonitorRecordInvalid, operation)
 }
 
 #[cfg(test)]

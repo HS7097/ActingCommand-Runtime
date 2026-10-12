@@ -2,20 +2,23 @@
 
 //! Zero-device adapter for evaluating contained tasks against recorded frames.
 
+use crate::codes::ExecutionKernelCode;
 use crate::{
-    ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
+    ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
     PreparedContainedTask, SelectionState, SelectionStateRequest,
 };
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{InputAction, InstanceFactContext, InstanceFactSnapshot};
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::Sha256Hash;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 
-const FIXTURE_EXHAUSTED_CODE: &str = "offline_fixture_exhausted";
+const FIXTURE_EXHAUSTED_CODE: Code = ExecutionKernelCode::OfflineFixtureExhausted.code();
 /// The instance an offline select step's empty fact snapshot names.
 const OFFLINE_INSTANCE: &str = "offline.simulation";
 /// The empty fact snapshot of an offline select step. An offline run has no ledger; the
@@ -46,9 +49,18 @@ pub enum OfflineDecision {
         final_page: Option<String>,
     },
     Refused {
-        code: String,
+        #[serde(serialize_with = "code_spelling")]
+        code: ContainedTaskCode,
         detail: Option<String>,
     },
+}
+
+/// A refusal code in serialized output as its spelling.
+fn code_spelling<S: Serializer>(
+    code: &ContainedTaskCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(code.as_str())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -80,27 +92,27 @@ pub struct OfflinePostAdmissionOcrStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineSimulationError {
-    code: String,
+    code: Code,
     detail: Option<String>,
 }
 
 impl OfflineSimulationError {
-    fn new(code: impl Into<String>) -> Self {
+    fn new(code: impl Into<Code>) -> Self {
         Self {
             code: code.into(),
             detail: None,
         }
     }
 
-    fn with_detail(code: impl Into<String>, detail: impl Into<String>) -> Self {
+    fn with_detail(code: impl Into<Code>, detail: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             detail: Some(detail.into()),
         }
     }
 
-    pub fn code(&self) -> &str {
-        &self.code
+    pub const fn code(&self) -> Code {
+        self.code
     }
 
     pub fn detail(&self) -> Option<&str> {
@@ -150,7 +162,7 @@ fn simulate(
     let mut runtime = OfflineRuntime::new(frames, now_unix_ms, task.has_select_steps());
     let decision = if runtime.frames.is_empty() {
         OfflineDecision::Refused {
-            code: "offline_fixture_missing".to_string(),
+            code: SharedCode::OfflineFixtureMissing.code().into(),
             detail: None,
         }
     } else {
@@ -167,7 +179,7 @@ fn simulate(
             },
             Ok(_) => {
                 return Err(OfflineSimulationError::new(
-                    "offline_simulation_executed_step_invariant",
+                    ExecutionKernelCode::OfflineSimulationExecutedStepInvariant.code(),
                 ));
             }
             Err(
@@ -182,13 +194,15 @@ fn simulate(
                     guard: planned.guard,
                 })
                 .ok_or_else(|| {
-                    OfflineSimulationError::new("offline_simulation_effect_intent_missing")
+                    OfflineSimulationError::new(
+                        ExecutionKernelCode::OfflineSimulationEffectIntentMissing.code(),
+                    )
                 })?,
             Err(
                 ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)
                 | ContainedTaskRunError::NonfatalOperation(OfflineBoundary::FixtureExhausted),
             ) => OfflineDecision::Refused {
-                code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                code: FIXTURE_EXHAUSTED_CODE.into(),
                 detail: None,
             },
             Err(
@@ -198,7 +212,7 @@ fn simulate(
                 return Err(OfflineSimulationError::new(code));
             }
             Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
-                code: error.code().to_string(),
+                code: error.code(),
                 detail: error.detail().map(str::to_string),
             },
         }
@@ -271,7 +285,7 @@ fn fingerprint_decision(
     })
     .map_err(|error| {
         OfflineSimulationError::with_detail(
-            "offline_decision_fingerprint_failed",
+            ExecutionKernelCode::OfflineDecisionFingerprintFailed.code(),
             error.to_string(),
         )
     })?;
@@ -323,7 +337,7 @@ impl OfflineRuntime {
 enum OfflineBoundary {
     EffectIntercepted,
     FixtureExhausted,
-    Invariant(&'static str),
+    Invariant(Code),
 }
 
 impl ContainedTaskRuntime for OfflineRuntime {
@@ -335,10 +349,14 @@ impl ContainedTaskRuntime for OfflineRuntime {
             self.last_frame
                 .as_ref()
                 .ok_or(OfflineBoundary::Invariant(
-                    "offline_simulation_confirmation_frame_missing",
+                    ExecutionKernelCode::OfflineSimulationConfirmationFrameMissing.code(),
                 ))?
                 .try_clone()
-                .map_err(|_| OfflineBoundary::Invariant("offline_simulation_frame_copy_failed"))?
+                .map_err(|_| {
+                    OfflineBoundary::Invariant(
+                        ExecutionKernelCode::OfflineSimulationFrameCopyFailed.code(),
+                    )
+                })?
         } else {
             let frame = self
                 .frames
@@ -346,7 +364,9 @@ impl ContainedTaskRuntime for OfflineRuntime {
                 .ok_or(OfflineBoundary::FixtureExhausted)?;
             if self.retains_last_frame {
                 self.last_frame = Some(frame.try_clone().map_err(|_| {
-                    OfflineBoundary::Invariant("offline_simulation_frame_copy_failed")
+                    OfflineBoundary::Invariant(
+                        ExecutionKernelCode::OfflineSimulationFrameCopyFailed.code(),
+                    )
                 })?);
             }
             frame
@@ -386,12 +406,12 @@ impl ContainedTaskRuntime for OfflineRuntime {
     ) -> Result<(), Self::Error> {
         let Some(planned) = &self.planned else {
             return Err(OfflineBoundary::Invariant(
-                "offline_simulation_effect_intent_missing",
+                ExecutionKernelCode::OfflineSimulationEffectIntentMissing.code(),
             ));
         };
         if planned.action != action {
             return Err(OfflineBoundary::Invariant(
-                "offline_simulation_action_mismatch",
+                ExecutionKernelCode::OfflineSimulationActionMismatch.code(),
             ));
         }
         Err(OfflineBoundary::EffectIntercepted)
@@ -419,7 +439,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
             } => {
                 if self.planned.is_some() {
                     return Err(OfflineBoundary::Invariant(
-                        "offline_simulation_multiple_effects",
+                        ExecutionKernelCode::OfflineSimulationMultipleEffects.code(),
                     ));
                 }
                 self.planned = Some(PlannedEffect {
@@ -603,7 +623,7 @@ mod tests {
         assert_same_refusal(
             &exhaustion,
             vec![solid_frame([0, 0, 0], [0, 0, 0])],
-            FIXTURE_EXHAUSTED_CODE,
+            FIXTURE_EXHAUSTED_CODE.as_str(),
         );
     }
 
@@ -689,7 +709,7 @@ mod tests {
     fn assert_refusal(result: &OfflineSimulationResult, expected: &str) {
         assert!(matches!(
             &result.decision,
-            OfflineDecision::Refused { code, .. } if code == expected
+            OfflineDecision::Refused { code, .. } if code.as_str() == expected
         ));
         assert_eq!(result.decision_fingerprint.len(), 64);
         assert!(
@@ -713,7 +733,7 @@ mod tests {
         assert_refusal(&offline, expected);
         assert!(matches!(
             &effecting.decision,
-            OfflineDecision::Refused { code, .. } if code == expected
+            OfflineDecision::Refused { code, .. } if code.as_str() == expected
         ));
         assert_eq!(effecting.decision, offline.decision);
         assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
@@ -727,7 +747,7 @@ mod tests {
             ..PackageOptions::default()
         });
         assert_eq!(
-            prepare_error(&missing_guard).code(),
+            prepare_error(&missing_guard).code().as_str(),
             "contained_task_guard_missing"
         );
 
@@ -736,7 +756,7 @@ mod tests {
             ..PackageOptions::default()
         });
         assert_eq!(
-            prepare_error(&missing_recovery).code(),
+            prepare_error(&missing_recovery).code().as_str(),
             "contained_task_recovery_missing"
         );
     }
@@ -1040,14 +1060,14 @@ mod tests {
                     outcome.executed_steps
                 ),
                 Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
-                    code: error.code().to_string(),
+                    code: error.code(),
                     detail: error.detail().map(str::to_string),
                 },
                 Err(
                     ContainedTaskRunError::Boundary(EffectingBoundary::FixtureExhausted)
                     | ContainedTaskRunError::NonfatalOperation(EffectingBoundary::FixtureExhausted),
                 ) => OfflineDecision::Refused {
-                    code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                    code: FIXTURE_EXHAUSTED_CODE.into(),
                     detail: None,
                 },
                 Err(

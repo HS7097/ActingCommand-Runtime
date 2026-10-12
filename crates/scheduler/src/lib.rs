@@ -4,8 +4,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod codes;
 pub mod facts;
 
+pub use codes::SchedulerCode;
+
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ContainedTaskRequest, FencedWrite, FencedWritePurpose, HolderId, IdentifierIssuer, InstanceId,
     LeaseId, LeasePriority, LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch,
@@ -368,33 +373,33 @@ pub enum SchedulerError {
 }
 
 impl SchedulerError {
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         match self {
-            Self::InvalidConfig => "invalid_scheduler_config",
-            Self::InvalidConnection => "invalid_connection_id",
-            Self::IdentifierIssuance => "identifier_issuance_failed",
-            Self::ExpiryOverflow => "lease_expiry_overflow",
-            Self::Busy { .. } | Self::QueueAhead { .. } => "lease_busy",
-            Self::Cooldown { .. } => "lease_cooldown",
-            Self::StaleOwnerEpoch => "stale_owner_epoch",
-            Self::LeaseMismatch => "lease_mismatch",
-            Self::InstanceMismatch => "instance_mismatch",
-            Self::HolderMismatch => "holder_mismatch",
-            Self::ConnectionMismatch => "connection_mismatch",
-            Self::LeaseExpired => "lease_expired",
-            Self::LeaseNotExpired => "lease_not_expired",
-            Self::LeaseMissing => "lease_missing",
-            Self::QueueFull => "lease_queue_full",
-            Self::QueueExpired => "lease_queue_expired",
-            Self::QueueMissing => "lease_queue_missing",
-            Self::QueueConnectionMismatch => "lease_queue_connection_mismatch",
-            Self::QueueRequestMismatch => "lease_queue_request_mismatch",
-            Self::QueueTimeoutInvalid => "lease_queue_timeout_invalid",
-            Self::QueueSequenceOverflow => "lease_queue_sequence_overflow",
-            Self::StepSequenceOverflow => "lease_step_sequence_overflow",
-            Self::TransferNotSafe => "lease_transfer_not_safe",
-            Self::DestructiveStateMismatch => "destructive_state_mismatch",
-            Self::ResourceCloseOnly => "resource_close_only",
+            Self::InvalidConfig => SchedulerCode::InvalidSchedulerConfig.code(),
+            Self::InvalidConnection => SchedulerCode::InvalidConnectionId.code(),
+            Self::IdentifierIssuance => SchedulerCode::IdentifierIssuanceFailed.code(),
+            Self::ExpiryOverflow => SchedulerCode::LeaseExpiryOverflow.code(),
+            Self::Busy { .. } | Self::QueueAhead { .. } => RuntimeErrorCode::LeaseBusy.code(),
+            Self::Cooldown { .. } => RuntimeErrorCode::LeaseCooldown.code(),
+            Self::StaleOwnerEpoch => RuntimeErrorCode::StaleOwnerEpoch.code(),
+            Self::LeaseMismatch => RuntimeErrorCode::LeaseMismatch.code(),
+            Self::InstanceMismatch => RuntimeErrorCode::InstanceMismatch.code(),
+            Self::HolderMismatch => RuntimeErrorCode::HolderMismatch.code(),
+            Self::ConnectionMismatch => RuntimeErrorCode::ConnectionMismatch.code(),
+            Self::LeaseExpired => RuntimeErrorCode::LeaseExpired.code(),
+            Self::LeaseNotExpired => SchedulerCode::LeaseNotExpired.code(),
+            Self::LeaseMissing => RuntimeErrorCode::LeaseMissing.code(),
+            Self::QueueFull => SchedulerCode::LeaseQueueFull.code(),
+            Self::QueueExpired => SharedCode::LeaseQueueExpired.code(),
+            Self::QueueMissing => SchedulerCode::LeaseQueueMissing.code(),
+            Self::QueueConnectionMismatch => SharedCode::LeaseQueueConnectionMismatch.code(),
+            Self::QueueRequestMismatch => SchedulerCode::LeaseQueueRequestMismatch.code(),
+            Self::QueueTimeoutInvalid => SchedulerCode::LeaseQueueTimeoutInvalid.code(),
+            Self::QueueSequenceOverflow => SchedulerCode::LeaseQueueSequenceOverflow.code(),
+            Self::StepSequenceOverflow => SchedulerCode::LeaseStepSequenceOverflow.code(),
+            Self::TransferNotSafe => SchedulerCode::LeaseTransferNotSafe.code(),
+            Self::DestructiveStateMismatch => SchedulerCode::DestructiveStateMismatch.code(),
+            Self::ResourceCloseOnly => SchedulerCode::ResourceCloseOnly.code(),
         }
     }
 
@@ -972,11 +977,15 @@ impl SeedScheduler {
             holder_id,
             connection_id,
             ClaimKind::ResourceClose,
+            ClaimGate::Open,
             now_monotonic_ms,
         )
     }
 
     /// [`Self::prepare_resource_close`] for a dedicated lease of `kind` (Workflow #369 Q-2).
+    /// Workflow #369 §5.1 (review M-2): only an entry that `gate` lets through refuses it
+    /// (`TransferNotSafe`); a routine entry the pause holds back waits for the device.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_dedicated_lease(
         &mut self,
         request_id: RequestId,
@@ -984,13 +993,10 @@ impl SeedScheduler {
         holder_id: HolderId,
         connection_id: ConnectionId,
         kind: ClaimKind,
+        gate: ClaimGate,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
-        if self
-            .instances
-            .get(&instance_id)
-            .is_some_and(|state| !state.queue.is_empty())
-        {
+        if self.refusing_count(instance_id, gate, now_monotonic_ms) > 0 {
             return Err(SchedulerError::TransferNotSafe);
         }
         let lease_ttl_ms = self.config.lease_ttl_ms;
@@ -1394,6 +1400,59 @@ impl SeedScheduler {
                 .filter(|entry| entry.eligible(gate, now_monotonic_ms))
                 .count()
         })
+    }
+
+    /// Workflow #369 §5.1 (review M-2): the entries on `instance_id` that refuse a pause release
+    /// or a dedicated lease: those `gate` lets through, except the holding ladder's own
+    /// continuation (its ladder is the holder that the release already waits for).
+    pub fn refusing_count(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> usize {
+        self.instances.get(&instance_id).map_or(0, |state| {
+            state
+                .queue
+                .iter()
+                .filter(|entry| {
+                    entry.eligible(gate, now_monotonic_ms) && !entry.kind.holder_owned()
+                })
+                .count()
+        })
+    }
+
+    /// Workflow #369 §3.5: how many entries wait on every instance together (install idle).
+    pub fn queued_total(&self) -> usize {
+        self.instances.values().map(|state| state.queue.len()).sum()
+    }
+
+    /// Workflow #369 §5.3: whether a ladder holds `instance_id` or waits for it: the holder is
+    /// a ladder (or its continuation's grant), or a ladder claim or continuation is queued.
+    pub fn ladder_active(&self, instance_id: InstanceId) -> bool {
+        let is_ladder =
+            |kind: ClaimKind| matches!(kind, ClaimKind::Ladder | ClaimKind::LadderContinuation);
+        self.instances.get(&instance_id).is_some_and(|state| {
+            state
+                .lease
+                .as_ref()
+                .is_some_and(|lease| is_ladder(lease.kind))
+                || state.queue.iter().any(|entry| is_ladder(entry.kind))
+        })
+    }
+
+    /// Workflow #369 H-6: the queued entries of `kind` on `instance_id`, in grant order.
+    pub fn queued_of_kind(&self, instance_id: InstanceId, kind: ClaimKind) -> Vec<RequestId> {
+        self.instances
+            .get(&instance_id)
+            .map_or_else(Vec::new, |state| {
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| entry.kind == kind)
+                    .map(|entry| entry.request_id)
+                    .collect()
+            })
     }
 
     pub fn poll_queued(
@@ -1878,7 +1937,12 @@ impl SeedScheduler {
             priority: queued.priority,
             destructive_step: None,
             preempt_requested: false,
-            kind: queued.kind,
+            // Workflow #369 H-3: a granted continuation is its ladder's hold again.
+            kind: if queued.kind == ClaimKind::LadderContinuation {
+                ClaimKind::Ladder
+            } else {
+                queued.kind
+            },
         });
         refresh_preempt_requested(state);
         self.lease_locations.remove(&prepared.from.token.lease_id());

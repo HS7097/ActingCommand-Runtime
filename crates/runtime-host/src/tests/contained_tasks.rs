@@ -626,6 +626,16 @@ fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run(
         payload.effect_disposition(),
         Some(EffectDisposition::Performed)
     );
+    // Whatever its links, the claim's lease is released exactly once.
+    let lease_releases = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::LeaseReleased),
+            lease_id: Some(token.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(lease_releases.len(), 1, "{lease_releases:#?}");
     // The claim's own grant is under the claim's request links, not the run's.
     let claim_grants = projected_events(
         &mut client,

@@ -2,6 +2,7 @@
 
 //! Immutable package identity, independent of the local material locator.
 
+use crate::codes::RuntimeContractCode;
 use crate::{RuntimeContractError, RuntimeContractResult};
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +27,9 @@ impl GitOid {
             GitObjectAlgorithm::Sha256 => 64,
         };
         if self.hex.len() != length || !lower_hex(&self.hex) {
-            return Err(RuntimeContractError::new("invalid_git_object_id"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidGitObjectId,
+            ));
         }
         Ok(())
     }
@@ -52,13 +55,12 @@ impl GitSourceTree {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         self.commit.validate()?;
         self.tree.validate()?;
-        let repository = self
-            .repository
-            .strip_prefix("https://")
-            .ok_or_else(|| RuntimeContractError::new("invalid_package_repository"))?;
-        let (host, path) = repository
-            .split_once('/')
-            .ok_or_else(|| RuntimeContractError::new("invalid_package_repository"))?;
+        let repository = self.repository.strip_prefix("https://").ok_or_else(|| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidPackageRepository)
+        })?;
+        let (host, path) = repository.split_once('/').ok_or_else(|| {
+            RuntimeContractError::new(RuntimeContractCode::InvalidPackageRepository)
+        })?;
         if self.repository.len() > 512
             || host.is_empty()
             || host != host.to_ascii_lowercase()
@@ -74,7 +76,9 @@ impl GitSourceTree {
             || self.commit.algorithm != self.tree.algorithm
             || !safe_source_path(&self.bundle_path)
         {
-            return Err(RuntimeContractError::new("invalid_source_tree_reference"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidSourceTreeReference,
+            ));
         }
         Ok(())
     }
@@ -102,7 +106,7 @@ impl ContentDirectory {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.sha256.len() != 64 || !lower_hex(&self.sha256) {
             return Err(RuntimeContractError::new(
-                "invalid_content_directory_reference",
+                RuntimeContractCode::InvalidContentDirectoryReference,
             ));
         }
         Ok(())
@@ -144,7 +148,9 @@ impl PackageRef {
         match self {
             Self::LegacyZipSha256(value) => {
                 if value.len() != 64 || !lower_hex(value) {
-                    return Err(RuntimeContractError::new("invalid_package_sha256"));
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPackageSha256,
+                    ));
                 }
                 Ok(())
             }
@@ -169,8 +175,9 @@ impl PackageRef {
     pub fn parse_argument(value: &str) -> RuntimeContractResult<Self> {
         let reference = if value.trim_start().starts_with('{') {
             // A JSON object can only decode as one of the versioned object references.
-            serde_json::from_str(value)
-                .map_err(|_| RuntimeContractError::new("invalid_source_tree_reference"))?
+            serde_json::from_str(value).map_err(|_| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidSourceTreeReference)
+            })?
         } else {
             Self::LegacyZipSha256(value.strip_prefix("sha256:").unwrap_or(value).to_owned())
         };
@@ -333,7 +340,9 @@ impl BundleSource {
             .split_once('/')
             .is_some_and(|(owner, name)| segment(owner) && segment(name));
         if !repository || !matches!(self.commit.len(), 40 | 64) || !lower_hex(&self.commit) {
-            return Err(RuntimeContractError::new("invalid_bundle_source"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundleSource,
+            ));
         }
         Ok(())
     }
@@ -360,13 +369,17 @@ impl BundlePackV2 {
             || !bundle_text(&self.entry_task_id)
             || self.file_count == 0
         {
-            return Err(RuntimeContractError::new("invalid_bundle_pack"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundlePack,
+            ));
         }
         if self.digest.len() != 64
             || !lower_hex(&self.digest)
             || self.path != format!("packs/{}", self.digest)
         {
-            return Err(RuntimeContractError::new("invalid_bundle_pack_path"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundlePackPath,
+            ));
         }
         Ok(())
     }
@@ -390,7 +403,9 @@ impl BundleIndexV2 {
     /// At least one pack; package ids and digests unique; every `path` is `packs/<digest>`.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if !bundle_identifier(&self.game) || self.packs.is_empty() {
-            return Err(RuntimeContractError::new("invalid_bundle_index"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundleIndex,
+            ));
         }
         if let Some(source) = &self.source {
             source.validate()?;
@@ -402,7 +417,9 @@ impl BundleIndexV2 {
             if !package_ids.insert(pack.package_id.as_str())
                 || !digests.insert(pack.digest.as_str())
             {
-                return Err(RuntimeContractError::new("duplicate_bundle_pack"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::DuplicateBundlePack,
+                ));
             }
         }
         Ok(())
@@ -447,12 +464,14 @@ pub fn validate_bundle_maintenance_declarations(
                 .len()
                 != entry.uses.len()
         {
-            return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundleMaintenance,
+            ));
         }
         for purpose in &entry.uses {
             if *purpose != MaintenanceUse::Prerequisite && !roles.insert((&entry.server, purpose)) {
                 return Err(RuntimeContractError::new(
-                    "duplicate_bundle_maintenance_role",
+                    RuntimeContractCode::DuplicateBundleMaintenanceRole,
                 ));
             }
         }
@@ -489,7 +508,9 @@ impl BundleIndexV3 {
         }
         .validate()?;
         if self.maintenance.len() > self.packs.len() {
-            return Err(RuntimeContractError::new("invalid_bundle_maintenance"));
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundleMaintenance,
+            ));
         }
         validate_bundle_maintenance_declarations(&self.maintenance)?;
         for entry in &self.maintenance {
@@ -498,7 +519,9 @@ impl BundleIndexV3 {
                 .iter()
                 .any(|pack| pack.package_id == entry.package_id && pack.server == entry.server)
             {
-                return Err(RuntimeContractError::new("bundle_maintenance_pack_missing"));
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::BundleMaintenancePackMissing,
+                ));
             }
         }
         Ok(())

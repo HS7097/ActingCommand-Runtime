@@ -16,6 +16,8 @@
 //! binaries against the pin this build carries before the ledger opens and refuses with
 //! `adb_install_missing` or `adb_install_mismatch`; there is no fallback to another adb.
 
+use crate::codes::ActingdCode;
+use actingcommand_contract::outcome::Code;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -224,9 +226,9 @@ pub(crate) fn require(
     }
     Err(AdbInstallRejection {
         code: if missing {
-            "adb_install_missing"
+            ActingdCode::AdbInstallMissing.code()
         } else {
-            "adb_install_mismatch"
+            ActingdCode::AdbInstallMismatch.code()
         },
         adb: installed.adb.clone(),
         users: requirement.users.clone(),
@@ -300,14 +302,14 @@ impl fmt::Display for Finding {
 /// A refused install root adb: the code, the adb, the instances that use it and every file
 /// that is not as pinned.
 pub(crate) struct AdbInstallRejection {
-    code: &'static str,
+    code: Code,
     adb: PathBuf,
     users: Vec<String>,
     findings: Vec<Finding>,
 }
 
 impl AdbInstallRejection {
-    pub(crate) const fn code(&self) -> &'static str {
+    pub(crate) const fn code(&self) -> Code {
         self.code
     }
 

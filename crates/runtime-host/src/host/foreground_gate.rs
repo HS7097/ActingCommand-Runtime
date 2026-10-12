@@ -22,10 +22,12 @@
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{APPLICATION_FOREGROUND_FACT_KEY, FactValue};
 use actingcommand_device::DeviceResourceQuiescence;
 
-const GATE_OPERATION: &str = "require_foreground_application";
+const GATE_OPERATION: HostLocation = HostLocation::RequireForegroundApplication;
 
 impl HostShared {
     /// Refuses a pointer input whose foreground package is not the assigned application.
@@ -65,7 +67,7 @@ impl HostShared {
                 // dropped as for any ADB failure, then the host is poisoned instead of refusing.
                 if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
                     let mut fatal = RuntimeHostError::fatal(
-                        "application_foreground_unknown",
+                        HostCode::ApplicationForegroundUnknown,
                         GATE_OPERATION,
                         RuntimeErrorCode::RuntimeFatal,
                     )
@@ -75,7 +77,7 @@ impl HostShared {
                     return Err(RequestFailure::poison_without_terminal(fatal));
                 }
                 let error = gate_error(
-                    "application_foreground_unknown",
+                    HostCode::ApplicationForegroundUnknown,
                     instance_id,
                     format!("instance_alias={alias}; adb_failed={error}"),
                 );
@@ -84,7 +86,7 @@ impl HostShared {
         };
         let Some(foreground) = observation.foreground else {
             let error = gate_error(
-                "application_foreground_unknown",
+                HostCode::ApplicationForegroundUnknown,
                 instance_id,
                 format!(
                     "instance_alias={alias}; foreground=absent; assigned={}",
@@ -97,7 +99,7 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         if foreground != observation.assigned {
             let error = gate_error(
-                "application_not_foreground",
+                HostCode::ApplicationNotForeground,
                 instance_id,
                 format!(
                     "instance_alias={alias}; foreground={foreground}; assigned={}",
@@ -160,7 +162,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let scope = RuntimeFactScope::Instance { instance_id };
         let value = FactValue::String(foreground.to_owned());
-        let unchanged = lock(&self.runtime_facts, "read_application_foreground")?
+        let unchanged = lock(&self.runtime_facts, HostLocation::ReadApplicationForeground)?
             .get(&scope, APPLICATION_FOREGROUND_FACT_KEY)
             .is_some_and(|record| record.value == value);
         if unchanged {
@@ -176,7 +178,7 @@ impl HostShared {
             ttl_ms: None,
         }) {
             Ok(_) => Ok(()),
-            Err(error) if error.code() == "runtime_fact_stale" => Ok(()),
+            Err(error) if error.code() == HostCode::RuntimeFactStale.as_str() => Ok(()),
             Err(error) => Err(error),
         }
     }
@@ -196,7 +198,7 @@ impl HostShared {
                 RuntimeFactInvalidationReason::AdbUnreachable,
             ) {
                 Ok(_) => {}
-                Err(error) if error.code() == "runtime_fact_missing" => {}
+                Err(error) if error.code() == HostCode::RuntimeFactMissing.as_str() => {}
                 Err(error) => return Err(error),
             }
         }
@@ -204,7 +206,7 @@ impl HostShared {
     }
 }
 
-fn gate_error(code: &'static str, instance_id: InstanceId, detail: String) -> RuntimeHostError {
+fn gate_error(code: impl Into<Code>, instance_id: InstanceId, detail: String) -> RuntimeHostError {
     let mut error =
         RuntimeHostError::request(code, GATE_OPERATION, RuntimeErrorCode::InvalidRequest)
             .with_native_detail(detail);

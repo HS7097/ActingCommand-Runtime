@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ResourceToolingCode;
 use crate::maa_task_graph;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
 
 use actingcommand_pack_containment::source::{
@@ -512,9 +514,13 @@ fn capture_bundle_files(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceFile> {
                                 .map_err(|error| error.to_string())
                         }
                         Ok(_) if matches!(request, SourceRead::SelectionPolicy(_)) => {
-                            Err("selection_policy_limit_exceeded".to_string())
+                            Err(ResourceToolingCode::SelectionPolicyLimitExceeded
+                                .as_str()
+                                .to_string())
                         }
-                        Ok(_) => Err("ocr_fields_dictionary_limit_exceeded".to_string()),
+                        Ok(_) => Err(SharedCode::OcrFieldsDictionaryLimitExceeded
+                            .as_str()
+                            .to_string()),
                         Err(error) => Err(error.clone()),
                     }
                 }

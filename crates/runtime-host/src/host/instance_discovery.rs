@@ -11,12 +11,14 @@
 //! detail keeps the provider's device error.
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::{InstanceDiscoveryFailure, ProviderDiscoveredInstance};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     RuntimeDiscoveredInstance, RuntimeInstanceDiscovery, RuntimeObservedState,
 };
 
-const DISCOVERY_OPERATION: &str = "discover_instances";
+const DISCOVERY_OPERATION: ContractLocation = ContractLocation::DiscoverInstances;
 
 impl HostShared {
     pub(super) fn discover_instances(
@@ -35,7 +37,7 @@ impl HostShared {
             // The registry lock is taken only after the vendor tool has answered.
             let registry = lock(
                 &self.registered_instances,
-                "read_instance_discovery_registry",
+                HostLocation::ReadInstanceDiscoveryRegistry,
             )?;
             let mut instances = discovery
                 .instances
@@ -54,7 +56,7 @@ impl HostShared {
             instances.sort_by_key(|instance| instance.instance_index);
             if let Err(error) = RuntimeInstanceDiscovery::validate_instances(&instances) {
                 let error = RuntimeHostError::request(
-                    "instance_discovery_unavailable",
+                    SharedCode::InstanceDiscoveryUnavailable,
                     DISCOVERY_OPERATION,
                     RuntimeErrorCode::BackendOperationFailed,
                 )
@@ -77,12 +79,14 @@ impl HostShared {
         } = state
         else {
             return Err(RequestFailure::poison_without_terminal(ledger_error(
-                "instance_discovery_observation_kind",
+                HostLocation::InstanceDiscoveryObservationKind,
             )));
         };
         let discovery = RuntimeInstanceDiscovery::new(provider_version, source, instances)
             .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("instance_discovery_source"))
+                RequestFailure::poison_without_terminal(ledger_error(
+                    HostLocation::InstanceDiscoverySource,
+                ))
             })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -173,16 +177,16 @@ fn discovery_error(failure: &InstanceDiscoveryFailure) -> RuntimeHostError {
     let stage = diagnostic.map_or("instance_discovery.failed", |diagnostic| diagnostic.stage());
     let category = diagnostic.map_or("protocol", |diagnostic| diagnostic.category().as_str());
     let (code, runtime_code) = match (failure.code, stage) {
-        ("mumu_manager_version_unsupported", _) => (
-            "mumu_manager_version_unsupported",
+        (relayed, _) if relayed == HostCode::MumuManagerVersionUnsupported.as_str() => (
+            HostCode::MumuManagerVersionUnsupported.code(),
             RuntimeErrorCode::BackendOperationFailed,
         ),
         (_, "instance_discovery.unsupported") => (
-            "instance_discovery_unavailable",
+            SharedCode::InstanceDiscoveryUnavailable.code(),
             RuntimeErrorCode::InvalidRequest,
         ),
         _ => (
-            "instance_discovery_unavailable",
+            SharedCode::InstanceDiscoveryUnavailable.code(),
             RuntimeErrorCode::BackendOperationFailed,
         ),
     };
@@ -191,7 +195,7 @@ fn discovery_error(failure: &InstanceDiscoveryFailure) -> RuntimeHostError {
             category,
             stage,
             "execution_backend_provider",
-            DISCOVERY_OPERATION,
+            DISCOVERY_OPERATION.as_str(),
             format!("{code}: stage={stage}"),
             Sensitivity::Sensitive,
         ))

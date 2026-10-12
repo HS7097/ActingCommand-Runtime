@@ -6,6 +6,7 @@
 //! of another schema version is set aside and replaced by a fresh state (rulings #374 M7).
 
 use super::Failure;
+use crate::codes::ActingctlCode;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
@@ -95,7 +96,7 @@ pub(crate) fn load(directory: &Path, root: &str) -> Result<(WatchdogState, Loade
     let path = directory.join(STATE_FILE);
     let unreadable = |detail: String| {
         Failure::misconfigured(
-            "watchdog_state_unreadable",
+            ActingctlCode::WatchdogStateUnreadable,
             format!("{}: {detail}", path.display()),
         )
     };
@@ -135,7 +136,7 @@ pub(crate) fn set_aside(directory: &Path, now_unix_ms: u64) -> Result<PathBuf, F
     let to = directory.join(format!("{STATE_FILE}.other-schema-{now_unix_ms}"));
     fs::rename(&from, &to).map_err(|error| {
         Failure::misconfigured(
-            "watchdog_state_unwritable",
+            ActingctlCode::WatchdogStateUnwritable,
             format!("cannot move {} aside: {error}", from.display()),
         )
     })?;
@@ -149,12 +150,13 @@ pub(crate) fn save(directory: &Path, state: &WatchdogState) -> Result<(), Failur
     let temporary = directory.join(format!("{STATE_FILE}.tmp-{}", std::process::id()));
     let unwritable = |error: std::io::Error| {
         Failure::misconfigured(
-            "watchdog_state_unwritable",
+            ActingctlCode::WatchdogStateUnwritable,
             format!("{}: {error}", path.display()),
         )
     };
-    let mut bytes = serde_json::to_vec_pretty(state)
-        .map_err(|error| Failure::misconfigured("watchdog_state_unwritable", error.to_string()))?;
+    let mut bytes = serde_json::to_vec_pretty(state).map_err(|error| {
+        Failure::misconfigured(ActingctlCode::WatchdogStateUnwritable, error.to_string())
+    })?;
     bytes.push(b'\n');
     let mut file = fs::File::create(&temporary).map_err(unwritable)?;
     file.write_all(&bytes)
@@ -202,7 +204,7 @@ mod tests {
         // A corrupt document is a misconfiguration: the watchdog never guesses.
         fs::write(directory.path().join(STATE_FILE), b"{not json").expect("write state");
         let failure = load(directory.path(), "R").expect_err("corrupt state");
-        assert_eq!(failure.code, "watchdog_state_unreadable");
+        assert_eq!(failure.code.as_str(), "watchdog_state_unreadable");
 
         let mut state = WatchdogState::fresh("R");
         for at_unix_ms in 0..12 {

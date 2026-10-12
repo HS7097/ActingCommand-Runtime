@@ -2,6 +2,7 @@
 
 //! Shared runtime model types for Rust mainline contracts.
 
+use crate::outcome::{Outcome, OutcomeEnvelope};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -17,7 +18,9 @@ pub type ProfileId = String;
 pub type TaskId = String;
 pub type TaskRunId = String;
 pub type ResourceKey = String;
-pub type ContractResult<T> = Result<T, RuntimeError>;
+/// The result of the legacy engine and primitive traits: a failure is an [`Outcome`]
+/// (Workflow #378 A2a retired the prose `RuntimeError`, model-378 §8.1 L6).
+pub type ContractResult<T> = Result<T, Outcome>;
 
 pub const ENGINE_NATIVE: &str = "native";
 pub const ENGINE_DELEGATED: &str = "delegated";
@@ -50,19 +53,6 @@ pub struct Resolution {
     pub height: i32,
     pub scale: Option<f64>,
     pub dpi: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RuntimeError {
-    pub severity: Severity,
-    pub code: String,
-    pub message: String,
-    pub module: String,
-    pub original_error: Option<String>,
-    pub fallback_path: Option<String>,
-    pub user_visible_impact: Option<String>,
-    pub context: Metadata,
-    pub occurred_at: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -147,7 +137,7 @@ pub struct RuntimeStatus {
     pub state_dir: String,
     pub version: String,
     pub scheduler: SchedulerSummary,
-    pub last_error: Option<RuntimeError>,
+    pub last_error: Option<OutcomeEnvelope>,
     pub profiles: Vec<ProfileSummary>,
     pub capabilities: Vec<RuntimeCapability>,
 }

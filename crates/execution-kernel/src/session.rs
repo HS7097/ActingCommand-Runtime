@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::ExecutionKernelCode;
 use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
     ResolvedExecutionInstance,
 };
+use actingcommand_contract::codes::{DeviceSelfCheckFailure, SharedCode};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ApplicationLifecycleAction, CaptureGeometryObservation, CaptureGeometryUnknownReason,
     FencedWrite, FrameId, InputAction, InputFrameReference, ResourceDisposition,
@@ -110,7 +113,7 @@ impl SessionBackends {
             let mut observations = Vec::new();
             *self = match provider.open_nemu_session(alias, memory).map_err(|error| {
                 observed_open_error(
-                    "paired_backend_open_failed",
+                    DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
                     actingcommand_contract::BackendOpenEntry::NemuPair,
                     error,
                 )
@@ -184,7 +187,12 @@ impl TryFrom<InputAction> for PreparedInputAction {
             slope_in,
             slope_out,
         })
-        .map_err(|error| ExecutionKernelError::device("input_plan_preparation_failed", &error))?;
+        .map_err(|error| {
+            ExecutionKernelError::device(
+                ExecutionKernelCode::InputPlanPreparationFailed.code(),
+                &error,
+            )
+        })?;
         Ok(Self::SegmentedSwipe(plan))
     }
 }
@@ -382,7 +390,9 @@ impl ExecutionSession {
                     Ok(result) => result,
                     Err(_) => Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_panicked"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionPanicked.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     )),
@@ -390,7 +400,9 @@ impl ExecutionSession {
                 worker_needs_close.store(true, Ordering::Release);
                 result
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_spawn_failed"))?;
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionSpawnFailed.code())
+            })?;
         Ok(Self {
             resolved,
             state: Mutex::new(SessionState {
@@ -428,7 +440,8 @@ impl ExecutionSession {
                     Ok(_) => primary,
                     Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
                 };
-                let mut state = self.lock_state("execution_session_state_poisoned")?;
+                let mut state =
+                    self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
                 finish_after_result(&mut state, Err(error))
             }
         }
@@ -449,13 +462,16 @@ impl ExecutionSession {
         check: Option<Arc<dyn InputOperationCheck>>,
         step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<ExecutionInputOutcome> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::Input {
                 action,
                 frame,
@@ -463,7 +479,9 @@ impl ExecutionSession {
                 step,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
         }
@@ -472,7 +490,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -499,19 +517,24 @@ impl ExecutionSession {
         frame_id: Option<FrameId>,
         memory: Option<actingcommand_device::FrameMemoryBudget>,
     ) -> ExecutionKernelResult<Frame> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::Capture {
                 frame_id,
                 memory,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
         }
@@ -520,7 +543,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -535,19 +558,24 @@ impl ExecutionSession {
         memory: actingcommand_device::FrameMemoryBudget,
         deadline: Option<Instant>,
     ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::OpenBackends {
                 memory,
                 deadline,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
         }
@@ -556,7 +584,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -585,15 +613,20 @@ impl ExecutionSession {
 
     /// Workflow #191 H: drops the pending and committed input frames of a kept session.
     pub(crate) fn forget_input_frames(&self) -> ExecutionKernelResult<()> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sent = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::ForgetInputFrames { response })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = sent {
             return finish_after_result(&mut state, Err(error));
         }
@@ -602,7 +635,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -612,15 +645,20 @@ impl ExecutionSession {
         &self,
         command: impl FnOnce(SyncSender<ExecutionKernelResult<InputFrameContext>>) -> SessionCommand,
     ) -> ExecutionKernelResult<InputFrameContext> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sent = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(command(response))
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = sent {
             return finish_after_result(&mut state, Err(error));
         }
@@ -629,7 +667,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -642,19 +680,24 @@ impl ExecutionSession {
         authority: DeviceCloseAuthority,
         input_check: Option<Arc<dyn InputOperationCheck>>,
     ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let sent = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::PrepareApplication {
                 authority,
                 input_check,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = sent {
             return finish_after_result(&mut state, Err(error));
         }
@@ -663,7 +706,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -681,7 +724,8 @@ impl ExecutionSession {
                     Ok(_) => primary,
                     Err(cleanup) => ExecutionKernelError::merge_cleanup(primary, cleanup),
                 };
-                let mut state = self.lock_state("execution_session_state_poisoned")?;
+                let mut state =
+                    self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
                 finish_after_result(&mut state, Err(error))
             }
         }
@@ -692,19 +736,24 @@ impl ExecutionSession {
         action: ApplicationLifecycleAction,
         step: Arc<FencedWrite>,
     ) -> ExecutionKernelResult<()> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
         let send_result = state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .send(SessionCommand::ApplicationLifecycle {
                 action,
                 step,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
         }
@@ -713,7 +762,7 @@ impl ExecutionSession {
             Err(_) => finish_after_result(
                 &mut state,
                 Err(ExecutionKernelError::fatal(
-                    "execution_session_response_lost",
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                 )),
             ),
         }
@@ -729,16 +778,18 @@ impl ExecutionSession {
         state
             .sender
             .as_ref()
-            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .ok_or_else(|| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionClosed.code())
+            })?
             .try_send(SessionCommand::ObserveGeometry { deadline, response })
             .map_err(|error| match error {
                 mpsc::TrySendError::Full(_) => geometry_unavailable(
-                    "capture_geometry_queue_full",
+                    ExecutionKernelCode::CaptureGeometryQueueFull.code(),
                     "the existing session command queue is full",
                 ),
-                mpsc::TrySendError::Disconnected(_) => {
-                    ExecutionKernelError::fatal("execution_session_unavailable")
-                }
+                mpsc::TrySendError::Disconnected(_) => ExecutionKernelError::fatal(
+                    ExecutionKernelCode::ExecutionSessionUnavailable.code(),
+                ),
             })?;
         drop(state);
         match receiver.recv_timeout(geometry_remaining(deadline)?) {
@@ -748,11 +799,11 @@ impl ExecutionSession {
             }
             Ok(Err(error)) => Err(error),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(geometry_unavailable(
-                "capture_geometry_deadline_elapsed",
+                ExecutionKernelCode::CaptureGeometryDeadlineElapsed.code(),
                 "the geometry reply did not arrive within the task deadline",
             )),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(ExecutionKernelError::fatal(
-                "execution_session_response_lost",
+                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
             )),
         }
     }
@@ -768,12 +819,12 @@ impl ExecutionSession {
         geometry_remaining(deadline)?;
         let state = self.state.try_lock().map_err(|error| match error {
             TryLockError::WouldBlock => geometry_unavailable(
-                "capture_geometry_session_busy",
+                ExecutionKernelCode::CaptureGeometrySessionBusy.code(),
                 "the existing session state is busy",
             ),
-            TryLockError::Poisoned(_) => {
-                ExecutionKernelError::fatal("execution_session_state_poisoned")
-            }
+            TryLockError::Poisoned(_) => ExecutionKernelError::fatal(
+                ExecutionKernelCode::ExecutionSessionStatePoisoned.code(),
+            ),
         })?;
         if state.closed || state.sender.is_none() {
             return Err(state
@@ -783,7 +834,7 @@ impl ExecutionSession {
                 .cloned()
                 .unwrap_or_else(|| {
                     geometry_unavailable(
-                        "capture_geometry_session_closed",
+                        ExecutionKernelCode::CaptureGeometrySessionClosed.code(),
                         "the producing session is closed",
                     )
                 }));
@@ -809,7 +860,8 @@ impl ExecutionSession {
         authority: DeviceCloseAuthority,
         input_check: Option<Arc<dyn InputOperationCheck>>,
     ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
-        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        let mut state =
+            self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
         if let Some(result) = &state.close_result {
             return result.clone();
         }
@@ -827,12 +879,16 @@ impl ExecutionSession {
                 input_check,
                 response,
             })
-            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionUnavailable.code())
+            });
         drop(sender);
         let close_result = send_result.and_then(|()| {
-            receiver
-                .recv()
-                .map_err(|_| ExecutionKernelError::fatal("execution_session_response_lost"))?
+            receiver.recv().map_err(|_| {
+                ExecutionKernelError::fatal(
+                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                )
+            })?
         });
         let result = match (close_result, join_session(&mut state)) {
             (Ok(outcome), Ok(())) => Ok(outcome),
@@ -846,10 +902,7 @@ impl ExecutionSession {
         result
     }
 
-    fn lock_state(
-        &self,
-        code: &'static str,
-    ) -> ExecutionKernelResult<MutexGuard<'_, SessionState>> {
+    fn lock_state(&self, code: Code) -> ExecutionKernelResult<MutexGuard<'_, SessionState>> {
         self.state
             .lock()
             .map_err(|_| ExecutionKernelError::fatal(code))
@@ -876,16 +929,15 @@ impl Drop for ExecutionSession {
 
 fn ensure_open(state: &SessionState) -> ExecutionKernelResult<()> {
     if state.closed || state.sender.is_none() {
-        Err(ExecutionKernelError::fatal("execution_session_closed"))
+        Err(ExecutionKernelError::fatal(
+            ExecutionKernelCode::ExecutionSessionClosed.code(),
+        ))
     } else {
         Ok(())
     }
 }
 
-pub(crate) fn geometry_unavailable(
-    code: &'static str,
-    detail: &'static str,
-) -> ExecutionKernelError {
+pub(crate) fn geometry_unavailable(code: Code, detail: &'static str) -> ExecutionKernelError {
     ExecutionKernelError::device(code, &DeviceError::transient(detail))
 }
 
@@ -895,7 +947,7 @@ pub(crate) fn geometry_remaining(deadline: Instant) -> ExecutionKernelResult<Dur
         .filter(|remaining| !remaining.is_zero())
         .ok_or_else(|| {
             geometry_unavailable(
-                "capture_geometry_deadline_elapsed",
+                ExecutionKernelCode::CaptureGeometryDeadlineElapsed.code(),
                 "the original task deadline has elapsed",
             )
         })
@@ -929,8 +981,9 @@ fn join_session(state: &mut SessionState) -> ExecutionKernelResult<()> {
     let Some(join) = state.join.take() else {
         return Ok(());
     };
-    join.join()
-        .map_err(|_| ExecutionKernelError::fatal("execution_session_panicked"))?
+    join.join().map_err(|_| {
+        ExecutionKernelError::fatal(ExecutionKernelCode::ExecutionSessionPanicked.code())
+    })?
 }
 
 fn run_session(
@@ -981,7 +1034,9 @@ fn run_session(
                                 backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
-                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
                                 ),
                                 ResourceCloseOrder::InputFirst,
                                 DeviceCloseAuthority::LocalOnly,
@@ -999,7 +1054,9 @@ fn run_session(
                 if response.send(Ok(context)).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
@@ -1032,7 +1089,9 @@ fn run_session(
                     Ok(frame) => response.send(Ok(frame)).map_err(|_| {
                         close_after_failure(
                             backends.take(),
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ),
                             ResourceCloseOrder::CaptureFirst,
                             DeviceCloseAuthority::LocalOnly,
                         )
@@ -1045,7 +1104,9 @@ fn run_session(
                                 backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
-                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
                                 ),
                                 ResourceCloseOrder::CaptureFirst,
                                 DeviceCloseAuthority::LocalOnly,
@@ -1092,7 +1153,9 @@ fn run_session(
                     Ok(observations) => response.send(Ok(observations)).map_err(|_| {
                         close_after_failure(
                             backends.take(),
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ),
                             ResourceCloseOrder::CaptureFirst,
                             DeviceCloseAuthority::LocalOnly,
                         )
@@ -1105,7 +1168,9 @@ fn run_session(
                                 backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
-                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
                                 ),
                                 ResourceCloseOrder::CaptureFirst,
                                 DeviceCloseAuthority::LocalOnly,
@@ -1133,12 +1198,16 @@ fn run_session(
                     Ok(frame)
                 } else {
                     committed_frame = None;
-                    Err(ExecutionKernelError::fatal("input_frame_capture_mismatch"))
+                    Err(ExecutionKernelError::fatal(
+                        ExecutionKernelCode::InputFrameCaptureMismatch.code(),
+                    ))
                 };
                 if response.send(result).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
@@ -1152,11 +1221,17 @@ fn run_session(
                     .as_ref()
                     .filter(|frame| frame.reference == reference)
                     .cloned()
-                    .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"));
+                    .ok_or_else(|| {
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::InputFrameNotCommitted.code(),
+                        )
+                    });
                 if response.send(result).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
@@ -1168,7 +1243,9 @@ fn run_session(
                 if response.send(Ok(())).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
@@ -1192,7 +1269,10 @@ fn run_session(
                         }
                     };
                     let observation = backend.observe_geometry(deadline).map_err(|error| {
-                        ExecutionKernelError::device("capture_geometry_read_failed", &error)
+                        ExecutionKernelError::device(
+                            ExecutionKernelCode::CaptureGeometryReadFailed.code(),
+                            &error,
+                        )
                     })?;
                     geometry_remaining(deadline)?;
                     Ok(observation)
@@ -1202,7 +1282,9 @@ fn run_session(
                         // An expired caller has already returned Unavailable. A late value
                         // does not establish a successful Task check or admit cleanup.
                         Ok(_) if Instant::now() >= deadline => continue,
-                        Ok(_) => ExecutionKernelError::fatal("execution_session_response_lost"),
+                        Ok(_) => ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         Err(primary) => primary,
                     };
                     // Preserve backend errors and unexpected reply loss for the owner's Close.
@@ -1234,7 +1316,9 @@ fn run_session(
                         if response.send(Ok(outcome)).is_err() {
                             return Err(close_after_failure(
                                 backends.take(),
-                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ExecutionKernelError::fatal(
+                                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                ),
                                 ResourceCloseOrder::CaptureFirst,
                                 DeviceCloseAuthority::LocalOnly,
                             ));
@@ -1247,7 +1331,9 @@ fn run_session(
                                 backends.take(),
                                 ExecutionKernelError::merge(
                                     error,
-                                    ExecutionKernelError::fatal("execution_session_response_lost"),
+                                    ExecutionKernelError::fatal(
+                                        ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                    ),
                                 ),
                                 ResourceCloseOrder::CaptureFirst,
                                 DeviceCloseAuthority::LocalOnly,
@@ -1274,7 +1360,7 @@ fn run_session(
                     SessionBackends::Nemu(pair) => {
                         pair.owner.invalidate_display().map_err(|error| {
                             ExecutionKernelError::device(
-                                "application_frame_invalidation_failed",
+                                ExecutionKernelCode::ApplicationFrameInvalidationFailed.code(),
                                 &error,
                             )
                         })
@@ -1287,7 +1373,7 @@ fn run_session(
                     } => Ok(()),
                     SessionBackends::CloseFailed(error) => Err(error.as_ref().clone()),
                     SessionBackends::Independent { .. } => Err(ExecutionKernelError::fatal(
-                        "application_resource_close_required",
+                        ExecutionKernelCode::ApplicationResourceCloseRequired.code(),
                     )),
                 };
                 if let Err(error) = invalidation {
@@ -1299,7 +1385,9 @@ fn run_session(
                             backends.take(),
                             ExecutionKernelError::merge(
                                 error,
-                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ExecutionKernelError::fatal(
+                                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                ),
                             ),
                             ResourceCloseOrder::CaptureFirst,
                             DeviceCloseAuthority::LocalOnly,
@@ -1316,7 +1404,10 @@ fn run_session(
                 let result = provider
                     .control_application(&step, &instance_alias, action)
                     .map_err(|error| {
-                        ExecutionKernelError::device("application_backend_operation_failed", &error)
+                        ExecutionKernelError::device(
+                            SharedCode::ApplicationBackendOperationFailed.code(),
+                            &error,
+                        )
                     });
                 drop(step);
                 if let Err(error) = result {
@@ -1327,7 +1418,9 @@ fn run_session(
                             backends.take(),
                             ExecutionKernelError::merge(
                                 error,
-                                ExecutionKernelError::fatal("execution_session_response_lost"),
+                                ExecutionKernelError::fatal(
+                                    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                                ),
                             ),
                             ResourceCloseOrder::CaptureFirst,
                             DeviceCloseAuthority::LocalOnly,
@@ -1344,7 +1437,9 @@ fn run_session(
                 if response.send(Ok(())).is_err() {
                     return Err(close_after_failure(
                         backends.take(),
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                         ResourceCloseOrder::CaptureFirst,
                         DeviceCloseAuthority::LocalOnly,
                     ));
@@ -1365,13 +1460,15 @@ fn run_session(
                 if response.send(result.clone()).is_err() {
                     return match result {
                         Ok(outcome) => Err(ExecutionKernelError::fatal(
-                            "execution_session_response_lost",
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
                         )
                         .with_close_outcome(&outcome)
                         .with_close_recording()),
                         Err(error) => Err(ExecutionKernelError::merge(
                             error,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ),
                         )),
                     };
                 }
@@ -1416,7 +1513,9 @@ fn close_retained_after_failure(
                     backends.take(),
                     ExecutionKernelError::merge(
                         primary,
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                     ),
                     order,
                     DeviceCloseAuthority::LocalOnly,
@@ -1427,7 +1526,7 @@ fn close_retained_after_failure(
             Ok(SessionCommand::ForgetInputFrames { response }) => {
                 if response
                     .send(Err(ExecutionKernelError::device(
-                        "execution_session_close_pending",
+                        ExecutionKernelCode::ExecutionSessionClosePending.code(),
                         &DeviceError::transient(
                             "input frames are unavailable while their owner closes the session",
                         ),
@@ -1449,7 +1548,7 @@ fn close_retained_after_failure(
             ) => {
                 if response
                     .send(Err(ExecutionKernelError::device(
-                        "execution_session_close_pending",
+                        ExecutionKernelCode::ExecutionSessionClosePending.code(),
                         &DeviceError::transient(
                             "input frame is unavailable while its owner closes the session",
                         ),
@@ -1474,7 +1573,9 @@ fn close_retained_after_failure(
                 let primary = if geometry_response_lost {
                     ExecutionKernelError::merge(
                         primary,
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                     )
                 } else {
                     primary
@@ -1501,13 +1602,17 @@ fn close_retained_after_failure(
                     return Err(match result {
                         Ok(outcome) => ExecutionKernelError::merge(
                             primary,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ),
                         )
                         .with_close_outcome(&outcome)
                         .with_close_recording(),
                         Err(cleanup) => ExecutionKernelError::merge(
                             cleanup,
-                            ExecutionKernelError::fatal("execution_session_response_lost"),
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                            ),
                         ),
                     });
                 }
@@ -1518,7 +1623,7 @@ fn close_retained_after_failure(
                 // Refuse that observation without consuming the input owner's close handoff.
                 if response
                     .send(Err(ExecutionKernelError::device(
-                        "execution_session_close_pending",
+                        ExecutionKernelCode::ExecutionSessionClosePending.code(),
                         &DeviceError::transient(
                             "capture is unavailable while the resource owner closes the session",
                         ),
@@ -1531,7 +1636,9 @@ fn close_retained_after_failure(
                     backends.take(),
                     ExecutionKernelError::merge(
                         primary,
-                        ExecutionKernelError::fatal("execution_session_response_lost"),
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+                        ),
                     ),
                     order,
                     DeviceCloseAuthority::LocalOnly,
@@ -1539,7 +1646,7 @@ fn close_retained_after_failure(
             }
             Ok(SessionCommand::ObserveGeometry { deadline, response }) => {
                 let rejected = response.send(Err(geometry_unavailable(
-                    "execution_session_close_pending",
+                    ExecutionKernelCode::ExecutionSessionClosePending.code(),
                     "geometry is unavailable while the resource owner closes the session",
                 )));
                 if rejected.is_err() && Instant::now() < deadline {
@@ -1562,7 +1669,7 @@ fn close_retained_after_failure(
 }
 
 fn observed_open_error(
-    code: &'static str,
+    code: Code,
     entry: actingcommand_contract::BackendOpenEntry,
     mut error: DeviceError,
 ) -> ExecutionKernelError {
@@ -1591,20 +1698,27 @@ fn execute_input(
     let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
         let context = match backends {
             SessionBackends::Nemu(..) => {
-                let reference = frame
-                    .ok_or_else(|| ExecutionKernelError::fatal("nemu_input_frame_required"))?;
+                let reference = frame.ok_or_else(|| {
+                    ExecutionKernelError::fatal(SharedCode::NemuInputFrameRequired.code())
+                })?;
                 let committed = committed_frame
                     .filter(|value| value.reference == reference)
-                    .ok_or_else(|| ExecutionKernelError::fatal("input_frame_not_committed"))?;
+                    .ok_or_else(|| {
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::InputFrameNotCommitted.code(),
+                        )
+                    })?;
                 if committed.geometry.is_none() {
                     return Err(ExecutionKernelError::fatal(
-                        "nemu_input_frame_source_missing",
+                        ExecutionKernelCode::NemuInputFrameSourceMissing.code(),
                     ));
                 }
                 Some(InputExecutionContext {
                     geometry: committed.geometry.clone(),
                     check: check.ok_or_else(|| {
-                        ExecutionKernelError::fatal("nemu_input_fencing_required")
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::NemuInputFencingRequired.code(),
+                        )
                     })?,
                 })
             }
@@ -1616,7 +1730,7 @@ fn execute_input(
                 if input.is_none() {
                     let opened = provider.open_input(instance_alias).map_err(|error| {
                         observed_open_error(
-                            "input_backend_open_failed",
+                            DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
                             actingcommand_contract::BackendOpenEntry::Input,
                             error,
                         )
@@ -1626,12 +1740,16 @@ fn execute_input(
                 }
                 input
                     .as_mut()
-                    .ok_or_else(|| ExecutionKernelError::fatal("input_backend_missing"))?
+                    .ok_or_else(|| {
+                        ExecutionKernelError::fatal(ExecutionKernelCode::InputBackendMissing.code())
+                    })?
                     .as_mut()
             }
             SessionBackends::Nemu(pair) => pair.input.as_mut(),
             SessionBackends::Pending => {
-                return Err(ExecutionKernelError::fatal("input_backend_missing"));
+                return Err(ExecutionKernelError::fatal(
+                    ExecutionKernelCode::InputBackendMissing.code(),
+                ));
             }
         };
         let recovery = backend.take_adb_recovery();
@@ -1647,7 +1765,7 @@ fn execute_input(
                 Some(report) => error.with_adb_recovery(report.clone()),
                 None => error,
             };
-            ExecutionKernelError::device("input_backend_operation_failed", &error)
+            ExecutionKernelError::device(SharedCode::InputBackendOperationFailed.code(), &error)
         })?;
         Ok(ExecutionInputOutcome {
             touch_response_us,
@@ -1683,7 +1801,7 @@ fn execute_capture(
                             .open_capture(instance_alias, memory)
                             .map_err(|error| {
                                 observed_open_error(
-                                    "capture_backend_open_failed",
+                                    DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
                                     actingcommand_contract::BackendOpenEntry::Capture,
                                     error,
                                 )
@@ -1693,12 +1811,18 @@ fn execute_capture(
                 }
                 capture
                     .as_mut()
-                    .ok_or_else(|| ExecutionKernelError::fatal("capture_backend_missing"))?
+                    .ok_or_else(|| {
+                        ExecutionKernelError::fatal(
+                            ExecutionKernelCode::CaptureBackendMissing.code(),
+                        )
+                    })?
                     .as_mut()
             }
             SessionBackends::Nemu(pair) => pair.capture.as_mut(),
             SessionBackends::Pending => {
-                return Err(ExecutionKernelError::fatal("capture_backend_missing"));
+                return Err(ExecutionKernelError::fatal(
+                    ExecutionKernelCode::CaptureBackendMissing.code(),
+                ));
             }
         };
         let captured = backend.capture_timed();
@@ -1732,7 +1856,10 @@ fn execute_capture(
                 Ok(frame)
             })
             .map_err(|error| {
-                ExecutionKernelError::device("capture_backend_operation_failed", &error)
+                ExecutionKernelError::device(
+                    SharedCode::CaptureBackendOperationFailed.code(),
+                    &error,
+                )
             })
     };
     let result = execute();
@@ -1759,8 +1886,10 @@ fn open_backends(
 ) -> ExecutionKernelResult<Vec<actingcommand_device::BackendOpenObservation>> {
     let before_open = |observations: &[actingcommand_device::BackendOpenObservation]| {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            Err(ExecutionKernelError::fatal("preparation_deadline_exceeded")
-                .with_backend_open_observations(observations))
+            Err(ExecutionKernelError::fatal(
+                ExecutionKernelCode::PreparationDeadlineExceeded.code(),
+            )
+            .with_backend_open_observations(observations))
         } else {
             Ok(())
         }
@@ -1782,7 +1911,7 @@ fn open_backends(
             }
             Err(error) => {
                 return Err(observed_open_error(
-                    "input_backend_open_failed",
+                    DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
                     actingcommand_contract::BackendOpenEntry::Input,
                     error,
                 )
@@ -1905,7 +2034,10 @@ fn close_resources(
                 .close_once(authority, input_check)
                 .map(ExecutionResourceCloseOutcome::from_device)
                 .map_err(|error| {
-                    ExecutionKernelError::device_close("nemu_session_close_failed", &error)
+                    ExecutionKernelError::device_close(
+                        ExecutionKernelCode::NemuSessionCloseFailed.code(),
+                        &error,
+                    )
                 });
         }
     };
@@ -1966,7 +2098,7 @@ fn close_capture(
                 std::mem::forget(backend);
             }
             Err(ExecutionKernelError::device_close(
-                "capture_backend_close_failed",
+                ExecutionKernelCode::CaptureBackendCloseFailed.code(),
                 &error,
             ))
         }
@@ -2009,7 +2141,7 @@ fn close_input(
                 std::mem::forget(input.take().expect("input backend is present"));
             }
             Err(ExecutionKernelError::device_close(
-                "input_backend_close_failed",
+                ExecutionKernelCode::InputBackendCloseFailed.code(),
                 &error,
             ))
         }

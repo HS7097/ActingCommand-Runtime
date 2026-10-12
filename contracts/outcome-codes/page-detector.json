@@ -1,0 +1,31 @@
+{
+  "owner": "page-detector",
+  "codes": {
+    "batch_validation_failed": {
+      "category": "warning",
+      "owner": "page-detector",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page of an evaluation batch was not evaluated because the batch request failed validation before any page ran.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "batch_terminated": {
+      "category": "warning",
+      "owner": "page-detector",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page of an evaluation batch was not evaluated because the batch stopped early after a page evaluation broke an invariant.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

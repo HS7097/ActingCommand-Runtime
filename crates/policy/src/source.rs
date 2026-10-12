@@ -123,8 +123,9 @@ pub(crate) fn parse_selection_document(
         .value
         .validate()
         .map_err(|error| selection_diagnostic(source, schema_version, error))?;
-    // The scheduling consumer reads scalar facts only; a record list, which only `keyed_fact`
-    // reads in a task's select step, would abort every scheduling evaluation.
+    // The scheduling consumer reads scalar facts only: its snapshot carries no list rows, and
+    // its call, the collect option, refuses a document that declares a record list, which only
+    // `keyed_fact` reads in a task's select step. Refusing here keeps that out of the catalog.
     if parsed.value.uses_record_lists() {
         return Err(selection_diagnostic(
             source,

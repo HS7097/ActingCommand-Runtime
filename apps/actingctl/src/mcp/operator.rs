@@ -12,13 +12,18 @@ use super::child;
 use super::lab;
 use super::observer::select_instance;
 use super::runtime::client_error;
-use super::tools::{Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
+use super::tools::{
+    Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+};
+use crate::codes::ActingctlCode;
+use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
 use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
     MAX_RESOURCE_TARGETS_DOCUMENT_BYTES, OwnerEpoch, PackageRef, RequestId,
-    SchedulingPauseExpectation, SchedulingPauseScope, validate_scheduling_pause_reason,
+    SchedulingPauseExpectation, SchedulingPauseScope,
 };
+use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_client::{
     ContainedTaskResetOutcome, RunKey, RunStatusMode, RuntimeClient,
 };
@@ -80,14 +85,14 @@ pub(super) fn record_provenance(
         };
         if let Err(error) = client.declare_governance_identity(&card) {
             let error = client_error(&error);
-            if error.host_code() != Some("governance_client_not_allowed") {
+            if error.host_code() != Some(GovernanceIdentityRefusal::ClientNotAllowed.as_str()) {
                 return Err(error);
             }
             // The Runtime recorded its warning event and still takes Cli writes.
             warnings.push(
                 ToolError::new(
                     "safety",
-                    "governance_client_not_allowed",
+                    GovernanceIdentityRefusal::ClientNotAllowed,
                     "actingd's allowed_clients does not list actingctl-mcp; the Runtime recorded a warning and the write went ahead",
                 )
                 .with_detail("card_refusal", error.into_value())
@@ -108,7 +113,7 @@ pub(super) fn record_provenance(
     .map_err(|error| {
         ToolError::new(
             "usage",
-            "client_action_invalid",
+            SharedCode::ClientActionInvalid,
             format!("cannot form the client action: {error}"),
         )
     })?;
@@ -184,7 +189,13 @@ fn error_from_value(error: &Value) -> ToolError {
         "uncertain" => "uncertain",
         _ => "runtime",
     };
-    let mut mapped = ToolError::new(class, text("code"), text("message"));
+    let mut mapped = ToolError::coded(
+        class,
+        ToolCode::Relayed {
+            relayed_code: text("code"),
+        },
+        text("message"),
+    );
     if let Some(Value::Object(details)) = error.get("details") {
         for (key, value) in details {
             mapped = mapped.with_detail(key, value.clone());
@@ -306,7 +317,7 @@ fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, T
     location.check()?;
     let Some(root) = location.install_root else {
         return Err(ToolError::usage(
-            "lab_tool_unavailable",
+            ActingctlCode::LabToolUnavailable,
             "no install root, so actinglab cannot compute the package_ref; pass package_ref",
         ));
     };
@@ -332,7 +343,7 @@ fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, T
         .ok_or_else(|| {
             ToolError::new(
                 "runtime",
-                "lab_process_failed",
+                ActingctlCode::LabProcessFailed,
                 "actinglab package digest answered without a package reference",
             )
         })
@@ -384,7 +395,7 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
             .map(|instance| instance.instance_alias().to_owned())
     }) else {
         return Err(ToolError::usage(
-            "run_unknown",
+            ActingctlCode::RunUnknown,
             "the ledger names no configured instance for this handle; read it with ac_get_run",
         )
         .with_detail("state", json!(run.state)));
@@ -429,7 +440,7 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
 /// A scheduled run cannot be stopped by a client; an instance pause drains it.
 fn stop_error(error: &actingcommand_runtime_client::RuntimeClientError) -> ToolError {
     let mapped = client_error(error);
-    if mapped.host_code() == Some("scheduled_contained_task_not_client_cancellable") {
+    if mapped.host_code() == Some(SharedCode::ScheduledContainedTaskNotClientCancellable.as_str()) {
         return mapped.blocked_by(
             "ac_pause: an instance pause drains the instance and, when its drain times out, stops its in-flight runs",
         );
@@ -460,12 +471,10 @@ fn scope_alias(scope: &SchedulingPauseScope) -> Option<&str> {
 
 pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "reason", "drain_timeout_s"])?;
-    let reason = arguments
-        .string("reason")?
-        .unwrap_or(DEFAULT_PAUSE_REASON)
-        .to_owned();
-    validate_scheduling_pause_reason(&reason)
-        .map_err(|_| invalid_argument("reason", "must be 1-64 bytes of [a-z0-9_.-]"))?;
+    let reason = actingcommand_contract::SchedulingPauseReason::new(
+        arguments.string("reason")?.unwrap_or(DEFAULT_PAUSE_REASON),
+    )
+    .map_err(|_| invalid_argument("reason", "must be 1-64 bytes of [a-z0-9_.-]"))?;
     let drain_timeout_s = arguments
         .integer("drain_timeout_s", 1, MAX_DRAIN_TIMEOUT_S)?
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_S);
@@ -483,7 +492,7 @@ pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -
         write.warnings,
         move || {
             let paused = client
-                .pause_scheduling(scope, &reason, drain_timeout_s * 1000)
+                .pause_scheduling(scope, reason, drain_timeout_s * 1000)
                 .map_err(|error| client_error(&error))?;
             Ok(json!({"paused": paused, "owner_epoch": owner_epoch}))
         },
@@ -580,7 +589,7 @@ fn target_view(
         .resource_target_view(&alias)
         .map_err(|error| {
             let mapped = context.runtime.failure(&connected, &error);
-            if mapped.code() == "runtime_operation_unsupported" {
+            if mapped.code() == Some(ClientCode::RuntimeOperationUnsupported.code()) {
                 mapped.blocked_by(
                     "an actingd older than v0.11.0: read the scheduling catalog's resources instead (skill actingcommand, CLI workshop)",
                 )
@@ -660,7 +669,7 @@ pub(super) fn targets_set(
             .ok_or_else(|| {
                 ToolError::new(
                     "runtime",
-                    "clock_unavailable",
+                    ActingctlCode::ClockUnavailable,
                     "the system clock is before the Unix epoch or out of range",
                 )
             })?;
@@ -670,7 +679,7 @@ pub(super) fn targets_set(
     let document = Value::Object(document).to_string();
     if document.len() > MAX_RESOURCE_TARGETS_DOCUMENT_BYTES {
         return Err(ToolError::usage(
-            "resource_targets_document_too_large",
+            ActingctlCode::ResourceTargetsDocumentTooLarge,
             format!(
                 "the policy document has {} bytes; the Runtime takes at most {MAX_RESOURCE_TARGETS_DOCUMENT_BYTES}",
                 document.len()

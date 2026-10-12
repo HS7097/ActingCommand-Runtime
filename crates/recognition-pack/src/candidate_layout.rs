@@ -12,6 +12,7 @@
 //! pack give the same bytes everywhere. A budget is an error, never a truncation, and a value
 //! the backend does not give is absent, never defaulted.
 
+use crate::codes::RecognitionPackCode;
 use crate::{
     CandidateConsensus, CandidateIdentityDeclaration, CandidateIdentityRecognition,
     CandidateIdentityTemplate, CandidateSampleVariant, PackRect, PackRegion, RecognitionEvaluator,
@@ -29,6 +30,7 @@ use actingcommand_contract::candidate_projection::{
     CandidateRect, CandidateUnknownReason, INVALID_CANDIDATE_PROJECTION, ProjectedCandidate,
     candidate_id, validate_candidate_feature_name, validate_candidate_layout_id,
 };
+use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -37,12 +39,13 @@ use std::fmt;
 use std::time::Instant;
 
 /// The recognition pack declares no layout with the requested ID that this runtime projects.
-pub const CANDIDATE_LAYOUT_UNKNOWN: &str = "candidate_layout_unknown";
+pub const CANDIDATE_LAYOUT_UNKNOWN: Code = RecognitionPackCode::CandidateLayoutUnknown.code();
 /// A feature's target could not be evaluated; the detail names the target and the recognition
 /// error code, and the recognition error travels as the cause.
-pub const CANDIDATE_FEATURE_FAILED: &str = "candidate_feature_failed";
+pub const CANDIDATE_FEATURE_FAILED: Code = RecognitionPackCode::CandidateFeatureFailed.code();
 /// A feature's target needs an OCR or NN provider the evaluator was built without.
-pub const CANDIDATE_FEATURE_PROVIDER_MISSING: &str = "candidate_feature_provider_missing";
+pub const CANDIDATE_FEATURE_PROVIDER_MISSING: Code =
+    RecognitionPackCode::CandidateFeatureProviderMissing.code();
 
 const PAGE_ID_MAX_BYTES: usize = 256;
 /// Larger magnitudes cannot be held by an `i64` milli value.
@@ -141,7 +144,7 @@ pub struct CandidateSlot {
 /// Why no candidate projection was produced. Nothing is truncated or defaulted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateProjectionFailure {
-    code: &'static str,
+    code: Code,
     item: &'static str,
     detail: String,
     cause: Option<Box<RecognitionPackError>>,
@@ -150,13 +153,13 @@ pub struct CandidateProjectionFailure {
 impl CandidateProjectionFailure {
     pub fn recording_failed(detail: impl Into<String>) -> Self {
         Self::new(
-            "candidate_sample_record_failed",
+            RecognitionPackCode::CandidateSampleRecordFailed.code(),
             "recognition_evidence",
             detail,
         )
     }
 
-    fn new(code: &'static str, item: &'static str, detail: impl Into<String>) -> Self {
+    fn new(code: Code, item: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             item,
@@ -197,7 +200,7 @@ impl CandidateProjectionFailure {
     /// `candidate_projection_budget_exceeded`, `invalid_candidate_projection`,
     /// `invalid_candidate_id`, [`CANDIDATE_LAYOUT_UNKNOWN`], [`CANDIDATE_FEATURE_FAILED`] or
     /// [`CANDIDATE_FEATURE_PROVIDER_MISSING`].
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
@@ -305,7 +308,7 @@ impl SceneEvaluation<'_> {
         })?;
         if scenes.len() != layout.required_frames() || scenes.is_empty() || scenes.len() > 5 {
             return Err(CandidateProjectionFailure::new(
-                "candidate_samples_unavailable",
+                RecognitionPackCode::CandidateSamplesUnavailable.code(),
                 "frames",
                 format!(
                     "layout '{layout_id}' requires {} frames, got {}",
@@ -317,7 +320,7 @@ impl SceneEvaluation<'_> {
         for scene in scenes {
             if scene.width() != self.scene.width() || scene.height() != self.scene.height() {
                 return Err(CandidateProjectionFailure::new(
-                    "candidate_sample_geometry_changed",
+                    RecognitionPackCode::CandidateSampleGeometryChanged.code(),
                     "frame",
                     "sample geometry differs within this transaction",
                 ));
@@ -332,7 +335,7 @@ impl SceneEvaluation<'_> {
                 .any(|prior| std::ptr::eq(*prior, *scene))
         }) {
             return Err(CandidateProjectionFailure::new(
-                "candidate_samples_unavailable",
+                RecognitionPackCode::CandidateSamplesUnavailable.code(),
                 "frames",
                 "frame references must name distinct captures",
             ));

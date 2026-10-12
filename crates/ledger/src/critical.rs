@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::{GlobalLedger, GlobalLedgerError, GlobalLedgerResult, PersistedEvent};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     EffectDisposition, EventDraft, EventId, EventLinks, EventPayload, EventType, SanitizationError,
     SanitizedEventDraft, SecretFingerprinter,
@@ -18,8 +20,8 @@ impl EventAppender for GlobalLedger {
         // an observational draft here means the durability table was changed wrongly.
         if crate::durability::commit_sync(draft.payload()) != CommitSync::Full {
             return Err(GlobalLedgerError::fatal(
-                "critical_event_not_durable",
-                "append_durable",
+                LedgerCode::CriticalEventNotDurable.code(),
+                LedgerLocation::AppendDurable.location(),
             ));
         }
         self.append(draft)
@@ -243,20 +245,20 @@ impl fmt::Display for CriticalPlanError {
 }
 
 impl CriticalPlanError {
-    const fn code(self) -> &'static str {
+    const fn code(self) -> Code {
         match self {
-            Self::EventFamilyMismatch => "critical_event_family_mismatch",
-            Self::MissingCorrelationId => "critical_missing_correlation_id",
-            Self::CorrelationIdMismatch => "critical_correlation_id_mismatch",
-            Self::MissingActionId => "critical_missing_action_id",
-            Self::ActionIdMismatch => "critical_action_id_mismatch",
-            Self::StableIdentityLinkMismatch => "critical_stable_link_mismatch",
-            Self::DuplicateEventType => "critical_duplicate_event_type",
-            Self::DuplicateEventId => "critical_duplicate_event_id",
-            Self::UnsupportedIntent => "critical_unsupported_intent",
-            Self::OutcomeRoleMismatch => "critical_outcome_role_mismatch",
-            Self::EffectDispositionMismatch => "critical_effect_disposition_mismatch",
-            Self::PayloadActionMismatch => "critical_payload_action_mismatch",
+            Self::EventFamilyMismatch => LedgerCode::CriticalEventFamilyMismatch.code(),
+            Self::MissingCorrelationId => LedgerCode::CriticalMissingCorrelationId.code(),
+            Self::CorrelationIdMismatch => LedgerCode::CriticalCorrelationIdMismatch.code(),
+            Self::MissingActionId => LedgerCode::CriticalMissingActionId.code(),
+            Self::ActionIdMismatch => LedgerCode::CriticalActionIdMismatch.code(),
+            Self::StableIdentityLinkMismatch => LedgerCode::CriticalStableLinkMismatch.code(),
+            Self::DuplicateEventType => LedgerCode::CriticalDuplicateEventType.code(),
+            Self::DuplicateEventId => LedgerCode::CriticalDuplicateEventId.code(),
+            Self::UnsupportedIntent => LedgerCode::CriticalUnsupportedIntent.code(),
+            Self::OutcomeRoleMismatch => LedgerCode::CriticalOutcomeRoleMismatch.code(),
+            Self::EffectDispositionMismatch => LedgerCode::CriticalEffectDispositionMismatch.code(),
+            Self::PayloadActionMismatch => LedgerCode::CriticalPayloadActionMismatch.code(),
         }
     }
 }
@@ -648,12 +650,12 @@ fn persist_outcome(
     effect: EffectDisposition,
     built: Result<EventDraft, SanitizationError>,
 ) -> Result<PersistedEvent, (CriticalOutcomeStage, &'static str)> {
-    let draft = built.map_err(|error| (CriticalOutcomeStage::Build, error.code()))?;
+    let draft = built.map_err(|error| (CriticalOutcomeStage::Build, error.code().as_str()))?;
     let draft = draft
         .sanitize(fingerprinter)
-        .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code()))?;
+        .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code().as_str()))?;
     validate_outcome(operation, intent, &draft, role, effect)
-        .map_err(|error| (CriticalOutcomeStage::Validate, error.code()))?;
+        .map_err(|error| (CriticalOutcomeStage::Validate, error.code().as_str()))?;
     appender
         .append_durable(draft)
         .map_err(|error| (CriticalOutcomeStage::Append, error.code()))

@@ -6,10 +6,13 @@ use super::storage::{
     list_segments, parse_writer_metadata,
 };
 use super::{GlobalLedgerError, GlobalLedgerResult, MAX_QUERY_PAGE_EVENTS};
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::{
     PersistedEvent,
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     EventId, EventQuery, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
     VerifiedArtifactReference,
@@ -172,13 +175,28 @@ impl GlobalLedgerRepairRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GlobalLedgerCorruptTail {
-    pub code: &'static str,
+    pub code: Code,
     pub segment_index: u64,
     pub byte_offset: u64,
     pub dangling_byte_count: u64,
     pub tail_sha256: String,
+}
+
+/// The derived form this record printed before its code was typed: the code prints as a quoted
+/// spelling (Workflow #378 keeps developer text unchanged).
+impl std::fmt::Debug for GlobalLedgerCorruptTail {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GlobalLedgerCorruptTail")
+            .field("code", &self.code.as_str())
+            .field("segment_index", &self.segment_index)
+            .field("byte_offset", &self.byte_offset)
+            .field("dangling_byte_count", &self.dangling_byte_count)
+            .field("tail_sha256", &self.tail_sha256)
+            .finish()
+    }
 }
 
 pub struct GlobalLedgerReadOnly {
@@ -218,7 +236,10 @@ pub(super) fn open_metadata(
     let budget = config.budget;
     let mut snapshot = open_snapshot(config, |line| {
         parse_record(line)?.into_metadata().map_err(|error| {
-            GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
+            GlobalLedgerError::fatal(
+                error.code(),
+                LedgerLocation::ValidateReadOnlyPersistedEvent.location(),
+            )
         })
     })?;
     let bytes = snapshot.storage_snapshot.read_bytes;
@@ -235,19 +256,28 @@ fn open_snapshot<E: LedgerEventRead>(
 ) -> GlobalLedgerResult<ReadOnlySnapshot<E>> {
     if config.root.as_os_str().is_empty() {
         return Err(GlobalLedgerError::fatal(
-            "invalid_ledger_config",
-            "validate_read_only_root",
+            LedgerCode::InvalidLedgerConfig.code(),
+            LedgerLocation::ValidateReadOnlyRoot.location(),
         ));
     }
     let root = config.root.canonicalize().map_err(|error| {
-        GlobalLedgerError::io("ledger_io", "canonicalize_read_only_root", &error)
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::CanonicalizeReadOnlyRoot.location(),
+            &error,
+        )
     })?;
-    let root_metadata = fs::metadata(&root)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_read_only_root", &error))?;
+    let root_metadata = fs::metadata(&root).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::StatReadOnlyRoot.location(),
+            &error,
+        )
+    })?;
     if !root_metadata.is_dir() {
         return Err(GlobalLedgerError::fatal(
-            "invalid_ledger_config",
-            "validate_read_only_root",
+            LedgerCode::InvalidLedgerConfig.code(),
+            LedgerLocation::ValidateReadOnlyRoot.location(),
         ));
     }
 
@@ -291,8 +321,8 @@ fn open_snapshot<E: LedgerEventRead>(
                 .checked_add(corruption.byte_offset)
                 .ok_or_else(|| {
                     GlobalLedgerError::fatal(
-                        "ledger_snapshot_overflow",
-                        "count_verified_prefix_bytes",
+                        LedgerCode::LedgerSnapshotOverflow.code(),
+                        LedgerLocation::CountVerifiedPrefixBytes.location(),
                     )
                 })?;
             corrupt_tail = Some(corruption);
@@ -302,7 +332,10 @@ fn open_snapshot<E: LedgerEventRead>(
             .verified_prefix_bytes
             .checked_add(snapshot.bytes.len() as u64)
             .ok_or_else(|| {
-                GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_verified_prefix_bytes")
+                GlobalLedgerError::fatal(
+                    LedgerCode::LedgerSnapshotOverflow.code(),
+                    LedgerLocation::CountVerifiedPrefixBytes.location(),
+                )
             })?;
     }
     Ok(ReadOnlySnapshot {
@@ -350,7 +383,10 @@ impl GlobalLedgerReadOnly {
         let budget = config.budget;
         let mut snapshot = open_snapshot(config, |line| {
             parse_record(line)?.into_metadata().map_err(|error| {
-                GlobalLedgerError::fatal(error.code(), "validate_read_only_persisted_event")
+                GlobalLedgerError::fatal(
+                    error.code(),
+                    LedgerLocation::ValidateReadOnlyPersistedEvent.location(),
+                )
             })
         })?;
         let bytes = snapshot.storage_snapshot.read_bytes;
@@ -383,8 +419,8 @@ impl GlobalLedgerReadOnly {
                     .checked_add(corruption.byte_offset)
                     .ok_or_else(|| {
                         GlobalLedgerError::fatal(
-                            "ledger_snapshot_overflow",
-                            "count_verified_prefix_bytes",
+                            LedgerCode::LedgerSnapshotOverflow.code(),
+                            LedgerLocation::CountVerifiedPrefixBytes.location(),
                         )
                     })?;
                 snapshot.corrupt_tail = Some(corruption);
@@ -394,8 +430,8 @@ impl GlobalLedgerReadOnly {
                 .checked_add(segment.bytes.len() as u64)
                 .ok_or_else(|| {
                     GlobalLedgerError::fatal(
-                        "ledger_snapshot_overflow",
-                        "count_verified_prefix_bytes",
+                        LedgerCode::LedgerSnapshotOverflow.code(),
+                        LedgerLocation::CountVerifiedPrefixBytes.location(),
                     )
                 })?;
         }
@@ -431,8 +467,8 @@ impl GlobalLedgerReadOnly {
     ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         if !(1..=MAX_QUERY_PAGE_EVENTS).contains(&limit) || after > through {
             return Err(GlobalLedgerError::request(
-                "invalid_query_page",
-                "query_read_only_event_page",
+                LedgerCode::InvalidQueryPage.code(),
+                LedgerLocation::QueryReadOnlyEventPage.location(),
             ));
         }
         Ok(self
@@ -474,7 +510,10 @@ fn read_segment_snapshots(
     let mut snapshots = Vec::with_capacity(segments.len());
     let mut storage = GlobalLedgerStorageSnapshot {
         segment_count: u64::try_from(segments.len()).map_err(|_| {
-            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_segments")
+            GlobalLedgerError::fatal(
+                LedgerCode::LedgerSnapshotOverflow.code(),
+                LedgerLocation::CountReadOnlySegments.location(),
+            )
         })?,
         observed_bytes: 0,
         read_bytes: 0,
@@ -484,40 +523,70 @@ fn read_segment_snapshots(
     };
     for (position, (index, path)) in segments.iter().enumerate() {
         let mut file = File::open(path).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "open_read_only_segment", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::OpenReadOnlySegment.location(),
+                &error,
+            )
         })?;
         let byte_count = file
             .metadata()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_read_only_segment", &error))?
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::StatReadOnlySegment.location(),
+                    &error,
+                )
+            })?
             .len();
         let total = storage
             .observed_bytes
             .checked_add(byte_count)
             .ok_or_else(|| {
-                GlobalLedgerError::fatal("ledger_snapshot_overflow", "bound_read_only_snapshot")
+                GlobalLedgerError::fatal(
+                    LedgerCode::LedgerSnapshotOverflow.code(),
+                    LedgerLocation::BoundReadOnlySnapshot.location(),
+                )
             })?;
         check_read_budget(budget, total, 0)?;
-        let capacity = usize::try_from(byte_count)
-            .map_err(|_| GlobalLedgerError::fatal("corrupt_segment", "bound_read_only_segment"))?;
+        let capacity = usize::try_from(byte_count).map_err(|_| {
+            GlobalLedgerError::fatal(
+                LedgerCode::CorruptSegment.code(),
+                LedgerLocation::BoundReadOnlySegment.location(),
+            )
+        })?;
         let mut bytes = Vec::with_capacity(capacity);
         file.by_ref()
             .take(byte_count)
             .read_to_end(&mut bytes)
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "read_read_only_segment", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ReadReadOnlySegment.location(),
+                    &error,
+                )
             })?;
         let read_bytes = u64::try_from(bytes.len()).map_err(|_| {
-            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_bytes")
+            GlobalLedgerError::fatal(
+                LedgerCode::LedgerSnapshotOverflow.code(),
+                LedgerLocation::CountReadOnlyBytes.location(),
+            )
         })?;
         storage.observed_bytes =
             storage
                 .observed_bytes
                 .checked_add(byte_count)
                 .ok_or_else(|| {
-                    GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_observed_bytes")
+                    GlobalLedgerError::fatal(
+                        LedgerCode::LedgerSnapshotOverflow.code(),
+                        LedgerLocation::CountObservedBytes.location(),
+                    )
                 })?;
         storage.read_bytes = storage.read_bytes.checked_add(read_bytes).ok_or_else(|| {
-            GlobalLedgerError::fatal("ledger_snapshot_overflow", "count_read_only_bytes")
+            GlobalLedgerError::fatal(
+                LedgerCode::LedgerSnapshotOverflow.code(),
+                LedgerLocation::CountReadOnlyBytes.location(),
+            )
         })?;
         storage.read_complete &= read_bytes == byte_count;
         snapshots.push(ReadOnlySegmentSnapshot {
@@ -548,10 +617,11 @@ pub(super) fn check_read_budget(
     } else {
         return Ok(());
     };
-    Err(
-        GlobalLedgerError::request("ledger_read_budget_exceeded", "read_only_snapshot")
-            .with_detail(detail),
+    Err(GlobalLedgerError::request(
+        LedgerCode::LedgerReadBudgetExceeded.code(),
+        LedgerLocation::ReadOnlySnapshot.location(),
     )
+    .with_detail(detail))
 }
 
 pub(super) fn read_writer_metadata(
@@ -565,8 +635,8 @@ pub(super) fn read_writer_metadata(
         }
         Err(error) => {
             return Err(GlobalLedgerError::io(
-                "ledger_io",
-                "open_read_only_writer_metadata",
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::OpenReadOnlyWriterMetadata.location(),
                 &error,
             ));
         }
@@ -574,13 +644,17 @@ pub(super) fn read_writer_metadata(
     let byte_count = file
         .metadata()
         .map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "stat_read_only_writer_metadata", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::StatReadOnlyWriterMetadata.location(),
+                &error,
+            )
         })?
         .len();
     let capacity = usize::try_from(byte_count).map_err(|_| {
         GlobalLedgerError::fatal(
-            "malformed_owner_metadata",
-            "bound_read_only_writer_metadata",
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::BoundReadOnlyWriterMetadata.location(),
         )
     })?;
     let mut bytes = Vec::with_capacity(capacity);
@@ -589,15 +663,15 @@ pub(super) fn read_writer_metadata(
             return Ok(GlobalLedgerWriterMetadataObservation::Locked { byte_count });
         }
         return Err(GlobalLedgerError::io(
-            "ledger_io",
-            "read_read_only_writer_metadata",
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ReadReadOnlyWriterMetadata.location(),
             &error,
         ));
     }
     if bytes.is_empty() {
         return Err(GlobalLedgerError::fatal(
-            "malformed_owner_metadata",
-            "parse_read_only_writer_metadata",
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::ParseReadOnlyWriterMetadata.location(),
         ));
     }
     let complete_len = complete_record_len(&bytes);
@@ -606,8 +680,8 @@ pub(super) fn read_writer_metadata(
     } else {
         if complete_len != bytes.len() {
             return Err(GlobalLedgerError::fatal(
-                "malformed_owner_metadata",
-                "parse_read_only_writer_metadata_tail",
+                LedgerCode::MalformedOwnerMetadata.code(),
+                LedgerLocation::ParseReadOnlyWriterMetadataTail.location(),
             ));
         }
         &bytes[..complete_len - 1]
@@ -616,8 +690,8 @@ pub(super) fn read_writer_metadata(
     for record in records.split(|byte| *byte == b'\n') {
         if record.is_empty() {
             return Err(GlobalLedgerError::fatal(
-                "malformed_owner_metadata",
-                "parse_read_only_writer_metadata_blank",
+                LedgerCode::MalformedOwnerMetadata.code(),
+                LedgerLocation::ParseReadOnlyWriterMetadataBlank.location(),
             ));
         }
         metadata = Some(parse_writer_metadata(record)?.into());
@@ -654,23 +728,32 @@ fn scan_segment<E: LedgerEventRead>(
             .expect("complete record ceiling ends at a newline");
         let line = &snapshot.bytes[record_start..newline];
         if line.is_empty() {
-            return corrupt_tail("corrupt_segment", snapshot, record_start).map(Some);
+            return corrupt_tail(LedgerCode::CorruptSegment.code(), snapshot, record_start)
+                .map(Some);
         }
         let event = match parse(line) {
             Ok(event) => event,
             Err(error) => {
-                return corrupt_tail(corruption_code(error.code()), snapshot, record_start)
-                    .map(Some);
+                return corrupt_tail(corruption_code(&error), snapshot, record_start).map(Some);
             }
         };
         if event.sequence() != *next_sequence {
-            return corrupt_tail("sequence_discontinuity", snapshot, record_start).map(Some);
+            return corrupt_tail(
+                LedgerCode::SequenceDiscontinuity.code(),
+                snapshot,
+                record_start,
+            )
+            .map(Some);
         }
         if !event_ids.insert(*event.event_id()) {
-            return corrupt_tail("duplicate_event_id", snapshot, record_start).map(Some);
+            return corrupt_tail(LedgerCode::DuplicateEventId.code(), snapshot, record_start)
+                .map(Some);
         }
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
-            GlobalLedgerError::fatal("sequence_exhausted", "increment_read_only_sequence")
+            GlobalLedgerError::fatal(
+                LedgerCode::SequenceExhausted.code(),
+                LedgerLocation::IncrementReadOnlySequence.location(),
+            )
         })?;
         events.push(event);
         record_start = newline + 1;
@@ -680,14 +763,18 @@ fn scan_segment<E: LedgerEventRead>(
         && (snapshot.bytes.len() > complete_len
             || (!snapshot.is_final && snapshot.bytes.is_empty()))
     {
-        return corrupt_tail("corrupt_segment", snapshot, complete_len).map(Some);
+        return corrupt_tail(LedgerCode::CorruptSegment.code(), snapshot, complete_len).map(Some);
     }
     Ok(None)
 }
 
 fn parse_record(line: &[u8]) -> GlobalLedgerResult<StoredEventRecord> {
     let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
-        GlobalLedgerError::json("corrupt_segment", "parse_read_only_segment", &error)
+        GlobalLedgerError::json(
+            LedgerCode::CorruptSegment.code(),
+            LedgerLocation::ParseReadOnlySegment.location(),
+            &error,
+        )
     })?;
     let schema_version = unique
         .0
@@ -696,49 +783,71 @@ fn parse_record(line: &[u8]) -> GlobalLedgerResult<StoredEventRecord> {
         .and_then(Value::as_str);
     if schema_version != Some(GLOBAL_EVENT_SCHEMA_VERSION) {
         return Err(GlobalLedgerError::fatal(
-            "unsupported_event_schema",
-            "read_only_event_schema",
+            LedgerCode::UnsupportedEventSchema.code(),
+            LedgerLocation::ReadOnlyEventSchema.location(),
         ));
     }
     let stored = serde_json::from_value::<StoredLine>(unique.0).map_err(|error| {
-        GlobalLedgerError::json("corrupt_segment", "decode_read_only_segment", &error)
+        GlobalLedgerError::json(
+            LedgerCode::CorruptSegment.code(),
+            LedgerLocation::DecodeReadOnlySegment.location(),
+            &error,
+        )
     })?;
     if stored.line_type != LINE_TYPE {
         return Err(GlobalLedgerError::fatal(
-            "corrupt_segment",
-            "validate_read_only_line_type",
+            LedgerCode::CorruptSegment.code(),
+            LedgerLocation::ValidateReadOnlyLineType.location(),
         ));
     }
     Ok(stored.event)
 }
 
-fn corruption_code(code: &'static str) -> &'static str {
-    match code {
-        "unsupported_event_schema" => "unsupported_event_schema",
-        "artifact_store_verification_failed"
-        | "artifact_store_verification_mismatch"
-        | "artifact_store_verification_unavailable"
-        | "invalid_artifact_reference" => "artifact_store_verification_failed",
-        _ => "corrupt_segment",
+/// The corrupt-tail code of a record that does not parse: a schema refusal keeps its own code,
+/// an artifact verification failure is reported as one code, anything else is a corrupt
+/// segment.
+fn corruption_code(error: &GlobalLedgerError) -> Code {
+    let failed = error.code();
+    if failed == LedgerCode::UnsupportedEventSchema.as_str() {
+        return LedgerCode::UnsupportedEventSchema.code();
     }
+    let verification = [
+        LedgerCode::ArtifactStoreVerificationFailed.code(),
+        LedgerCode::ArtifactStoreVerificationMismatch.code(),
+        LedgerCode::ArtifactStoreVerificationUnavailable.code(),
+        SharedCode::InvalidArtifactReference.code(),
+    ];
+    if verification.iter().any(|code| code.as_str() == failed) {
+        return LedgerCode::ArtifactStoreVerificationFailed.code();
+    }
+    LedgerCode::CorruptSegment.code()
 }
 
 fn corrupt_tail(
-    code: &'static str,
+    code: Code,
     snapshot: &ReadOnlySegmentSnapshot,
     byte_offset: usize,
 ) -> GlobalLedgerResult<GlobalLedgerCorruptTail> {
     let suffix = snapshot.bytes.get(byte_offset..).ok_or_else(|| {
-        GlobalLedgerError::fatal("corrupt_segment", "locate_read_only_corrupt_tail")
+        GlobalLedgerError::fatal(
+            LedgerCode::CorruptSegment.code(),
+            LedgerLocation::LocateReadOnlyCorruptTail.location(),
+        )
     })?;
     Ok(GlobalLedgerCorruptTail {
         code,
         segment_index: snapshot.index,
         byte_offset: u64::try_from(byte_offset).map_err(|_| {
-            GlobalLedgerError::fatal("corrupt_segment", "convert_read_only_corrupt_offset")
+            GlobalLedgerError::fatal(
+                LedgerCode::CorruptSegment.code(),
+                LedgerLocation::ConvertReadOnlyCorruptOffset.location(),
+            )
         })?,
         dangling_byte_count: u64::try_from(suffix.len()).map_err(|_| {
-            GlobalLedgerError::fatal("corrupt_segment", "convert_read_only_corrupt_length")
+            GlobalLedgerError::fatal(
+                LedgerCode::CorruptSegment.code(),
+                LedgerLocation::ConvertReadOnlyCorruptLength.location(),
+            )
         })?,
         tail_sha256: format!("sha256:{:x}", Sha256::digest(suffix)),
     })

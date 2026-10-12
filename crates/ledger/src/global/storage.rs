@@ -8,9 +8,11 @@ use super::{
     projection::EventIndexes,
 };
 use crate::PersistedEvent;
+use crate::codes::{LedgerCode, LedgerLocation};
 #[cfg(test)]
 use crate::fact::LedgerEventRead;
 use crate::fact::StoredEventRecord;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
     EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
@@ -186,8 +188,8 @@ pub(super) trait DurableStorage: Send + 'static {
         _work: &dyn super::LedgerTransactionWork,
     ) -> GlobalLedgerResult<Option<u64>> {
         Err(GlobalLedgerError::request(
-            "ledger_joint_transaction_unsupported",
-            "append_transaction",
+            LedgerCode::LedgerJointTransactionUnsupported.code(),
+            LedgerLocation::AppendTransaction.location(),
         ))
     }
     fn close(&mut self) -> GlobalLedgerResult<()>;
@@ -238,11 +240,13 @@ impl SegmentStore {
         config: GlobalLedgerConfig,
         mut verifier: Option<&mut ArtifactVerifier<'_>>,
     ) -> GlobalLedgerResult<Self> {
-        fs::create_dir_all(&config.root)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_ledger_root", &error))?;
+        fs::create_dir_all(&config.root).map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "create_ledger_root", &error)
+        })?;
         let segments_dir = config.root.join("segments");
-        fs::create_dir_all(&segments_dir)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_segments", &error))?;
+        fs::create_dir_all(&segments_dir).map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "create_segments", &error)
+        })?;
         let (mut ownership, stale_owner) =
             WriterOwnership::acquire(&config.root, &config.owner_id)?;
         let recovery = match recover_segments(&config.root, &segments_dir, &mut verifier) {
@@ -269,7 +273,7 @@ impl SegmentStore {
             Ok(file) => file,
             Err(error) => {
                 let _ = ownership.close();
-                return Err(GlobalLedgerError::io(
+                return Err(GlobalLedgerError::io_untyped(
                     "ledger_io",
                     "open_active_segment",
                     &error,
@@ -278,7 +282,7 @@ impl SegmentStore {
         };
         let active_bytes = active_file
             .metadata()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "stat_segment", &error))?
+            .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "stat_segment", &error))?
             .len();
         let commit_statistics =
             match CommitStatistics::new(events.last().map_or(0, PersistedEvent::sequence)) {
@@ -294,7 +298,7 @@ impl SegmentStore {
             commit_statistics,
             backend: SegmentStorage {
                 root: config.root.canonicalize().map_err(|error| {
-                    GlobalLedgerError::io("ledger_io", "canonicalize_ledger_root", &error)
+                    GlobalLedgerError::io_untyped("ledger_io", "canonicalize_ledger_root", &error)
                 })?,
                 segments_dir,
                 ownership,
@@ -377,21 +381,21 @@ impl<B: DurableStorage> EventStore<B> {
     ) -> GlobalLedgerResult<PersistedEvent> {
         if self.recovering_retention && draft.event_type() != EventType::LedgerRecovered {
             return Err(GlobalLedgerError::request(
-                "artifact_retention_recovery_pending",
-                "append_event",
+                LedgerCode::ArtifactRetentionRecoveryPending.code(),
+                LedgerLocation::AppendEvent.location(),
             ));
         }
         if matches!(draft.payload(), EventPayload::Ledger(actingcommand_contract::LedgerPayload::Recovered(payload)) if payload.migration().is_some())
         {
             return Err(GlobalLedgerError::request(
-                "migration_requires_import_transaction",
-                "append_event",
+                LedgerCode::MigrationRequiresImportTransaction.code(),
+                LedgerLocation::AppendEvent.location(),
             ));
         }
         if is_unlinked_scheduled_settlement_draft(&draft) {
             return Err(GlobalLedgerError::fatal(
-                "scheduled_settlement_continuation_required",
-                "append_event",
+                LedgerCode::ScheduledSettlementContinuationRequired.code(),
+                LedgerLocation::AppendEvent.location(),
             ));
         }
         self.append_with_event_id(draft, None, observation)
@@ -415,18 +419,21 @@ impl<B: DurableStorage> EventStore<B> {
                 | EventType::FactInvalidated
         ) {
             return Err(GlobalLedgerError::request(
-                "joint_event_type_unsupported",
-                "append_transaction",
+                LedgerCode::JointEventTypeUnsupported.code(),
+                LedgerLocation::AppendTransaction.location(),
             ));
         }
         let event = PersistedEvent::from_sanitized(self.next_sequence, draft).map_err(|error| {
-            GlobalLedgerError::request(error.code(), "validate_sanitized_event")
+            GlobalLedgerError::request(
+                error.code(),
+                LedgerLocation::ValidateSanitizedEvent.location(),
+            )
         })?;
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
-                "duplicate_event_id",
-                "append_transaction",
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::AppendTransaction.location(),
             ));
         }
         self.validate_retention_admission(&event, false)?;
@@ -443,6 +450,13 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         execution: PolicyExecutionEventData,
     ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if super::take_settlement_refusal_for_test(&execution.decision_id) {
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryRefusedForTest.code(),
+                LedgerLocation::ReconcileScheduledPolicySettlement.location(),
+            ));
+        }
         let first_new_sequence = self.next_sequence;
         let execution_draft = scheduled_policy_execution_recovery_draft(&execution)?;
         self.append_recovered_policy_execution(execution_draft)?;
@@ -475,9 +489,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [intent] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_intent_not_unique",
-                "build_policy_completion_recovery",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryIntentNotUnique.code(),
+                LedgerLocation::BuildPolicyCompletionRecovery.location(),
             ));
         };
         let admissions = self
@@ -493,15 +507,15 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [admission] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_admission_not_unique",
-                "build_policy_completion_recovery",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryAdmissionNotUnique.code(),
+                LedgerLocation::BuildPolicyCompletionRecovery.location(),
             ));
         };
         let Some(admission) = admission.admission() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_payload_conflict",
-                "build_policy_completion_recovery",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryPayloadConflict.code(),
+                LedgerLocation::BuildPolicyCompletionRecovery.location(),
             ));
         };
         let executions = self
@@ -516,9 +530,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [execution] = executions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_execution_not_unique",
-                "build_policy_completion_recovery",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryExecutionNotUnique.code(),
+                LedgerLocation::BuildPolicyCompletionRecovery.location(),
             ));
         };
         scheduled_policy_recovery_draft(
@@ -545,7 +559,12 @@ impl<B: DurableStorage> EventStore<B> {
             }
             None => PersistedEvent::from_sanitized(self.next_sequence, draft),
         }
-        .map_err(|error| GlobalLedgerError::request(error.code(), "validate_sanitized_event"))?;
+        .map_err(|error| {
+            GlobalLedgerError::request(
+                error.code(),
+                LedgerLocation::ValidateSanitizedEvent.location(),
+            )
+        })?;
         self.persist_event(event, observation)
     }
 
@@ -555,7 +574,10 @@ impl<B: DurableStorage> EventStore<B> {
         continuation: ScheduledPolicyRecoveryContinuation,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let draft = continuation.apply_to(draft).map_err(|error| {
-            GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
+            GlobalLedgerError::request(
+                error.code(),
+                LedgerLocation::ValidateRecoveredScheduledEvent.location(),
+            )
         })?;
         self.append_with_event_id(draft, None, &mut None)
     }
@@ -572,16 +594,16 @@ impl<B: DurableStorage> EventStore<B> {
             || !draft.artifacts().is_empty()
             || !event_links_empty(draft.links())
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_draft_invalid",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                SharedCode::ScheduledRecoveryDraftInvalid.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         }
         let EventPayload::Policy(PolicyPayload::DispatchCompleted(completion)) = draft.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_draft_type_invalid",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryDraftTypeInvalid.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
 
@@ -598,9 +620,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(intent_fact, intent)] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_intent_not_unique",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryIntentNotUnique.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
         let admissions = self
@@ -616,9 +638,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(admission_fact, admission)] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_admission_not_unique",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryAdmissionNotUnique.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
         let executions = self
@@ -633,17 +655,17 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [execution_fact] = executions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_execution_not_unique",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryExecutionNotUnique.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
         let EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution)) =
             execution_fact.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_fact_type_invalid",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryFactTypeInvalid.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
         let completions = self
@@ -661,9 +683,9 @@ impl<B: DurableStorage> EventStore<B> {
             [] => None,
             [completion] => Some(*completion),
             _ => {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_recovery_completion_not_unique",
-                    "recover_policy_completion",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledRecoveryCompletionNotUnique.code(),
+                    LedgerLocation::RecoverPolicyCompletion.location(),
                 ));
             }
         };
@@ -678,9 +700,9 @@ impl<B: DurableStorage> EventStore<B> {
                 && admission_fact.sequence() < execution_fact.sequence())
             || !same_chain_without_lease(intent_fact.links(), admission_fact.links())
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_payload_conflict",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryPayloadConflict.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         }
 
@@ -695,16 +717,16 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [lease_granted] = lease_grants.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_lease_not_unique",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryLeaseNotUnique.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         };
         let recovered_links = execution_fact.links();
         if !same_scheduled_chain(recovered_links, lease_granted.links()) {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_execution_links_conflict",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryExecutionLinksConflict.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         }
         let releases = self
@@ -715,36 +737,49 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), lease_granted.links())
             })
             .collect::<Vec<_>>();
-        let [release] = releases.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_release_not_unique",
-                "recover_policy_completion",
-            ));
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review, ruling on the open case): a run
+        // whose lease a transfer handed on, that expired (or both, one end), or that was
+        // released without run links has no run-linked release; that end ends its lease
+        // (`unique_lease_end`), whether the run is settled from its terminal or interrupted.
+        let handed_on = if releases.is_empty() {
+            unique_lease_end(&self.events, lease_granted.links())
+        } else {
+            None
+        };
+        let release = match (releases.as_slice(), handed_on) {
+            ([release], _) => *release,
+            ([], Some((end, _))) => end,
+            _ => {
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledRecoveryReleaseNotUnique.code(),
+                    LedgerLocation::RecoverPolicyCompletion.location(),
+                ));
+            }
         };
         if release.sequence() <= admission_fact.sequence()
             || release.sequence() >= execution_fact.sequence()
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_release_order_invalid",
-                "recover_policy_completion",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryReleaseOrderInvalid.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             ));
         }
         if let Some(existing_completion) = existing_completion {
             let EventPayload::Policy(PolicyPayload::DispatchCompleted(existing)) =
                 existing_completion.payload()
             else {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_recovery_fact_type_invalid",
-                    "recover_policy_completion",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledRecoveryFactTypeInvalid.code(),
+                    LedgerLocation::RecoverPolicyCompletion.location(),
                 ));
             };
             if existing != completion
                 || !same_scheduled_chain(existing_completion.links(), lease_granted.links())
                 || existing_completion.sequence() <= execution_fact.sequence()
             {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_recovery_completion_conflict",
-                    "recover_policy_completion",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledRecoveryCompletionConflict.code(),
+                    LedgerLocation::RecoverPolicyCompletion.location(),
                 ));
             }
             return Ok(existing_completion.clone());
@@ -756,9 +791,9 @@ impl<B: DurableStorage> EventStore<B> {
             action_id,
         )
         .map_err(|_| {
-            GlobalLedgerError::fatal(
-                "scheduled_recovery_links_invalid",
-                "recover_policy_completion",
+            GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledRecoveryLinksInvalid.code(),
+                LedgerLocation::RecoverPolicyCompletion.location(),
             )
         })?;
         self.append_with_scheduled_recovery_continuation(draft, continuation)
@@ -775,16 +810,16 @@ impl<B: DurableStorage> EventStore<B> {
             || !draft.artifacts().is_empty()
             || !event_links_empty(draft.links())
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_draft_invalid",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryDraftInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
         let EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution)) = draft.payload()
         else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_draft_type_invalid",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryDraftTypeInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
         let expected_severity = match execution.outcome() {
@@ -797,9 +832,9 @@ impl<B: DurableStorage> EventStore<B> {
             PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
         };
         if draft.severity() != expected_severity {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_severity_invalid",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoverySeverityInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
 
@@ -816,9 +851,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(intent_fact, intent)] = intents.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_intent_not_unique",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryIntentNotUnique.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
         let admissions = self
@@ -834,9 +869,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [(admission_fact, admission)] = admissions.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_admission_not_unique",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryAdmissionNotUnique.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
         if !same_dispatch_definition(intent, admission)
@@ -846,9 +881,9 @@ impl<B: DurableStorage> EventStore<B> {
             || execution.instance_id() != intent.instance_id()
             || !same_chain_without_lease(intent_fact.links(), admission_fact.links())
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_payload_conflict",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryPayloadConflict.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
         let existing_executions = self
@@ -866,9 +901,9 @@ impl<B: DurableStorage> EventStore<B> {
             [] => None,
             [existing] => Some(*existing),
             _ => {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_execution_recovery_not_unique",
-                    "recover_policy_execution",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryNotUnique.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
                 ));
             }
         };
@@ -884,9 +919,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .count();
         if completion_count > 1 || completion_count == 1 && existing_execution.is_none() {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_outcome_conflict",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryOutcomeConflict.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
 
@@ -899,9 +934,9 @@ impl<B: DurableStorage> EventStore<B> {
             })
             .collect::<Vec<_>>();
         let [lease_granted] = lease_grants.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_lease_not_unique",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryLeaseNotUnique.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
         let recovered_links = lease_granted.links();
@@ -914,26 +949,41 @@ impl<B: DurableStorage> EventStore<B> {
                     && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
-        let [release] = releases.as_slice() else {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_release_not_unique",
-                "recover_policy_execution",
-            ));
+        // Workflow #369 E3 (#670 rulings 2 and 3, final review, ruling on the open case): a run
+        // whose lease a transfer handed on, that expired (or both, one end), or that was
+        // released without run links, before any run-linked release, has that end as its lease
+        // end (`unique_lease_end`); no release is written for a lease that already ended. With
+        // a terminal the run is settled from it, otherwise as interrupted from that end.
+        let handed_on = if releases.is_empty() {
+            unique_lease_end(&self.events, recovered_links)
+        } else {
+            None
         };
-        if release.severity() != EventSeverity::Info
-            || release.payload().action() != EventAction::LeaseRelease
-            || !matches!(
-                release.payload(),
-                EventPayload::Lease(LeasePayload::Released(_))
-            )
-            || !matches!(
-                release.payload().effect_disposition(),
-                Some(EffectDisposition::Performed | EffectDisposition::NotPerformed)
-            )
+        let release = match (releases.as_slice(), handed_on) {
+            ([release], _) => *release,
+            ([], Some((end, _))) => end,
+            _ => {
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryReleaseNotUnique.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
+                ));
+            }
+        };
+        if handed_on.is_none()
+            && (release.severity() != EventSeverity::Info
+                || release.payload().action() != EventAction::LeaseRelease
+                || !matches!(
+                    release.payload(),
+                    EventPayload::Lease(LeasePayload::Released(_))
+                )
+                || !matches!(
+                    release.payload().effect_disposition(),
+                    Some(EffectDisposition::Performed | EffectDisposition::NotPerformed)
+                ))
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_release_invalid",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryReleaseInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
 
@@ -948,42 +998,98 @@ impl<B: DurableStorage> EventStore<B> {
                     && event.links().run_id() == recovered_links.run_id()
             })
             .collect::<Vec<_>>();
+        if terminals.len() > 1 {
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
+            ));
+        }
+        // Workflow #369 E3 (coordinator ruling on #670 review H-1 and on the open case): a run
+        // with no terminal whose lease ended without a recorded outcome (the start recovered its
+        // release, its own release records `not_performed`, or its lease otherwise ended) is
+        // settled once as interrupted, from that release or end. A run's release with no
+        // terminal is taken through `same_task_run_chain`, under the grant's request or the
+        // run's own task request (final review M-1). A run that has a terminal is settled from
+        // it (`terminal_lease_end_valid`); an interrupted settlement of such a run is refused,
+        // whatever the order of its terminal and its release or lease end (coordinator ruling
+        // on #670, R4).
+        let recovered_interruption = (handed_on.is_some()
+            || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
+            && is_interrupted_settlement(execution.outcome());
         let source_fact = match terminals.as_slice() {
-            [] => *release,
+            _ if recovered_interruption => release,
+            [] => release,
             [terminal] => *terminal,
             _ => {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_execution_recovery_terminal_not_unique",
-                    "recover_policy_execution",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
                 ));
             }
         };
+        // Coordinator ruling on #670's open case: a run that has a terminal is settled from it,
+        // whatever the order of its lease end. The lease end is the run's run-linked release
+        // after the terminal: its own (under the terminal's request), or one on the grant's
+        // chain (the release the start recovered, or the one the run's settlement wrote when its
+        // own cleanup left the lease). With no run-linked release it is the end that ended the
+        // lease, after the terminal, or before it only when the lease expired (the run's
+        // terminal followed its lease's expiry); the order check relaxes for that shape only.
+        let terminal_lease_end_valid =
+            |terminal: &PersistedEvent, same_request: bool| match handed_on {
+                None => {
+                    same_task_run_chain(release.links(), recovered_links)
+                        && (!same_request
+                            || release.links().request_id() == terminal.links().request_id()
+                            || same_scheduled_chain(release.links(), recovered_links))
+                        && release.sequence() > terminal.sequence()
+                }
+                Some((end, expired)) => end.sequence() > terminal.sequence() || expired,
+            };
+        // Coordinator ruling on #670 (runtime budget): a run settled from its terminal that ran
+        // past its admitted runtime budget carries the policy's rewrite instead of its own
+        // outcome. The ledger does not record the dispatch's expected duration, so it checks the
+        // rewrite's form and the bound every rewrite meets (`runtime_exceeded` with no expected
+        // duration); the host checks the policy's exact rule.
+        let runtime_rewrite_valid = |reported_success: bool, runtime_ms: u64| {
+            matches!(
+                execution.outcome(),
+                PolicyExecutionOutcome::Failed { failure }
+                    if failure.is_runtime_budget_rewrite(reported_success)
+                        && failure.runtime_ms == runtime_ms
+            ) && admission
+                .admission()
+                .and_then(|record| record.budget.runtime_exceeded(0, runtime_ms))
+                == Some(true)
+        };
+        // Coordinator ruling on #670 (R4; verification N-2): only a run with no terminal is
+        // settled as interrupted.
+        let recovered_topology_valid = recovered_interruption && terminals.is_empty();
         if !(intent_fact.sequence() < lease_granted.sequence()
             && lease_granted.sequence() < admission_fact.sequence()
             && admission_fact.sequence() < source_fact.sequence())
         {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_order_invalid",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryOrderInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
         if let Some(existing_execution) = existing_execution {
             let EventPayload::Policy(PolicyPayload::ExecutionRecorded(existing)) =
                 existing_execution.payload()
             else {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_execution_recovery_fact_type_invalid",
-                    "recover_policy_execution",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryFactTypeInvalid.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
                 ));
             };
             let topology_valid = match source_fact.event_type() {
+                _ if recovered_interruption => recovered_topology_valid,
                 EventType::TaskCompleted | EventType::TaskFailed => {
                     same_task_run_chain(source_fact.links(), recovered_links)
-                        && same_task_run_chain(release.links(), recovered_links)
-                        && release.sequence() > source_fact.sequence()
+                        && terminal_lease_end_valid(source_fact, false)
                 }
                 EventType::LeaseReleased => {
-                    same_scheduled_chain(source_fact.links(), recovered_links)
+                    same_task_run_chain(source_fact.links(), recovered_links)
                         && terminals.is_empty()
                         && !self.events.iter().any(|event| {
                             event.links().task_id() == recovered_links.task_id()
@@ -1000,7 +1106,7 @@ impl<B: DurableStorage> EventStore<B> {
                         && matches!(
                             execution.outcome(),
                             PolicyExecutionOutcome::Failed { failure }
-                                if failure.error_code == "policy_settlement_interrupted"
+                                if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                                     && failure.original_class == PolicyFailureClass::Severe
                                     && failure.effective_class == PolicyFailureClass::Severe
                                     && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -1016,44 +1122,50 @@ impl<B: DurableStorage> EventStore<B> {
                 || !same_scheduled_chain(existing_execution.links(), recovered_links)
                 || !topology_valid
             {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_execution_recovery_conflict",
-                    "recover_policy_execution",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryConflict.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
                 ));
             }
             return Ok(existing_execution.clone());
         }
         match source_fact.event_type() {
+            _ if recovered_interruption => {
+                if !recovered_topology_valid {
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryInterruptionConflict.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
+                    ));
+                }
+            }
             EventType::TaskCompleted => {
                 let [terminal] = terminals.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_terminal_not_unique",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_task_request_not_unique",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryTaskRequestNotUnique.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let runtime_ms = source_fact
                     .timestamp_unix_ms()
                     .checked_sub(task_request.timestamp_unix_ms())
                     .ok_or_else(|| {
-                        GlobalLedgerError::fatal(
-                            "scheduled_execution_recovery_clock_regressed",
-                            "recover_policy_execution",
+                        GlobalLedgerError::settlement_refusal(
+                            LedgerCode::ScheduledExecutionRecoveryClockRegressed.code(),
+                            ContractLocation::RecoverPolicyExecution.location(),
                         )
                     })?;
                 if *terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
-                    || !same_task_run_chain(release.links(), recovered_links)
-                    || release.links().request_id() != source_fact.links().request_id()
+                    || !terminal_lease_end_valid(source_fact, true)
                     || source_fact.severity() != EventSeverity::Info
-                    || release.sequence() <= source_fact.sequence()
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
                     || !matches!(
@@ -1068,41 +1180,41 @@ impl<B: DurableStorage> EventStore<B> {
                                 }
                             )
                     )
-                    || !matches!(
+                    || !(matches!(
                         execution.outcome(),
                         PolicyExecutionOutcome::Succeeded {
                             runtime_ms: actual
                         } if *actual == runtime_ms
-                    )
+                    ) || runtime_rewrite_valid(true, runtime_ms))
                 {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_success_conflict",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoverySuccessConflict.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 }
             }
             EventType::TaskFailed => {
                 let [terminal] = terminals.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_terminal_not_unique",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryTerminalNotUnique.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let class = match source_fact.severity() {
                     EventSeverity::Warning => PolicyFailureClass::Recoverable,
                     EventSeverity::Fatal => PolicyFailureClass::Severe,
                     EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
-                        return Err(GlobalLedgerError::fatal(
-                            "scheduled_execution_recovery_failure_severity_ambiguous",
-                            "recover_policy_execution",
+                        return Err(GlobalLedgerError::settlement_refusal(
+                            LedgerCode::ScheduledExecutionRecoveryFailureSeverityAmbiguous.code(),
+                            ContractLocation::RecoverPolicyExecution.location(),
                         ));
                     }
                 };
                 let EventPayload::Task(TaskPayload::Semantic(payload)) = source_fact.payload()
                 else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_failure_invalid",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryFailureInvalid.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let TaskSemanticFact::TerminalCommitted {
@@ -1111,53 +1223,51 @@ impl<B: DurableStorage> EventStore<B> {
                     ..
                 } = payload.fact()
                 else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_failure_invalid",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryFailureInvalid.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_task_request_not_unique",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryTaskRequestNotUnique.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
                 let runtime_ms = source_fact
                     .timestamp_unix_ms()
                     .checked_sub(task_request.timestamp_unix_ms())
                     .ok_or_else(|| {
-                        GlobalLedgerError::fatal(
-                            "scheduled_execution_recovery_clock_regressed",
-                            "recover_policy_execution",
+                        GlobalLedgerError::settlement_refusal(
+                            LedgerCode::ScheduledExecutionRecoveryClockRegressed.code(),
+                            ContractLocation::RecoverPolicyExecution.location(),
                         )
                     })?;
                 if *terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
-                    || !same_task_run_chain(release.links(), recovered_links)
-                    || release.links().request_id() != source_fact.links().request_id()
-                    || release.sequence() <= source_fact.sequence()
+                    || !terminal_lease_end_valid(source_fact, true)
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
-                    || !matches!(
+                    || !(matches!(
                         execution.outcome(),
                         PolicyExecutionOutcome::Failed { failure }
                             if failure.error_code == *failure_code
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms
-                    )
+                    ) || runtime_rewrite_valid(false, runtime_ms))
                 {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_failure_conflict",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryFailureConflict.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 }
             }
             EventType::LeaseReleased => {
-                if source_fact != *release
-                    || !same_scheduled_chain(source_fact.links(), recovered_links)
+                if source_fact != release
+                    || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
                     || self.events.iter().any(|event| {
@@ -1175,7 +1285,7 @@ impl<B: DurableStorage> EventStore<B> {
                     || !matches!(
                         execution.outcome(),
                         PolicyExecutionOutcome::Failed { failure }
-                            if failure.error_code == "policy_settlement_interrupted"
+                            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                                 && failure.original_class == PolicyFailureClass::Severe
                                 && failure.effective_class == PolicyFailureClass::Severe
                                 && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -1185,23 +1295,23 @@ impl<B: DurableStorage> EventStore<B> {
                                 && failure.runtime_ms == 0
                     )
                 {
-                    return Err(GlobalLedgerError::fatal(
-                        "scheduled_execution_recovery_interruption_conflict",
-                        "recover_policy_execution",
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryInterruptionConflict.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 }
             }
             _ => {
-                return Err(GlobalLedgerError::fatal(
-                    "scheduled_execution_recovery_fact_type_invalid",
-                    "recover_policy_execution",
+                return Err(GlobalLedgerError::settlement_refusal(
+                    LedgerCode::ScheduledExecutionRecoveryFactTypeInvalid.code(),
+                    ContractLocation::RecoverPolicyExecution.location(),
                 ));
             }
         }
         if execution.observed_at_unix_ms() != source_fact.timestamp_unix_ms() {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_time_conflict",
-                "recover_policy_execution",
+            return Err(GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryTimeConflict.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             ));
         }
         let action_id = issue_scheduled_recovery_action_id()?;
@@ -1211,9 +1321,9 @@ impl<B: DurableStorage> EventStore<B> {
             action_id,
         )
         .map_err(|_| {
-            GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_links_invalid",
-                "recover_policy_execution",
+            GlobalLedgerError::settlement_refusal(
+                LedgerCode::ScheduledExecutionRecoveryLinksInvalid.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             )
         })?;
         self.append_with_scheduled_recovery_continuation(draft, continuation)
@@ -1237,8 +1347,8 @@ impl<B: DurableStorage> EventStore<B> {
             && !(guarded && event.event_type() == EventType::ArtifactEvictionOutcome)
         {
             return Err(GlobalLedgerError::request(
-                "artifact_retention_recovery_pending",
-                "append_event",
+                LedgerCode::ArtifactRetentionRecoveryPending.code(),
+                LedgerLocation::AppendEvent.location(),
             ));
         }
         self.retention
@@ -1262,8 +1372,8 @@ impl<B: DurableStorage> EventStore<B> {
         let following_sequence = increment_sequence(self.next_sequence)?;
         if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
-                "duplicate_event_id",
-                "append_event",
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::AppendEvent.location(),
             ));
         }
         self.validate_retention_admission(&event, guarded)?;
@@ -1427,11 +1537,17 @@ impl<B: DurableStorage> EventStore<B> {
         let now = unix_ms_now()?;
         let payload = LedgerPayloadDraft::recovered(reason, segment_index, affected_bytes, audit);
         let identifiers = IdentifierIssuer::new().map_err(|_| {
-            GlobalLedgerError::fatal("recovery_event_failed", "create_identifier_issuer")
+            GlobalLedgerError::fatal(
+                LedgerCode::RecoveryEventFailed.code(),
+                LedgerLocation::CreateIdentifierIssuer.location(),
+            )
         })?;
         let draft = EventDraft::new(
             identifiers.mint_event_id().map_err(|_| {
-                GlobalLedgerError::fatal("recovery_event_failed", "issue_recovery_event_id")
+                GlobalLedgerError::fatal(
+                    LedgerCode::RecoveryEventFailed.code(),
+                    LedgerLocation::IssueRecoveryEventId.location(),
+                )
             })?,
             now,
             EventSeverity::Warning,
@@ -1445,11 +1561,17 @@ impl<B: DurableStorage> EventStore<B> {
         )
         .sanitize(
             &Sha256SecretFingerprinter::new(b"actingcommand-ledger-recovery-v2").map_err(|_| {
-                GlobalLedgerError::fatal("recovery_event_failed", "configure_fingerprinter")
+                GlobalLedgerError::fatal(
+                    LedgerCode::RecoveryEventFailed.code(),
+                    LedgerLocation::ConfigureFingerprinter.location(),
+                )
             })?,
         )
         .map_err(|_| {
-            GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event")
+            GlobalLedgerError::fatal(
+                LedgerCode::RecoveryEventFailed.code(),
+                LedgerLocation::SanitizeRecoveryEvent.location(),
+            )
         })?;
         self.append_with_event_id(draft, event_id, &mut None)
     }
@@ -1467,7 +1589,7 @@ impl DurableStorage for SegmentStorage {
             event: StoredEventRecord::from_event(event),
         })
         .map_err(|error| {
-            GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
+            GlobalLedgerError::json_untyped("event_serialization_failed", "serialize_event", &error)
         })?;
         bytes.push(b'\n');
         if self.active_bytes > 0
@@ -1478,10 +1600,10 @@ impl DurableStorage for SegmentStorage {
         let write_started = Instant::now();
         self.active_file
             .write_all(&bytes)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "append_event", &error))?;
+            .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "append_event", &error))?;
         self.active_file
             .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
+            .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "sync_event", &error))?;
         let write_sync_ns = Instant::now()
             .checked_duration_since(write_started)
             .and_then(|value| u64::try_from(value.as_nanos()).ok());
@@ -1492,7 +1614,7 @@ impl DurableStorage for SegmentStorage {
     fn close(&mut self) -> GlobalLedgerResult<()> {
         self.active_file
             .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_on_close", &error))?;
+            .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "sync_on_close", &error))?;
         self.ownership.close()
     }
 }
@@ -1500,9 +1622,9 @@ impl DurableStorage for SegmentStorage {
 #[cfg(test)]
 impl SegmentStorage {
     fn rotate(&mut self) -> GlobalLedgerResult<()> {
-        self.active_file
-            .sync_all()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_before_rotate", &error))?;
+        self.active_file.sync_all().map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "sync_before_rotate", &error)
+        })?;
         self.active_index = self.active_index.saturating_add(1);
         let path = segment_path(&self.segments_dir, self.active_index);
         self.active_file = OpenOptions::new()
@@ -1510,7 +1632,9 @@ impl SegmentStorage {
             .append(true)
             .read(true)
             .open(path)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_segment", &error))?;
+            .map_err(|error| {
+                GlobalLedgerError::io_untyped("ledger_io", "create_segment", &error)
+            })?;
         self.active_bytes = 0;
         Ok(())
     }
@@ -1533,15 +1657,15 @@ fn scheduled_policy_recovery_draft(
 ) -> GlobalLedgerResult<SanitizedEventDraft> {
     let identifiers = IdentifierIssuer::new().map_err(|_| {
         GlobalLedgerError::fatal(
-            "scheduled_recovery_event_id_failed",
-            "build_scheduled_policy_recovery",
+            LedgerCode::ScheduledRecoveryEventIdFailed.code(),
+            LedgerLocation::BuildScheduledPolicyRecovery.location(),
         )
     })?;
     EventDraft::new(
         identifiers.mint_event_id().map_err(|_| {
             GlobalLedgerError::fatal(
-                "scheduled_recovery_event_id_failed",
-                "build_scheduled_policy_recovery",
+                LedgerCode::ScheduledRecoveryEventIdFailed.code(),
+                LedgerLocation::BuildScheduledPolicyRecovery.location(),
             )
         })?,
         timestamp_unix_ms,
@@ -1558,16 +1682,16 @@ fn scheduled_policy_recovery_draft(
         &Sha256SecretFingerprinter::new(b"actingcommand-ledger-scheduled-settlement-v1").map_err(
             |_| {
                 GlobalLedgerError::fatal(
-                    "scheduled_recovery_sanitize_failed",
-                    "build_scheduled_policy_recovery",
+                    LedgerCode::ScheduledRecoverySanitizeFailed.code(),
+                    LedgerLocation::BuildScheduledPolicyRecovery.location(),
                 )
             },
         )?,
     )
     .map_err(|_| {
         GlobalLedgerError::fatal(
-            "scheduled_recovery_sanitize_failed",
-            "build_scheduled_policy_recovery",
+            LedgerCode::ScheduledRecoverySanitizeFailed.code(),
+            LedgerLocation::BuildScheduledPolicyRecovery.location(),
         )
     })
 }
@@ -1608,8 +1732,8 @@ fn issue_scheduled_recovery_action_id() -> GlobalLedgerResult<IssuedActionId> {
         .and_then(|issuer| issuer.mint_action_id())
         .map_err(|_| {
             GlobalLedgerError::fatal(
-                "scheduled_recovery_action_id_failed",
-                "recover_policy_execution",
+                LedgerCode::ScheduledRecoveryActionIdFailed.code(),
+                ContractLocation::RecoverPolicyExecution.location(),
             )
         })
 }
@@ -1702,24 +1826,97 @@ fn same_task_run_chain(actual: &EventLinks, scheduled: &EventLinks) -> bool {
         && actual.recognition_id().is_none()
 }
 
+/// The one event that ended the lease of `granted` without a run-linked release, on its
+/// instance: a `lease.transferred` that handed it on, its `lease.expired`, or a `lease.released`
+/// without run links (the host's close). An expiry handed on to a waiting claim writes a
+/// transfer and the lease's expiry; the two are one end, at the earlier (#670 final review
+/// M-2). Any other set of ends is no one end. The host's `single_lease_end` takes the same end.
+/// Also returns whether the lease expired (an expiry is among the ends).
+fn unique_lease_end<'a>(
+    events: &'a [PersistedEvent],
+    granted: &EventLinks,
+) -> Option<(&'a PersistedEvent, bool)> {
+    let lease_id = granted.lease_id()?;
+    let ends = events
+        .iter()
+        .filter(|event| {
+            event.links().instance_id() == granted.instance_id()
+                && (matches!(
+                    event.payload(),
+                    EventPayload::Lease(LeasePayload::Transferred(transfer))
+                        if *lease_id == transfer.from_lease_id()
+                ) || (event.links().lease_id() == Some(lease_id)
+                    && (event.event_type() == EventType::LeaseExpired
+                        || (event.event_type() == EventType::LeaseReleased
+                            && event.links().run_id().is_none()))))
+        })
+        .collect::<Vec<_>>();
+    match ends.as_slice() {
+        [end] => Some((*end, end.event_type() == EventType::LeaseExpired)),
+        [first, second] => {
+            let types = [first.event_type(), second.event_type()];
+            (types.contains(&EventType::LeaseTransferred)
+                && types.contains(&EventType::LeaseExpired))
+            .then_some(if first.sequence() < second.sequence() {
+                (*first, true)
+            } else {
+                (*second, true)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The interrupted settlement of a scheduled run the daemon's own end cut short
+/// (`policy_settlement_interrupted`), as the startup reconciliation records it.
+fn is_interrupted_settlement(outcome: &PolicyExecutionOutcome) -> bool {
+    matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
+                && failure.original_class == PolicyFailureClass::Severe
+                && failure.effective_class == PolicyFailureClass::Severe
+                && failure.disposition == PolicyFailureDisposition::PausedTask
+                && failure.retry_attempt == 0
+                && failure.retry_at_unix_ms.is_none()
+                && !failure.reported_success
+                && failure.runtime_ms == 0
+    )
+}
+
+/// The request a recovered scheduled run is measured from: a fixture-simulated run's client
+/// intent (`lab.request`), or, for a physical run, which records none, its scheduler
+/// `command.received` (`runtime.task_run`) under the run's links.
 fn matching_scheduled_task_requests<'a>(
     events: &'a [PersistedEvent],
     terminal: &PersistedEvent,
     scheduled: &EventLinks,
 ) -> Vec<&'a PersistedEvent> {
+    let same_request = |event: &PersistedEvent| {
+        event.links().instance_id() == scheduled.instance_id()
+            && event.links().correlation_id() == scheduled.correlation_id()
+            && event.links().causation_id() == scheduled.causation_id()
+            && event.links().task_id() == scheduled.task_id()
+            && event.links().run_id() == scheduled.run_id()
+            && event.links().lease_id().is_none()
+            && event.links().frame_id().is_none()
+            && event.links().recognition_id().is_none()
+            && event.links().request_id() == terminal.links().request_id()
+    };
+    let client_intents = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::LabRequest && same_request(event))
+        .collect::<Vec<_>>();
+    if !client_intents.is_empty() {
+        return client_intents;
+    }
     events
         .iter()
         .filter(|event| {
-            event.event_type() == EventType::LabRequest
-                && event.links().instance_id() == scheduled.instance_id()
-                && event.links().correlation_id() == scheduled.correlation_id()
-                && event.links().causation_id() == scheduled.causation_id()
-                && event.links().task_id() == scheduled.task_id()
-                && event.links().run_id() == scheduled.run_id()
-                && event.links().lease_id().is_none()
-                && event.links().frame_id().is_none()
-                && event.links().recognition_id().is_none()
-                && event.links().request_id() == terminal.links().request_id()
+            event.event_type() == EventType::CommandReceived
+                && event.origin().source() == EventSource::Scheduler
+                && event.payload().action() == EventAction::RuntimeTaskRun
+                && same_request(event)
         })
         .collect()
 }
@@ -1820,7 +2017,10 @@ impl TailRepairRecord {
 
     fn event_id(&self) -> GlobalLedgerResult<EventId> {
         let digest = self.repair_id.strip_prefix("sha256:").ok_or_else(|| {
-            GlobalLedgerError::fatal("invalid_repair_record", "derive_recovery_event_id")
+            GlobalLedgerError::fatal(
+                LedgerCode::InvalidRepairRecord.code(),
+                LedgerLocation::DeriveRecoveryEventId.location(),
+            )
         })?;
         if digest.len() != 64
             || !digest
@@ -1828,27 +2028,30 @@ impl TailRepairRecord {
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         {
             return Err(GlobalLedgerError::fatal(
-                "invalid_repair_record",
-                "derive_recovery_event_id",
+                LedgerCode::InvalidRepairRecord.code(),
+                LedgerLocation::DeriveRecoveryEventId.location(),
             ));
         }
         let canonical = format!("evt_{}", &digest[..32]);
         serde_json::from_value(Value::String(canonical)).map_err(|_| {
-            GlobalLedgerError::fatal("invalid_repair_record", "derive_recovery_event_id")
+            GlobalLedgerError::fatal(
+                LedgerCode::InvalidRepairRecord.code(),
+                LedgerLocation::DeriveRecoveryEventId.location(),
+            )
         })
     }
 
     fn validate(&self) -> GlobalLedgerResult<()> {
         if self.schema_version != REPAIR_SCHEMA_VERSION {
             return Err(GlobalLedgerError::fatal(
-                "unsupported_repair_schema",
-                "validate_repair_record",
+                LedgerCode::UnsupportedRepairSchema.code(),
+                LedgerLocation::ValidateRepairRecord.location(),
             ));
         }
         if self.segment_index == 0 || self.original_len <= self.repaired_len {
             return Err(GlobalLedgerError::fatal(
-                "invalid_repair_record",
-                "validate_repair_lengths",
+                LedgerCode::InvalidRepairRecord.code(),
+                LedgerLocation::ValidateRepairLengths.location(),
             ));
         }
         let tail_digest = parse_sha256(&self.tail_sha256)?;
@@ -1860,8 +2063,8 @@ impl TailRepairRecord {
         );
         if self.repair_id != expected_id || self.quarantine_key != quarantine_key(&expected_id)? {
             return Err(GlobalLedgerError::fatal(
-                "invalid_repair_record",
-                "validate_repair_identity",
+                LedgerCode::InvalidRepairRecord.code(),
+                LedgerLocation::ValidateRepairIdentity.location(),
             ));
         }
         self.event_id()?;
@@ -1910,8 +2113,8 @@ impl RepairJournal {
             }
             Err(error) => {
                 return Err(GlobalLedgerError::io(
-                    "ledger_io",
-                    "read_repair_journal",
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ReadRepairJournal.location(),
                     &error,
                 ));
             }
@@ -1921,23 +2124,31 @@ impl RepairJournal {
         }
         if bytes.last() != Some(&b'\n') {
             return Err(GlobalLedgerError::fatal(
-                "corrupt_repair_journal",
-                "parse_repair_journal_tail",
+                LedgerCode::CorruptRepairJournal.code(),
+                LedgerLocation::ParseRepairJournalTail.location(),
             ));
         }
         let mut journal = Self::default();
         for line in bytes[..bytes.len() - 1].split(|byte| *byte == b'\n') {
             if line.is_empty() {
                 return Err(GlobalLedgerError::fatal(
-                    "corrupt_repair_journal",
-                    "parse_repair_journal_blank",
+                    LedgerCode::CorruptRepairJournal.code(),
+                    LedgerLocation::ParseRepairJournalBlank.location(),
                 ));
             }
             let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
-                GlobalLedgerError::json("corrupt_repair_journal", "parse_repair_journal", &error)
+                GlobalLedgerError::json(
+                    LedgerCode::CorruptRepairJournal.code(),
+                    LedgerLocation::ParseRepairJournal.location(),
+                    &error,
+                )
             })?;
             let record = serde_json::from_value::<TailRepairRecord>(unique.0).map_err(|error| {
-                GlobalLedgerError::json("corrupt_repair_journal", "decode_repair_journal", &error)
+                GlobalLedgerError::json(
+                    LedgerCode::CorruptRepairJournal.code(),
+                    LedgerLocation::DecodeRepairJournal.location(),
+                    &error,
+                )
             })?;
             journal.apply(record)?;
         }
@@ -1949,8 +2160,8 @@ impl RepairJournal {
         {
             if !unresolved_segments.insert(progress.prepared.segment_index) {
                 return Err(GlobalLedgerError::fatal(
-                    "repair_state_inconsistent",
-                    "validate_repair_segments",
+                    LedgerCode::RepairStateInconsistent.code(),
+                    LedgerLocation::ValidateRepairSegments.location(),
                 ));
             }
         }
@@ -1979,8 +2190,8 @@ impl RepairJournal {
             RepairJournalState::Prepared => {
                 if self.repairs.contains_key(&record.repair_id) {
                     return Err(GlobalLedgerError::fatal(
-                        "repair_state_inconsistent",
-                        "apply_repair_prepared",
+                        LedgerCode::RepairStateInconsistent.code(),
+                        LedgerLocation::ApplyRepairPrepared.location(),
                     ));
                 }
                 self.repairs.insert(
@@ -1994,14 +2205,14 @@ impl RepairJournal {
             RepairJournalState::Completed => {
                 let Some(progress) = self.repairs.get_mut(&record.repair_id) else {
                     return Err(GlobalLedgerError::fatal(
-                        "repair_state_inconsistent",
-                        "apply_repair_completed",
+                        LedgerCode::RepairStateInconsistent.code(),
+                        LedgerLocation::ApplyRepairCompleted.location(),
                     ));
                 };
                 if progress.completed || !progress.prepared.same_definition(&record) {
                     return Err(GlobalLedgerError::fatal(
-                        "repair_state_inconsistent",
-                        "apply_repair_completed",
+                        LedgerCode::RepairStateInconsistent.code(),
+                        LedgerLocation::ApplyRepairCompleted.location(),
                     ));
                 }
                 progress.completed = true;
@@ -2080,8 +2291,9 @@ fn recover_segments(
     }
 
     if let Some(last) = snapshots.last() {
-        let bytes = fs::read(&last.path)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "read_final_segment", &error))?;
+        let bytes = fs::read(&last.path).map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "read_final_segment", &error)
+        })?;
         let complete_len = complete_record_len(&bytes);
         if bytes.len() > complete_len {
             let record = TailRepairRecord::prepared(
@@ -2091,7 +2303,7 @@ fn recover_segments(
                 &bytes[complete_len..],
             )?;
             if journal.contains(&record.repair_id) {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::fatal_untyped(
                     "repair_state_inconsistent",
                     "discover_tail_repair",
                 ));
@@ -2116,16 +2328,16 @@ fn read_segment_snapshots(segments: &[(u64, PathBuf)]) -> GlobalLedgerResult<Vec
     for (position, (index, path)) in segments.iter().enumerate() {
         let is_last = position + 1 == segments.len();
         let bytes = fs::read(path)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "read_segment", &error))?;
+            .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "read_segment", &error))?;
         let complete_len = complete_record_len(&bytes);
         if bytes.is_empty() && !is_last {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "corrupt_segment",
                 "recover_empty_non_final_segment",
             ));
         }
         if bytes.len() > complete_len && !is_last {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "corrupt_segment",
                 "recover_non_final_tail",
             ));
@@ -2154,7 +2366,7 @@ fn parse_segment_records(
         &snapshot.bytes[..snapshot.complete_len - 1]
     };
     if complete_records.is_empty() && snapshot.complete_len > 0 {
-        return Err(GlobalLedgerError::fatal(
+        return Err(GlobalLedgerError::fatal_untyped(
             "corrupt_segment",
             "parse_blank_record",
         ));
@@ -2164,45 +2376,48 @@ fn parse_segment_records(
     }
     for line in complete_records.split(|byte| *byte == b'\n') {
         if line.is_empty() {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "corrupt_segment",
                 "parse_blank_record",
             ));
         }
-        let unique = serde_json::from_slice::<UniqueJsonValue>(line)
-            .map_err(|error| GlobalLedgerError::json("corrupt_segment", "parse_segment", &error))?;
+        let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
+            GlobalLedgerError::json_untyped("corrupt_segment", "parse_segment", &error)
+        })?;
         let schema_version = unique
             .0
             .get("event")
             .and_then(|event| event.get("schema_version"))
             .and_then(Value::as_str);
         if schema_version != Some(GLOBAL_EVENT_SCHEMA_VERSION) {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "unsupported_event_schema",
                 "recover_event_schema",
             ));
         }
         let stored = serde_json::from_value::<StoredLine>(unique.0).map_err(|error| {
-            GlobalLedgerError::json("corrupt_segment", "decode_segment", &error)
+            GlobalLedgerError::json_untyped("corrupt_segment", "decode_segment", &error)
         })?;
         if stored.line_type != LINE_TYPE {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "corrupt_segment",
                 "validate_line_type",
             ));
         }
-        let event =
-            stored.event.clone().into_metadata().map_err(|error| {
-                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
-            })?;
+        let event = stored.event.clone().into_metadata().map_err(|error| {
+            GlobalLedgerError::fatal(
+                error.code(),
+                LedgerLocation::ValidatePersistedEvent.location(),
+            )
+        })?;
         if event.sequence() != *next_sequence {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "sequence_discontinuity",
                 "recover_sequence",
             ));
         }
         if !event_ids.insert(*event.event_id()) {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "duplicate_event_id",
                 "recover_event_ids",
             ));
@@ -2223,26 +2438,27 @@ fn resume_prepared_repair(
         .iter()
         .find(|snapshot| snapshot.index == repair.segment_index)
     else {
-        return Err(GlobalLedgerError::fatal(
+        return Err(GlobalLedgerError::fatal_untyped(
             "repair_segment_missing",
             "resume_tail_repair",
         ));
     };
     if !snapshot.is_last {
-        return Err(GlobalLedgerError::fatal(
+        return Err(GlobalLedgerError::fatal_untyped(
             "repair_segment_not_final",
             "resume_tail_repair",
         ));
     }
-    let bytes = fs::read(&snapshot.path)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "read_repair_segment", &error))?;
+    let bytes = fs::read(&snapshot.path).map_err(|error| {
+        GlobalLedgerError::io_untyped("ledger_io", "read_repair_segment", &error)
+    })?;
     match bytes.len() as u64 {
         length if length == repair.original_len => {
             let repaired_len = usize::try_from(repair.repaired_len).map_err(|_| {
-                GlobalLedgerError::fatal("invalid_repair_record", "resume_tail_repair")
+                GlobalLedgerError::fatal_untyped("invalid_repair_record", "resume_tail_repair")
             })?;
             if repaired_len != complete_record_len(&bytes) {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::fatal_untyped(
                     "repair_tail_mismatch",
                     "resume_tail_repair",
                 ));
@@ -2255,18 +2471,19 @@ fn resume_prepared_repair(
                 .write(true)
                 .open(&snapshot.path)
                 .map_err(|error| {
-                    GlobalLedgerError::io("ledger_io", "open_segment_repair", &error)
+                    GlobalLedgerError::io_untyped("ledger_io", "open_segment_repair", &error)
                 })?;
             file.set_len(repair.repaired_len).map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "truncate_final_tail", &error)
+                GlobalLedgerError::io_untyped("ledger_io", "truncate_final_tail", &error)
             })?;
-            file.sync_all()
-                .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_tail_repair", &error))?;
+            file.sync_all().map_err(|error| {
+                GlobalLedgerError::io_untyped("ledger_io", "sync_tail_repair", &error)
+            })?;
             repair_test_barrier("after_truncate")?;
         }
         length if length == repair.repaired_len => {
             if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::fatal_untyped(
                     "repair_tail_mismatch",
                     "resume_tail_repair",
                 ));
@@ -2274,7 +2491,7 @@ fn resume_prepared_repair(
             ensure_quarantine(root, repair, None)?;
         }
         _ => {
-            return Err(GlobalLedgerError::fatal(
+            return Err(GlobalLedgerError::fatal_untyped(
                 "repair_segment_length_mismatch",
                 "resume_tail_repair",
             ));
@@ -2291,14 +2508,15 @@ fn ensure_quarantine(
 ) -> GlobalLedgerResult<()> {
     let path = root.join(&repair.quarantine_key);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "create_quarantine", &error))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "create_quarantine", &error)
+        })?;
     }
     match fs::read(&path) {
         Ok(existing) => {
             verify_tail_hash(repair, &existing)?;
             if tail.is_some_and(|tail| tail != existing) {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::fatal_untyped(
                     "quarantine_mismatch",
                     "verify_quarantine",
                 ));
@@ -2307,7 +2525,7 @@ fn ensure_quarantine(
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let Some(tail) = tail else {
-                return Err(GlobalLedgerError::fatal(
+                return Err(GlobalLedgerError::fatal_untyped(
                     "quarantine_missing",
                     "verify_quarantine",
                 ));
@@ -2318,14 +2536,16 @@ fn ensure_quarantine(
                 .write(true)
                 .open(path)
                 .map_err(|error| {
-                    GlobalLedgerError::io("ledger_io", "create_quarantine_file", &error)
+                    GlobalLedgerError::io_untyped("ledger_io", "create_quarantine_file", &error)
                 })?;
-            file.write_all(tail)
-                .map_err(|error| GlobalLedgerError::io("ledger_io", "write_quarantine", &error))?;
-            file.sync_all()
-                .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_quarantine", &error))
+            file.write_all(tail).map_err(|error| {
+                GlobalLedgerError::io_untyped("ledger_io", "write_quarantine", &error)
+            })?;
+            file.sync_all().map_err(|error| {
+                GlobalLedgerError::io_untyped("ledger_io", "sync_quarantine", &error)
+            })
         }
-        Err(error) => Err(GlobalLedgerError::io(
+        Err(error) => Err(GlobalLedgerError::io_untyped(
             "ledger_io",
             "read_quarantine",
             &error,
@@ -2338,8 +2558,8 @@ fn verify_tail_hash(repair: &TailRepairRecord, tail: &[u8]) -> GlobalLedgerResul
         || format!("sha256:{:x}", Sha256::digest(tail)) != repair.tail_sha256
     {
         return Err(GlobalLedgerError::fatal(
-            "repair_tail_mismatch",
-            "verify_repair_tail",
+            LedgerCode::RepairTailMismatch.code(),
+            LedgerLocation::VerifyRepairTail.location(),
         ));
     }
     Ok(())
@@ -2376,8 +2596,8 @@ fn verify_recovery_event(
         || !payload_valid
     {
         return Err(GlobalLedgerError::fatal(
-            "repair_recovery_event_mismatch",
-            "verify_recovery_event",
+            LedgerCode::RepairRecoveryEventMismatch.code(),
+            LedgerLocation::VerifyRecoveryEvent.location(),
         ));
     }
     Ok(())
@@ -2387,7 +2607,7 @@ fn verify_recovery_event(
 fn append_repair_record(root: &Path, record: &TailRepairRecord) -> GlobalLedgerResult<()> {
     record.validate()?;
     let mut bytes = serde_json::to_vec(record).map_err(|error| {
-        GlobalLedgerError::json(
+        GlobalLedgerError::json_untyped(
             "repair_serialization_failed",
             "serialize_repair_record",
             &error,
@@ -2398,11 +2618,14 @@ fn append_repair_record(root: &Path, record: &TailRepairRecord) -> GlobalLedgerR
         .create(true)
         .append(true)
         .open(root.join(REPAIR_JOURNAL_FILE))
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "open_repair_journal", &error))?;
-    file.write_all(&bytes)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "write_repair_journal", &error))?;
+        .map_err(|error| {
+            GlobalLedgerError::io_untyped("ledger_io", "open_repair_journal", &error)
+        })?;
+    file.write_all(&bytes).map_err(|error| {
+        GlobalLedgerError::io_untyped("ledger_io", "write_repair_journal", &error)
+    })?;
     file.sync_all()
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_repair_journal", &error))
+        .map_err(|error| GlobalLedgerError::io_untyped("ledger_io", "sync_repair_journal", &error))
 }
 
 fn derive_repair_id(
@@ -2423,8 +2646,8 @@ fn derive_repair_id(
 fn parse_sha256(value: &str) -> GlobalLedgerResult<[u8; 32]> {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return Err(GlobalLedgerError::fatal(
-            "invalid_repair_record",
-            "parse_repair_hash",
+            LedgerCode::InvalidRepairRecord.code(),
+            LedgerLocation::ParseRepairHash.location(),
         ));
     };
     if hex.len() != 64
@@ -2433,8 +2656,8 @@ fn parse_sha256(value: &str) -> GlobalLedgerResult<[u8; 32]> {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
         return Err(GlobalLedgerError::fatal(
-            "invalid_repair_record",
-            "parse_repair_hash",
+            LedgerCode::InvalidRepairRecord.code(),
+            LedgerLocation::ParseRepairHash.location(),
         ));
     }
     let mut bytes = [0_u8; 32];
@@ -2455,12 +2678,15 @@ fn decode_lower_hex(byte: u8) -> u8 {
 
 fn quarantine_key(repair_id: &str) -> GlobalLedgerResult<String> {
     let digest = repair_id.strip_prefix("sha256:").ok_or_else(|| {
-        GlobalLedgerError::fatal("invalid_repair_record", "derive_quarantine_key")
+        GlobalLedgerError::fatal(
+            LedgerCode::InvalidRepairRecord.code(),
+            LedgerLocation::DeriveQuarantineKey.location(),
+        )
     })?;
     if digest.len() != 64 {
         return Err(GlobalLedgerError::fatal(
-            "invalid_repair_record",
-            "derive_quarantine_key",
+            LedgerCode::InvalidRepairRecord.code(),
+            LedgerLocation::DeriveQuarantineKey.location(),
         ));
     }
     Ok(format!("quarantine/{digest}.bin"))
@@ -2479,14 +2705,17 @@ pub(super) fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
         return Ok(());
     }
     let ready = std::env::var_os("ACTINGCOMMAND_TEST_REPAIR_READY").ok_or_else(|| {
-        GlobalLedgerError::fatal("repair_test_barrier_invalid", "repair_test_barrier")
+        GlobalLedgerError::fatal_untyped("repair_test_barrier_invalid", "repair_test_barrier")
     })?;
-    let mut file = File::create(PathBuf::from(ready))
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "repair_test_barrier", &error))?;
-    file.write_all(stage.as_bytes())
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "repair_test_barrier", &error))?;
-    file.sync_all()
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "repair_test_barrier", &error))?;
+    let mut file = File::create(PathBuf::from(ready)).map_err(|error| {
+        GlobalLedgerError::io_untyped("ledger_io", "repair_test_barrier", &error)
+    })?;
+    file.write_all(stage.as_bytes()).map_err(|error| {
+        GlobalLedgerError::io_untyped("ledger_io", "repair_test_barrier", &error)
+    })?;
+    file.sync_all().map_err(|error| {
+        GlobalLedgerError::io_untyped("ledger_io", "repair_test_barrier", &error)
+    })?;
     loop {
         std::thread::park_timeout(std::time::Duration::from_secs(60));
     }
@@ -2494,11 +2723,21 @@ pub(super) fn repair_test_barrier(stage: &str) -> GlobalLedgerResult<()> {
 
 pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64, PathBuf)>> {
     let mut segments = Vec::new();
-    for entry in fs::read_dir(segments_dir)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "list_segments", &error))?
-    {
+    for entry in fs::read_dir(segments_dir).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ListSegments.location(),
+            &error,
+        )
+    })? {
         let path = entry
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "read_segment_entry", &error))?
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ReadSegmentEntry.location(),
+                    &error,
+                )
+            })?
             .path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
@@ -2516,8 +2755,8 @@ pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64,
     for (expected, (actual, _)) in (1_u64..).zip(&segments) {
         if expected != *actual {
             return Err(GlobalLedgerError::fatal(
-                "segment_discontinuity",
-                "list_segments",
+                LedgerCode::SegmentDiscontinuity.code(),
+                LedgerLocation::ListSegments.location(),
             ));
         }
     }
@@ -2556,8 +2795,8 @@ pub(super) fn verify_completed_repairs(
     for progress in journal.repairs.values() {
         if !progress.completed {
             return Err(GlobalLedgerError::fatal(
-                "repair_state_inconsistent",
-                "validate_import_repairs",
+                LedgerCode::RepairStateInconsistent.code(),
+                LedgerLocation::ValidateImportRepairs.location(),
             ));
         }
         let repair = &progress.prepared;
@@ -2566,11 +2805,18 @@ pub(super) fn verify_completed_repairs(
             .iter()
             .find(|event| *event.event_id() == id)
             .ok_or_else(|| {
-                GlobalLedgerError::fatal("repair_recovery_event_missing", "validate_import_repairs")
+                GlobalLedgerError::fatal(
+                    LedgerCode::RepairRecoveryEventMissing.code(),
+                    LedgerLocation::ValidateImportRepairs.location(),
+                )
             })?;
         verify_recovery_event(event, repair)?;
         let tail = fs::read(root.join(&repair.quarantine_key)).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "verify_import_quarantine", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::VerifyImportQuarantine.location(),
+                &error,
+            )
         })?;
         verify_tail_hash(repair, &tail)?;
     }
@@ -2591,18 +2837,26 @@ impl LockedWriterFile {
     pub(super) fn bytes(&self) -> GlobalLedgerResult<Vec<u8>> {
         let mut file = &self.file;
         file.rewind().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "seek_locked_writer_metadata", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::SeekLockedWriterMetadata.location(),
+                &error,
+            )
         })?;
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "read_locked_writer_metadata", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ReadLockedWriterMetadata.location(),
+                    &error,
+                )
             })?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err(GlobalLedgerError::fatal(
-                "writer_metadata_too_large",
-                "read_locked_writer_metadata",
+                LedgerCode::WriterMetadataTooLarge.code(),
+                LedgerLocation::ReadLockedWriterMetadata.location(),
             ));
         }
         Ok(bytes)
@@ -2619,8 +2873,8 @@ impl LockedWriterFile {
                 let reparse = false;
                 if !metadata.is_file() || metadata.file_type().is_symlink() || reparse {
                     return Err(GlobalLedgerError::fatal(
-                        "writer_lock_unsafe",
-                        "lock_writer_without_metadata_write",
+                        LedgerCode::WriterLockUnsafe.code(),
+                        LedgerLocation::LockWriterWithoutMetadataWrite.location(),
                     ));
                 }
                 true
@@ -2628,8 +2882,8 @@ impl LockedWriterFile {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => false,
             Err(error) => {
                 return Err(GlobalLedgerError::io(
-                    "ledger_io",
-                    "inspect_writer_lock",
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectWriterLock.location(),
                     &error,
                 ));
             }
@@ -2640,26 +2894,37 @@ impl LockedWriterFile {
             .create_new(!existing)
             .open(path)
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "open_maintenance_writer_lock", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::OpenMaintenanceWriterLock.location(),
+                    &error,
+                )
             })?;
         file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => {
-                GlobalLedgerError::fatal("writer_conflict", "lock_writer_without_metadata_write")
-            }
-            std::fs::TryLockError::Error(error) => {
-                GlobalLedgerError::io("ledger_io", "lock_writer_without_metadata_write", &error)
-            }
+            std::fs::TryLockError::WouldBlock => GlobalLedgerError::fatal(
+                LedgerCode::WriterConflict.code(),
+                LedgerLocation::LockWriterWithoutMetadataWrite.location(),
+            ),
+            std::fs::TryLockError::Error(error) => GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::LockWriterWithoutMetadataWrite.location(),
+                &error,
+            ),
         })?;
         let length = file
             .metadata()
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "inspect_locked_writer_metadata", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectLockedWriterMetadata.location(),
+                    &error,
+                )
             })?
             .len();
         if length > 4 * 1024 * 1024 {
             return Err(GlobalLedgerError::fatal(
-                "writer_metadata_too_large",
-                "read_locked_writer_metadata",
+                LedgerCode::WriterMetadataTooLarge.code(),
+                LedgerLocation::ReadLockedWriterMetadata.location(),
             ));
         }
         let mut bytes = Vec::new();
@@ -2667,20 +2932,24 @@ impl LockedWriterFile {
             .take(length + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "read_locked_writer_metadata", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::ReadLockedWriterMetadata.location(),
+                    &error,
+                )
             })?;
         if bytes.len() as u64 != length {
             return Err(GlobalLedgerError::fatal(
-                "writer_metadata_changed",
-                "read_locked_writer_metadata",
+                LedgerCode::WriterMetadataChanged.code(),
+                LedgerLocation::ReadLockedWriterMetadata.location(),
             ));
         }
         let mut previous = None;
         if !bytes.is_empty() {
             if bytes.last() != Some(&b'\n') {
                 return Err(GlobalLedgerError::fatal(
-                    "malformed_owner_metadata",
-                    "read_locked_writer_metadata",
+                    LedgerCode::MalformedOwnerMetadata.code(),
+                    LedgerLocation::ReadLockedWriterMetadata.location(),
                 ));
             }
             for line in bytes[..bytes.len() - 1].split(|byte| *byte == b'\n') {
@@ -2688,8 +2957,8 @@ impl LockedWriterFile {
             }
         } else if existing {
             return Err(GlobalLedgerError::fatal(
-                "malformed_owner_metadata",
-                "read_locked_writer_metadata",
+                LedgerCode::MalformedOwnerMetadata.code(),
+                LedgerLocation::ReadLockedWriterMetadata.location(),
             ));
         }
         Ok(Self {
@@ -2706,8 +2975,8 @@ impl LockedWriterFile {
             .is_some_and(|metadata| metadata.active)
         {
             return Err(GlobalLedgerError::fatal(
-                "source_writer_not_closed",
-                "validate_maintenance_writer",
+                LedgerCode::SourceWriterNotClosed.code(),
+                LedgerLocation::ValidateMaintenanceWriter.location(),
             ));
         }
         Ok(())
@@ -2715,7 +2984,11 @@ impl LockedWriterFile {
 
     pub(super) fn close(self) -> GlobalLedgerResult<()> {
         self.file.unlock().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "unlock_maintenance_writer", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::UnlockMaintenanceWriter.location(),
+                &error,
+            )
         })
     }
 }
@@ -2739,25 +3012,32 @@ impl WriterOwnership {
                     .write(true)
                     .open(path)
                     .map_err(|error| {
-                        GlobalLedgerError::io("ledger_io", "open_writer_lock", &error)
+                        GlobalLedgerError::io(
+                            LedgerCode::LedgerIo.code(),
+                            LedgerLocation::OpenWriterLock.location(),
+                            &error,
+                        )
                     })?;
                 (file, false)
             }
             Err(error) => {
                 return Err(GlobalLedgerError::io(
-                    "ledger_io",
-                    "create_writer_lock",
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::CreateWriterLock.location(),
                     &error,
                 ));
             }
         };
         file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => {
-                GlobalLedgerError::fatal("writer_conflict", "acquire_writer_lock")
-            }
-            std::fs::TryLockError::Error(error) => {
-                GlobalLedgerError::io("ledger_io", "acquire_writer_lock", &error)
-            }
+            std::fs::TryLockError::WouldBlock => GlobalLedgerError::fatal(
+                LedgerCode::WriterConflict.code(),
+                LedgerLocation::AcquireWriterLock.location(),
+            ),
+            std::fs::TryLockError::Error(error) => GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::AcquireWriterLock.location(),
+                &error,
+            ),
         })?;
         let previous = read_writer_metadata(&mut file, created)?;
         let stale_owner = previous
@@ -2827,9 +3107,13 @@ impl WriterOwnership {
         self.metadata.active = false;
         self.metadata.closed_at_unix_ms = Some(unix_ms_now()?);
         write_writer_metadata(&mut self.file, &self.metadata)?;
-        self.file
-            .unlock()
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "release_writer_lock", &error))?;
+        self.file.unlock().map_err(|error| {
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::ReleaseWriterLock.location(),
+                &error,
+            )
+        })?;
         self.closed = true;
         if let Some(lock) = self.compatibility_lock.take() {
             lock.close()?;
@@ -2842,18 +3126,28 @@ fn read_writer_metadata(
     file: &mut File,
     created: bool,
 ) -> GlobalLedgerResult<Option<WriterMetadata>> {
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "seek_writer_metadata", &error))?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::SeekWriterMetadata.location(),
+            &error,
+        )
+    })?;
     let mut content = Vec::new();
-    file.read_to_end(&mut content)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "read_writer_metadata", &error))?;
+    file.read_to_end(&mut content).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ReadWriterMetadata.location(),
+            &error,
+        )
+    })?;
     if content.is_empty() {
         return if created {
             Ok(None)
         } else {
             Err(GlobalLedgerError::fatal(
-                "malformed_owner_metadata",
-                "parse_writer_metadata",
+                LedgerCode::MalformedOwnerMetadata.code(),
+                LedgerLocation::ParseWriterMetadata.location(),
             ))
         };
     }
@@ -2869,26 +3163,34 @@ fn read_writer_metadata(
     };
     if records.is_empty() {
         return Err(GlobalLedgerError::fatal(
-            "malformed_owner_metadata",
-            "parse_writer_metadata",
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::ParseWriterMetadata.location(),
         ));
     }
     let mut metadata = None;
     for record in records.split(|byte| *byte == b'\n') {
         if record.is_empty() {
             return Err(GlobalLedgerError::fatal(
-                "malformed_owner_metadata",
-                "parse_writer_metadata",
+                LedgerCode::MalformedOwnerMetadata.code(),
+                LedgerLocation::ParseWriterMetadata.location(),
             ));
         }
         metadata = Some(parse_writer_metadata(record)?);
     }
     if tail_len > 0 {
         file.set_len(complete.len() as u64).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "truncate_writer_metadata_tail", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::TruncateWriterMetadataTail.location(),
+                &error,
+            )
         })?;
         file.sync_all().map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "sync_writer_metadata_tail", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::SyncWriterMetadataTail.location(),
+                &error,
+            )
         })?;
     }
     Ok(metadata)
@@ -2896,15 +3198,23 @@ fn read_writer_metadata(
 
 pub(super) fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterMetadata> {
     let unique = serde_json::from_slice::<UniqueJsonValue>(record).map_err(|error| {
-        GlobalLedgerError::json("malformed_owner_metadata", "parse_writer_metadata", &error)
+        GlobalLedgerError::json(
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::ParseWriterMetadata.location(),
+            &error,
+        )
     })?;
     let metadata = serde_json::from_value::<WriterMetadata>(unique.0).map_err(|error| {
-        GlobalLedgerError::json("malformed_owner_metadata", "decode_writer_metadata", &error)
+        GlobalLedgerError::json(
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::DecodeWriterMetadata.location(),
+            &error,
+        )
     })?;
     if metadata.schema_version != WRITER_SCHEMA_VERSION {
         return Err(GlobalLedgerError::fatal(
-            "unsupported_writer_schema",
-            "validate_writer_metadata",
+            LedgerCode::UnsupportedWriterSchema.code(),
+            LedgerLocation::ValidateWriterMetadata.location(),
         ));
     }
     let lifecycle_valid = match (metadata.active, metadata.closed_at_unix_ms) {
@@ -2918,8 +3228,8 @@ pub(super) fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterM
         && lifecycle_valid;
     if !valid {
         return Err(GlobalLedgerError::fatal(
-            "malformed_owner_metadata",
-            "validate_writer_metadata",
+            LedgerCode::MalformedOwnerMetadata.code(),
+            LedgerLocation::ValidateWriterMetadata.location(),
         ));
     }
     Ok(metadata)
@@ -2928,36 +3238,66 @@ pub(super) fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterM
 fn write_writer_metadata(file: &mut File, metadata: &WriterMetadata) -> GlobalLedgerResult<()> {
     let mut bytes = serde_json::to_vec(metadata).map_err(|error| {
         GlobalLedgerError::json(
-            "owner_metadata_serialization_failed",
-            "serialize_writer_metadata",
+            LedgerCode::OwnerMetadataSerializationFailed.code(),
+            LedgerLocation::SerializeWriterMetadata.location(),
             &error,
         )
     })?;
     bytes.push(b'\n');
-    let end = file
-        .seek(SeekFrom::End(0))
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "seek_writer_metadata", &error))?;
+    let end = file.seek(SeekFrom::End(0)).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::SeekWriterMetadata.location(),
+            &error,
+        )
+    })?;
     if end > 0 {
         file.seek(SeekFrom::End(-1)).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "seek_writer_metadata_tail", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::SeekWriterMetadataTail.location(),
+                &error,
+            )
         })?;
         let mut last = [0_u8; 1];
         file.read_exact(&mut last).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "read_writer_metadata_tail", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::ReadWriterMetadataTail.location(),
+                &error,
+            )
         })?;
         file.seek(SeekFrom::End(0)).map_err(|error| {
-            GlobalLedgerError::io("ledger_io", "seek_writer_metadata_append", &error)
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::SeekWriterMetadataAppend.location(),
+                &error,
+            )
         })?;
         if last[0] != b'\n' {
             file.write_all(b"\n").map_err(|error| {
-                GlobalLedgerError::io("ledger_io", "commit_legacy_writer_metadata", &error)
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::CommitLegacyWriterMetadata.location(),
+                    &error,
+                )
             })?;
         }
     }
-    file.write_all(&bytes)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "write_writer_metadata", &error))?;
-    file.sync_all()
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_writer_metadata", &error))?;
+    file.write_all(&bytes).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::WriteWriterMetadata.location(),
+            &error,
+        )
+    })?;
+    file.sync_all().map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::SyncWriterMetadata.location(),
+            &error,
+        )
+    })?;
     Ok(())
 }
 
@@ -2965,13 +3305,21 @@ fn unix_ms_now() -> GlobalLedgerResult<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .map_err(|_| GlobalLedgerError::fatal("clock_before_epoch", "read_clock"))
+        .map_err(|_| {
+            GlobalLedgerError::fatal(
+                LedgerCode::ClockBeforeEpoch.code(),
+                LedgerLocation::ReadClock.location(),
+            )
+        })
 }
 
 pub(super) fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {
-    sequence
-        .checked_add(1)
-        .ok_or_else(|| GlobalLedgerError::fatal("sequence_exhausted", "increment_sequence"))
+    sequence.checked_add(1).ok_or_else(|| {
+        GlobalLedgerError::fatal(
+            LedgerCode::SequenceExhausted.code(),
+            LedgerLocation::IncrementSequence.location(),
+        )
+    })
 }
 
 pub(super) struct UniqueJsonValue(pub(super) Value);

@@ -4,6 +4,9 @@
 //! of what one tick observed and of the watchdog state. First match wins.
 
 use super::state::{StartRecord, WatchdogState};
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Code;
+use actingcommand_runtime_client::ClientCode;
 
 /// A start record counts against the budget for this long.
 pub(crate) const BUDGET_WINDOW_MS: u64 = 30 * 60 * 1000;
@@ -26,6 +29,8 @@ pub(crate) const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
 pub(crate) const READY_TIMEOUT_MS: u64 = 180 * 1000;
 /// Clock slack between a spawn and the started owner's recorded start.
 pub(crate) const CLOCK_SLACK_MS: u64 = 2 * 1000;
+/// The developer line actingd prints for a Runtime host error: the top code comes next.
+const RUNTIME_FATAL_PREFIX: &str = "FATAL actingd: runtime host error ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnerLock {
@@ -90,6 +95,9 @@ pub(crate) struct Observed {
     pub(crate) live: Option<Result<LiveOwner, String>>,
     pub(crate) journal: Journal,
     pub(crate) fatal: Option<Fatal>,
+    /// Workflow #381 A R5b: with J closed but no log covering its epoch, the FATAL of the last
+    /// earlier owner whose epoch a log covers, if that log holds one.
+    pub(crate) earlier_fatal: Option<Fatal>,
 }
 
 /// Rows 7a-7b: the probes taken only when a start is considered.
@@ -112,7 +120,7 @@ pub(crate) struct RuntimeProcess {
 pub(crate) enum Decision {
     RunInProgress,
     Misconfigured {
-        code: String,
+        code: Code,
         detail: String,
     },
     Alive {
@@ -152,7 +160,7 @@ pub(crate) enum Decision {
         log: String,
     },
     StartFailed {
-        code: String,
+        code: Code,
         detail: String,
     },
 }
@@ -226,7 +234,7 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
                 detail: detail.clone(),
             },
             None => Decision::OwnerLockHeld {
-                detail: "runtime_info_unavailable".to_owned(),
+                detail: ClientCode::RuntimeInfoUnavailable.as_str().to_owned(),
             },
         });
     }
@@ -236,7 +244,7 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
         }
         (_, Journal::Unrecognised { detail }) => {
             return Stage::Decided(Decision::Misconfigured {
-                code: "watchdog_journal_unrecognised".to_owned(),
+                code: ActingctlCode::WatchdogJournalUnrecognised.code(),
                 detail: detail.clone(),
             });
         }
@@ -250,14 +258,38 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
     }
     // Row 5 precedes row 6 (review M7): a FATAL exit also closes the journal.
     if let Some(fatal) = &observed.fatal {
-        return Stage::Decided(Decision::FatalHold(fatal.clone()));
+        return fatal_stage(fatal);
     }
     if !record.active {
+        // Row 6′ (Workflow #381 A R5b): a close no log covers may follow the FATAL of an owner
+        // before it, which row 5 cannot see behind the later record.
+        if let Some(fatal) = &observed.earlier_fatal {
+            return fatal_stage(fatal);
+        }
         return Stage::Decided(Decision::FormalClose {
             owner_epoch: record.owner_epoch.clone(),
         });
     }
     Stage::ConsiderStart
+}
+
+/// Rows 5 and 5′ (Workflow #381 A R5′): a FATAL holds, unless its top code is one of a
+/// held start that stopped; that one considers a start.
+fn fatal_stage(fatal: &Fatal) -> Stage {
+    /// Workflow #381 A R5′: the registered top codes of a held start that stopped (runtime-host
+    /// `HostCode`). Such a halt is one a restart may fix, so the start rows 7a-7f decide, as
+    /// after a crash. Only the top code counts, never the operation or a cause.
+    const RESTARTABLE_STOP_CODES: [&str; 3] =
+        ["install_startup_stopped", "held_timeout", "release_timeout"];
+    let top_code = fatal
+        .line
+        .strip_prefix(RUNTIME_FATAL_PREFIX)
+        .and_then(|rest| rest.split_whitespace().next());
+    if top_code.is_some_and(|code| RESTARTABLE_STOP_CODES.contains(&code)) {
+        Stage::ConsiderStart
+    } else {
+        Stage::Decided(Decision::FatalHold(fatal.clone()))
+    }
 }
 
 /// Rows 7a-7f.
@@ -310,7 +342,8 @@ pub(crate) fn started_by_watchdog(owner: &LiveOwner, starts: &[StartRecord]) -> 
     starts.iter().any(|start| {
         start.owner_epoch.as_deref() == Some(owner.owner_epoch.as_str())
             || (start.owner_epoch.is_none()
-                && matches!(start.outcome.as_str(), "pending" | "start_timeout")
+                && (start.outcome == "pending"
+                    || start.outcome == ActingctlCode::StartTimeout.as_str())
                 && owner.started_at_unix_ms >= start.at_unix_ms.saturating_sub(CLOCK_SLACK_MS)
                 && owner.started_at_unix_ms <= start.at_unix_ms.saturating_add(READY_TIMEOUT_MS))
     })
@@ -374,6 +407,7 @@ mod tests {
             live: None,
             journal,
             fatal,
+            earlier_fatal: None,
         }
     }
 

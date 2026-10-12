@@ -4,6 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+// Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
+mod codes;
+#[cfg(test)]
+mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
@@ -11,6 +15,8 @@ mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
@@ -18,14 +24,15 @@ use actingcommand_contract::{
     SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use codes::ActingctlCode;
 use serde_json::Value;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
@@ -81,7 +88,57 @@ fn main() -> ExitCode {
     }
 }
 
+/// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InstallTransitionRun {
+    /// The deadline of the whole run, counted from its start; no exchange waits past it.
+    budget: Option<Duration>,
+    /// The I/O timeout of one exchange.
+    exchange_timeout: Duration,
+    /// Whether the run declares its governance identity before the action.
+    declares_identity: bool,
+}
+
+/// Workflow #381 A R1′ (review M2): one deadline for each run, not one per exchange. Query,
+/// Release, BeginDrain and Abort take at most 60 s in all; CommitShutdown's exchanges take at
+/// most 10 s, so that with the `--wait 60` acsetup adds they stay inside acsetup's 75 s.
+const INSTALL_TRANSITION_RUN_BUDGET: Duration = Duration::from_secs(60);
+const INSTALL_COMMIT_EXCHANGE_BUDGET: Duration = Duration::from_secs(10);
+
+fn install_transition_run(
+    action: &actingcommand_contract::InstallTransitionAction,
+) -> InstallTransitionRun {
+    use actingcommand_contract::InstallTransitionAction;
+    let budget = match action {
+        InstallTransitionAction::CommitShutdown { .. } => INSTALL_COMMIT_EXCHANGE_BUDGET,
+        _ => INSTALL_TRANSITION_RUN_BUDGET,
+    };
+    InstallTransitionRun {
+        budget: Some(budget),
+        exchange_timeout: budget,
+        // Workflow #381 A R2: the read-only Query declares no identity, so it appends nothing.
+        declares_identity: !matches!(action, InstallTransitionAction::Query { .. }),
+    }
+}
+
+/// Workflow #381 A R1′: the client configuration of one run. An install-transition run gets its
+/// budget as the exchange timeout and as one deadline counted from `started`.
+fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
+    let (actor, source) = command.origin();
+    let config = RuntimeClientConfig::new(state_root, actor, source);
+    let Command::InstallTransition { action } = command else {
+        return config;
+    };
+    let run = install_transition_run(action);
+    let config = config.with_io_timeout(run.exchange_timeout);
+    match run.budget {
+        Some(budget) => config.with_deadline(started + budget),
+        None => config,
+    }
+}
+
 fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
+    let started = Instant::now();
     let Invocation {
         state_root,
         instance,
@@ -125,8 +182,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     } else {
         None
     };
-    let (actor, source) = command.origin();
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(&state_root, actor, source))
+    let install_run = match &command {
+        Command::InstallTransition { action } => Some(install_transition_run(action)),
+        _ => None,
+    };
+    let client = RuntimeClient::connect(client_config(&state_root, &command, started))
         .map_err(ActingctlError::runtime)?;
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
@@ -224,9 +284,11 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             }
         },
         Command::InstallTransition { action } => {
-            client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-                client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
-            }).map_err(ActingctlError::runtime)?;
+            if install_run.is_some_and(|install_run| install_run.declares_identity) {
+                client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+                    client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
+                }).map_err(ActingctlError::runtime)?;
+            }
             let receipt = client.install_transition(action).map_err(ActingctlError::runtime)?;
             match shutdown_wait {
                 Some(wait) => {
@@ -308,13 +370,13 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         ),
         // Workflow #191 ps1: without --instance the pause / resume is global.
         Command::Pause {
-            reason_code,
+            pause_reason,
             drain_timeout_ms,
         } => serde_json::to_value(
             client
                 .pause_scheduling(
                     pause_scope(optional_instance),
-                    &reason_code,
+                    pause_reason,
                     drain_timeout_ms,
                 )
                 .map_err(ActingctlError::runtime)?,
@@ -446,7 +508,7 @@ enum Command {
     EmulatorDiscover,
     /// `pause [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]`.
     Pause {
-        reason_code: String,
+        pause_reason: actingcommand_contract::SchedulingPauseReason,
         drain_timeout_ms: u64,
     },
     /// `resume [--instance <alias>]`.
@@ -569,9 +631,10 @@ impl Invocation {
                 }
                 "--reason" if command == "pause" && pause_reason.is_none() => {
                     let reason = require_text(&arguments, &mut index)?;
-                    actingcommand_contract::validate_scheduling_pause_reason(&reason)
-                        .map_err(|_| ActingctlError::Usage)?;
-                    pause_reason = Some(reason);
+                    pause_reason = Some(
+                        actingcommand_contract::SchedulingPauseReason::new(reason)
+                            .map_err(|_| ActingctlError::Usage)?,
+                    );
                 }
                 "--drain-timeout-ms" if command == "pause" && drain_timeout_ms.is_none() => {
                     let timeout = require_u64(&arguments, &mut index)?;
@@ -725,7 +788,13 @@ impl Invocation {
                 _ => return Err(ActingctlError::Usage),
             },
             "pause" => Command::Pause {
-                reason_code: pause_reason.unwrap_or_else(|| DEFAULT_PAUSE_REASON.to_owned()),
+                pause_reason: match pause_reason {
+                    Some(reason) => reason,
+                    None => {
+                        actingcommand_contract::SchedulingPauseReason::new(DEFAULT_PAUSE_REASON)
+                            .map_err(|_| ActingctlError::Usage)?
+                    }
+                },
                 drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
             },
             "resume" => Command::Resume,
@@ -844,7 +913,7 @@ enum ActingctlError {
     Output,
     /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
     ShutdownWait {
-        code: &'static str,
+        code: Code,
         detail: String,
     },
 }
@@ -852,6 +921,26 @@ enum ActingctlError {
 impl ActingctlError {
     fn runtime(error: actingcommand_runtime_client::RuntimeClientError) -> Self {
         Self::Runtime(error)
+    }
+
+    /// The registered code of this failure (model section 7.3).
+    fn code(&self) -> Code {
+        match self {
+            Self::Usage => ActingctlCode::ActingctlUsageInvalid.code(),
+            Self::Runtime(error) => error.code(),
+            Self::Package => ActingctlCode::ActingctlPackageResolutionFailed.code(),
+            Self::FactRecord => ActingctlCode::ActingctlFactRecordInvalid.code(),
+            Self::ResourceTargetsFile => ActingctlCode::ResourceTargetsFileInvalid.code(),
+            Self::InstanceUnknown => {
+                actingcommand_contract::RuntimeErrorCode::InstanceUnknown.code()
+            }
+            Self::TaskOffsetScopeAmbiguous => ActingctlCode::TaskOffsetScopeAmbiguous.code(),
+            Self::PriorityOffsetInvalid => SharedCode::PriorityOffsetInvalid.code(),
+            Self::Clock => ActingctlCode::ClockUnavailable.code(),
+            Self::ConfigFactsMissing => ActingctlCode::ConfigFactsMissing.code(),
+            Self::Output => ActingctlCode::ActingctlOutputFailed.code(),
+            Self::ShutdownWait { code, .. } => *code,
+        }
     }
 }
 
@@ -863,12 +952,12 @@ impl fmt::Display for ActingctlError {
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
-            Self::ResourceTargetsFile => formatter.write_str("resource_targets_file_invalid: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8"),
-            Self::InstanceUnknown => formatter.write_str("instance_unknown: the runtime status lists no instance with that alias"),
-            Self::TaskOffsetScopeAmbiguous => formatter.write_str("task_offset_scope_ambiguous: the registered instances do not name exactly one configured game; pass --instance <alias>"),
-            Self::PriorityOffsetInvalid => formatter.write_str("priority_offset_invalid: the task identifier cannot form a priority offset fact"),
-            Self::Clock => formatter.write_str("clock_unavailable: the system clock is before the Unix epoch or out of range"),
-            Self::ConfigFactsMissing => formatter.write_str("config_facts_missing: the runtime fact snapshot holds no config.subsystems / config.parameters record"),
+            Self::ResourceTargetsFile => write!(formatter, "{}: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8", self.code()),
+            Self::InstanceUnknown => write!(formatter, "{}: the runtime status lists no instance with that alias", self.code()),
+            Self::TaskOffsetScopeAmbiguous => write!(formatter, "{}: the registered instances do not name exactly one configured game; pass --instance <alias>", self.code()),
+            Self::PriorityOffsetInvalid => write!(formatter, "{}: the task identifier cannot form a priority offset fact", self.code()),
+            Self::Clock => write!(formatter, "{}: the system clock is before the Unix epoch or out of range", self.code()),
+            Self::ConfigFactsMissing => write!(formatter, "{}: the runtime fact snapshot holds no config.subsystems / config.parameters record", self.code()),
             Self::Output => formatter.write_str("failed to write JSON output"),
             Self::ShutdownWait { code, detail } => {
                 write!(formatter, "{code} during wait_shutdown: {detail}")

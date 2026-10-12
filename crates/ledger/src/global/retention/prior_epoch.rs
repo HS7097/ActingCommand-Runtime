@@ -56,7 +56,8 @@ impl RetentionIndex {
         let Some(observation) = fact(event) else {
             return Ok(());
         };
-        let writer = recorded_owner(event).ok_or_else(|| invalid("prior_epoch_writer_missing"))?;
+        let writer = recorded_owner(event)
+            .ok_or_else(|| invalid(LedgerCode::PriorEpochWriterMissing.code()))?;
         if !guarded
             || self.owner_at(self.through_sequence) != Some(writer)
             || event.origin().source() != EventSource::Runtime
@@ -70,11 +71,11 @@ impl RetentionIndex {
             || event.links().correlation_id().is_none()
             || event.links().action_id().is_none()
         {
-            return Err(invalid("prior_epoch_close_admission_conflict"));
+            return Err(invalid(LedgerCode::PriorEpochCloseAdmissionConflict.code()));
         }
         observation
             .validate(writer)
-            .map_err(|_| invalid("prior_epoch_close_invalid"))?;
+            .map_err(|_| invalid(LedgerCode::PriorEpochCloseInvalid.code()))?;
         match observation {
             PriorEpochCloseFact::OwnerImported(record) => {
                 if record.through_sequence != self.through_sequence
@@ -82,13 +83,13 @@ impl RetentionIndex {
                         != Some(record.scope_upper_sequence)
                     || self.owner_imports.contains_key(&record.evidence.subject)
                 {
-                    return Err(invalid("prior_epoch_import_prefix_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochImportPrefixConflict.code()));
                 }
             }
             PriorEpochCloseFact::ScopeClosed(record) => {
                 let scope = ClosureScope::from_subject(record.subject);
                 let Some((proof_source, proof)) = self.owner_imports.get(&scope.owner) else {
-                    return Err(invalid("prior_epoch_import_missing"));
+                    return Err(invalid(LedgerCode::PriorEpochImportMissing.code()));
                 };
                 if *proof_source != record.proof
                     || proof.basis != record.basis
@@ -101,18 +102,18 @@ impl RetentionIndex {
                     || self.ordinary_close(&scope).is_some()
                     || self.prior_epoch_closes.contains_key(&scope)
                 {
-                    return Err(invalid("prior_epoch_scope_prefix_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochScopePrefixConflict.code()));
                 }
                 let original = source(events, &record.scope_source)?;
                 if self.owner_at(original.sequence()) != Some(scope.owner)
                     || ClosureScope::from_event(original, scope.owner) != Some(scope)
                 {
-                    return Err(invalid("prior_epoch_scope_source_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochScopeSourceConflict.code()));
                 }
                 let imported = source(events, &record.proof)?;
                 if !matches!(fact(imported), Some(PriorEpochCloseFact::OwnerImported(value)) if value == proof)
                 {
-                    return Err(invalid("prior_epoch_import_source_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochImportSourceConflict.code()));
                 }
             }
         }
@@ -169,7 +170,7 @@ impl RetentionIndex {
 
 fn deadline_check(deadline: Instant) -> GlobalLedgerResult<()> {
     if Instant::now() >= deadline {
-        return Err(invalid("prior_epoch_close_deadline"));
+        return Err(invalid(LedgerCode::PriorEpochCloseDeadline.code()));
     }
     Ok(())
 }
@@ -200,7 +201,7 @@ fn classify_unproven(
             true,
             Some(OwnerResourceDisposition::None | OwnerResourceDisposition::ConfirmedClosed),
         ) => Ok(Some(UnprovenReason::ProofMissing)),
-        _ => Err(invalid("prior_epoch_unproven_unclassified")),
+        _ => Err(invalid(LedgerCode::PriorEpochUnprovenUnclassified.code())),
     }
 }
 
@@ -225,7 +226,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                 .last()
                 .is_some_and(|last| last.owner_epoch == writer)
         {
-            return Err(invalid("prior_epoch_startup_barrier_conflict"));
+            return Err(invalid(LedgerCode::PriorEpochStartupBarrierConflict.code()));
         }
         let page = self
             .retention
@@ -256,7 +257,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
             if native.is_none()
                 && sealed.is_some_and(|(_, proof)| proof.basis == PriorEpochCloseBasis::Proven)
             {
-                return Err(invalid("prior_epoch_native_proof_missing"));
+                return Err(invalid(LedgerCode::PriorEpochNativeProofMissing.code()));
             }
             let current = match native {
                 Some(_) => Some(PriorEpochCloseBasis::Proven),
@@ -276,7 +277,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                         != Some(proof.scope_upper_sequence)
                     || last > proof.scope_upper_sequence
                 {
-                    return Err(invalid("prior_epoch_native_proof_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochNativeProofConflict.code()));
                 }
                 if completed.is_some() {
                     continue;
@@ -289,7 +290,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                     continue;
                 };
                 if last > upper {
-                    return Err(invalid("prior_epoch_scope_range_conflict"));
+                    return Err(invalid(LedgerCode::PriorEpochScopeRangeConflict.code()));
                 }
                 let record = PriorEpochOwnerImport {
                     evidence: match native {
@@ -312,7 +313,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                 .get(&scope.owner)
                 .expect("sealed import");
             if last > proof.scope_upper_sequence {
-                return Err(invalid("prior_epoch_scope_range_conflict"));
+                return Err(invalid(LedgerCode::PriorEpochScopeRangeConflict.code()));
             }
             let close = PriorEpochScopeClose {
                 subject: scope.subject(),
@@ -343,7 +344,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
             RuntimePayloadDraft,
         };
         deadline_check(deadline)?;
-        let issue = || invalid("prior_epoch_identifier_failed");
+        let issue = || invalid(LedgerCode::PriorEpochIdentifierFailed.code());
         let ids = IdentifierIssuer::new().map_err(|_| issue())?;
         let links = EventLinksDraft::default()
             .with_request_id(ids.mint_request_id().map_err(|_| issue())?)
@@ -364,7 +365,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         .sanitize(&super::super::Sha256SecretFingerprinter::new(
             b"actingcommand-ledger-owner-close-v1",
         )?)
-        .map_err(|_| invalid("prior_epoch_sanitize_failed"))?;
+        .map_err(|_| invalid(LedgerCode::PriorEpochSanitizeFailed.code()))?;
         let event = PersistedEvent::from_sanitized(self.next_sequence, draft)
             .map_err(|error| invalid(error.code()))?;
         deadline_check(deadline)?;
@@ -389,7 +390,7 @@ impl super::super::GlobalLedger {
             let sender = self
                 .sender
                 .as_ref()
-                .ok_or_else(|| invalid("writer_unavailable"))?;
+                .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
             super::super::send_command(
                 sender,
                 super::super::WriterCommand::ReconcilePriorEpochCloses {
@@ -399,20 +400,24 @@ impl super::super::GlobalLedger {
                     deadline,
                     response,
                 },
-                "reconcile_prior_epoch_closes",
+                LedgerLocation::ReconcilePriorEpochCloses.location(),
             )?;
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
                 .min(super::super::COMMAND_TIMEOUT);
             let next = receiver.recv_timeout(remaining).map_err(|error| {
                 invalid(match error {
-                    std::sync::mpsc::RecvTimeoutError::Timeout => "writer_response_timeout",
-                    std::sync::mpsc::RecvTimeoutError::Disconnected => "writer_unavailable",
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        LedgerCode::WriterResponseTimeout.code()
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        LedgerCode::WriterUnavailable.code()
+                    }
                 })
             })??;
             match next {
                 Some(value) if after.is_none_or(|previous| value > previous) => after = Some(value),
-                Some(_) => return Err(invalid("prior_epoch_cursor_conflict")),
+                Some(_) => return Err(invalid(LedgerCode::PriorEpochCursorConflict.code())),
                 None => return Ok(()),
             }
         }

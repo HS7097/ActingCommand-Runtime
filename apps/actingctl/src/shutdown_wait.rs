@@ -4,6 +4,7 @@
 //! owner journal record and that its process exited. It writes nothing and takes no file lock.
 
 use crate::ActingctlError;
+use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;
 use actingcommand_contract::{OWNER_JOURNAL_LIMIT, RuntimeShutdownTarget};
 use serde_json::{Value, json};
@@ -66,7 +67,7 @@ pub(crate) fn wait_for_shutdown(
                 "pid_alive": observed.pid_alive,
                 "pid_probe_error": observed.pid_probe_error,
             });
-            return Err(failure("shutdown_wait_timeout", detail));
+            return Err(failure(ActingctlCode::ShutdownWaitTimeout, detail));
         }
         std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
     }
@@ -82,7 +83,7 @@ fn observe_journal(
 ) -> Result<(), ActingctlError> {
     let unreadable = |error: &dyn std::fmt::Display| {
         let detail = json!({ "path": path.display().to_string(), "error": error.to_string() });
-        failure("shutdown_wait_journal_unreadable", detail)
+        failure(ActingctlCode::ShutdownWaitJournalUnreadable, detail)
     };
     let mut bytes = Vec::new();
     match File::open(path)
@@ -128,9 +129,9 @@ fn observe_journal(
     Ok(())
 }
 
-fn failure(code: &'static str, detail: Value) -> ActingctlError {
+fn failure(code: ActingctlCode, detail: Value) -> ActingctlError {
     ActingctlError::ShutdownWait {
-        code,
+        code: code.code(),
         detail: detail.to_string(),
     }
 }

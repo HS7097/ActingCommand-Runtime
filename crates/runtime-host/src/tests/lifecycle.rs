@@ -621,6 +621,8 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
         ApplicationLifecycleAction::Stop,
     ));
 
+    // Workflow #369 W-3 (S5): the command waits its 3 s cap in the queue before its refusal.
+    contender.set_receipt_read_timeout();
     let receipt = contender.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
     assert_eq!(state.application_count.load(Ordering::Acquire), 0);
@@ -933,7 +935,8 @@ fn scheduling_pauses_survive_a_restart_until_resumed() {
     for scope in scopes() {
         let request = client.request(RuntimeOperation::PauseScheduling {
             scope,
-            reason_code: "restart_check".to_owned(),
+            pause_reason: actingcommand_contract::SchedulingPauseReason::new("restart_check")
+                .expect("pause reason"),
             drain_timeout_ms: 1_000,
         });
         let receipt = client.send(&request);
@@ -971,13 +974,13 @@ fn scheduling_pauses_survive_a_restart_until_resumed() {
         .expect("restored pauses");
     let global = global.expect("restored global pause");
     assert_eq!(global.revision, 1);
-    assert_eq!(global.reason_code, "restart_check");
+    assert_eq!(global.pause_reason.as_str(), "restart_check");
     assert_eq!(global.since_unix_ms, paused_global.since_unix_ms);
     let instance = instances
         .get(POLICY_INSTANCE_ALIAS)
         .expect("restored instance pause");
     assert_eq!(instance.revision, 1);
-    assert_eq!(instance.reason_code, "restart_check");
+    assert_eq!(instance.pause_reason.as_str(), "restart_check");
     assert_eq!(instance.since_unix_ms, paused_instance.since_unix_ms);
     assert_eq!(instance.stage, InstancePauseStage::Released);
     let mut client = TestClient::connect(&reopened);

@@ -2,6 +2,7 @@
 
 //! Rust mainline boundary for native engines and delegated upstream backends.
 
+use crate::outcome::OutcomeEnvelope;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +97,7 @@ pub struct CommandResult {
     pub state: RuntimeState,
     pub accepted: bool,
     pub message: Option<String>,
-    pub error: Option<RuntimeError>,
+    pub error: Option<OutcomeEnvelope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,7 +117,7 @@ pub struct TaskRunSummary {
     pub state: RuntimeState,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,
-    pub last_error: Option<RuntimeError>,
+    pub last_error: Option<OutcomeEnvelope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

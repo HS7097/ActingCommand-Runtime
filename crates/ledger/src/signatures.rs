@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::LedgerCode;
 use crate::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerReadOnly, GlobalLedgerResult, PersistedEvent,
 };
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     DiagnosticSignatureDefinition, EventActor, EventPayload, EventQuery, EventSource, EventType,
     LedgerPayload, LedgerSignatureEvent, MAX_SIGNATURE_CATALOG_ENTRIES, MAX_SIGNATURE_PAGE_ROWS,
@@ -91,7 +94,7 @@ impl SignaturePrefix {
     /// read from the live writer. Concurrent appends beyond that bound are not read.
     pub fn catalog_from_live(ledger: &GlobalLedger, through: u64) -> GlobalLedgerResult<Self> {
         if through == 0 {
-            return Err(error("signature_through_zero"));
+            return Err(error(LedgerCode::SignatureThroughZero.code()));
         }
         let observed = ledger.latest_sequence()?.min(through);
         let mut events = Vec::new();
@@ -113,7 +116,7 @@ impl SignaturePrefix {
                 after = last.sequence();
                 events.extend(page);
                 if events.len() > MAX_SIGNATURE_PREFIX_EVENTS {
-                    return Err(error("signature_catalog_event_limit"));
+                    return Err(error(LedgerCode::SignatureCatalogEventLimit.code()));
                 }
             }
         }
@@ -127,7 +130,7 @@ impl SignaturePrefix {
         through: u64,
     ) -> GlobalLedgerResult<Self> {
         if through == 0 {
-            return Err(error("signature_through_zero"));
+            return Err(error(LedgerCode::SignatureThroughZero.code()));
         }
         let observed = snapshot.latest_sequence().min(through);
         let mut events = Vec::new();
@@ -143,7 +146,7 @@ impl SignaturePrefix {
                     .filter(|event| event.sequence() <= observed),
             );
             if events.len() > MAX_SIGNATURE_PREFIX_EVENTS {
-                return Err(error("signature_catalog_event_limit"));
+                return Err(error(LedgerCode::SignatureCatalogEventLimit.code()));
             }
         }
         events.sort_by_key(PersistedEvent::sequence);
@@ -168,12 +171,12 @@ fn catalog_prefix(
     hasher.update(format!("through={through}\nobserved={observed}\n").as_bytes());
     let mut total = 0_usize;
     for event in &events {
-        let bytes =
-            serde_json::to_vec(event).map_err(|_| error("signature_prefix_encoding_failed"))?;
+        let bytes = serde_json::to_vec(event)
+            .map_err(|_| error(LedgerCode::SignaturePrefixEncodingFailed.code()))?;
         total = total
             .checked_add(bytes.len() + 1)
             .filter(|total| *total <= MAX_SIGNATURE_PREFIX_BYTES)
-            .ok_or_else(|| error("signature_catalog_byte_limit"))?;
+            .ok_or_else(|| error(LedgerCode::SignatureCatalogByteLimit.code()))?;
         hasher.update(&bytes);
         hasher.update(b"\n");
     }
@@ -201,7 +204,7 @@ struct PrefixBuilder {
 impl PrefixBuilder {
     fn new(through: u64) -> GlobalLedgerResult<Self> {
         if through == 0 {
-            return Err(error("signature_through_zero"));
+            return Err(error(LedgerCode::SignatureThroughZero.code()));
         }
         let mut hasher = Sha256::new();
         hasher.update(b"actingcommand.signature-prefix.v1\n");
@@ -215,15 +218,15 @@ impl PrefixBuilder {
     }
     fn push(&mut self, event: PersistedEvent) -> GlobalLedgerResult<()> {
         if self.events.len() == MAX_SIGNATURE_PREFIX_EVENTS {
-            return Err(error("signature_prefix_event_limit"));
+            return Err(error(LedgerCode::SignaturePrefixEventLimit.code()));
         }
-        let bytes =
-            serde_json::to_vec(&event).map_err(|_| error("signature_prefix_encoding_failed"))?;
+        let bytes = serde_json::to_vec(&event)
+            .map_err(|_| error(LedgerCode::SignaturePrefixEncodingFailed.code()))?;
         self.bytes = self
             .bytes
             .checked_add(bytes.len() + 1)
             .filter(|bytes| *bytes <= MAX_SIGNATURE_PREFIX_BYTES)
-            .ok_or_else(|| error("signature_prefix_byte_limit"))?;
+            .ok_or_else(|| error(LedgerCode::SignaturePrefixByteLimit.code()))?;
         self.contiguous &= event.sequence() == self.events.len() as u64 + 1;
         self.hasher.update(&bytes);
         self.hasher.update(b"\n");
@@ -337,9 +340,9 @@ impl SignatureCatalog {
     ) -> GlobalLedgerResult<()> {
         definition
             .validate()
-            .map_err(|_| error("signature_definition_invalid"))?;
+            .map_err(|_| error(LedgerCode::SignatureDefinitionInvalid.code()))?;
         if !self.gaps.is_empty() {
-            return Err(error("signature_catalog_incomplete"));
+            return Err(error(LedgerCode::SignatureCatalogIncomplete.code()));
         }
         match self.entries.get(&definition.signature_id) {
             Some(previous)
@@ -353,7 +356,7 @@ impl SignatureCatalog {
             {
                 Ok(())
             }
-            _ => Err(error("signature_registration_conflict")),
+            _ => Err(error(LedgerCode::SignatureRegistrationConflict.code())),
         }
     }
 
@@ -362,11 +365,11 @@ impl SignatureCatalog {
         registration: &SignatureRegistrationRef,
     ) -> GlobalLedgerResult<()> {
         if !self.gaps.is_empty() {
-            return Err(error("signature_catalog_incomplete"));
+            return Err(error(LedgerCode::SignatureCatalogIncomplete.code()));
         }
         match self.entries.get(&registration.signature_id) {
             Some(entry) if !entry.retired && entry.registration == *registration => Ok(()),
-            _ => Err(error("signature_registration_not_active")),
+            _ => Err(error(LedgerCode::SignatureRegistrationNotActive.code())),
         }
     }
 }
@@ -390,16 +393,16 @@ pub fn replay_signatures(
 ) -> GlobalLedgerResult<SignatureReplayPage> {
     request
         .validate()
-        .map_err(|_| error("signature_page_invalid"))?;
+        .map_err(|_| error(LedgerCode::SignaturePageInvalid.code()))?;
     if input.identity.scope.is_some() {
-        return Err(error("signature_input_scope_invalid"));
+        return Err(error(LedgerCode::SignatureInputScopeInvalid.code()));
     }
     let offset = match &request.cursor {
         None => 0,
         Some(cursor) if cursor.input == input.identity && cursor.catalog == catalog.identity => {
             cursor.row_offset
         }
-        Some(_) => return Err(error("signature_cursor_snapshot_mismatch")),
+        Some(_) => return Err(error(LedgerCode::SignatureCursorSnapshotMismatch.code())),
     };
     let active = catalog
         .entries
@@ -446,7 +449,7 @@ pub fn replay_signatures(
     }
     let total = matched_count + missing_fields_count;
     if offset > total {
-        return Err(error("signature_cursor_out_of_range"));
+        return Err(error(LedgerCode::SignatureCursorOutOfRange.code()));
     }
     let next = offset + rows.len() as u64;
     let next_cursor = (next < total).then(|| SignatureReplayCursor {
@@ -466,7 +469,7 @@ pub fn replay_signatures(
         next_cursor,
     };
     page.validate()
-        .map_err(|_| error("signature_result_invalid"))?;
+        .map_err(|_| error(LedgerCode::SignatureResultInvalid.code()))?;
     Ok(page)
 }
 
@@ -568,6 +571,6 @@ fn match_optional<T: PartialEq + ?Sized>(
     }
 }
 
-fn error(code: &'static str) -> GlobalLedgerError {
-    GlobalLedgerError::request(code, "diagnostic_signatures")
+fn error(code: Code) -> GlobalLedgerError {
+    GlobalLedgerError::request(code, ContractLocation::DiagnosticSignatures.location())
 }

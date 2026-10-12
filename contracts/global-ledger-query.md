@@ -41,9 +41,9 @@ intersects the query's inclusive range. Existing `--wait-ms`, `--max-events`,
 idle response and next-cursor semantics remain the subscription owner's contract.
 
 ```text
-actinglab lab watch --origin-module capture --diagnostic-code capture.failed --after 0 --max-events 64
+actinglab lab watch --origin-module capture --diagnostic-code capture_failed --after 0 --max-events 64
 actinglab lab watch --req <correlation-id> --after <sequence> --wait-ms 1000
-actingledger --state-root <root> events --origin-module capture --diagnostic-code capture.failed --severity error --after 0 --through <sequence> --limit 64
+actingledger --state-root <root> events --origin-module capture --diagnostic-code capture_failed --severity error --after 0 --through <sequence> --limit 64
 actingledger --state-root <root> events --exclude-event-type perf.summary --exclude-event-type monitor.probe_completed --after 0 --limit 64
 ```
 
@@ -61,28 +61,9 @@ writer nor records matching facts, and creates no secondary signature store.
 [Diagnostic signatures](diagnostic-signatures.md) provide explicit Runtime
 registration, matching and retirement plus B's read-only historical replay.
 
-`device-test ledger` is an independent read-only consumer of the same
-`ledger-forensics` events request and result:
-
-```text
-device-test ledger --state-root <runtime-state> --origin-module capture --diagnostic-code capture.failed --severity error --after 0 --through <sequence> --limit 64
-```
-
-`--state-root` selects the Runtime state directory containing `ledger` and its
-artifact store. Optional `--origin-module`, `--diagnostic-code`, `--severity`,
-`--correlation-id`, `--after`, `--through` and `--limit` have the native offline
-events semantics. Defaults are after zero, a snapshot-frozen upper bound, and
-the leaf's maximum of 1024 events. Continue with the returned
-`next_after_sequence` and the same `through_sequence` and filters.
-
-The command emits the complete native JSON report, retaining event provenance,
-verified artifact references and the leaf's sensitive-data projection. Native
-read or validation failures propagate to the CLI's fatal exit. Dispatch occurs
-before device configuration, ADB resolution or backend creation; device options
-and commands cannot be combined with this read. Existing non-production device
-commands retain their permissions and behavior. The selected facts come from
-Runtime's GlobalLedger; the tool's execution journal is not imported as Runtime
-facts.
+`device-test ledger`, a second read-only consumer of the same
+`ledger-forensics` events request and result, was retired with the device-test
+tool in Runtime v0.11.6.
 
 ## Shared view and snapshot types
 

@@ -75,7 +75,9 @@ pub enum Check {
 pub struct Finding {
     pub check: Check,
     pub line: usize,
-    /// The enclosing function, if any.
+    /// For a struct or variant field, the field as `Type.field` or `Enum::Variant.field`;
+    /// otherwise the enclosing function, if any: a method as `Type::method` (its impl's self
+    /// type) or `Trait::method`, a free or nested function by its bare name.
     pub item: Option<String>,
     pub detail: String,
 }
@@ -129,6 +131,8 @@ pub fn scan_file(source: &str, channels: Option<ChannelScope<'_>>) -> Result<Fil
                 registered: scope.registered,
                 outcome_module: scope.outcome_module,
                 functions: Vec::new(),
+                owners: Vec::new(),
+                types: Vec::new(),
                 findings: Vec::new(),
             };
             visitor.visit_file(&file);
@@ -585,11 +589,27 @@ pub fn inspect_channels(source: &str, scope: ChannelScope<'_>) -> Result<Vec<Fin
 struct ChannelVisitor<'a> {
     registered: &'a BTreeSet<String>,
     outcome_module: bool,
+    /// The enclosing functions: a free or nested function by its name, a method by its impl's
+    /// self type or its trait, as `Type::method` or `Trait::method`.
     functions: Vec<String>,
+    /// The self type of each enclosing impl block, or the trait of a trait block (`None` when
+    /// the self type is not a path).
+    owners: Vec<Option<String>>,
+    /// The enclosing struct or enum, then `Enum::Variant` inside a variant.
+    types: Vec<String>,
     findings: Vec<Finding>,
 }
 
 impl ChannelVisitor<'_> {
+    /// A method's item name: `Type::method` inside `impl Type` or `impl Trait for Type`,
+    /// `Trait::method` inside `trait Trait`, else the bare name.
+    fn method_item(&self, name: &Ident) -> String {
+        match self.owners.last() {
+            Some(Some(owner)) => format!("{owner}::{name}"),
+            _ => name.to_string(),
+        }
+    }
+
     fn report(&mut self, check: Check, span: Span, detail: String) {
         self.findings.push(Finding {
             check,
@@ -698,14 +718,16 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         if is_test_item(&node.attrs) {
             return;
         }
-        self.functions.push(node.sig.ident.to_string());
+        let item = self.method_item(&node.sig.ident);
+        self.functions.push(item);
         self.signature(&node.sig);
         visit::visit_impl_item_fn(self, node);
         self.functions.pop();
     }
 
     fn visit_trait_item_fn(&mut self, node: &'ast syn::TraitItemFn) {
-        self.functions.push(node.sig.ident.to_string());
+        let item = self.method_item(&node.sig.ident);
+        self.functions.push(item);
         self.signature(&node.sig);
         visit::visit_trait_item_fn(self, node);
         self.functions.pop();
@@ -718,7 +740,15 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         if !self.outcome_module {
             self.construction(node);
         }
+        self.owners.push(type_name(&node.self_ty));
         visit::visit_item_impl(self, node);
+        self.owners.pop();
+    }
+
+    fn visit_item_trait(&mut self, node: &'ast syn::ItemTrait) {
+        self.owners.push(Some(node.ident.to_string()));
+        visit::visit_item_trait(self, node);
+        self.owners.pop();
     }
 
     fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
@@ -732,11 +762,44 @@ impl<'ast> Visit<'ast> for ChannelVisitor<'_> {
         visit::visit_item_type(self, node);
     }
 
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        self.types.push(node.ident.to_string());
+        visit::visit_item_struct(self, node);
+        self.types.pop();
+    }
+
+    fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
+        self.types.push(node.ident.to_string());
+        visit::visit_item_enum(self, node);
+        self.types.pop();
+    }
+
+    fn visit_variant(&mut self, node: &'ast syn::Variant) {
+        let qualified = match self.types.last() {
+            Some(owner) => format!("{owner}::{}", node.ident),
+            None => node.ident.to_string(),
+        };
+        self.types.push(qualified);
+        visit::visit_variant(self, node);
+        self.types.pop();
+    }
+
     fn visit_field(&mut self, node: &'ast syn::Field) {
         if let Some(name) = &node.ident {
             let field = name.to_string();
             if carries_code_name(&field) && is_string_type(&node.ty) {
-                self.report(Check::G2, name.span(), format!("field {field} is a string"));
+                // A field finding names its field, so a bridge entry can allow exactly it.
+                let item = self
+                    .types
+                    .last()
+                    .map(|owner| format!("{owner}.{field}"))
+                    .or_else(|| self.functions.last().cloned());
+                self.findings.push(Finding {
+                    check: Check::G2,
+                    line: line_of(name.span()),
+                    item,
+                    detail: format!("field {field} is a string"),
+                });
             }
         }
         visit::visit_field(self, node);
