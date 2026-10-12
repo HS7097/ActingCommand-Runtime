@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Observer tools (#338 §四 工具表): ac_overview, ac_events and ac_material. They only
-//! read; like the CLI's reads they record no client.action. Every fact comes from the
-//! Runtime and runtime-client unchanged; this module only selects, pages and bounds it.
+//! Observer tools (#338 §四 工具表): ac_overview and ac_material. They only read; like the
+//! CLI's reads they record no client.action. Every fact comes from the Runtime and
+//! runtime-client unchanged; this module only selects, pages and bounds it. ac_events lives in
+//! `events` (Workflow #389 MCP-1).
 
 use super::runs;
 use super::runtime::{Connected, Location, read_bounded};
@@ -10,13 +11,13 @@ use super::tools::{
     self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::ActingctlCode;
-use actingcommand_contract::RuntimeErrorCode;
+use crate::events::CursorBinding;
 use actingcommand_contract::{
-    ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition, LedgerView,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
-    RuntimeInstanceStatus, RuntimeMaterialReadFailure, RuntimeMaterialReadLimit,
-    RuntimeMaterialReadRequest, RuntimeMaterialReadState, RuntimeMonitorInstanceStatus,
+    ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition,
+    MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectionProfile,
+    RuntimeEventQueryCursor, RuntimeEventQueryPageRequest, RuntimeInstanceStatus,
+    RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
+    RuntimeMaterialReadState, RuntimeMonitorInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeMaterialCompleteResult, RuntimeMaterialSelection};
 use serde_json::{Map, Value, json};
@@ -28,10 +29,13 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+// An ac_events row, as `actingctl events` prints it (Workflow #389 MCP-1).
+pub(super) use crate::events::brief_row as event_row;
+
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 /// ac_events reads full payloads, as the ledger's diagnostic code lives in them.
-pub(super) const EVENTS_PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
+pub(super) const EVENTS_PROFILE: ProjectionProfile = crate::events::PROFILE;
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports.
@@ -178,30 +182,13 @@ fn instance_row(
 }
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
-/// Runtime's status lists them.
+/// Runtime's status lists them: the selector CLI and MCP share (MCP-0 command table §2.1).
 pub(super) fn select_instance<'s>(
     instances: &'s [RuntimeInstanceStatus],
     selector: &str,
 ) -> Result<&'s RuntimeInstanceStatus, ToolError> {
-    let port = selector.parse::<u16>().ok();
-    let mut matching = instances.iter().filter(|instance| {
-        instance.instance_alias() == selector
-            || json!(instance.instance_id()).as_str() == Some(selector)
-            || port.is_some_and(|port| instance.adb_port() == Some(port))
-    });
-    let selected = matching.next().ok_or_else(|| {
-        ToolError::usage(
-            RuntimeErrorCode::InstanceUnknown,
-            format!("no configured instance has the alias, instance_id or ADB port {selector}"),
-        )
-    })?;
-    if matching.next().is_some() {
-        return Err(ToolError::usage(
-            ActingctlCode::InstanceAmbiguous,
-            format!("{selector} names more than one instance; pass its alias or instance_id"),
-        ));
-    }
-    Ok(selected)
+    crate::instance_selector::select(instances, selector)
+        .map_err(|error| ToolError::usage(error.code(), error.message(selector)))
 }
 
 fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
@@ -244,164 +231,6 @@ fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
     Value::Object(install)
 }
 
-pub(super) fn events(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let arguments = Arguments::new(
-        arguments,
-        &["instance", "view", "since_unix_ms", "cursor", "limit"],
-    )?;
-    let selector = arguments.string("instance")?;
-    let view = arguments.string("view")?.map(parse_view).transpose()?;
-    let since_unix_ms = arguments.integer("since_unix_ms", 0, u64::MAX)?;
-    let cursor = arguments.string("cursor")?;
-    let limit = arguments
-        .integer("limit", 1, tools::MAX_LIST)?
-        .unwrap_or(tools::DEFAULT_LIST);
-    let limit = u16::try_from(limit).map_err(|_| invalid_argument("limit", "is too large"))?;
-    let connected = context.runtime.connect()?;
-    let instance_id = match selector {
-        Some(selector) => {
-            let status = connected
-                .client
-                .status()
-                .map_err(|error| context.runtime.failure(&connected, &error))?;
-            Some(select_instance(status.instances(), selector)?.instance_id())
-        }
-        None => None,
-    };
-    let query = EventQuery {
-        view,
-        from_timestamp_unix_ms: since_unix_ms,
-        instance_id,
-        ..EventQuery::default()
-    };
-    let resume = cursor
-        .map(|token| decode_cursor(context, &connected, token, &query))
-        .transpose()?;
-    let request = RuntimeEventQueryPageRequest::new(limit, resume).map_err(|_| cursor_invalid())?;
-    let page = connected
-        .client
-        .query_event_page(query.clone(), EVENTS_PROFILE, request)
-        .map_err(|error| context.runtime.failure(&connected, &error))?;
-    let snapshot = page.snapshot_ledger_position();
-    let mut rows = page.events().iter().map(event_row).collect::<Vec<_>>();
-    let mut kept = rows.len();
-    loop {
-        let truncated = kept < rows.len();
-        let next = if truncated {
-            let after = page.events()[kept - 1].sequence;
-            Some(
-                RuntimeEventQueryCursor::new(snapshot, after, &query, EVENTS_PROFILE).map_err(
-                    |error| {
-                        ToolError::new(
-                            "runtime",
-                            ActingctlCode::CursorEncodeFailed,
-                            format!("cannot form the next cursor: {error}"),
-                        )
-                    },
-                )?,
-            )
-        } else {
-            page.next_cursor().cloned()
-        };
-        let next = next
-            .map(|cursor| encode_cursor(context, &connected, &cursor))
-            .transpose()?;
-        let result = page_result(&rows[..kept], next, truncated, snapshot);
-        if tools::fits_success(&result) {
-            return Ok(ToolSuccess::new(result));
-        }
-        if kept > 1 {
-            kept -= 1;
-            continue;
-        }
-        // One row alone is over the budget: shorten its material list, and say so, rather
-        // than drop the row.
-        let Some(materials) = rows
-            .first_mut()
-            .and_then(|row| row.get_mut("materials"))
-            .and_then(Value::as_array_mut)
-            .filter(|materials| !materials.is_empty())
-        else {
-            // Nothing left to shorten: the result answers output_budget_exceeded.
-            return Ok(ToolSuccess::new(result));
-        };
-        materials.pop();
-        rows[0]["materials_truncated"] = json!(true);
-    }
-}
-
-fn parse_view(view: &str) -> Result<LedgerView, ToolError> {
-    serde_json::from_value(json!(view))
-        .map_err(|_| invalid_argument("view", "is not a ledger view"))
-}
-
-fn page_result(
-    rows: &[Value],
-    next_cursor: Option<String>,
-    truncated: bool,
-    snapshot: u64,
-) -> Value {
-    let mut result = Map::new();
-    result.insert("events".to_owned(), Value::Array(rows.to_vec()));
-    if let Some(cursor) = next_cursor {
-        result.insert("next_cursor".to_owned(), json!(cursor));
-    }
-    if truncated {
-        result.insert("truncated".to_owned(), json!(true));
-    }
-    result.insert("snapshot_ledger_position".to_owned(), json!(snapshot));
-    Value::Object(result)
-}
-
-pub(super) fn event_row(event: &ProjectedEvent) -> Value {
-    let mut row = Map::new();
-    row.insert("seq".to_owned(), json!(event.sequence));
-    row.insert("ts".to_owned(), json!(event.timestamp_unix_ms));
-    row.insert("type".to_owned(), json!(event.event_type));
-    row.insert("severity".to_owned(), json!(event.severity));
-    if let Some(instance_id) = event.links.instance_id() {
-        row.insert("instance".to_owned(), json!(instance_id));
-    }
-    if let Some(request_id) = event.links.request_id() {
-        row.insert("request_id".to_owned(), json!(request_id));
-    }
-    if let Some(run_id) = event.links.run_id() {
-        row.insert("run_id".to_owned(), json!(run_id));
-    }
-    let code = match &event.payload {
-        ProjectionPayload::Full(payload) => payload.diagnostic_code(),
-        _ => None,
-    };
-    if let Some(code) = code {
-        row.insert("code".to_owned(), json!(code.as_str()));
-    }
-    if !event.artifacts.is_empty() {
-        let materials = event
-            .artifacts
-            .iter()
-            .map(|artifact| {
-                json!({
-                    "ref": material_ref(event, artifact),
-                    "media_type": artifact.media_type,
-                    "size": artifact.byte_count,
-                })
-            })
-            .collect();
-        row.insert("materials".to_owned(), Value::Array(materials));
-    }
-    Value::Object(row)
-}
-
-/// `<seq>:<event_id>:<artifact_id>`: enough to find the material again in the ledger.
-fn material_ref(event: &ProjectedEvent, artifact: &ProjectedArtifactReference) -> String {
-    format!(
-        "{}:{}:{}",
-        event.sequence,
-        text_of(json!(event.event_id)),
-        text_of(json!(artifact.artifact_id))
-    )
-}
-
 fn text_of(value: Value) -> String {
     match value {
         Value::String(text) => text,
@@ -409,69 +238,25 @@ fn text_of(value: Value) -> String {
     }
 }
 
-fn cursor_invalid() -> ToolError {
-    ToolError::usage(
-        ActingctlCode::CursorInvalid,
-        "this cursor belongs to another query, Runtime connection or server process; read again from the first page without a cursor",
-    )
-}
-
 /// `v1.<server>.<connection>.<snapshot>.<after>.<query fingerprint>`: the Runtime cursor
-/// bound to this server process and this connection.
+/// bound to this server process and this connection, as ac_events reads it back.
 pub(super) fn encode_cursor(
     context: &ToolContext<'_>,
     connected: &Connected,
     cursor: &RuntimeEventQueryCursor,
 ) -> Result<String, ToolError> {
-    let fingerprint = json!(cursor)
-        .get("query_fingerprint")
-        .and_then(Value::as_str)
-        .and_then(|fingerprint| fingerprint.strip_prefix("sha256:"))
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            ToolError::new(
-                "runtime",
-                ActingctlCode::CursorEncodeFailed,
-                "the Runtime cursor carries no query fingerprint",
-            )
-        })?;
-    Ok(format!(
-        "v1.{:016x}.{}.{}.{}.{fingerprint}",
-        context.session,
-        connected.generation,
-        cursor.snapshot_ledger_position(),
-        cursor.after_sequence()
-    ))
-}
-
-fn decode_cursor(
-    context: &ToolContext<'_>,
-    connected: &Connected,
-    token: &str,
-    query: &EventQuery,
-) -> Result<RuntimeEventQueryCursor, ToolError> {
-    let parts = token.split('.').collect::<Vec<_>>();
-    let [version, session, generation, snapshot, after, fingerprint] = parts.as_slice() else {
-        return Err(cursor_invalid());
-    };
-    if *version != "v1"
-        || u64::from_str_radix(session, 16).ok() != Some(context.session)
-        || generation.parse::<u64>().ok() != Some(connected.generation)
-    {
-        return Err(cursor_invalid());
+    CursorBinding {
+        session: context.session,
+        generation: connected.generation,
     }
-    let snapshot = snapshot.parse::<u64>().map_err(|_| cursor_invalid())?;
-    let after = after.parse::<u64>().map_err(|_| cursor_invalid())?;
-    let cursor = serde_json::from_value::<RuntimeEventQueryCursor>(json!({
-        "snapshot_ledger_position": snapshot,
-        "after_sequence": after,
-        "query_fingerprint": format!("sha256:{fingerprint}"),
-    }))
-    .map_err(|_| cursor_invalid())?;
-    if cursor.validate().is_err() || !cursor.matches(query, EVENTS_PROFILE).unwrap_or(false) {
-        return Err(cursor_invalid());
-    }
-    Ok(cursor)
+    .encode(cursor)
+    .map_err(|error| {
+        ToolError::new(
+            "runtime",
+            ActingctlCode::CursorEncodeFailed,
+            error.message(),
+        )
+    })
 }
 
 /// One committed material, found again from its ref at the ledger's current snapshot.

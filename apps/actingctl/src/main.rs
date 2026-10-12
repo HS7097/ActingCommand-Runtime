@@ -6,8 +6,10 @@
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
+mod events;
 #[cfg(test)]
 mod gate_381a;
+mod instance_selector;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
@@ -63,6 +65,11 @@ fn main() -> ExitCode {
             return exit;
         }
     }
+    // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
+    if let Some(exit) = events::dispatch(&arguments) {
+        return exit;
+    }
+    // --- end MCP-1 ---
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {
