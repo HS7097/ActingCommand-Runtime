@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     OcrAnchorMatch, OcrRegionEvidence, OcrRegionOffset, OcrRegionRect, OcrRegionUnresolvedReason,
 };
@@ -24,7 +25,13 @@ mod candidate_identity;
 mod candidate_layout;
 mod codes;
 mod target_consensus;
+mod text_locate;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
+pub use text_locate::{
+    OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
+    OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
+    OcrProviderDetection, TEXT_READ_MAX_CALLS, TextReadBudgetOverrun, TextReadCount,
+};
 
 pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
 
@@ -33,7 +40,7 @@ pub use candidate_identity::{
     CandidateIdentityTemplate, normalize_name,
 };
 
-pub use codes::RecognitionPackCode;
+pub use codes::{RecognitionPackCode, RecognitionPackLocation, TextReadBudget};
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
@@ -71,6 +78,8 @@ pub enum RecognitionPackErrorCode {
     VisionProviderFailure,
     VisionProviderInvalidResponse,
     RegionUnresolved,
+    /// Workflow #396 REC-1: a text read refused to conclude (its outcome says why).
+    TextReadRefused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,14 +89,19 @@ pub struct RecognitionPackError {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<Box<OcrRegionEvidence>>,
+    /// Boxed: only a timed template failure carries it, and inline it would put the error,
+    /// with the outcome of Workflow #396 REC-1, at clippy's large-error threshold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    timing: Option<actingcommand_contract::TemplateMatchTimingObservation>,
+    timing: Option<Box<actingcommand_contract::TemplateMatchTimingObservation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     #[serde(skip)]
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
     sample: Option<Box<actingcommand_contract::TaskDiagnosticSampleData>>,
+    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
 }
 
 impl RecognitionPackError {
@@ -105,7 +119,23 @@ impl RecognitionPackError {
             declaration_issue: None,
             ppocr_diagnostics: Vec::new(),
             sample: None,
+            outcome: None,
         }
+    }
+
+    /// A text read that refused to conclude, under its registered outcome (Workflow #396).
+    pub(crate) fn text_read(outcome: Outcome) -> Self {
+        let mut error = Self::fatal_with_code(
+            RecognitionPackErrorCode::TextReadRefused,
+            outcome.to_string(),
+        );
+        error.outcome = Some(outcome);
+        error
+    }
+
+    /// The registered outcome of a text read that refused to conclude.
+    pub fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
     }
 
     pub fn severity(&self) -> RecognitionPackErrorSeverity {
@@ -141,7 +171,7 @@ impl RecognitionPackError {
     }
 
     pub fn timing(&self) -> Option<&actingcommand_contract::TemplateMatchTimingObservation> {
-        self.timing.as_ref()
+        self.timing.as_deref()
     }
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
@@ -183,7 +213,7 @@ impl fmt::Display for RecognitionPackError {
 
 impl Error for RecognitionPackError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackRect {
     pub x: i32,
     pub y: i32,
@@ -399,6 +429,9 @@ pub struct OcrTarget {
     pub model_ref: String,
     pub model_sha256: String,
     pub click: Option<PackRect>,
+    /// Schema 0.7: find the text block by block and give its box (Workflow #396 REC-1).
+    #[serde(default)]
+    pub locate: Option<OcrLocate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,6 +526,8 @@ pub struct OcrProviderRequest<'a> {
     pub timeout_ms: u64,
     pub model_ref: &'a str,
     pub model_sha256: &'a str,
+    /// How the region is cut into blocks (Workflow #396 REC-1).
+    pub blocks: OcrProviderBlocks,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -508,6 +543,8 @@ pub struct OcrProviderResult {
     pub text: String,
     pub blocks: Vec<OcrProviderTextBlock>,
     pub confidence: Option<f32>,
+    /// A `Detect` read's box count before truncation (Workflow #396 REC-1).
+    pub detection: Option<OcrProviderDetection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -720,6 +757,10 @@ pub struct TargetEvaluation {
     pub color_digest: Option<Box<ColorDigestEvaluation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<Box<CompositeEvaluation>>,
+    /// Why the target did not pass, when a registered reason exists (Workflow #396 REC-1:
+    /// `text_locate_not_found`, `text_locate_outside_cells`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Outcome>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<actingcommand_contract::TaskDiagnosticSamplingData>,
@@ -835,6 +876,9 @@ pub struct OcrEvaluation {
     pub matched_expected: Option<String>,
     pub match_mode: OcrMatchMode,
     pub blocks: Vec<OcrTextEvidence>,
+    /// A locate target's found block and cell (Workflow #396 REC-1); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located: Option<OcrLocatedEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -900,6 +944,14 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     let pack: RecognitionPack = serde_json::from_value(value).map_err(|err| {
         RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
     })?;
+    text_locate::validate_locate_declarations(&pack).map_err(|refusal| {
+        let mut error = RecognitionPackError::fatal(refusal.explanation)
+            .at_declaration(refusal.pointer, refusal.reason);
+        if let Some(issue) = &mut error.declaration_issue {
+            issue.schema_version = Some(schema_version.clone());
+        }
+        error
+    })?;
     if matches!(schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5")
         && pack
             .targets
@@ -917,7 +969,9 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
 }
 
 /// A template cache bound to one immutable Scene and its admitted evaluator.
-/// OCR results are never cached; callers cannot import evaluations from another frame.
+/// OCR results are not cached, except the text reads of locate targets, which are remembered
+/// per request for this Scene only (Workflow #396 REC-1); callers cannot import evaluations
+/// from another frame.
 pub struct SceneEvaluation<'a> {
     evaluator: &'a RecognitionEvaluator,
     scene: &'a Scene,
@@ -926,6 +980,7 @@ pub struct SceneEvaluation<'a> {
     sample_recorder: Option<RefCell<&'a mut TargetSampleRecorder<'a>>>,
     consensus_results: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
     sample_deadline: Option<std::time::Instant>,
+    text_reads: RefCell<text_locate::TextReads>,
 }
 
 impl SceneEvaluation<'_> {
@@ -1059,6 +1114,7 @@ impl SceneEvaluation<'_> {
                 declaration_issue: None,
                 ppocr_diagnostics: Vec::new(),
                 sample: None,
+                outcome: None,
             }
         };
         if !evaluated.passed {
@@ -1119,6 +1175,7 @@ impl RecognitionEvaluator {
             sample_recorder: None,
             consensus_results: RefCell::new(HashMap::new()),
             sample_deadline: None,
+            text_reads: RefCell::new(text_locate::TextReads::default()),
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
@@ -1422,6 +1479,7 @@ impl RecognitionEvaluator {
                     timeout_ms,
                     model_ref: &target.model_ref,
                     model_sha256: &target.model_sha256,
+                    blocks: OcrProviderBlocks::Implicit,
                 })
                 .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
             diagnostics = observation.result.ppocr_diagnostics.clone();
@@ -1620,6 +1678,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            failure: None,
             message: template_message(template_ok, color_ok),
         })
     }
@@ -1725,6 +1784,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            failure: None,
             message: match unresolved {
                 Some(reason) => format!(
                     "no joint template/color match; best template color region unresolved: {reason:?}"
@@ -1763,6 +1823,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            failure: None,
             message: if passed {
                 "color passed".to_string()
             } else {
@@ -1776,6 +1837,9 @@ impl RecognitionEvaluator {
         context: &SceneEvaluation<'_>,
         target: &OcrTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        if let Some(locate) = &target.locate {
+            return self.evaluate_located_text(context, target, locate);
+        }
         let scene = context.scene;
         let (region, region_evidence) = context.ocr_region(target)?;
         (|| {
@@ -1796,6 +1860,7 @@ impl RecognitionEvaluator {
                     timeout_ms: target.timeout_ms,
                     model_ref: &target.model_ref,
                     model_sha256: &target.model_sha256,
+                    blocks: OcrProviderBlocks::Implicit,
                 })
                 .map_err(|err| provider_error(&target.id, "ocr", err))?;
             let ocr = validate_ocr_result(result, region)?;
@@ -1834,10 +1899,12 @@ impl RecognitionEvaluator {
                     matched_expected,
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
+                    located: None,
                 })),
                 nn: None,
                 color_digest: None,
                 composite: None,
+                failure: None,
                 message,
             })
         })()
@@ -1900,6 +1967,7 @@ impl RecognitionEvaluator {
             }),
             color_digest: None,
             composite: None,
+            failure: None,
             message: if passed {
                 "nn passed".to_string()
             } else {
@@ -1954,6 +2022,7 @@ impl RecognitionEvaluator {
                 observed_cells: observed.to_hex(),
             })),
             composite: None,
+            failure: None,
             message: if passed {
                 "color digest passed".to_string()
             } else {
@@ -2028,6 +2097,7 @@ impl RecognitionEvaluator {
                 members,
                 ppocr_diagnostics,
             })),
+            failure: None,
             message,
         })
     }
@@ -2259,6 +2329,18 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             ][..],
             "composite" => &["type", "id", "mode", "members"][..],
             "click_only" => &["type", "id", "click"][..],
+            "ocr" if schema != SCHEMA_0_7 && object.contains_key("locate") => {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::UnsupportedTarget,
+                    format!(
+                        "schema {schema} target[{index}].locate requires schema_version '{SCHEMA_0_7}'"
+                    ),
+                )
+                .at_declaration(
+                    format!("/targets/{index}/locate"),
+                    actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+                ));
+            }
             "ocr" => &[
                 "type",
                 "id",
@@ -2272,6 +2354,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 "model_ref",
                 "model_sha256",
                 "click",
+                "locate",
             ][..],
             "nn" => &[
                 "type",
@@ -2294,6 +2377,9 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             }
         };
         reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
+        if let Some(locate) = object.get("locate") {
+            validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
+        }
         if target_type == "color_digest"
             && let Some(algorithm) = object.get("algorithm").and_then(Value::as_str)
             && let Err(error) = ColorDigestAlgorithm::parse(algorithm)
@@ -2386,6 +2472,67 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
     }
     if let Some(layouts) = root.get("candidate_layouts") {
         candidate_layout::validate_candidate_layouts_wire(layouts)?;
+    }
+    Ok(())
+}
+
+/// The wire shape of a schema 0.7 `locate` object (Workflow #396 REC-1): its members, the
+/// `line_merge` keyword or object and the integer members of `cells`. Values are checked with
+/// the typed declaration.
+fn validate_locate_wire(value: &Value, pointer: &str) -> RecognitionPackResult<()> {
+    let locate = validate_strict_object(
+        value,
+        &["normalize", "blocks", "line_merge", "cells"],
+        pointer,
+    )?;
+    let invalid_type = |field: String| {
+        RecognitionPackError::fatal(format!("{field} has the wrong type")).at_declaration(
+            field,
+            actingcommand_contract::ResourceDeclarationReason::InvalidType,
+        )
+    };
+    for field in ["normalize", "blocks"] {
+        match locate.get(field) {
+            Some(value) if value.is_string() => {}
+            Some(_) => return Err(invalid_type(format!("{pointer}/{field}"))),
+            None => {
+                return Err(
+                    RecognitionPackError::fatal(format!("{pointer} lacks {field}")).at_declaration(
+                        format!("{pointer}/{field}"),
+                        actingcommand_contract::ResourceDeclarationReason::MissingField,
+                    ),
+                );
+            }
+        }
+    }
+    if let Some(line_merge) = locate.get("line_merge") {
+        let line_merge_pointer = format!("{pointer}/line_merge");
+        if line_merge.is_object() {
+            let factor = validate_strict_object(line_merge, &["gap_factor"], &line_merge_pointer)?;
+            if !factor.get("gap_factor").is_some_and(Value::is_u64) {
+                return Err(invalid_type(format!("{line_merge_pointer}/gap_factor")));
+            }
+        } else if line_merge.as_str() != Some("none") {
+            return Err(RecognitionPackError::fatal(format!(
+                "{line_merge_pointer} must be \"none\" or {{\"gap_factor\": n}}"
+            ))
+            .at_declaration(
+                line_merge_pointer,
+                actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+    }
+    if let Some(cells) = locate.get("cells") {
+        let cells_pointer = format!("{pointer}/cells");
+        const CELL_FIELDS: [&str; 8] = [
+            "x", "y", "width", "height", "pitch_x", "pitch_y", "columns", "rows",
+        ];
+        let cells = validate_strict_object(cells, &CELL_FIELDS, &cells_pointer)?;
+        for field in CELL_FIELDS {
+            if !cells.get(field).is_some_and(Value::is_i64) {
+                return Err(invalid_type(format!("{cells_pointer}/{field}")));
+            }
+        }
     }
     Ok(())
 }
@@ -2698,6 +2845,9 @@ fn validate_pack(
     }
     target_consensus::validate_target_consensus(pack, errors);
     candidate_layout::validate_candidate_layouts(pack, errors);
+    if let Err(refusal) = text_locate::validate_locate_declarations(pack) {
+        errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
+    }
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
@@ -3337,33 +3487,35 @@ fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> Recog
     let mut error = RecognitionPackError::fatal(format!(
         "recognition primitive failed for target '{target_id}': {err}"
     ));
-    error.timing = err.timing().map(|timing| TemplateMatchTimingObservation {
-        clock: TimingObservationClock::ProcessInstant,
-        stage: match timing.stage {
-            recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
-            recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
-            recognition::TemplateMatchTimingStage::Refinement => {
-                TemplateMatchTimingStage::Refinement
-            }
-            recognition::TemplateMatchTimingStage::ImageprocReturned => {
-                TemplateMatchTimingStage::ImageprocReturned
-            }
-            recognition::TemplateMatchTimingStage::JointTemplateColor => {
-                TemplateMatchTimingStage::JointTemplateColor
-            }
-        },
-        elapsed_us: timing.elapsed_us.map_or(
-            ObservedMicroseconds::Unavailable {
-                reason: TimingObservationIssue::DurationOverflow,
+    error.timing = err.timing().map(|timing| {
+        Box::new(TemplateMatchTimingObservation {
+            clock: TimingObservationClock::ProcessInstant,
+            stage: match timing.stage {
+                recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
+                recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
+                recognition::TemplateMatchTimingStage::Refinement => {
+                    TemplateMatchTimingStage::Refinement
+                }
+                recognition::TemplateMatchTimingStage::ImageprocReturned => {
+                    TemplateMatchTimingStage::ImageprocReturned
+                }
+                recognition::TemplateMatchTimingStage::JointTemplateColor => {
+                    TemplateMatchTimingStage::JointTemplateColor
+                }
             },
-            |value| ObservedMicroseconds::Measured { value },
-        ),
-        limit_us: timing.limit_us.map_or(
-            ObservedMicroseconds::Unavailable {
-                reason: TimingObservationIssue::DurationOverflow,
-            },
-            |value| ObservedMicroseconds::Measured { value },
-        ),
+            elapsed_us: timing.elapsed_us.map_or(
+                ObservedMicroseconds::Unavailable {
+                    reason: TimingObservationIssue::DurationOverflow,
+                },
+                |value| ObservedMicroseconds::Measured { value },
+            ),
+            limit_us: timing.limit_us.map_or(
+                ObservedMicroseconds::Unavailable {
+                    reason: TimingObservationIssue::DurationOverflow,
+                },
+                |value| ObservedMicroseconds::Measured { value },
+            ),
+        })
     });
     error
 }
@@ -3690,6 +3842,7 @@ mod tests {
                     confidence: Some(0.95),
                 }],
                 confidence: Some(0.95),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -3934,6 +4087,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -4140,6 +4294,7 @@ mod tests {
                 text: "hello".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(f32::NAN),
+                detection: None,
             },
             OcrProviderResult {
                 ppocr_diagnostics: Vec::new(),
@@ -4150,6 +4305,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             },
         ] {
             let evaluator = vision_evaluator(
@@ -4194,6 +4350,7 @@ mod tests {
                 text: "hello".into(),
                 blocks: vec![],
                 confidence: Some(1.0),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -5265,6 +5422,7 @@ mod tests {
                         model_ref: PPOCR_V6_MEDIUM_MODEL_REF.to_string(),
                         model_sha256: "a".repeat(64),
                         click: None,
+                        locate: None,
                     }),
                     RecognitionTarget::Nn(NnTarget {
                         id: "nn/page".to_string(),
@@ -5461,6 +5619,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             })
         }
 
@@ -5527,6 +5686,7 @@ mod tests {
                         confidence: Some(1.0),
                     }],
                     confidence: Some(1.0),
+                    detection: None,
                 }),
                 nn: Err(VisionProviderError::new(
                     VisionProviderErrorCode::Unavailable,

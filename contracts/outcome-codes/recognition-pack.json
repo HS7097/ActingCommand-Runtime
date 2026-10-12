@@ -84,6 +84,94 @@
       "description": "No candidate projection: recording a candidate sample evaluation failed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "text_locate_not_found": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target did not pass: no block read in its region matches an expected value with at least the target's minimum confidence (Workflow #396 REC-1). count is the number of blocks read. Carried as the target evaluation's failure; a guard refuses its input with it as the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_locate_outside_cells": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target did not pass: the matching block's center lies in none of the target's declared cells (Workflow #396 REC-1). Carried as the target evaluation's failure.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_read_budget_exceeded": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "text_read_budget": "required",
+        "count": "required",
+        "limit_count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A text read was refused before calling the OCR provider: one consumer (one page recognition or one guard evaluation) would exceed its budget of provider calls or of summed region area in pixels (Workflow #396 REC-1). count is the amount already used, limit_count the budget. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_read_blocks_truncated": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  },
+  "locations": {
+    "text_locate_evaluate": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Comparing a locate OCR target's blocks with its expected values and declared cells (Workflow #396 REC-1)."
+    },
+    "text_read_request": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking one consumer's text read budget before calling the OCR provider (Workflow #396 REC-1)."
     }
   }
 }

@@ -135,7 +135,9 @@ or substitutes a declared search rectangle. Existing absolute/full-frame OCR is 
 
 Page recognition and field collection share a Scene-bound template evaluation context.
 A previously evaluated template is reused; an unevaluated anchor is evaluated once in
-that Scene. OCR output is not cached, and callers cannot import an old template result.
+that Scene. The text reads of locate targets (section Located text) are remembered per
+request within that Scene; other OCR output is not cached, and callers cannot import an
+old template result.
 The context is bounded by admitted target identities and is released with the frame.
 Best-match score, threshold and the existing color check govern the anchor. This API
 does not establish match uniqueness. Resource authors choose discriminating icons and
@@ -348,3 +350,78 @@ and reports stay at the existing controlled artifact paths with `DebugFull` rete
 profiles must use the redacted fields projection; raw references identify restricted
 evidence and do not authorize exporting its contents. Frame coverage and acquisition
 remain the responsibility of the resource task and its authorized execution window.
+
+## Located text
+
+Workflow #396 REC-1. An OCR target of recognition pack schema `0.7` (task schema `0.9`
+`ocr_targets[]`) may declare `locate`; it is then a locate target. It finds one of its
+`expected` names among the blocks the provider read in its region, and a `target` or
+`offset` click takes the found block, or the declared cell holding it, as its click box.
+Every member is written by the pack; there is no Runtime default.
+
+```json
+"locate": {"normalize": "identity_v1", "blocks": "detect", "line_merge": {"gap_factor": 0},
+           "cells": {"x": 0, "y": 0, "width": 140, "height": 230,
+                     "pitch_x": 150, "pitch_y": 240, "columns": 4, "rows": 2}}
+```
+
+- `normalize`: `identity_v1`, the identity normalization of candidate names without
+  confusions (full-width folding, voiced kana composition, lowercase, whitespace removed).
+  Blocks and `expected` values are normalized alike.
+- `blocks`: `detect` runs the detector inside the region (rectangle, `full_frame` or
+  `template_relative`) and reads every box on its own, with its own rectangle; padding is
+  clipped to the requested region. `region` reads the whole region as one block whose
+  rectangle is the region; it is refused with `full_frame`. A model folder without
+  `det.onnx` fails a `detect` read as a provider failure, never as "not found".
+- `line_merge`: required with `detect`, refused with `region`. `"none"` merges no boxes;
+  `{"gap_factor": n}` (0..=16) applies the folder's line merge with `n` in place of
+  `detector.merge_gap_factor` (`vision-model-folders.md`).
+- `cells` (optional): a grid relative to the region's top-left corner, cell
+  `k = row * columns + column` from 0; `x`, `y` >= 0, `width`, `height` >= 1,
+  `pitch_x` >= `width`, `pitch_y` >= `height`, 1 to 64 cells, the whole grid inside the
+  region (a `template_relative` region by its declared size).
+
+Each block is compared on its own, never across blocks: `exact` needs the normalized block
+to equal a normalized `expected` value, `contains` to contain it. A block without a
+normalized text (longer than 128 characters, blank or holding a control character) matches
+nothing. A match is a hit only when the block's confidence is present and at least
+`minimum_confidence`. The hit with the highest confidence in milli (rounded down) wins; on a
+tie the earlier block in the sorted order `(y, x, height, width, text)`. With `cells`, the
+cell holding the hit's center `(x + floor(w/2), y + floor(h/2))` is the found cell.
+
+A locate target that does not pass carries its typed reason as `failure`:
+`text_locate_not_found` (no hit; `count` is the number of blocks read) or
+`text_locate_outside_cells` (the hit's center lies in no cell). A passing target carries
+`located`: the hit's block index, rectangle and confidence in milli, the cell index and
+rectangle when `cells` is declared, and `truncated`. When the detector found more boxes
+than the folder's `max_boxes`, a read without a hit fails with the evaluation error
+`text_read_blocks_truncated` (`count` boxes detected, `limit_count` the folder's
+`max_boxes`); a hit passes with `truncated: true`. The task diagnostic stream records
+`failure` on the target row, `located` on its OCR row and the outcome of an evaluation
+error on its recognition error row.
+
+Reads are counted per consumer: one page recognition (every page rule of the page set) or
+one guard evaluation. A consumer reads with at most 4 provider calls and at most one frame
+of summed region area, each distinct request once; requests are the same when their
+resolved region, model, languages, timeout, `blocks` and `line_merge` are equal. Within one
+Scene a request calls the provider once; a later locate target with the same request reads
+the remembered result. Admission counts every consumer statically (a `template_relative`
+region counts as its own request) and refuses an exceeded budget with
+`resource_declaration_invalid` at the page (`/pages/<i>`) or guard
+(`/operations/<i>/guard`) that exceeds it. A read that would exceed the budget at run time
+fails before the provider call with `text_read_budget_exceeded` (`text_read_budget`
+`calls` or `area`, `count` used, `limit_count`). A sample deadline too short for the read
+calls no OCR.
+
+A guard declares `verify_text` naming its own target, a locate target (task schema `0.9`).
+Its input is taken by a `target` or `offset` click: the click box is the found cell when
+`cells` is declared, else the found block; `offset` is relative to that box's top-left
+corner. A text guard never takes `target_center`. A click box outside the frame fails with
+`contained_task_input_out_of_bounds`. A locate target that does not pass refuses the guard
+(`contained_task_guard_refused`, its reason as the `cause=` token of the detail); an
+evaluation error fails the guard evaluation (`contained_task_guard_evaluation_failed`). In
+both cases no input is sent.
+
+A locate target is refused as an OCR field or reading `target_id`, an OCR relative anchor,
+a candidate layout slot target or feature, and with `target_consensus`. Every locate
+declaration error is refused with `resource_declaration_invalid` at its JSON pointer.

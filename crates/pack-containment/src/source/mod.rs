@@ -2691,6 +2691,7 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 Some("composite" | "color_digest")
             ) || target.get("max_distance").is_some()
                 || target.pointer("/color_check/max_distance").is_some()
+                || target.get("locate").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
@@ -2735,6 +2736,7 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
             "model_ref",
             "model_sha256",
             "click",
+            "locate",
         ],
         "ocr_targets entry",
     )?;
@@ -2784,6 +2786,10 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
             "click".to_string(),
             canonical_ocr_rect(click, "ocr_targets entry click")?,
         );
+    }
+    // Workflow #396 REC-1: `locate` passes to the pack as declared (pack schema `0.7`).
+    if let Some(locate) = source.get("locate") {
+        target.insert("locate".to_string(), locate.clone());
     }
     Ok(Value::Object(target))
 }
@@ -4571,21 +4577,42 @@ fn validate_parsed_guard_references(
                 "operation '{operation_id}' guard.check points to non-composite target '{target_id}'"
             ));
         }
+        // Workflow #396 REC-1: `verify_text` names the guard target, a locate OCR target.
+        let text_guard = guard.get("verify_text").and_then(Value::as_str);
+        if let Some(verify_text) = text_guard
+            && (verify_text != target_id
+                || target.get("type").and_then(Value::as_str) != Some("ocr")
+                || target.get("locate").is_none())
+        {
+            errors.push(format!(
+                "operation '{operation_id}' guard.verify_text '{verify_text}' must name the guard target, a locate OCR target"
+            ));
+        }
         if operation.pointer("/click/kind").and_then(Value::as_str) == Some("offset") {
             if guard
                 .get("verify_template")
                 .and_then(Value::as_str)
                 .is_none()
+                && text_guard.is_none()
             {
                 errors.push(format!(
                     "operation '{operation_id}' offset click requires a template guard that can produce matched_rect"
                 ));
             }
-            if target.get("type").and_then(Value::as_str) != Some("template") {
+            if target.get("type").and_then(Value::as_str) != Some("template")
+                && text_guard.is_none()
+            {
                 errors.push(format!(
                     "operation '{operation_id}' offset click guard target '{target_id}' must be a template target"
                 ));
             }
+        }
+        if operation.pointer("/click/kind").and_then(Value::as_str) == Some("target_center")
+            && text_guard.is_some()
+        {
+            errors.push(format!(
+                "operation '{operation_id}' a located-text guard takes a target or offset click, never target_center"
+            ));
         }
     }
     if errors.is_empty() {

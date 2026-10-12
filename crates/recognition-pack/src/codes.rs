@@ -14,5 +14,31 @@ actingcommand_contract::outcome_codes! {
         CandidateSamplesUnavailable => "candidate_samples_unavailable": error / none,
         CandidateSampleGeometryChanged => "candidate_sample_geometry_changed": error / environment_fault,
         CandidateSampleRecordFailed => "candidate_sample_record_failed": error / none,
+        // Workflow #396 REC-1: text located by OCR. A target that did not pass carries the
+        // first two as its `failure`; the last two are evaluation errors.
+        TextLocateNotFound => "text_locate_not_found": error,
+        TextLocateOutsideCells => "text_locate_outside_cells": error,
+        TextReadBudgetExceeded => "text_read_budget_exceeded": error,
+        TextReadBlocksTruncated => "text_read_blocks_truncated": error,
+    }
+}
+
+// Workflow #396 REC-1.
+actingcommand_contract::outcome_locations! {
+    /// Where a text read or a text location happened.
+    pub enum RecognitionPackLocation {
+        TextLocateEvaluate => "text_locate_evaluate",
+        TextReadRequest => "text_read_request",
+    }
+}
+
+// Workflow #396 REC-1.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which per-consumer text read budget ran out (`text_read_budget`).
+    pub enum TextReadBudget: "text_read_budget" {
+        /// The provider calls of one consumer.
+        Calls => "calls",
+        /// The summed region area of one consumer, in pixels.
+        Area => "area",
     }
 }

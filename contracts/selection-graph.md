@@ -96,6 +96,11 @@ threshold that was applied.
 A post-admission OCR field target is never referenced by a page, directly or as a member of
 a composite the page references.
 
+A `target` or `offset` click takes its box from a template guard (`guard.verify_template`)
+or, from task schema `0.9`, from a located-text guard (`guard.verify_text`, `ocr-fields.md`,
+section Located text); a `target_center` click takes a template guard only (Workflow #396
+REC-1).
+
 ### Relation to pages
 
 A page is `all_of(required)`, each `any_of` group, and `none_of(forbidden)`; these fields

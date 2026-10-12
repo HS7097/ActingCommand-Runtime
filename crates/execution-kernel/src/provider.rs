@@ -18,16 +18,17 @@ pub use actingcommand_device::{
 pub use actingcommand_recognition_pack::VisionProvider as RecognitionVisionProvider;
 use actingcommand_recognition_pack::{
     NnProviderLabel, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
-    OcrProviderExecutionEvidence, OcrProviderObservation, OcrProviderRequest, OcrProviderResult,
-    OcrProviderTextBlock, PackRect, VisionProviderError, VisionProviderErrorCode,
-    VisionProviderFrame,
+    OcrProviderBlocks, OcrProviderDetection, OcrProviderExecutionEvidence, OcrProviderObservation,
+    OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock, PackRect, VisionProviderError,
+    VisionProviderErrorCode, VisionProviderFrame,
 };
 use actingcommand_vision_ffi::{
-    NnClassificationResult, NnEngine, NnInferenceRequest, NnModelLoad, NnModelSpec, OcrEngine,
-    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceRequestView, OcrInferenceResult,
-    OcrModelLoad, OcrModelSpec, OcrSessionId, OnnxExecutionProvider, VisionBackendKind,
-    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame, VisionFrameView,
-    VisionModelListing, VisionModelLoader, VisionPixelFormat, VisionRect, next_ocr_session_id,
+    NnClassificationResult, NnEngine, NnInferenceRequest, NnModelLoad, NnModelSpec, OcrBlockMode,
+    OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceRequestView,
+    OcrInferenceResult, OcrLineMerge, OcrModelLoad, OcrModelSpec, OcrSessionId,
+    OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
+    VisionFrame, VisionFrameView, VisionModelListing, VisionModelLoader, VisionPixelFormat,
+    VisionRect, next_ocr_session_id,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -613,6 +614,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     region,
                     languages: request.languages,
                     timeout_ms,
+                    blocks: ocr_block_mode(request.blocks),
                 })
             },
         )?;
@@ -637,6 +639,7 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                     region,
                     languages: request.languages,
                     timeout_ms,
+                    blocks: ocr_block_mode(request.blocks),
                 })
             },
         )?;
@@ -821,8 +824,30 @@ fn not_installed<'a>(
     )
 }
 
+/// The vision boundary's block mode of a recognition request (Workflow #396 REC-1).
+fn ocr_block_mode(blocks: OcrProviderBlocks) -> OcrBlockMode {
+    match blocks {
+        OcrProviderBlocks::Implicit => OcrBlockMode::Implicit,
+        OcrProviderBlocks::Region => OcrBlockMode::Region,
+        OcrProviderBlocks::Detect {
+            line_merge_gap_factor: None,
+        } => OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::Never,
+        },
+        OcrProviderBlocks::Detect {
+            line_merge_gap_factor: Some(factor),
+        } => OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::GapFactor(factor),
+        },
+    }
+}
+
 fn map_ocr_result(result: OcrInferenceResult) -> OcrProviderResult {
     OcrProviderResult {
+        detection: result.detection.map(|count| OcrProviderDetection {
+            detected: count.detected,
+            limit: count.limit,
+        }),
         ppocr_diagnostics: result.ppocr_diagnostics,
         text: result.text,
         blocks: result
@@ -1594,6 +1619,7 @@ mod tests {
                 timeout_ms: 1_000,
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
+                blocks: OcrProviderBlocks::Implicit,
             },
         )
         .expect("canonical ROI accepted");
@@ -1685,6 +1711,7 @@ mod tests {
                 timeout_ms: 1_000,
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
+                blocks: OcrProviderBlocks::Implicit,
             },
         )
         .expect_err("provider warning remains fail-closed");
@@ -1713,6 +1740,7 @@ mod tests {
             timeout_ms: 1_000,
             model_ref: "PP-OCRv6_medium",
             model_sha256: &model_sha256,
+            blocks: OcrProviderBlocks::Implicit,
         };
         let test_double = VisionFfiProvider::new(
             Some((
@@ -1774,6 +1802,7 @@ mod tests {
                 timeout_ms: 1,
                 model_ref: "PP-OCRv6_medium",
                 model_sha256: &model_sha256,
+                blocks: OcrProviderBlocks::Implicit,
             },
         )
         .expect_err("timeout remains typed");
@@ -1804,6 +1833,7 @@ mod tests {
             timeout_ms: 1_000,
             model_ref: "PP-OCRv6_medium",
             model_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            blocks: OcrProviderBlocks::Implicit,
         }
     }
 
@@ -1929,6 +1959,7 @@ mod tests {
             confidence: Some(0.99),
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
+            detection: None,
         }
     }
 
@@ -1948,6 +1979,7 @@ mod tests {
                 confidence: Some(0.99),
                 backend: self.backend,
                 warnings: self.warnings.clone(),
+                detection: None,
             })
         }
     }
