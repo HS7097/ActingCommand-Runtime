@@ -1553,6 +1553,23 @@ mod tests {
     }
 
     #[test]
+    fn the_collect_option_refuses_a_document_that_declares_a_record_list() {
+        // Only a select step reads a record list; the collect option refuses the document
+        // even when the list is present and readable.
+        let policy = crate::schema::keyed_policy();
+        let facts = list_facts(
+            &policy,
+            &[list_record(vec![
+                list_row("member-a", 2),
+                list_row("member-c", 3),
+            ])],
+        );
+        let error = evaluate_collect(&policy, &list_candidates(), &facts, NOW)
+            .expect_err("the collect option reads no record list");
+        assert_eq!(error.code(), SelectionErrorCode::TypeMismatch);
+    }
+
+    #[test]
     fn where_selects_the_rows_of_one_kind_before_keys_must_be_unique() {
         use actingcommand_contract::FactScalar;
         let mut policy = crate::schema::keyed_policy();

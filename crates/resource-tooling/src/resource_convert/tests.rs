@@ -1282,8 +1282,9 @@ fn a_business_catalog_declares_up_to_1024_identities() {
     let compiled = crate::compile_business_catalog(&catalog(1_024), "test", "business_id")
         .expect("a 1024-row catalog compiles");
     assert_eq!(compiled.provenance.entries.len(), 1_024);
-    crate::compile_business_catalog(&catalog(1_025), "test", "business_id")
+    let refusal = crate::compile_business_catalog(&catalog(1_025), "test", "business_id")
         .expect_err("a 1025-row catalog is refused");
+    assert_eq!(refusal.code, "package_invalid");
 }
 
 #[test]
