@@ -332,4 +332,15 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // ---- Workflow #386 SR-0 (scheduling rules): begin ----
+    required_ms: duration_ms,
+    remaining_ms: duration_ms,
+    limit_ms: duration_ms,
+    pack_operation_id: id,
+    step_id: id,
+    page_id: id,
+    blackout_id: id,
+    blackout_start_unix_ms: unix_ms,
+    pacing_stage: vocab(pacing_stage),
+    // ---- Workflow #386 SR-0 (scheduling rules): end ----
 }

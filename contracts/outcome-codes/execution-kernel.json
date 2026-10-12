@@ -1,0 +1,151 @@
+{
+  "owner": "execution-kernel",
+  "codes": {
+    "recognition_sample_deadline_exceeded": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "timeout_ms": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition observation (capture, multi-frame sampling and recognition) did not finish within its window, and every observe-only retry (attempts: the configured base plus the pacing curve's extra retries) ran out too; stage names the observation. A retry never repeats an input. A scheduled run that ends with it settles as a condition termination and is rerun after the condition lifts (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "common_causes": "A slow or stalled emulator under host load; a page whose consensus needs more frames than its window allows at the current pacing.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Repeated occurrences at stage s0 mean the package's sampling or timeouts are too tight."
+    },
+    "recognition_sample_deadline_or_permission_lost": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "retired",
+      "since": "0.12.0",
+      "retired_in": "0.12.0",
+      "replaced_by": "recognition_sample_deadline_exceeded",
+      "description": "Retired. An observation's sampling checkpoint reported a passed deadline or a lost permission. A production run cannot lose its permission in the middle (the checkpoint only reports cancellation), so the deadline case is recognition_sample_deadline_exceeded.",
+      "common_causes": "A sampling deadline passed during a multi-frame observation.",
+      "handling": "None from slice SR-1 on: the code is no longer emitted."
+    },
+    "recognition_sample_budget_insufficient": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "remaining_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A running task had less time left (remaining_ms) than the next page recognition needs (required_ms), so it ended before sampling. Only for a run in progress; at admission the same condition is recognition_sample_budget_invalid. A scheduled run that ends with it settles as a condition termination and is rerun. Not a recovery ladder trigger.",
+      "common_causes": "Slow steps or long waits earlier in the run used up the task time; host load lengthened the run.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Repeated occurrences at stage s0 mean the task timeout is too tight for its declared sampling."
+    },
+    "recognition_sample_budget_invalid": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "limit_ms": "required",
+        "pack_operation_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admission refused a task package whose declared sampling needs more time (required_ms) than the smaller of its step and task timeouts (limit_ms); pack_operation_id names the operation when one operation exceeds it. It is a suspend code by default: the Runtime suspends the task package until its content or the Runtime build changes (contracts/policy-suspension.md). Not a recovery ladder trigger.",
+      "common_causes": "A package written for an older kernel whose budget rule was looser; a package whose consensus or candidate sampling declarations outgrew its timeouts.",
+      "handling": "Raise the package's step or task timeout, or reduce its declared sampling, and replace the package; the suspension lifts when its content hash changes."
+    },
+    "candidate_sample_budget_insufficient": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "remaining_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A running selection step had less time left (remaining_ms) than its candidate sampling needs (required_ms). Settles like recognition_sample_budget_insufficient: a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "Earlier steps used up the task time; host load lengthened the run.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows."
+    },
+    "candidate_sample_deadline_exceeded": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "timeout_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate sampling of a selection step did not finish within its window, and every observe-only retry (attempts) ran out too. Same rule as recognition_sample_deadline_exceeded: a new timing context per retry, no repeated input, a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "A slow or stalled emulator under host load.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows."
+    },
+    "contained_task_feature_locked": {
+      "category": "warning",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "page_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run recognised a page (page_id) that its task's feature_locks declaration names as the sign of a locked feature, and stopped there with no input. The host publishes the instance fact fact_key (a session.feature. key) as false for the configured time. Not a failure streak and not a recovery ladder trigger.",
+      "common_causes": "The account has not unlocked the feature the task needs.",
+      "handling": "Nothing to repair: the task is not scheduled on the instance while the fact says locked. Publish true for the key once the feature is unlocked."
+    },
+    "cost_commit_time_insufficient": {
+      "category": "warning",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "required_ms": "required",
+        "remaining_ms": "required",
+        "step_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Before the input of the step its cost_commit declaration names (step_id), the run had less task budget or wall-clock time left (remaining_ms) than the declared time to finish plus the margin (required_ms), so it stopped with nothing spent. Settles as a condition termination with a rerun. Not a recovery ladder trigger.",
+      "common_causes": "Earlier steps or host load used up the time; the declaration's after_ms is larger than the time left in the task.",
+      "handling": "Nothing to repair for one occurrence; the rerun follows. Frequent occurrences mean after_ms or the task timeout needs another look (contracts/cost-commit.md)."
+    },
+    "cost_commit_declaration_invalid": {
+      "category": "error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "field": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A task package's cost_commit declaration breaks a rule (field points at the member): step_id is not a step of the task, after_ms is 0 or longer than the task timeout, or the package's maintenance use is recognition. check-config reports it.",
+      "common_causes": "A typo in step_id; an after_ms copied from another task; a recognition maintenance package that declares cost_commit.",
+      "handling": "Fix the declaration in the resource repository and replace the package."
+    }
+  }
+}

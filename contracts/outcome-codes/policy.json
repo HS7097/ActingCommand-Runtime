@@ -65,6 +65,69 @@
       "description": "A gate or term (rule_id) of a scheduling-layer selection document declares a drop_candidate or substitute clause (unknown_clause) that the scheduling layer does not apply: there an unknown input defers the candidate that read it. The document's author meant something else than what runs. An abort_evaluation clause gives no warning.",
       "common_causes": "A selection document written for an in-task select step, where the clauses apply, is used as the scheduling-layer document.",
       "handling": "Expect the candidate to be deferred instead of dropped or scored with the substitute; to keep the clause's effect, use the document in a select step instead."
+    },
+    "feature_locked": {
+      "category": "info",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate is deferred because the active, unexpired session.feature. record fact_key of its instance is false and the task needs that feature; next_eligible_unix_ms is the record's expiry when it has one. A missing or expired record never defers (there is no substitute value).",
+      "common_causes": "A run met the feature's locked page earlier; a person or an agent marked the feature locked.",
+      "handling": "Nothing to repair. Publish true for the key once the feature is unlocked; otherwise the task is tried again when the record expires."
+    },
+    "decision_reason_missing": {
+      "category": "error",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A decision that is not selected ended without a reason, which is a programming error in the evaluator. The candidate is still deferred and the evaluation round goes on, so the gap is visible rather than reported as none.",
+      "common_causes": "An evaluator path that defers or blocks a candidate without pushing its reason.",
+      "handling": "Report it with the evaluation's inputs; the evaluator path needs its reason."
+    },
+    "pack_schedule_closed": {
+      "category": "info",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Every candidate of the task package package_id is deferred because the pack schedule that applies to the instance (an instruction row of session.pack.schedule, else a default row of the standard package) says the package is not schedulable now; next_eligible_unix_ms is the end of the covering row.",
+      "common_causes": "A person or an agent closed the package for a period; the standard package closes it by default.",
+      "handling": "Nothing to repair. Write a row that makes the package schedulable, or wait for the row to end."
+    },
+    "pack_schedule_unknown_package": {
+      "category": "info",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A session.pack.schedule row names a package that no task of the active catalog uses. Reported once per evaluation cycle; the row is kept and has no effect until a catalog uses the package. Not an error.",
+      "common_causes": "A row written for a package of another standard package or catalog generation.",
+      "handling": "Nothing to repair; remove the row if it is no longer wanted."
     }
   }
 }

@@ -25,3 +25,28 @@ actingcommand_contract::outcome_codes! {
         SelectionUnknownClauseIgnored => "selection_unknown_clause_ignored": warning,
     }
 }
+
+// ---- Workflow #386 SR-0 (scheduling rules): registered ahead of their slices; begin ----
+actingcommand_contract::outcome_codes! {
+    /// Codes the scheduling rules (Workflow #386) register in the documentation slice SR-0,
+    /// ahead of the slices that emit them (named on each entry). Contracts:
+    /// `contracts/scheduling/README.md`, `contracts/instance-fact-store.md`.
+    pub(crate) enum SchedulingRulePolicyCode {
+        /// Info. A candidate is deferred because a `session.feature.*` record of its instance
+        /// says a feature the task needs is locked (keys `fact_key`, and
+        /// `next_eligible_unix_ms` when the record expires; SR-5a).
+        FeatureLocked => "feature_locked": info,
+        /// Error. A decision that is not selected ended without a reason: a programming error.
+        /// The candidate is still deferred and the round goes on (keys `task_id`,
+        /// `instance_id`; SR-6a).
+        DecisionReasonMissing => "decision_reason_missing": error,
+        /// Info. A candidate's task package is not schedulable at this time by the instance's
+        /// pack schedule (keys `package_id`, and `next_eligible_unix_ms` when the covering row
+        /// ends; SR-11).
+        PackScheduleClosed => "pack_schedule_closed": info,
+        /// Info. A pack schedule row names a package no task of the active catalog uses;
+        /// reported once per cycle, not an error (keys `package_id`; SR-11).
+        PackScheduleUnknownPackage => "pack_schedule_unknown_package": info,
+    }
+}
+// ---- Workflow #386 SR-0 (scheduling rules): end ----

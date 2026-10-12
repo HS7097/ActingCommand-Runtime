@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
+mod codes;
 mod contained_task;
 mod drive;
 mod environment;
