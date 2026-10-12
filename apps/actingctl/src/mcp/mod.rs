@@ -10,6 +10,7 @@ mod jobs;
 mod lab;
 mod observer;
 mod operator;
+mod packs;
 mod protocol;
 mod runs;
 mod runtime;

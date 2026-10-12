@@ -110,5 +110,7 @@ actingcommand_contract::outcome_codes! {
         ExitedDuringStartup => "exited_during_startup": error,
         StartTimeout => "start_timeout": error,
         ProcessProbeFailed => "process_probe_failed": error,
+        // Workflow #389 MCP-11: `packs` / `ac_packs`.
+        PackageBindingUnreadable => "package_binding_unreadable": warning,
     }
 }

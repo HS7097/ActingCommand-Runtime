@@ -14,6 +14,7 @@ mod emulator_restart;
 mod install_transition;
 mod mcp_harness;
 mod mcp_instance_alias;
+mod mcp_packs;
 mod mcp_shell;
 
 #[allow(dead_code)]

@@ -1328,6 +1328,22 @@
       "description": "The watchdog's process probe failed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "package_binding_unreadable": {
+      "category": "warning",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a startup package also needs a control.json naming its package_id); the row says readable false and the rest of the answer is read as usual. alias names the instance of a per-instance binding.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

@@ -1054,10 +1054,10 @@ pub(super) fn load_for(
     }
     let bytes = match installation {
         Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
-        None => fs::read(path).map_err(|_| ActingdCode::ConfigReadFailed.code())?,
+        None => fs::read(path).map_err(|_| SharedCode::ConfigReadFailed.code())?,
     };
     let mut config = serde_json::from_slice::<ActingdConfigFile>(&bytes)
-        .map_err(|_| ActingdCode::ConfigDecodeFailed.code())?;
+        .map_err(|_| SharedCode::ConfigDecodeFailed.code())?;
     config.source_root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

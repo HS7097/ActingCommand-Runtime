@@ -27,32 +27,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "config_read_failed": {
-      "category": "error",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration file: reading it failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "config_decode_failed": {
-      "category": "error",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration file: it does not decode as actingd's configuration.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "install_provider_retired": {
       "category": "error",
       "owner": "actingd",
