@@ -8,8 +8,9 @@
 //! crates'. Every entry added by A2b is pending (B2 settles them).
 
 actingcommand_contract::outcome_codes! {
-    /// The Runtime host's codes. The documented entries were registered ahead of the A2
-    /// sweep (Workflow #375, #369, #381, #372); the rest are A2b's.
+    /// The Runtime host's codes. The documented entries at the top were registered ahead of
+    /// the A2 sweep (Workflow #375, #369, #381, #372), the marked block at the end ahead of
+    /// the slices that emit them (Workflow #389 U-0); the rest are A2b's.
     pub enum HostCode {
         /// Error. `ledger-maintenance` refuses a root whose artifact retention is not
         /// settled: on a formal root an eviction intent without its outcome, which only the

@@ -6989,7 +6989,8 @@
       "execution-kernel"
     ],
     "candidate_sample_": [
-      "execution-kernel"
+      "execution-kernel",
+      "recognition-pack"
     ],
     "contained_task_feature_": [
       "execution-kernel"
