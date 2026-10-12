@@ -1184,7 +1184,7 @@ fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
 fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
     task_geometry_error(match conclusion {
         TaskGeometryConclusion::AspectMismatch { .. } => {
-            HostCode::ContainedTaskGeometryFrameDisplayMismatch
+            HostCode::ContainedTaskGeometryAspectMismatch
         }
         TaskGeometryConclusion::Unknown { .. } => HostCode::ContainedTaskGeometryUnknown,
         TaskGeometryConclusion::Unavailable => HostCode::ContainedTaskGeometryUnavailable,
@@ -1398,9 +1398,14 @@ impl RuntimeContainedTask<'_> {
         if self.geometry_initial.is_some() {
             return Ok(());
         }
-        // Workflow #392 DA-A: no frame is refused for its aspect ratio, so every first frame
-        // reads its display's geometry.
-        let result = self.read_task_geometry(true);
+        let result = if frame.backend_name != CaptureBackendName::FixtureSimulation
+            && u64::from(extent.width()) * 9 != u64::from(extent.height()) * 16
+        {
+            // The delivered frame already disproves the prerequisite; no display read is needed.
+            Ok(frame.geometry.clone())
+        } else {
+            self.read_task_geometry(true)
+        };
         let (conclusion, event) =
             self.record_task_geometry(TaskGeometryPhase::Initial, None, None, &result)?;
         match (conclusion, result) {
@@ -1408,16 +1413,6 @@ impl RuntimeContainedTask<'_> {
                 TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable,
                 Ok(value),
             ) => {
-                if conclusion == TaskGeometryConclusion::Pass {
-                    self.host
-                        .publish_display_facts(
-                            self.token.instance_id(),
-                            self.instance_alias,
-                            extent,
-                            &value,
-                        )
-                        .map_err(|error| task_geometry_request_failure(error, Some(&event)))?;
-                }
                 // Only a confirmed GlobalLedger commit opens the input prerequisite.
                 self.geometry_initial = Some((extent, value));
                 Ok(())

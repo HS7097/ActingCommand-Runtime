@@ -3203,12 +3203,10 @@ pub enum TaskGeometryConclusion {
     FixtureNotApplicable,
 }
 
-/// Workflow #392 DA-A (model 392 v1.1, section 8.3): the frame's own aspect ratio is recorded,
-/// never refused, so the one remaining mismatch is a frame whose aspect ratio differs from the
-/// display's logical extent (capture correctness, not an aspect policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskGeometryAspectMismatch {
+    FrameNotSixteenByNine,
     FrameAndLogicalDisplayDiffer,
 }
 
@@ -3253,9 +3251,7 @@ pub struct TaskGeometryObservation {
 }
 
 impl TaskGeometryObservation {
-    /// Classifies ordered, already-delivered frame dimensions without transforming them. The
-    /// frame's aspect ratio is not checked (Workflow #392 DA-A): only its agreement with the
-    /// display it was captured from.
+    /// Classifies ordered, already-delivered frame dimensions without transforming them.
     pub fn assess(
         frame: &TaskGeometryFrame,
         observation: &crate::CaptureGeometryObservation,
@@ -3270,6 +3266,11 @@ impl TaskGeometryObservation {
                 TaskGeometryConclusion::Unknown {
                     reason: TaskGeometryUnknownReason::FixtureSourceMismatch,
                 }
+            };
+        }
+        if u64::from(frame.extent.width()) * 9 != u64::from(frame.extent.height()) * 16 {
+            return TaskGeometryConclusion::AspectMismatch {
+                reason: TaskGeometryAspectMismatch::FrameNotSixteenByNine,
             };
         }
         let geometry = match observation {
