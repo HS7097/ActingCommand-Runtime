@@ -110,5 +110,8 @@ actingcommand_contract::outcome_codes! {
         ExitedDuringStartup => "exited_during_startup": error,
         StartTimeout => "start_timeout": error,
         ProcessProbeFailed => "process_probe_failed": error,
+        // Workflow #389 MCP-10: `actingctl start` and `actingctl restart`.
+        StartRuntimeAlreadyRunning => "start_runtime_already_running": error,
+        StartWaitIdleExpired => "start_wait_idle_expired": error,
     }
 }
