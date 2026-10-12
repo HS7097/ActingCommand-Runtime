@@ -1,27 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Production package ingress over the pack-containment capability.
+//! Production package ingress over the pack-containment capability. Workflow #336 PKG-S1
+//! (option 丙): every entry takes a path or bytes and admits the package structurally; the
+//! caller's reference, where an entry takes one, is only recorded on the bundle and compared
+//! with nothing.
 
-use actingcommand_pack_containment::{
-    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
-};
+use actingcommand_contract::PackageRef;
+use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, LoadedBundle};
 use actingcommand_recognition_pack::VisionProvider;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExternalExpectedSha256(Sha256Hash);
-
-impl ExternalExpectedSha256 {
-    pub fn parse_hex(value: &str) -> Result<Self, ContainmentError> {
-        Sha256Hash::parse_hex(value).map(Self)
-    }
-
-    pub const fn hash(self) -> Sha256Hash {
-        self.0
-    }
-}
 
 #[derive(Debug)]
 pub enum ExecutionBundleError {
@@ -55,7 +44,8 @@ impl From<ContainmentError> for ExecutionBundleError {
     }
 }
 
-/// Immutable production resource capability admitted with an externally supplied expected hash.
+/// Immutable production resource capability: a package admitted by containment, by its path or
+/// its bytes, with the reference its caller gave recorded on it.
 #[derive(Debug)]
 pub struct ExternallyVerifiedBundle {
     bundle: LoadedBundle,
@@ -65,12 +55,12 @@ impl ExternallyVerifiedBundle {
     pub(crate) fn load_metadata_path(
         instance_label: &str,
         locator: &std::path::Path,
-        expected: &actingcommand_contract::PackageRef,
+        recorded: &PackageRef,
         deadline: std::time::Instant,
     ) -> Result<Self, ExecutionBundleError> {
         let instance = InstanceId::new(instance_label)?;
         let mut containment = Containment::for_metadata_validation();
-        containment.load_path(&instance, locator, expected, false, deadline)?;
+        containment.load_path(&instance, locator, recorded, false, deadline)?;
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
@@ -80,7 +70,7 @@ impl ExternallyVerifiedBundle {
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
-        expected: &actingcommand_contract::PackageRef,
+        recorded: &PackageRef,
         observation: bool,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
@@ -90,19 +80,19 @@ impl ExternallyVerifiedBundle {
             Some(provider) => Containment::with_vision_provider(provider),
             None => Containment::new(),
         };
-        containment.load_path(&instance, locator, expected, observation, deadline)?;
+        containment.load_path(&instance, locator, recorded, observation, deadline)?;
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
         Ok(Self { bundle })
     }
 
-    /// Workflow #336: `load_path` for a content table already in memory, admitted against the
-    /// content-directory reference `expected`.
+    /// Workflow #336: `load_path` for a content table already in memory; `recorded` is kept as
+    /// `load_path` keeps it.
     pub fn load_content_entries(
         instance_label: &str,
         entries: std::collections::BTreeMap<String, Vec<u8>>,
-        expected: &actingcommand_contract::ContentDirectory,
+        recorded: &PackageRef,
         observation: bool,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
@@ -112,7 +102,7 @@ impl ExternallyVerifiedBundle {
             Some(provider) => Containment::with_vision_provider(provider),
             None => Containment::new(),
         };
-        containment.load_content_entries(&instance, entries, expected, observation, deadline)?;
+        containment.load_content_entries(&instance, entries, recorded, observation, deadline)?;
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
@@ -122,7 +112,7 @@ impl ExternallyVerifiedBundle {
     pub fn load_observation(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, ExecutionBundleError> {
         let instance = InstanceId::new(instance_label)?;
@@ -130,7 +120,7 @@ impl ExternallyVerifiedBundle {
             Some(provider) => Containment::with_vision_provider(provider),
             None => Containment::new(),
         };
-        containment.load_observation(&instance, zip_bytes, &expected.hash())?;
+        containment.load_observation(&instance, zip_bytes, recorded)?;
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
@@ -140,21 +130,21 @@ impl ExternallyVerifiedBundle {
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &PackageRef,
     ) -> Result<Self, ExecutionBundleError> {
-        Self::load_with_optional_vision_provider(instance_label, zip_bytes, expected, None)
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, recorded, None)
     }
 
     pub fn load_with_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &PackageRef,
         vision_provider: Arc<dyn VisionProvider>,
     ) -> Result<Self, ExecutionBundleError> {
         Self::load_with_optional_vision_provider(
             instance_label,
             zip_bytes,
-            expected,
+            recorded,
             Some(vision_provider),
         )
     }
@@ -162,7 +152,7 @@ impl ExternallyVerifiedBundle {
     fn load_with_optional_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, ExecutionBundleError> {
         let instance = InstanceId::new(instance_label)?;
@@ -170,7 +160,7 @@ impl ExternallyVerifiedBundle {
             Some(provider) => Containment::with_vision_provider(provider),
             None => Containment::new(),
         };
-        containment.load(&instance, zip_bytes, &expected.hash())?;
+        containment.load(&instance, zip_bytes, recorded)?;
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
@@ -183,30 +173,5 @@ impl ExternallyVerifiedBundle {
 
     pub fn into_loaded_bundle(self) -> LoadedBundle {
         self.bundle
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn external_hash_type_rejects_invalid_hash_text() {
-        assert!(ExternalExpectedSha256::parse_hex("not-a-hash").is_err());
-    }
-
-    #[test]
-    fn production_ingress_rejects_hash_mismatch_before_zip_parsing() {
-        let expected = ExternalExpectedSha256::parse_hex(
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .expect("expected hash");
-        let error = ExternallyVerifiedBundle::load("node.a", b"not-a-zip", expected)
-            .expect_err("hash mismatch");
-
-        assert!(matches!(
-            error,
-            ExecutionBundleError::Containment(ContainmentError::HashMismatch { .. })
-        ));
     }
 }

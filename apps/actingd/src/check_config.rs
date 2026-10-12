@@ -2,8 +2,7 @@
 
 use super::*;
 use actingcommand_contract::{
-    ConfigParameter, FactScalar, InstanceResourcePackage, InstanceResourcePackageKind,
-    RuntimeConfigManifest,
+    ConfigParameter, FactScalar, InstanceResourcePackage, RuntimeConfigManifest,
 };
 use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
 use actingcommand_runtime_host::{
@@ -23,9 +22,6 @@ const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1
 const NOT_CHECKED: [&str; 1] = ["vision_model_content"];
 /// Added to `not_checked` when the configured state root does not exist (Workflow #361 C3).
 const STATE_ROOT_ABSENT_NOT_CHECKED: &str = "state_root_absent";
-/// Added to `not_checked` when a `resource_package` is a directory whose name is not a content
-/// digest: the field carries no reference to admit such a directory against (Workflow #288).
-const RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED: &str = "resource_package_directory_declarations";
 /// Added to `not_checked` when no MuMu install root could be resolved.
 const MUMU_DISCOVERY_NOT_CHECKED: &str = "mumu_discovery";
 /// The `device_paths` names the manifest reports (Workflow #318, cfg2), echoed in order.
@@ -449,13 +445,9 @@ fn summarize(
             entry["resource_package"] = json!(package);
         }
     }
+    // Workflow #336 PKG-S1: every `resource_package` directory is admitted in full by its path,
+    // so none is left unchecked.
     let mut not_checked = NOT_CHECKED.to_vec();
-    if resource_packages.values().any(|package| {
-        package.kind == InstanceResourcePackageKind::Directory
-            && actingcommand_contract::digest_named(Path::new(&package.path)).is_none()
-    }) {
-        not_checked.push(RESOURCE_PACKAGE_DIRECTORY_NOT_CHECKED);
-    }
     let (mumu_root, mumu_root_unresolved) = mumu_root_report(
         checked.mumu_root.as_deref(),
         checked.env_nemu_folder.as_deref(),

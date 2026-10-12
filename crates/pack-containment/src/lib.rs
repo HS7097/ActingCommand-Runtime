@@ -151,10 +151,6 @@ impl fmt::Display for Sha256Hash {
     }
 }
 
-pub trait TrustSource {
-    fn expected_hash(&self, task_id: &TaskId) -> ContainmentResult<Sha256Hash>;
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ContainmentLimits {
     pub max_compressed_bytes: u64,
@@ -193,91 +189,82 @@ pub struct Containment {
 }
 
 impl Containment {
-    /// Reads one explicitly referenced local package, without obtaining material online.
+    /// Reads one local package by its path, without obtaining material online (Workflow #336
+    /// PKG-S1, option 丙). The path chooses the reading: a directory, a `.json` container or a
+    /// `.zip` container is a source package, compiled in memory; a `.zip` holding
+    /// `resources/manifest.json` is an assembled package. Admission is structural only: neither
+    /// a digest of the package nor a pin inside it is computed or compared, and no name is read
+    /// as an identity. `recorded` is the caller's reference, kept on the bundle only as a record
+    /// for the fields that still carry it until PKG-S2 and PKG-S4 delete them; nothing checks
+    /// it against the material, and its caller has validated its form.
     pub fn load_path(
         &mut self,
         instance: &InstanceId,
         locator: &Path,
-        expected: &PackageRef,
+        recorded: &PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
-        expected
-            .validate()
-            .map_err(|_| source_error(SharedCode::PackageReferenceInvalid))?;
-        match expected {
-            PackageRef::LegacyZipSha256(hash) => {
-                let file = std::fs::File::open(locator)
-                    .map_err(|_| source_error(PackContainmentCode::PackageOpenFailed))?;
-                let metadata = file
-                    .metadata()
-                    .map_err(|_| source_error(PackContainmentCode::PackageMetadataFailed))?;
-                if !metadata.is_file() || metadata.len() > self.limits.max_compressed_bytes {
-                    return Err(source_error(PackContainmentCode::PackageSizeInvalid));
-                }
-                let mut bytes = Vec::new();
-                file.take(self.limits.max_compressed_bytes.saturating_add(1))
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| source_error(SharedCode::PackageReadFailed))?;
-                if std::time::Instant::now() >= deadline {
-                    return Err(source_error(PackContainmentCode::PackageDeadline));
-                }
-                self.load_for(instance, &bytes, &Sha256Hash::parse_hex(hash)?, observation)
+        // Workflow #288 A4: the Git source-tree reference is retired; it is refused before the
+        // locator is read.
+        if matches!(recorded, PackageRef::GitSourceTree(_)) {
+            return Err(source_error(PackContainmentCode::SourceTreeLoaderRetired));
+        }
+        match content_dir::read(locator, self.limits, deadline)? {
+            content_dir::LocatorContent::Entries(entries) => {
+                self.admit_source(instance, entries, recorded.clone(), observation, deadline)
             }
-            // Workflow #288 A4: the Git source-tree loader is retired. The reference still
-            // decodes and validates unchanged; loading it never reads the locator.
-            PackageRef::GitSourceTree(_) => {
-                Err(source_error(PackContainmentCode::SourceTreeLoaderRetired))
-            }
-            PackageRef::ContentDirectory(reference) => {
-                let (entries, verified) =
-                    content_dir::snapshot(locator, reference, self.limits, deadline)?;
-                self.admit_source(instance, entries, verified, observation, deadline)
+            content_dir::LocatorContent::AssembledZip(bytes) => {
+                self.load_for(instance, &bytes, recorded, observation)
             }
         }
     }
 
-    /// Workflow #288 A2b: reads `locator` exactly as content-directory admission does (one
-    /// bounded snapshot under this loader's limits and `deadline`, links and unsafe entries
-    /// refused), but against no expected reference and without the directory-name check, and
-    /// returns the `content-directory.v1` reference of what it holds with the bytes read.
-    /// Nothing is parsed; admitting the directory remains `load_path` with that reference.
+    /// Workflow #288 A2b: reads `locator` exactly as `load_path` does (one bounded snapshot
+    /// under this loader's limits and `deadline`, links and unsafe entries refused), and
+    /// returns the `content-directory.v1` reference of what it holds with the bytes read, for
+    /// the authoring tools that still name a package by it. Nothing is parsed, and no admission
+    /// uses this reference.
     pub fn snapshot_content_directory(
         &self,
         locator: &Path,
         deadline: std::time::Instant,
     ) -> ContainmentResult<ContentDirectorySnapshot> {
-        let (entries, reference) = content_dir::measure(locator, self.limits, deadline)?;
+        let entries = content_dir::measure(locator, self.limits, deadline)?;
+        let reference = actingcommand_contract::ContentDirectory {
+            schema_version: actingcommand_contract::ContentDirectoryVersion::V1,
+            sha256: actingcommand_contract::content_directory_digest(
+                entries
+                    .iter()
+                    .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
+            ),
+        };
         Ok(ContentDirectorySnapshot { reference, entries })
     }
 
     /// Workflow #336: admits a content table already in memory (for example a content
-    /// container just encoded and not yet written) as `load_path` admits a content-directory
-    /// locator once it is read: the shared entry rules, the digest comparison with `expected`,
-    /// then the same assembly.
+    /// container just encoded and not yet written) as `load_path` admits a source package once
+    /// it is read: the shared entry rules, then the same assembly. `recorded` is kept as
+    /// `load_path` keeps it and compared with nothing.
     pub fn load_content_entries(
         &mut self,
         instance: &InstanceId,
         entries: BTreeMap<String, Vec<u8>>,
-        expected: &actingcommand_contract::ContentDirectory,
+        recorded: &PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
-        expected
-            .validate()
-            .map_err(|_| source_error(SharedCode::PackageReferenceInvalid))?;
         let entries = content_dir::admit_entries(entries, self.limits, deadline)?;
-        let verified = content_dir::verify(&entries, expected)?;
-        self.admit_source(instance, entries, verified, observation, deadline)
+        self.admit_source(instance, entries, recorded.clone(), observation, deadline)
     }
 
-    /// Assembles one verified in-memory source snapshot and issues its capability; the
-    /// material is not read again.
+    /// Assembles one in-memory source snapshot and issues its capability; the material is not
+    /// read again.
     fn admit_source(
         &mut self,
         instance: &InstanceId,
         entries: BTreeMap<String, Vec<u8>>,
-        verified: PackageRef,
+        recorded: PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
@@ -287,7 +274,7 @@ impl Containment {
         }
         let bundle = LoadedBundle::from_memory_package(
             package,
-            verified,
+            recorded,
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             Some(operation),
@@ -338,13 +325,16 @@ impl Containment {
         }
     }
 
+    /// Admits the bytes of an assembled package ZIP, structurally only (Workflow #336 PKG-S1):
+    /// no digest of the bytes is computed or compared. `recorded` is kept as `load_path` keeps
+    /// it.
     pub fn load(
         &mut self,
         instance: &InstanceId,
         task_zip_bytes: &[u8],
-        expected: &Sha256Hash,
+        recorded: &PackageRef,
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, task_zip_bytes, expected, false)
+        self.load_for(instance, task_zip_bytes, recorded, false)
     }
 
     /// Admits the existing Lab resource layout without requiring an executable operation.
@@ -352,16 +342,16 @@ impl Containment {
         &mut self,
         instance: &InstanceId,
         zip_bytes: &[u8],
-        expected: &Sha256Hash,
+        recorded: &PackageRef,
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, zip_bytes, expected, true)
+        self.load_for(instance, zip_bytes, recorded, true)
     }
 
     fn load_for(
         &mut self,
         instance: &InstanceId,
         task_zip_bytes: &[u8],
-        expected: &Sha256Hash,
+        recorded: &PackageRef,
         observation: bool,
     ) -> ContainmentResult<&LoadedBundle> {
         if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
@@ -371,18 +361,10 @@ impl Containment {
                 limit: self.limits.max_compressed_bytes,
             });
         }
-        let actual = Sha256Hash::digest(task_zip_bytes);
-        if !constant_time_hash_eq(&actual, expected) {
-            return Err(ContainmentError::HashMismatch {
-                instance: instance.clone(),
-                expected: *expected,
-                actual,
-            });
-        }
         let package = MemoryPackage::from_zip(task_zip_bytes, self.limits, instance)?;
         let bundle = LoadedBundle::from_memory_package(
             package,
-            PackageRef::LegacyZipSha256(actual.to_string()),
+            recorded.clone(),
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             None,
@@ -523,6 +505,8 @@ pub enum PackageLayout {
 pub struct LoadedBundle {
     projection_metadata: Option<VerifiedProjectionMetadata>,
     task_id: TaskId,
+    /// The reference the caller gave at admission, kept only as a record (Workflow #336
+    /// PKG-S1); admission never compares it with the material.
     verified: PackageRef,
     layout: PackageLayout,
     entries: Arc<BTreeMap<String, Vec<u8>>>,
@@ -557,12 +541,11 @@ impl LoadedBundle {
         } else {
             PackageMetadata::from_entries(&entries)?
         };
-        // Source entries remain the verified original bytes for provenance and restore.
+        // Source entries remain the original bytes read for provenance and restore.
         // The execution document is derived by the same pure canonicalization as ZIP tooling.
         if let Some(operation) = execution_operation {
             metadata.operation = operation;
         }
-        validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         source::validate_loaded_declarations(&metadata)
             .map_err(|error| declaration_error(&metadata.operation_path, error))?;
         let projection_metadata = if let (Some(pack), Some(pages), Some(navigation)) = (
@@ -571,7 +554,6 @@ impl LoadedBundle {
             &metadata.navigation_path,
         ) {
             validate_projection_resources(
-                &metadata.manifest,
                 &metadata.resource_root,
                 pack,
                 pages,
@@ -623,6 +605,8 @@ impl LoadedBundle {
         &self.task_id
     }
 
+    /// The caller's reference recorded at admission (Workflow #336 PKG-S1): a record only,
+    /// never checked against the material.
     pub fn package_ref(&self) -> &PackageRef {
         &self.verified
     }
@@ -969,23 +953,6 @@ struct LabControl {
     resource_root: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ManifestFile {
-    path: String,
-    #[serde(default)]
-    sha256: Option<String>,
-    #[serde(default)]
-    hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManifestHashes {
-    #[serde(default)]
-    hashes: BTreeMap<String, String>,
-    #[serde(default)]
-    files: Vec<ManifestFile>,
-}
-
 #[derive(Debug)]
 struct MemoryAssetResolver {
     entries: Arc<BTreeMap<String, Vec<u8>>>,
@@ -1025,20 +992,10 @@ pub enum ContainmentError {
     SourceTree {
         code: Code,
     },
-    ContentDirectoryDigestMismatch {
-        expected: Sha256Hash,
-        actual: Sha256Hash,
-        file_count: usize,
-    },
     InvalidInstanceId,
     MissingTaskId,
     InvalidHash {
         value: String,
-    },
-    HashMismatch {
-        instance: InstanceId,
-        expected: Sha256Hash,
-        actual: Sha256Hash,
     },
     CompressedTooLarge {
         instance: InstanceId,
@@ -1075,12 +1032,6 @@ pub enum ContainmentError {
         path: String,
         message: String,
     },
-    ManifestHashMismatch {
-        path: String,
-        expected: Sha256Hash,
-        actual: Sha256Hash,
-    },
-    UnsafeManifestHashPath,
     UnsupportedResourceRoot {
         value: String,
     },
@@ -1109,27 +1060,11 @@ impl fmt::Display for ContainmentError {
                 issue.declaration_file, issue.field_path, issue.reason,
             ),
             Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
-            Self::ContentDirectoryDigestMismatch {
-                expected,
-                actual,
-                file_count,
-            } => write!(
-                f,
-                "fatal containment error: content_directory_digest_mismatch: expected {expected}, actual {actual} over {file_count} files"
-            ),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
             Self::InvalidHash { value } => write!(
                 f,
                 "fatal containment error: invalid sha256 hash '{value}'; hash mismatch cannot be evaluated"
-            ),
-            Self::HashMismatch {
-                instance,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "fatal containment error: hash mismatch for instance {instance}: expected {expected}, actual {actual}"
             ),
             Self::CompressedTooLarge {
                 instance,
@@ -1183,17 +1118,6 @@ impl fmt::Display for ContainmentError {
                     f,
                     "fatal containment error: failed to parse {path}: {message}"
                 )
-            }
-            Self::ManifestHashMismatch {
-                path,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "fatal containment error: manifest hash mismatch for {path}: expected {expected}, actual {actual}"
-            ),
-            Self::UnsafeManifestHashPath => {
-                f.write_str("fatal containment error: manifest hash path is unsafe")
             }
             Self::UnsupportedResourceRoot { value } => write!(
                 f,
@@ -1711,9 +1635,10 @@ fn collect_recognition_pack_diagnostics(
     Ok(diagnostics)
 }
 
-/// Shared metadata admission for generated packages and contained packages.
+/// Shared metadata admission for generated packages and contained packages. A projection
+/// declaration's dependencies must be present below the resource root; no manifest hash is
+/// required or compared (Workflow #336 PKG-S1).
 pub fn validate_projection_resources<'a>(
-    manifest: &Value,
     resource_root: &str,
     pack_path: &str,
     pages_path: &str,
@@ -1736,48 +1661,16 @@ pub fn validate_projection_resources<'a>(
         ));
     }
     let declaration_bytes = read(&projection_path);
-    let hashes: ManifestHashes =
-        serde_json::from_value(manifest.clone()).map_err(|e| fail(e.to_string()))?;
-    let verified_bytes = |path: &str| -> ContainmentResult<&'a [u8]> {
-        let relative = path
-            .strip_prefix(&format!("{resource_root}/"))
+    let present_bytes = |path: &str| -> ContainmentResult<&'a [u8]> {
+        path.strip_prefix(&format!("{resource_root}/"))
             .ok_or_else(|| fail("projection path is outside resource root".to_string()))?;
-        let expected = hashes
-            .hashes
-            .get(relative)
-            .map(String::as_str)
-            .or_else(|| {
-                hashes
-                    .files
-                    .iter()
-                    .find(|f| f.path == relative)
-                    .and_then(|f| f.sha256.as_deref().or(f.hash.as_deref()))
-            })
-            .ok_or_else(|| {
-                fail(format!(
-                    "projection dependency requires a manifest hash: {path}"
-                ))
-            })?;
-        let bytes = read(path).ok_or_else(|| ContainmentError::MissingEntry {
+        read(path).ok_or_else(|| ContainmentError::MissingEntry {
             path: path.to_string(),
-        })?;
-        let expected = Sha256Hash::parse_hex(expected)?;
-        let actual = Sha256Hash::digest(bytes);
-        if !constant_time_hash_eq(&actual, &expected) {
-            return Err(ContainmentError::ManifestHashMismatch {
-                path: path.to_string(),
-                expected,
-                actual,
-            });
-        }
-        Ok(bytes)
+        })
     };
-    if declaration_bytes.is_some() {
-        verified_bytes(&projection_path)?;
-    }
     let parse = |path| -> ContainmentResult<Value> {
         let bytes = if declaration_bytes.is_some() {
-            verified_bytes(path)?
+            present_bytes(path)?
         } else {
             read(path).ok_or_else(|| fail(format!("missing catalog resource {path}")))?
         };
@@ -1797,9 +1690,6 @@ pub fn validate_projection_resources<'a>(
         )
         .map_err(|e| fail(e.to_string()))?;
         if operation["post_admission_ocr"]["mode"] == "fields_v1" {
-            if declaration_bytes.is_some() {
-                verified_bytes(path)?;
-            }
             catalog
                 .add_operation_fields(&operation)
                 .map_err(|e| fail(e.to_string()))?;
@@ -1814,74 +1704,6 @@ pub fn validate_projection_resources<'a>(
         .validate(catalog)
         .map_err(|e| fail(e.to_string()))?;
     Ok(Some(verified))
-}
-
-fn validate_manifest_hashes(
-    manifest: &Value,
-    entries: &BTreeMap<String, Vec<u8>>,
-    resource_root: &str,
-) -> ContainmentResult<()> {
-    let hashes: ManifestHashes =
-        serde_json::from_value(manifest.clone()).map_err(|err| ContainmentError::JsonParse {
-            path: prefixed_path(resource_root, "manifest.json"),
-            message: err.to_string(),
-        })?;
-    for (path, expected) in hashes
-        .hashes
-        .iter()
-        .map(|(path, hash)| (path.as_str(), hash.as_str()))
-        .chain(hashes.files.iter().filter_map(|file| {
-            file.sha256
-                .as_deref()
-                .or(file.hash.as_deref())
-                .map(|hash| (file.path.as_str(), hash))
-        }))
-    {
-        validate_manifest_hash_entry(entries, resource_root, path, expected)?;
-    }
-    Ok(())
-}
-
-fn validate_manifest_hash_entry(
-    entries: &BTreeMap<String, Vec<u8>>,
-    resource_root: &str,
-    path: &str,
-    expected: &str,
-) -> ContainmentResult<()> {
-    validate_manifest_hash_path(path)?;
-    let resolved = prefixed_path(resource_root, path);
-    let bytes = entries
-        .get(&resolved)
-        .ok_or_else(|| ContainmentError::MissingEntry {
-            path: resolved.clone(),
-        })?;
-    let expected = Sha256Hash::parse_hex(expected)?;
-    let actual = Sha256Hash::digest(bytes);
-    if !constant_time_hash_eq(&actual, &expected) {
-        return Err(ContainmentError::ManifestHashMismatch {
-            path: resolved,
-            expected,
-            actual,
-        });
-    }
-    Ok(())
-}
-
-fn validate_manifest_hash_path(path: &str) -> ContainmentResult<()> {
-    if path.ends_with('/')
-        || path.contains('\\')
-        || path.contains(':')
-        || path.starts_with('/')
-        || Path::new(path).components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(ContainmentError::UnsafeManifestHashPath);
-    }
-    Ok(())
 }
 
 fn task_id_from_manifest_or_operations(
@@ -2032,14 +1854,6 @@ fn has_dangerous_extension(path: &str) -> bool {
         })
 }
 
-fn constant_time_hash_eq(actual: &Sha256Hash, expected: &Sha256Hash) -> bool {
-    let mut diff = 0_u8;
-    for (actual, expected) in actual.as_bytes().iter().zip(expected.as_bytes()) {
-        diff |= actual ^ expected;
-    }
-    diff == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2062,7 +1876,7 @@ mod tests {
         );
         let instance = InstanceId::new("neutral-observation").unwrap();
         let bytes = zip_from_map(entries.clone());
-        let expected = Sha256Hash::digest(&bytes);
+        let expected = recorded(&bytes);
         let mut containment = Containment::new();
         let loaded = containment
             .load_observation(&instance, &bytes, &expected)
@@ -2077,18 +1891,18 @@ mod tests {
         );
         assert!(matches!(
             Containment::new().load_observation(&instance, b"invalid zip", &expected),
-            Err(ContainmentError::HashMismatch { .. })
+            Err(ContainmentError::MalformedZip { .. })
         ));
         let module = zip_with_entries(&[("manifest.json", br#"{"entry_task_id":"task_a"}"#)]);
         assert!(
             Containment::new()
-                .load_observation(&instance, &module, &Sha256Hash::digest(&module))
+                .load_observation(&instance, &module, &recorded(&module))
                 .is_err()
         );
         entries.insert(operation_path.into(), br#"{"task_id":"task_a","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_color","privacy":"personal"}]}}"#.to_vec());
         let bytes = zip_from_map(entries);
         let loaded = containment
-            .load_observation(&instance, &bytes, &Sha256Hash::digest(&bytes))
+            .load_observation(&instance, &bytes, &recorded(&bytes))
             .unwrap();
         let metadata = loaded.projection_metadata().unwrap();
         assert_eq!(metadata.catalog().fields.len(), 1);
@@ -2101,7 +1915,7 @@ mod tests {
     #[test]
     fn load_single_lab_package_and_evaluate_from_capability() {
         let zip = lab_package_zip("task_a", [255, 0, 0]);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("127.0.0.1:16384").expect("instance");
         let mut containment = Containment::new();
 
@@ -2110,10 +1924,7 @@ mod tests {
             .expect("bundle loaded");
 
         assert_eq!(bundle.task_id().as_str(), "task_a");
-        assert_eq!(
-            bundle.package_ref(),
-            &PackageRef::LegacyZipSha256(expected.to_string())
-        );
+        assert_eq!(bundle.package_ref(), &expected);
         let evaluator = bundle.evaluator().expect("evaluator");
         let scene = Scene::from_pixels(1, 1, &[255, 0, 0], ScenePixelFormat::Rgb8).expect("scene");
         let result = evaluator
@@ -2123,7 +1934,10 @@ mod tests {
     }
 
     #[test]
-    fn page_projection_metadata_requires_hashes_and_resolved_references() {
+    // Workflow #336 PKG-S1: a projection declaration's dependencies need no manifest hash and
+    // their bytes are compared with none (modes 1 and 2 are admitted); its references must
+    // still resolve (mode 3).
+    fn page_projection_metadata_requires_resolved_references_but_no_hashes() {
         let mut entries = lab_package_entries("task_a", [255, 0, 0]);
         let navigation_path = "resources/navigation/neutral.test.navigation.json";
         let projection_path = "resources/navigation/neutral.test.projection.json";
@@ -2169,27 +1983,21 @@ mod tests {
             let result = containment.load(
                 &InstanceId::new("neutral-instance").unwrap(),
                 &zip,
-                &Sha256Hash::digest(&zip),
+                &recorded(&zip),
             );
-            if mode == 0 {
+            if mode < 3 {
                 assert_eq!(
                     result
                         .unwrap()
                         .projection_metadata()
                         .unwrap()
                         .target_privacy("home_color"),
-                    Some(actingcommand_contract::page_projection::Privacy::Personal)
+                    Some(actingcommand_contract::page_projection::Privacy::Personal),
+                    "mode {mode}"
                 );
             } else {
                 let message = result.unwrap_err().to_string();
-                assert!(
-                    message.contains(match mode {
-                        1 => "hash mismatch",
-                        2 => "requires a manifest hash",
-                        _ => "unknown reference",
-                    }),
-                    "{message}"
-                );
+                assert!(message.contains("unknown reference"), "{message}");
             }
         }
     }
@@ -2226,7 +2034,7 @@ mod tests {
         replace_manifested_entry(&mut entries, pack_path, &pack);
         replace_manifested_entry(&mut entries, pages_path, &pages);
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("vision-instance").expect("instance");
         let mut no_provider = Containment::new();
 
@@ -2294,10 +2102,10 @@ mod tests {
         let mut containment = Containment::new();
 
         containment
-            .load(&a, &zip_a, &Sha256Hash::digest(&zip_a))
+            .load(&a, &zip_a, &recorded(&zip_a))
             .expect("a loaded");
         containment
-            .load(&b, &zip_b, &Sha256Hash::digest(&zip_b))
+            .load(&b, &zip_b, &recorded(&zip_b))
             .expect("b loaded");
 
         assert_eq!(
@@ -2311,23 +2119,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_hash_mismatch_before_decompress() {
-        let zip = lab_package_zip("task_a", [255, 0, 0]);
-        let wrong = Sha256Hash::digest(b"wrong bytes");
-        let instance = InstanceId::new("inst").expect("instance");
-        let mut containment = Containment::new();
-
-        let err = containment
-            .load(&instance, &zip, &wrong)
-            .expect_err("hash mismatch rejected");
-
-        assert!(matches!(err, ContainmentError::HashMismatch { .. }));
-    }
-
-    #[test]
     fn rejects_decompression_limit_without_oom() {
         let zip = zip_with_entries(&[("module/manifest.json", br#"{}"#.as_slice())]);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("inst").expect("instance");
         let mut containment = Containment::with_limits(ContainmentLimits {
             max_total_decompressed_bytes: 1,
@@ -2348,7 +2142,7 @@ mod tests {
             ("module/a.bin", b"1234".as_slice()),
             ("module/b.bin", b"567".as_slice()),
         ]);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("budget-instance").expect("instance");
 
         for (total_limit, resident_limit) in [(5, 10), (10, 5)] {
@@ -2421,7 +2215,7 @@ mod tests {
             ("module/manifest.json", br#"{}"#.as_slice()),
             ("../outside", b"x".as_slice()),
         ]);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("inst").expect("instance");
         let mut containment = Containment::new();
 
@@ -2440,10 +2234,10 @@ mod tests {
         let mut containment = Containment::new();
 
         containment
-            .load(&instance, &zip_a, &Sha256Hash::digest(&zip_a))
+            .load(&instance, &zip_a, &recorded(&zip_a))
             .expect("first load");
         containment
-            .load(&instance, &zip_b, &Sha256Hash::digest(&zip_b))
+            .load(&instance, &zip_b, &recorded(&zip_b))
             .expect("second load");
 
         assert_eq!(
@@ -2456,62 +2250,6 @@ mod tests {
         );
         containment.unload(&instance);
         assert!(containment.get(&instance).is_none());
-    }
-
-    #[test]
-    fn rejects_manifest_hash_mismatch() {
-        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
-        entries.insert(
-            "resources/manifest.json".to_string(),
-            br#"{"entry_task_id":"task_a","files":[{"path":"operations/task_a/task.json","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}"#.to_vec(),
-        );
-        let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
-        let instance = InstanceId::new("inst").expect("instance");
-        let mut containment = Containment::new();
-
-        let err = containment
-            .load(&instance, &zip, &expected)
-            .expect_err("manifest mismatch rejected");
-
-        assert!(matches!(err, ContainmentError::ManifestHashMismatch { .. }));
-    }
-
-    #[test]
-    fn manifest_hash_cannot_be_satisfied_by_bare_path_shadow() {
-        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
-        let resource_path = "resources/operations/task_a/task.json";
-        let official = entries
-            .get(resource_path)
-            .expect("official operation")
-            .clone();
-        let shadow = br#"{"shadow":true}"#.to_vec();
-        let shadow_hash = Sha256Hash::digest(&shadow);
-        entries.insert("operations/task_a/task.json".to_string(), shadow);
-        entries.insert(
-            "resources/manifest.json".to_string(),
-            format!(
-                r#"{{"entry_task_id":"task_a","files":[{{"path":"operations/task_a/task.json","sha256":"sha256:{shadow_hash}"}}]}}"#
-            )
-            .into_bytes(),
-        );
-        let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
-        let instance = InstanceId::new("shadow-instance").expect("instance");
-        let mut containment = Containment::new();
-
-        let err = containment
-            .load(&instance, &zip, &expected)
-            .expect_err("bare path must not satisfy a resource-root hash");
-
-        assert_eq!(
-            err,
-            ContainmentError::ManifestHashMismatch {
-                path: resource_path.to_string(),
-                expected: shadow_hash,
-                actual: Sha256Hash::digest(&official),
-            }
-        );
     }
 
     #[test]
@@ -2564,7 +2302,7 @@ mod tests {
                 .into_bytes(),
             );
             let zip = zip_from_map(entries);
-            let expected = Sha256Hash::digest(&zip);
+            let expected = recorded(&zip);
             let instance = InstanceId::new("root-instance").expect("instance");
             let mut containment = Containment::new();
 
@@ -2593,7 +2331,7 @@ mod tests {
             br#"{}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("root-instance").expect("instance");
         let mut containment = Containment::new();
 
@@ -2632,7 +2370,7 @@ mod tests {
         replace_manifested_entry(&mut entries, &operation_path, &operation);
 
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-reference").expect("instance");
         let mut containment = Containment::new();
 
@@ -2662,7 +2400,7 @@ mod tests {
             operation["error_pages"] = error_pages;
             replace_manifested_entry(&mut entries, &operation_path, &operation);
             let zip = zip_from_map(entries);
-            let expected_hash = Sha256Hash::digest(&zip);
+            let expected_hash = recorded(&zip);
             let instance = InstanceId::new(format!("error-page-{name}")).expect("instance");
             let mut containment = Containment::new();
 
@@ -2712,7 +2450,7 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-detector").expect("instance");
         let mut containment = Containment::new();
         let bundle = containment
@@ -2757,7 +2495,7 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-conflict").expect("instance");
         let mut containment = Containment::new();
 
@@ -2868,7 +2606,7 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = Sha256Hash::digest(&zip);
+        let expected = recorded(&zip);
         let instance = InstanceId::new("set-error-page-conflict").expect("instance");
         let mut containment = Containment::new();
 
@@ -3003,6 +2741,12 @@ mod tests {
             manifest_path.to_string(),
             serde_json::to_vec(&manifest).unwrap(),
         );
+    }
+
+    /// The reference a caller records for a package ZIP: the package's own SHA-256, as
+    /// callers give it. Admission keeps it and compares it with nothing.
+    fn recorded(bytes: &[u8]) -> PackageRef {
+        PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
     }
 
     fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {

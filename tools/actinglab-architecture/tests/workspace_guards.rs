@@ -663,11 +663,10 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
 
-    for required in [
-        "pub struct ExternalExpectedSha256",
-        "pub struct ExternallyVerifiedBundle",
-        "Containment::new()",
-    ] {
+    // Workflow #336 PKG-S1: the capability admits by path or bytes and records the caller's
+    // reference; `pkg_s1_package_admission_computes_and_compares_no_package_digest` keeps every
+    // digest comparison off this path.
+    for required in ["pub struct ExternallyVerifiedBundle", "Containment::new()"] {
         assert!(
             bundle.contains(required),
             "execution bundle ingress lost {required}"
@@ -680,16 +679,13 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)"),
+        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded)"),
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains(
-            "ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256()"
-        ) && host.contains("PreparedContainedTask::load_path(")
-            && host.contains("request.expected_sha256(),")
-            && host.contains("PreparedContainedTask::load(instance_alias, &bytes, expected)"),
-        "Runtime host must bind the client package reference to contained package admission"
+        host.contains("PreparedContainedTask::load_path(")
+            && host.contains("request.expected_sha256(),"),
+        "Runtime host must admit the client package by its path and record its reference"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(

@@ -4,7 +4,7 @@ use actingcommand_contract::{
     MAX_READONLY_OBSERVATION_ARTIFACT_BYTES, MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use actingcommand_lab::{ExternalExpectedSha256, validate_lab_package_bytes};
+use actingcommand_lab::validate_lab_package_bytes;
 use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -47,10 +47,8 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
         envelope_data(&first)["decision_fingerprint"],
         decision_fingerprint
     );
-    assert_eq!(
-        record["simulation"]["package_sha256"],
-        fixture.package_sha256
-    );
+    // Workflow #336 PKG-S1: the simulation result names its package by `package_id` only.
+    assert!(record["simulation"].get("package_sha256").is_none());
     assert_eq!(record["simulation"]["entry_count"], 6);
     assert_eq!(record["simulation"]["task_count"], 1);
     assert_eq!(record["simulation"]["capture_count"], 1);
@@ -334,8 +332,8 @@ fn package_adapter_accepts_legacy_drag_field_aliases() {
         drag_fields: DragFields::LegacyAliases,
         ..PackageOptions::default()
     });
-    let expected = ExternalExpectedSha256::parse_hex(&sha256_hex(&bytes)).unwrap();
-    let loaded = validate_lab_package_bytes("legacy-drag-aliases.zip", &bytes, expected).unwrap();
+    let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(sha256_hex(&bytes));
+    let loaded = validate_lab_package_bytes("legacy-drag-aliases.zip", &bytes, &recorded).unwrap();
     assert_eq!(loaded.task_count, 1);
 }
 

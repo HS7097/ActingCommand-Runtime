@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Production semantic commands admit resources only through an externally hashed in-memory bundle.
+//! Production semantic commands admit resources only through a contained in-memory bundle.
+//! Workflow #336 PKG-S1: the given reference is recorded and compared with nothing.
 
 use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, parse_navigation_graph_value};
 use actingcommand_contract::{ContainedTaskRequest, PackageRef};
-use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
-use actingcommand_pack_containment::ContainmentLimits;
+use actingcommand_lab::ExternallyVerifiedBundle;
+use actingcommand_pack_containment::{ContainmentLimits, Sha256Hash};
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use actingcommand_resource_tooling::{PublishedPackageReader, open_published_package};
@@ -157,7 +158,7 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     }
     let bytes = zip.read_all()?;
     let instance = format!("semantic_{}", command.replace('-', "_"));
-    ExternallyVerifiedBundle::load(&instance, &bytes, expected)
+    ExternallyVerifiedBundle::load(&instance, &bytes, &expected)
         .map(Arc::new)
         .map_err(|error| CliError::package_invalid(error.to_string()))
 }
@@ -179,9 +180,7 @@ impl PackageInput {
         match source {
             Some(value) => PackageRef::parse_argument(&value)
                 .map_err(|error| CliError::package_invalid(error.to_string())),
-            None => Ok(PackageRef::LegacyZipSha256(
-                explicit_hash(flags)?.hash().to_string(),
-            )),
+            None => explicit_hash(flags),
         }
     }
 
@@ -288,7 +287,9 @@ pub(super) fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf>
     }
 }
 
-pub(super) fn explicit_hash(flags: &FlagArgs) -> CliOutcome<ExternalExpectedSha256> {
+/// The `--expected-sha256` ZIP reference, in canonical lowercase form. Workflow #336 PKG-S1:
+/// it is recorded and compared with nothing; PKG-S4 removes the flag.
+pub(super) fn explicit_hash(flags: &FlagArgs) -> CliOutcome<PackageRef> {
     match flags.optional("--expected-sha256") {
         None => Err(CliError::package_invalid(
             "semantic commands require externally supplied --expected-sha256 <hash>",
@@ -296,7 +297,8 @@ pub(super) fn explicit_hash(flags: &FlagArgs) -> CliOutcome<ExternalExpectedSha2
         Some(value) if value == "true" => Err(CliError::usage(
             "--expected-sha256 requires an explicit SHA-256 value",
         )),
-        Some(value) => ExternalExpectedSha256::parse_hex(&value)
+        Some(value) => Sha256Hash::parse_hex(&value)
+            .map(|hash| PackageRef::LegacyZipSha256(hash.to_string()))
             .map_err(|error| CliError::package_invalid(error.to_string())),
     }
 }

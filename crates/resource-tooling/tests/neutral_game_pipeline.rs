@@ -117,7 +117,7 @@ fn fields_v1_neutral_declaration_and_reference_closure() {
 // Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
 #[test]
 fn zero_input_fields_source_and_admission_boundaries() {
-    use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+    use actingcommand_execution_kernel::PreparedContainedTask;
     use actingcommand_pack_containment::Sha256Hash;
     use actingcommand_resource_tooling::{PackageValidateRequest, validate_package};
     use std::io::{Cursor, Write};
@@ -169,7 +169,9 @@ fn zero_input_fields_source_and_admission_boundaries() {
         PreparedContainedTask::load(
             "neutral-fields",
             &bytes,
-            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
+            &actingcommand_contract::PackageRef::LegacyZipSha256(
+                Sha256Hash::digest(&bytes).to_string(),
+            ),
         )
         .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
         fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();

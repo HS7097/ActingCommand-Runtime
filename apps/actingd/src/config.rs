@@ -9,18 +9,15 @@ use actingcommand_contract::resource_declaration::{
 };
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
-    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
-    digest_named,
+    ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
+    PackageRef, RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
     EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{
-    ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
-};
+use actingcommand_execution_kernel::{PreparedContainedTask, prerequisite_package_id_valid};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -37,7 +34,6 @@ use actingcommand_vision_ffi::{
     VisionModelListing, VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -746,9 +742,9 @@ struct InstanceConfig {
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
 /// locator (relative paths resolve against the configuration file's directory) and the
-/// bare lowercase hex digest. A locator whose last segment is that same digest names a
-/// content directory (Workflow #288) and yields its `ContentDirectory` reference; any other
-/// locator keeps the ZIP digest. Nothing is opened or hashed at assembly.
+/// bare lowercase hex digest. Workflow #336 PKG-S1: the locator's path chooses the loader and
+/// no name is read as an identity; the digest is only recorded, as the request's reference,
+/// until PKG-S4 removes the key. Nothing is opened or hashed at assembly.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
@@ -766,14 +762,7 @@ impl StartupPackageConfigFile {
         if !path.is_absolute() {
             return Err(ActingdCode::StartupPackagePathInvalid.code());
         }
-        let digest = if digest_named(&path) == Some(self.expected_sha256.as_str()) {
-            PackageRef::ContentDirectory(ContentDirectory {
-                schema_version: ContentDirectoryVersion::V1,
-                sha256: self.expected_sha256,
-            })
-        } else {
-            PackageRef::from(self.expected_sha256)
-        };
+        let digest = PackageRef::from(self.expected_sha256);
         if digest.validate().is_err() {
             return Err(ActingdCode::StartupPackageDigestInvalid.code());
         }
@@ -855,12 +844,11 @@ impl std::fmt::Display for ResourcePackageRejection {
 }
 
 /// Admits every configured `resource_package`, identically for `check-config` and daemon
-/// startup: the path must exist (`resource_package_missing`); a file must be read by the
-/// contained-task package loader exactly as `task-run` admits one, with the file's own
-/// digest as the expected one (`resource_package_invalid`). A directory whose name is a
-/// content digest (Workflow #288) is admitted the same way against the `ContentDirectory`
-/// reference of that name; any other directory is confirmed to exist only, since the field
-/// carries no reference for it, so `check-config` lists it as not checked.
+/// startup: the path must exist (`resource_package_missing`); a directory or a file must be
+/// admitted by the contained-task package loader exactly as `task-run` admits one, by its path
+/// and structurally (`resource_package_invalid`). Workflow #336 PKG-S1: no digest is computed
+/// or compared and no name is read as an identity; the field carries no reference, so none is
+/// recorded.
 pub(super) fn validate_resource_packages(
     configured: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, InstanceResourcePackage>, ResourcePackageRejection> {
@@ -897,34 +885,8 @@ pub(super) fn validate_resource_packages(
             )
         };
         let kind = if metadata.is_dir() {
-            if let Some(digest) = digest_named(&path) {
-                let expected = PackageRef::ContentDirectory(ContentDirectory {
-                    schema_version: ContentDirectoryVersion::V1,
-                    sha256: digest.to_owned(),
-                });
-                PreparedContainedTask::load_path(
-                    alias,
-                    &path,
-                    &expected,
-                    None,
-                    Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
-                )
-                .map_err(loader_refused)?;
-            }
             InstanceResourcePackageKind::Directory
         } else if metadata.is_file() {
-            let bytes = fs::read(&path).map_err(|error| {
-                invalid(SharedCode::PackageReadFailed.as_str(), error.to_string())
-            })?;
-            let expected =
-                ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
-                    .map_err(|error| {
-                        invalid(
-                            SharedCode::PackageReferenceInvalid.as_str(),
-                            error.to_string(),
-                        )
-                    })?;
-            PreparedContainedTask::load(alias, &bytes, expected).map_err(loader_refused)?;
             InstanceResourcePackageKind::File
         } else {
             return Err(rejected(
@@ -933,6 +895,14 @@ pub(super) fn validate_resource_packages(
                 None,
             ));
         };
+        PreparedContainedTask::load_path(
+            alias,
+            &path,
+            &PackageRef::default(),
+            None,
+            Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
+        )
+        .map_err(loader_refused)?;
         admitted.insert(
             alias.clone(),
             InstanceResourcePackage {

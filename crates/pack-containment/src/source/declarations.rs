@@ -1820,8 +1820,9 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// (`contracts/selection-graph.md`, section Select step). It is read as the selection-policy
 /// crate reads a document: decoded, refused when its canonical form would be ambiguous
 /// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
-/// must seal its bytes with `policy.sha256` and name a candidate layout its own task declares
-/// on the step's `from` page; the document must apply to that layout, read only features the
+/// must name a candidate layout its own task declares on the step's `from` page (its
+/// `policy.sha256` is format-checked by the declaration grammar and compared with nothing,
+/// Workflow #336 PKG-S1); the document must apply to that layout, read only features the
 /// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
 /// require exactly one candidate. The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
@@ -1865,7 +1866,6 @@ fn select_policy(
     policy
         .validate()
         .map_err(|error| refuse("", format!("invalid selection policy: {error}")))?;
-    let digest = crate::Sha256Hash::digest(bytes).to_string();
     let game = bundle
         .data
         .get("game")
@@ -1886,13 +1886,6 @@ fn select_policy(
             continue;
         }
         let pointer = format!("/operations/{index}/select");
-        if select.pointer("/policy/sha256").and_then(Value::as_str) != Some(digest.as_str()) {
-            return Err(task.refuse(
-                &format!("{pointer}/policy/sha256"),
-                ResourceDeclarationReason::InvalidValue,
-                &format!("the policy document's bytes hash to {digest}"),
-            ));
-        }
         let layout_id = select
             .get("layout_id")
             .and_then(Value::as_str)

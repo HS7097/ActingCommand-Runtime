@@ -29,7 +29,7 @@ pub struct TaskPackageDescriptor {
 }
 
 impl PreparedContainedTask {
-    /// Available only after hash verification, containment and full offline preparation.
+    /// Available only after containment and full offline preparation.
     /// Missing identity or declarations fail preparation; callers must not infer them from
     /// an index or path. Creating this description runs no task or provider.
     pub fn package_descriptor(&self) -> TaskPackageDescriptor {
@@ -248,9 +248,10 @@ impl PrerequisiteChain {
     }
 }
 
-/// Validate actual content-directory identities, every declared use and the complete
-/// chains against precisely the bindings this bundle will supply. Pure and shared with
-/// installers; descriptors must be obtained from each hash-admitted pack in this index.
+/// Validate each pack's identity `(package_id, server, entry_task_id)`, every declared use and
+/// the complete chains against precisely the bindings this bundle will supply. Pure and shared
+/// with installers; descriptors must be obtained from each admitted pack in this index. The
+/// index's digests are compared with nothing (Workflow #336 PKG-S1).
 pub fn validate_bundle_maintenance(
     index: &BundleIndexV3,
     packages: &[TaskPackageDescriptor],
@@ -280,7 +281,6 @@ pub fn validate_bundle_maintenance(
         if actual.game != index.game
             || actual.server != pack.server
             || actual.entry_task_id != pack.entry_task_id
-            || !matches!(&actual.reference, PackageRef::ContentDirectory(reference) if reference.sha256 == pack.digest)
         {
             return Err(invalid(format!(
                 "package_id={} index/material mismatch",

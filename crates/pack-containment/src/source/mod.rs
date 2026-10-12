@@ -16,7 +16,6 @@ use actingcommand_contract::{
 };
 use actingcommand_recognition_pack::{AssetResolver, RecognitionPackError, RecognitionPackResult};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -3261,9 +3260,9 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                     ));
                 }
                 let bytes = files.read(&path).map_err(CliError::package_invalid)?;
-                if bytes.len() as u64 != size
-                    || format!("{:x}", Sha256::digest(bytes)) != dictionary.sha256
-                {
+                // Workflow #336 PKG-S1: the declared `sha256` is not compared; the bytes read
+                // must still be the length the file had when it was measured.
+                if bytes.len() as u64 != size {
                     return Err(CliError::package_invalid(
                         PackContainmentCode::OcrFieldsDictionaryHashMismatch.as_str(),
                     ));
@@ -3345,7 +3344,7 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         .and_then(Value::as_str)
         .filter(|path| safe_task_local_resource_path(path))
         .ok_or_else(|| CliError::package_invalid("post_admission_ocr.truth_set.path is unsafe"))?;
-    let truth_sha256 = truth
+    truth
         .get("sha256")
         .and_then(Value::as_str)
         .filter(|value| {
@@ -3426,11 +3425,11 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
             bundle.dir.join(truth_path).display()
         ))
     })?;
-    if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes)
-        || format!("{:x}", Sha256::digest(truth_bytes)) != truth_sha256
-    {
+    // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
+    // nothing; only the size bound applies to the bytes.
+    if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes) {
         return Err(CliError::package_invalid(
-            "post_admission_ocr truth set size or SHA-256 does not match",
+            "post_admission_ocr truth set exceeds max_total_bytes",
         ));
     }
     let truth_json: Value = serde_json::from_slice(truth_bytes).map_err(|error| {

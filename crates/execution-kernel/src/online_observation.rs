@@ -3,9 +3,7 @@
 //! One contained, read-only observation over the existing recognition owners.
 
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
-use crate::{
-    DriveSemanticInput, ExternalExpectedSha256, ExternallyVerifiedBundle, drive_rect_center,
-};
+use crate::{DriveSemanticInput, ExternallyVerifiedBundle, drive_rect_center};
 use actingcommand_contract::codes::{ContractLocation, PageProjectionCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::page_projection::{
@@ -92,16 +90,18 @@ pub struct EvaluatedPageObservation {
 }
 
 impl PreparedPageObservation {
+    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path;
+    /// `recorded` is the caller's reference, kept as a record and compared with nothing.
     pub fn load_path(
         instance: &str,
         locator: &std::path::Path,
-        expected: &actingcommand_contract::PackageRef,
+        recorded: &actingcommand_contract::PackageRef,
         targets: &[String],
         provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, OnlineObservationError> {
         let bundle = ExternallyVerifiedBundle::load_path(
-            instance, locator, expected, true, provider, deadline,
+            instance, locator, recorded, true, provider, deadline,
         )
         .map_err(|error| {
             OnlineObservationError::new(
@@ -116,12 +116,12 @@ impl PreparedPageObservation {
     pub fn load(
         instance: &str,
         bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &actingcommand_contract::PackageRef,
         targets: &[String],
         provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, OnlineObservationError> {
         let bundle =
-            ExternallyVerifiedBundle::load_observation(instance, bytes, expected, provider)
+            ExternallyVerifiedBundle::load_observation(instance, bytes, recorded, provider)
                 .map_err(|error| {
                     OnlineObservationError::new(
                         ExecutionKernelCode::ObservationContainmentFailed.code(),
@@ -235,6 +235,8 @@ impl PreparedPageObservation {
         })
     }
 
+    /// The caller's reference recorded at admission (Workflow #336 PKG-S1); PKG-S2 replaces
+    /// it with the package's `package_label`.
     pub fn package_sha256(&self) -> actingcommand_contract::PackageRef {
         self.bundle.loaded_bundle().package_ref().clone()
     }

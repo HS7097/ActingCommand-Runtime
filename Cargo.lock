@@ -242,6 +242,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "trybuild",
+ "windows-sys",
  "zip",
 ]
 

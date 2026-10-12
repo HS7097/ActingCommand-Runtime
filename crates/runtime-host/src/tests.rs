@@ -44,8 +44,7 @@ use actingcommand_device::{
 };
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
-    ExecutionKernel, ExternalExpectedSha256, InputFrameContext, ObservedFrame,
-    PreparedContainedTask,
+    ExecutionKernel, InputFrameContext, ObservedFrame, PreparedContainedTask,
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{

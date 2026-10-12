@@ -4,9 +4,7 @@
 //! admitted structurally. Neither a digest of the package nor a pin inside it is compared, and
 //! no name is read as an identity. Tests S1-T1, S1-T2, S1-T3 and S1-T5.
 
-use actingcommand_contract::{
-    ContentDirectory, ContentDirectoryVersion, PackageRef, content_directory_digest,
-};
+use actingcommand_contract::{ContentDirectory, ContentDirectoryVersion, PackageRef};
 use actingcommand_pack_containment::{
     CONTENT_JSON_V1, Containment, ContainmentError, InstanceId, Sha256Hash,
 };
@@ -208,10 +206,13 @@ fn s1_t2_a_package_changed_in_place_is_admitted_under_its_former_reference() {
     let directory = scratch.path().join("package");
     let mut entries = source_entries();
     write_directory(&directory, &entries);
-    let former =
-        content_reference(&content_directory_digest(entries.iter().map(
-            |(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes()),
-        )));
+    // The reference the package had before the change, as the authoring tools measure it.
+    let former = PackageRef::ContentDirectory(
+        Containment::new()
+            .snapshot_content_directory(&directory, Instant::now() + Duration::from_secs(60))
+            .expect("measure the package")
+            .reference,
+    );
     admit(&directory, &former).expect("the package is admitted before the change");
 
     let task_path = "resources/operations/source_task/task.json";

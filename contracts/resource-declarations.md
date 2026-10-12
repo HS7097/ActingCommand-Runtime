@@ -160,7 +160,7 @@ uses none of them derives every document byte for byte as before.
 | `color_probes[].digest` | A color digest entry (`color-digest.md`, section Package declaration). A color probe declares exactly one of `expected` and `digest`; a digest entry has no `max_distance`. |
 | `operations[].guard.check` | A string naming the check that guards the input; the guard evaluates its `target_id`, which is that check. |
 | `candidate_layouts[]` | `{"id", "page_id", "kind": "fixed_slots", "features": [...], "slots": [...]}`: the candidate layouts of a page the task declares (`selection-graph.md`, section Candidate layouts, Source declaration). Each slot's `rect` and `click` lie inside the task's `coordinate_space`; each slot target is a template, color, color digest, check, OCR or NN target of the derived pack, and a `measure_milli` feature never reads a check. |
-| `operations[].select` | `{"layout_id", "policy": {"path": "policies/<name>.json", "sha256"}}`, the operation's only effect, with a declared `guard` of any accepted kind, an `expect_after` and no trusted coordinate (`selection-graph.md`, section Select step). The layout is one the task declares on the step's `from` page; the policy document is read as a selection-policy document, sealed by the SHA-256 of its bytes, and applies to the layout. |
+| `operations[].select` | `{"layout_id", "policy": {"path": "policies/<name>.json", "sha256"}}`, the operation's only effect, with a declared `guard` of any accepted kind, an `expect_after` and no trusted coordinate (`selection-graph.md`, section Select step). The layout is one the task declares on the step's `from` page; the policy document is read as a selection-policy document and applies to the layout. Its declared `sha256` is format-checked and compared with nothing (Workflow #336 PKG-S1). |
 
 A check, like a color digest, is never clicked and never locates anything. `guard.check`
 requires the guard target to be a `composite` target. `guard.color_probe` accepts a color or a
@@ -193,8 +193,7 @@ Only `pack.json` is written at schema `0.7`, and only when it holds a `composite
 navigation, operation index and primitives stay at `0.6`.
 
 A select step's refusals name the task's `task.json` (`/operations/<i>/select/…`, its `guard`,
-`expect_after` or `unguarded_trusted_coordinate`, and `…/select/policy/sha256` when the bytes
-hash differently) or the policy document itself (the document, `/applies_to/candidate_layout_id`,
+`expect_after` or `unguarded_trusted_coordinate`) or the policy document itself (the document, `/applies_to/candidate_layout_id`,
 `/fields/<j>/name`, `/fields/<j>/value_type`, `/selection/required_count`). A select step is no
 navigation edge and no page operation; its primitive has `click: null`, its declared `guard`
 and the `select` object, and the sealed task keeps `select` and the declared guard.

@@ -180,37 +180,16 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
     let instance = ContainmentInstanceId::new("runtime-debug-package")
         .map_err(|_| debug_package_error(HostCode::DebugPackageInstanceInvalid))?;
     let mut containment = Containment::new();
-    let bundle = if let Some(hash) = request.expected_sha256().legacy_sha256() {
-        let file = fs::File::open(path)
-            .map_err(|_| debug_package_error(HostCode::DebugPackageOpenFailed))?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| debug_package_error(HostCode::DebugPackageMetadataFailed))?;
-        if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error(HostCode::DebugPackageFileInvalid));
-        }
-        let mut bytes = Vec::new();
-        file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| debug_package_error(HostCode::DebugPackageReadFailed))?;
-        if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-            return Err(debug_package_error(HostCode::DebugPackageFileTooLarge));
-        }
-        let expected = Sha256Hash::parse_hex(hash)
-            .map_err(|_| debug_package_error(HostCode::DebugPackageHashInvalid))?;
-        containment
-            .load(&instance, &bytes, &expected)
-            .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?
-    } else {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(
-                ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-            ))
-            .ok_or_else(|| debug_package_error(HostCode::DebugPackageDeadlineOverflow))?;
-        containment
-            .load_path(&instance, path, request.expected_sha256(), false, deadline)
-            .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?
-    };
+    // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is recorded
+    // (the summary's `verified_sha256` until PKG-S4) and compared with nothing.
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(
+            ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+        ))
+        .ok_or_else(|| debug_package_error(HostCode::DebugPackageDeadlineOverflow))?;
+    let bundle = containment
+        .load_path(&instance, path, request.expected_sha256(), false, deadline)
+        .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?;
     PackageDebugSummary::new(
         bundle.task_id().as_str(),
         bundle.package_ref().clone(),

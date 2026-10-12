@@ -109,9 +109,9 @@ fn s1_t4_ocr_truth_set_and_dictionary_pins_are_not_compared_at_admission() {
         let root = TempDir::new().expect("tempdir");
         let bytes = package_bytes(&entries);
         let path = root.path().join(format!("{name}.zip"));
-        fs::write(&path, &bytes).expect("package file");
         let reference =
             actingcommand_contract::PackageRef::from(format!("{:x}", Sha256::digest(&bytes)));
+        fs::write(&path, bytes).expect("package file");
         let admitted = PreparedContainedTask::load_path(
             "node.a",
             &path,

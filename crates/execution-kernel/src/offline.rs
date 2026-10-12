@@ -67,8 +67,8 @@ fn code_spelling<S: Serializer>(
 pub struct OfflineSimulationResult {
     pub mode: &'static str,
     pub executed: bool,
+    /// The package's identity, its `package_id` (Workflow #336 PKG-S1: no package digest).
     pub package_id: String,
-    pub package_sha256: actingcommand_contract::PackageRef,
     pub decision_fingerprint: String,
     pub task_id: String,
     pub entry_count: usize,
@@ -219,12 +219,10 @@ fn simulate(
     };
 
     let package_id = task.package_label().to_string();
-    let package_sha256 = task.package_sha256().clone();
     let task_id = task.task_label().to_string();
     let post_admission_ocr_declared = task.has_post_admission_ocr();
     let decision_fingerprint = fingerprint_decision(
         &package_id,
-        &package_sha256,
         &task_id,
         &runtime.recognition,
         &decision,
@@ -234,7 +232,6 @@ fn simulate(
         mode: "offline_simulation",
         executed: false,
         package_id,
-        package_sha256,
         decision_fingerprint,
         task_id,
         entry_count: task.entry_count(),
@@ -255,8 +252,8 @@ fn simulate(
 #[derive(Serialize)]
 struct DecisionFingerprintProjection<'a> {
     schema_version: &'static str,
+    /// The package by its `package_id` only (Workflow #336 PKG-S1).
     package_id: &'a str,
-    package_sha256: &'a actingcommand_contract::PackageRef,
     task_id: &'a str,
     recognition: &'a [OfflineRecognitionResult],
     decision: &'a OfflineDecision,
@@ -267,7 +264,6 @@ struct DecisionFingerprintProjection<'a> {
 
 fn fingerprint_decision(
     package_id: &str,
-    package_sha256: &actingcommand_contract::PackageRef,
     task_id: &str,
     recognition: &[OfflineRecognitionResult],
     decision: &OfflineDecision,
@@ -277,7 +273,6 @@ fn fingerprint_decision(
     let encoded = serde_json::to_vec(&DecisionFingerprintProjection {
         schema_version: "actingcommand.package-offline-decision.v1",
         package_id,
-        package_sha256,
         task_id,
         recognition,
         decision,
@@ -457,7 +452,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExternalExpectedSha256, PreparedContainedTask};
+    use crate::PreparedContainedTask;
     use actingcommand_device::{CaptureBackendName, PixelFormat};
     use serde_json::{Value, json};
     use std::io::{Cursor, Write};
@@ -870,25 +865,20 @@ mod tests {
         zip.finish().expect("finish zip").into_inner()
     }
 
+    /// The reference a caller records for the package: its own SHA-256, as callers give it.
+    fn recorded(bytes: &[u8]) -> actingcommand_contract::PackageRef {
+        actingcommand_contract::PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
+    }
+
     fn prepare(bytes: &[u8]) -> PreparedContainedTask {
-        let expected = Sha256Hash::digest(bytes).to_string();
-        PreparedContainedTask::load(
-            "neutral.instance",
-            bytes,
-            ExternalExpectedSha256::parse_hex(&expected).expect("hash"),
-        )
-        .expect("prepared task")
+        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
+            .expect("prepared task")
     }
 
     fn prepare_error(bytes: &[u8]) -> crate::ContainedTaskError {
-        let expected = Sha256Hash::digest(bytes).to_string();
-        PreparedContainedTask::load(
-            "neutral.instance",
-            bytes,
-            ExternalExpectedSha256::parse_hex(&expected).expect("hash"),
-        )
-        .err()
-        .expect("admission failure")
+        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
+            .err()
+            .expect("admission failure")
     }
 
     fn home_frame(guard_passes: bool) -> Frame {
@@ -1089,7 +1079,6 @@ mod tests {
         };
         let decision_fingerprint = fingerprint_decision(
             task.package_label(),
-            task.package_sha256(),
             task.task_label(),
             &recognition,
             &decision,

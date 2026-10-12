@@ -270,8 +270,10 @@ step with `lab_run_select_unsupported`.
   refuses it with `UnconsumedField` at `/operations/<i>/select`.
 - `layout_id` names a candidate layout that the same task declares on the step's `from` page.
 - `policy` is a selection-policy document ([selection-policy.md](selection-policy.md)) at
-  `policies/<name>.json` in the task's directory, sealed by `sha256`, the SHA-256 of its bytes
-  (64 lowercase hex digits). The document is part of the package like every task file.
+  `policies/<name>.json` in the task's directory, with a declared `sha256` (64 lowercase hex
+  digits). Workflow #336 PKG-S1: the `sha256` stays required and format-checked, and nothing
+  compares it with the document's bytes (PKG-S2 makes it optional). The document is part of
+  the package like every task file.
 - `guard` is required. It may be any guard the parser and admission accept:
   `verify_template`, `color_probe` (a color or a color digest target) or `check`. The rule
   that a `target`, `target_center` or `offset` click needs a template guard does not apply. The
@@ -289,7 +291,6 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | `policy` is `{path, sha256}`: a safe task-local `policies/<name>.json` path and 64 lowercase hex digits. | `…/select/policy/path`, `…/select/policy/sha256` | `task.json` |
 | No other effect is declared. | `/operations/<i>/select` | `task.json` |
 | `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
-| The document's bytes hash to `policy.sha256`. | `/operations/<i>/select/policy/sha256` | `task.json` |
 | The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
@@ -305,13 +306,12 @@ any input with its own codes:
 | --- | --- |
 | `contained_task_select_invalid` | The step lacks its guard or `expect_after`, is a trusted coordinate, or its `select` is malformed; or the layout is not a layout of the recognition pack, or not on the step's `from` page. |
 | `contained_task_select_policy_missing` | The document is not in the package. |
-| `contained_task_select_policy_hash_mismatch` | The SHA-256 of the document's bytes in the package differs from `policy.sha256`. The bytes are hashed directly, not looked up in a manifest, so a ZIP and a content-directory package are sealed the same way. |
 | `contained_task_select_policy_invalid` | The document does not read as a selection-policy document. |
 | `contained_task_select_policy_mismatch` | The document does not apply to the layout, as above. |
 
-The sealed binding of a select step is therefore the document path and SHA-256 inside the
-package, the package's own identity (its ZIP SHA-256 or content-directory digest) and the
-direct byte hash. A per-request policy binding is not part of v1.
+The binding of a select step is therefore the document path inside the package the run
+admitted; since Workflow #336 PKG-S1 neither the document's declared SHA-256 nor a package
+digest is compared. A per-request policy binding is not part of v1.
 
 ### Derived documents
 

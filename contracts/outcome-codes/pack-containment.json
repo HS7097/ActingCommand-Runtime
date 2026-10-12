@@ -1,71 +1,6 @@
 {
   "owner": "pack-containment",
   "codes": {
-    "package_open_failed": {
-      "category": "error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file could not be opened.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_metadata_failed": {
-      "category": "error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file's metadata could not be read.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_size_invalid": {
-      "category": "error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file is not a regular file, or exceeds the compressed size limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_deadline": {
-      "category": "error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Reading a legacy package file passed its admission deadline.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "content_directory_name_mismatch": {
-      "category": "error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A content directory's name does not match the reference it is admitted under.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "content_directory_locator_not_absolute": {
       "category": "error",
       "owner": "pack-containment",
@@ -245,6 +180,19 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Reading a content directory passed its admission deadline.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "content_directory_changed_during_read": {
+      "category": "error",
+      "owner": "pack-containment",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A package directory's root was replaced while it was being read (its file identity before and after the read differ); nothing read is admitted.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -556,7 +504,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A post-admission OCR dictionary file does not match its declared length or SHA-256 (the message of a package_invalid refusal).",
+      "description": "A post-admission OCR dictionary file's bytes differ in length from the file measured before they were read (the message of a package_invalid refusal); its declared SHA-256 is not compared (Workflow #336 PKG-S1).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
