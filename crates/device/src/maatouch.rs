@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::adb::{Adb, AdbConfig, CommandOutput, stop_child};
 use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
 use crate::{
     DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSeverity,
@@ -24,7 +24,9 @@ const MAX_GESTURE_MS: u64 = 60_000;
 
 #[derive(Debug, Clone)]
 pub struct DeviceTarget {
-    pub serial: Option<String>,
+    /// The adb serial, when the target is addressed by one instead of `HOST:PORT`. Workflow #398
+    /// RD-1a: it shows only its label; [`DeviceTarget::adb_arg`] is its one way out.
+    pub serial: Option<crate::DeviceSerial>,
     pub host: String,
     pub port: u16,
     pub connect: bool,
@@ -42,10 +44,34 @@ impl Default for DeviceTarget {
 }
 
 impl DeviceTarget {
-    pub fn resolved_serial(&self) -> String {
+    /// The adb `-s` argument: the serial, otherwise `HOST:PORT`. For the adb command line only
+    /// (Workflow #398 RD-1a).
+    pub fn adb_arg(&self) -> String {
         self.serial
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", self.host, self.port))
+            .as_ref()
+            .map_or_else(|| self.endpoint(), |serial| serial.adb_arg().to_owned())
+    }
+
+    /// What people, logs and records see: the serial's label, otherwise `HOST:PORT`.
+    pub fn label(&self) -> String {
+        self.serial
+            .as_ref()
+            .map_or_else(|| self.endpoint(), |serial| serial.label().to_owned())
+    }
+
+    /// The configured serial's label; `None` when the target is addressed by `HOST:PORT`.
+    pub fn configured_label(&self) -> Option<String> {
+        self.serial.as_ref().map(|serial| serial.label().to_owned())
+    }
+
+    fn endpoint(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+impl std::fmt::Display for DeviceTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label())
     }
 }
 
@@ -216,7 +242,7 @@ impl MaaTouchBackend {
         target: DeviceTarget,
         maatouch_config: MaaTouchConfig,
     ) -> Self {
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         Self {
             adb_config,
             target,
@@ -908,13 +934,7 @@ fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult
         if err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
             return err;
         }
-        let devices = adb
-            .run(&["devices", "-l"])
-            .map(|out| out.stdout)
-            .unwrap_or_else(|list_err| format!("adb devices -l also failed: {list_err}"));
-        DeviceError::transient(format!(
-            "target device {serial} is not available: {err}\nadb devices -l:\n{devices}"
-        ))
+        unavailable_device_error(serial, &err, adb.run(&["devices", "-l"]))
     })?;
     if state != "device" {
         return Err(DeviceError::transient(format!(
@@ -930,6 +950,20 @@ fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult
         state,
         screen_size,
     })
+}
+
+/// The error of a target adb does not answer for, with what `adb devices -l` reported.
+pub(crate) fn unavailable_device_error(
+    target: &str,
+    err: &DeviceError,
+    listing: DeviceResult<CommandOutput>,
+) -> DeviceError {
+    let devices = listing
+        .map(|out| out.stdout)
+        .unwrap_or_else(|list_err| format!("adb devices -l also failed: {list_err}"));
+    DeviceError::transient(format!(
+        "target device {target} is not available: {err}\nadb devices -l:\n{devices}"
+    ))
 }
 
 fn spawn_stderr_reader(
@@ -1265,7 +1299,7 @@ mod tests {
     #[test]
     fn target_defaults_to_host_port_serial() {
         let target = DeviceTarget::default();
-        assert_eq!(target.resolved_serial(), "127.0.0.1:16384");
+        assert_eq!(target.adb_arg(), "127.0.0.1:16384");
     }
 
     #[test]

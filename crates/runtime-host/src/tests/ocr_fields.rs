@@ -13,7 +13,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     };
     use actingcommand_device::{
         AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
-        CaptureSelectionContext, DeviceTarget, InputSelectionContext, MaaTouchConfig,
+        CaptureSelectionContext, DeviceSerial, DeviceTarget, InputSelectionContext, MaaTouchConfig,
         MumuInstallSource, TouchBackendChoice, TouchBackendConfig, TouchBackendName,
     };
     use actingcommand_recognition_pack::{
@@ -534,7 +534,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .store(successful, Ordering::Release);
         let configured_instance = instance_id();
         let target = DeviceTarget {
-            serial: Some("127.0.0.1:16384".to_owned()),
+            serial: Some(DeviceSerial::handset("127.0.0.1:16384", "neutral.instance")),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -899,7 +899,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         });
         let configured_instance = instance_id();
         let target_config = DeviceTarget {
-            serial: Some("neutral-recovery".to_owned()),
+            serial: Some(DeviceSerial::handset(
+                "neutral-recovery",
+                "fixture01.instance",
+            )),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {

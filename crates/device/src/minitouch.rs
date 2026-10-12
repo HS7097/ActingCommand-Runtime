@@ -90,7 +90,7 @@ impl MinitouchBackend {
         target: DeviceTarget,
         minitouch_config: MinitouchConfig,
     ) -> Self {
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         Self {
             adb_config,
             target,

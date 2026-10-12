@@ -7,7 +7,7 @@ use super::{
 };
 use actingcommand_device::{AdbPathSource, CaptureBackendChoice};
 #[cfg(test)]
-use actingcommand_device::{DeviceTarget, TouchBackendChoice};
+use actingcommand_device::{DeviceSerial, DeviceTarget, TouchBackendChoice};
 use actingcommand_lab::{InstanceConfig, UserConfig};
 use std::path::PathBuf;
 
@@ -29,9 +29,9 @@ fn device_config_for_instance(
     let mut target = DeviceTarget::default();
     #[cfg(test)]
     if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
-        target.serial = Some(serial);
+        target.serial = Some(DeviceSerial::handset(serial, &instance_id));
     } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
-        target.serial = Some(instance_id.clone());
+        target.serial = Some(DeviceSerial::handset(instance_id.clone(), &instance_id));
     }
     let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
     #[cfg(test)]

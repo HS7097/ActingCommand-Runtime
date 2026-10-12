@@ -1390,7 +1390,7 @@ fn test_fake_semantic_input(
     let action = semantic_input_json(input);
     let event = json!({
         "backend": "test_fake_touch",
-        "serial": device_config.target.resolved_serial(),
+        "serial": device_config.target.adb_arg(),
         "action": action
     });
     fs::write(
@@ -1406,7 +1406,7 @@ fn test_fake_semantic_input(
         "touch_backend_attempts": [],
         "touch_backend_warnings": [],
         "control_mode": "semantic",
-        "serial": device_config.target.resolved_serial(),
+        "serial": device_config.target.adb_arg(),
         "device_state": "device",
         "screen_size": "Physical size: 1280x720",
         "handshake": Value::Null,

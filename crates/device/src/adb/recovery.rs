@@ -67,6 +67,9 @@ pub struct AdbCommandEvidence {
     pub stdout_lossy_decode: bool,
     pub stderr_lossy_decode: bool,
     pub state: AdbTransportState,
+    /// Workflow #398 RD-1a: a bound device serial in `stdout` or `stderr` was replaced by its
+    /// label token.
+    pub raw_text_redacted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +120,7 @@ impl Adb {
     }
 }
 
-pub(super) fn command_evidence(
+pub(crate) fn command_evidence(
     output: &CommandOutput,
     succeeded: bool,
     exit_code: Option<i32>,
@@ -154,6 +157,7 @@ pub(super) fn command_evidence(
         stdout_lossy_decode: output.stdout_lossy_decode,
         stderr_lossy_decode: output.stderr_lossy_decode,
         state,
+        raw_text_redacted: false,
     }
 }
 
@@ -202,7 +206,7 @@ pub(super) fn is_tcp_endpoint(serial: &str) -> bool {
         })
 }
 
-pub(super) fn ensure_input_device_with_commands(
+pub(crate) fn ensure_input_device_with_commands(
     serial: &str,
     budget: Duration,
     mut run: impl FnMut(&[&str], Duration) -> DeviceResult<CommandOutput>,

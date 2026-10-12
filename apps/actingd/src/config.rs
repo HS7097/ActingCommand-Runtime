@@ -14,9 +14,9 @@ use actingcommand_contract::{
     digest_named,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceSerial,
+    DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_execution_kernel::{
     ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
@@ -1911,8 +1911,11 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
         let target = DeviceTarget {
-            serial: self.serial,
+            serial: self
+                .serial
+                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
             host,
             port: port.unwrap_or(0),
             connect,

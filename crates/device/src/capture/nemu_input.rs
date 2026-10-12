@@ -122,7 +122,11 @@ impl NemuIpcSession {
             ));
         }
         let configured_adb = capture.adb_config.adb_path.clone();
-        let configured_serial = capture.target.serial.clone();
+        let configured_serial = capture
+            .target
+            .serial
+            .as_ref()
+            .map(|serial| serial.adb_arg().to_owned());
         let capture = prepare_capture_backend_config(capture)?;
         let root = capture
             .nemu
@@ -130,7 +134,7 @@ impl NemuIpcSession {
             .as_ref()
             .ok_or_else(|| DeviceError::fatal("Nemu input installation identity is missing"))?;
         require_input_version(root, input.command_timeout)?;
-        let serial = capture.target.resolved_serial();
+        let serial = capture.target.adb_arg();
         let selection = Arc::new(CaptureSelectionContext {
             requested: CaptureBackendChoice::NemuIpc,
             configured_adb,
