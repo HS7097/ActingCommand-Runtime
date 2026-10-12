@@ -299,6 +299,71 @@
       "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "scrcpy_server_digest_mismatch": {
+      "category": "fatal",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy server the executable carries does not match the SHA-256 pinned in scripts/windows-tools/windows-tool-sources.v1.json, or the build embedded none; the scrcpy capture backend does not open. A damaged or incomplete installation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_server_start_failed": {
+      "category": "error",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy capture backend could not start: pushing the server, the adb forward, starting the server, connecting to it, its stream header or its first frame failed within the start timeout. The open fails as capture_backend_open_failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_stream_ended": {
+      "category": "error",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy video stream stopped: the server exited, the socket closed, a packet was malformed or H.264 decoding failed. No frame is delivered from a stream that ended; the capture fails instead of falling back to another backend.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_video_size_mismatch": {
+      "category": "error",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy stream's video size is not the unscaled size requested (the display, or its centred crop to the size alignment), so its frames would be scaled; the stream is refused instead of downsampled.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "capture_frame_stale": {
+      "category": "error",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#398 R1 RD-3i: a stream capture backend received no frame encoded after the capture floor (the completion of the last input, or the frame delivered last) within its fresh wait; the step makes no input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

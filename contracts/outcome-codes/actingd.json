@@ -1796,6 +1796,19 @@
       "description": "actingd refused its configuration file: a policy.monitor value is outside its range.",
       "common_causes": "TBD",
       "handling": "Correct policy.monitor as contracts/actingd-check-config.md describes it."
+    },
+    "device_config_invalid": {
+      "category": "error",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration (#398 R1 RD-3i): an instance's device fields do not fit its device kind, for example capture_backend scrcpy on an emulator instance. Every configured instance is an emulator until RD-1b adds the key device.kind.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

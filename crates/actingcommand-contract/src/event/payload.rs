@@ -3307,6 +3307,7 @@ impl TaskGeometryObservation {
                     | CaptureBackendName::AdbScreencapEncode
                     | CaptureBackendName::AdbScreencapRawGzip
                     | CaptureBackendName::DroidcastRaw
+                    | CaptureBackendName::Scrcpy
             )
         );
         if geometry.backend != frame.backend
@@ -3334,15 +3335,13 @@ impl TaskGeometryObservation {
                 reason: TaskGeometryUnknownReason::RotationUnavailable,
             };
         }
-        if u64::from(frame.extent.width()) * u64::from(geometry.logical_display_extent.height())
-            != u64::from(frame.extent.height()) * u64::from(geometry.logical_display_extent.width())
+        // #402 RD-3i: a recorded crop names the region the frame shows; any other geometry keeps
+        // the proportional comparison.
+        if !geometry.frame_matches_display(frame.extent)
             || matches!(
                 &frame.producer,
                 CaptureGeometryObservation::Observed(producer)
-                    if u64::from(frame.extent.width())
-                        * u64::from(producer.logical_display_extent.height())
-                        != u64::from(frame.extent.height())
-                            * u64::from(producer.logical_display_extent.width())
+                    if !producer.frame_matches_display(frame.extent)
             )
         {
             return TaskGeometryConclusion::AspectMismatch {

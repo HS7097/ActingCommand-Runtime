@@ -35,10 +35,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 mod nemu_input;
+// #402 RD-3: the scrcpy continuous-stream backend for real devices.
+mod scrcpy;
 pub use nemu_input::{
     InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
 };
+pub use scrcpy::{SCRCPY_SERVER_SHA256, SCRCPY_SERVER_VERSION, ScrcpyBackend, ScrcpyConfig};
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 const IHDR_LENGTH: [u8; 4] = [0, 0, 0, 13];
@@ -70,6 +73,14 @@ pub trait CaptureBackend {
                 elapsed.and_then(|span| u64::try_from(span.as_micros()).ok());
             frame
         })
+    }
+
+    /// #398 R1 §5.2 (RD-3i): acquire a frame that meets `floor`. A snapshot backend acquires
+    /// after the call, so its frame meets any floor and this is [`Self::capture_timed`]. A
+    /// stream backend delivers only a frame it can show was encoded after the floor, or fails
+    /// `capture_frame_stale`. Wrappers forward the floor to the backend they wrap.
+    fn capture_fresh(&mut self, _floor: Option<CaptureFloor>) -> DeviceResult<Frame> {
+        self.capture_timed()
     }
 
     /// Read this producer's display geometry within the caller's absolute deadline.
@@ -127,6 +138,9 @@ pub enum CaptureBackendChoice {
     Adb,
     DroidcastRaw,
     NemuIpc,
+    /// #402 RD-3: the scrcpy continuous stream. Only an explicit choice selects it (the
+    /// automatic orders never include it) and only on a real device ([`Self::allowed_on`]).
+    Scrcpy,
 }
 
 impl CaptureBackendChoice {
@@ -137,8 +151,9 @@ impl CaptureBackendChoice {
             "adb" | "adb_screencap" | "screencap" => Ok(Self::Adb),
             "droidcast_raw" | "droidcast" => Ok(Self::DroidcastRaw),
             "nemu_ipc" | "nemu" => Ok(Self::NemuIpc),
+            "scrcpy" => Ok(Self::Scrcpy),
             other => Err(DeviceError::fatal(format!(
-                "unknown capture backend '{other}', expected auto, auto-fastest, adb, droidcast_raw, or nemu_ipc"
+                "unknown capture backend '{other}', expected auto, auto-fastest, adb, droidcast_raw, nemu_ipc, or scrcpy"
             ))),
         }
     }
@@ -150,8 +165,42 @@ impl CaptureBackendChoice {
             Self::Adb => "adb",
             Self::DroidcastRaw => "droidcast_raw",
             Self::NemuIpc => "nemu_ipc",
+            Self::Scrcpy => "scrcpy",
         }
     }
+
+    /// #398 R1 §5.1 (RD-3i): scrcpy is a third-party component for real devices only; every
+    /// other choice stays open to both kinds.
+    pub fn allowed_on(self, kind: DeviceKind) -> bool {
+        !matches!((self, kind), (Self::Scrcpy, DeviceKind::Emulator))
+    }
+}
+
+/// #398 R1 §3.1: the kind of device an instance drives. RD-1b adds the instance key
+/// `device.kind`; until then every configured instance is an emulator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    Emulator,
+    Handset,
+}
+
+/// #398 R1 §5.2 (RD-3i): the lower bound a capture must meet. `after` is the host time an
+/// input completed; `after_sequence` is the stream sequence of the frame delivered last. A
+/// snapshot backend acquires after the call anyway and meets any floor; a stream backend waits
+/// for a frame newer than both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureFloor {
+    pub after: Option<Instant>,
+    pub after_sequence: Option<u64>,
+}
+
+/// #398 R1 §5.2 (RD-3i): where a stream frame sits in its stream: its sequence (1, 2, ... per
+/// backend open), the device's presentation time and the host time the frame arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameStreamStamp {
+    pub sequence: u64,
+    pub device_pts_us: u64,
+    pub received_at: Instant,
 }
 
 /// Device frame in a common raw-pixel contract.
@@ -170,6 +219,8 @@ pub struct Frame {
     pub selection: Option<Arc<CaptureSelectionContext>>,
     /// Observation made by this frame's producer, without an additional capture.
     pub geometry: CaptureGeometryObservation,
+    /// #398 R1 §5.2 (RD-3i): the frame's place in its stream; `None` for a snapshot backend.
+    pub stream: Option<FrameStreamStamp>,
     /// The original producer call, excluding selection, retained-frame take and material work.
     capture_acquire_us: Option<u64>,
     /// Dropped after the owned pixel/PNG buffers; never shared by a physical copy.
@@ -188,6 +239,7 @@ impl PartialEq for Frame {
             && self.backend_name == other.backend_name
             && self.selection == other.selection
             && self.geometry == other.geometry
+            && self.stream == other.stream
             && self.capture_acquire_us == other.capture_acquire_us
     }
 }
@@ -263,6 +315,7 @@ impl Frame {
             backend_name: self.backend_name,
             selection: self.selection.clone(),
             geometry: self.geometry.clone(),
+            stream: self.stream,
             capture_acquire_us: self.capture_acquire_us,
             memory_charge: charge,
         };
@@ -320,6 +373,7 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            stream: None,
             geometry: if backend_name == CaptureBackendName::FixtureSimulation {
                 CaptureGeometryObservation::NotApplicable(
                     CaptureGeometryNotApplicable::FixtureSimulation,
@@ -352,6 +406,7 @@ impl Frame {
             captured_at: SystemTime::now(),
             backend_name,
             selection: None,
+            stream: None,
             geometry: if backend_name == CaptureBackendName::FixtureSimulation {
                 CaptureGeometryObservation::NotApplicable(
                     CaptureGeometryNotApplicable::FixtureSimulation,
@@ -475,6 +530,8 @@ pub struct CaptureBackendConfig {
     pub capture_timeout: Duration,
     pub droidcast: DroidcastRawConfig,
     pub nemu: NemuIpcConfig,
+    /// #402 RD-3: the scrcpy stream's parameters (used only when `scrcpy` is requested).
+    pub scrcpy: ScrcpyConfig,
     pub resolved_mumu: Option<CaptureMumuContext>,
     /// The caller-injected `ACTINGCOMMAND_*` fallbacks (Workflow #318 cfg3): consulted by
     /// `prepare_capture_backend_config` only where the matching configured value (ADB path,
@@ -492,6 +549,7 @@ impl CaptureBackendConfig {
             capture_timeout: DEFAULT_CAPTURE_TIMEOUT,
             droidcast: DroidcastRawConfig::default(),
             nemu: NemuIpcConfig::default(),
+            scrcpy: ScrcpyConfig::default(),
             resolved_mumu: None,
             env_overrides: EnvOverrides::default(),
         }
@@ -591,16 +649,13 @@ impl CaptureBackend for SelectedCaptureBackend {
     }
 
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let mut frame = self.backend.capture_timed()?;
-        if let Some(selection) = &self.selection {
-            let mut selection = selection.as_ref().clone();
-            selection.nemu_frame = frame
-                .selection
-                .as_ref()
-                .and_then(|value| value.nemu_frame.clone());
-            frame.selection = Some(Arc::new(selection));
-        }
-        Ok(frame)
+        let frame = self.backend.capture_timed()?;
+        Ok(self.with_selection(frame))
+    }
+
+    fn capture_fresh(&mut self, floor: Option<CaptureFloor>) -> DeviceResult<Frame> {
+        let frame = self.backend.capture_fresh(floor)?;
+        Ok(self.with_selection(frame))
     }
 
     fn close_once(
@@ -612,6 +667,20 @@ impl CaptureBackend for SelectedCaptureBackend {
 
     fn vendor_stdio(&self) -> &[VendorStdioCapture] {
         self.backend.vendor_stdio()
+    }
+}
+
+impl SelectedCaptureBackend {
+    fn with_selection(&self, mut frame: Frame) -> Frame {
+        if let Some(selection) = &self.selection {
+            let mut selection = selection.as_ref().clone();
+            selection.nemu_frame = frame
+                .selection
+                .as_ref()
+                .and_then(|value| value.nemu_frame.clone());
+            frame.selection = Some(Arc::new(selection));
+        }
+        frame
     }
 }
 
@@ -668,6 +737,15 @@ pub fn create_capture_backend_with_memory(
             selected_explicit_primed(
                 config.requested,
                 CaptureBackendName::NemuIpc,
+                Box::new(backend),
+                memory,
+            )
+        }
+        CaptureBackendChoice::Scrcpy => {
+            let backend = ScrcpyBackend::open(config.adb_config, config.target, config.scrcpy)?;
+            selected_explicit_primed(
+                config.requested,
+                CaptureBackendName::Scrcpy,
                 Box::new(backend),
                 memory,
             )
@@ -1259,6 +1337,10 @@ fn build_capture_backend(
                 name.as_str()
             )))
         }
+        // #402 RD-3: no automatic order lists scrcpy; only an explicit choice opens it.
+        CaptureBackendName::Scrcpy => Err(DeviceError::fatal(
+            "scrcpy is never probed automatically; it opens only as an explicit choice",
+        )),
     }
 }
 
@@ -1380,6 +1462,17 @@ impl CaptureBackend for PrimedCaptureBackend {
             return Ok(frame);
         }
         self.inner.capture_timed()
+    }
+
+    /// #398 R1 §5.2 (RD-3i): the primed frame of a snapshot backend meets any floor and is
+    /// returned as before. A stream frame primed at open is handed back to the stream backend's
+    /// own freshness check: the backend still holds it as its latest frame and returns it only
+    /// if it meets the floor.
+    fn capture_fresh(&mut self, floor: Option<CaptureFloor>) -> DeviceResult<Frame> {
+        match self.primed.take() {
+            Some(frame) if floor.is_none() || frame.stream.is_none() => Ok(frame),
+            _ => self.inner.capture_fresh(floor),
+        }
     }
 
     fn vendor_stdio(&self) -> &[VendorStdioCapture] {

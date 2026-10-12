@@ -6770,6 +6770,9 @@
     ],
     "writer_": [
       "ledger"
+    ],
+    "scrcpy_": [
+      "device"
     ]
   },
   "fragments": {

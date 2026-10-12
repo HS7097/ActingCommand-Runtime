@@ -41,7 +41,7 @@ pub use adb::*;
 pub use adb_bounds_diagnostic::*;
 pub use backend_open::*;
 pub use capture::*;
-pub use codes::{DeviceLocation, NemuResolutionReason};
+pub use codes::{DeviceLocation, NemuResolutionReason, StreamCaptureCode};
 pub use discovery::*;
 pub use emulator::*;
 pub use error::*;

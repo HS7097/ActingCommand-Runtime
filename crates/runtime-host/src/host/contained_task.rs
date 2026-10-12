@@ -2925,6 +2925,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 .capture_frame_retained_with_geometry_session_and_registration_guard(
                     self.instance_alias,
                     Some(*frame_id.transport()),
+                    None,
                     registration,
                     memory,
                 );

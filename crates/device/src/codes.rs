@@ -42,6 +42,27 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+actingcommand_contract::outcome_codes! {
+    /// #402 RD-3: the scrcpy stream capture backend's results, and the stream freshness result
+    /// of the capture interface (#398 RD-3i). Until B5 types the device layer, a device error
+    /// carries the spelling as its message, as the frame memory codes do.
+    pub enum StreamCaptureCode {
+        /// The scrcpy server the executable carries does not match its pinned SHA-256 (or the
+        /// build embedded none).
+        ScrcpyServerDigestMismatch => "scrcpy_server_digest_mismatch": fatal,
+        /// Pushing, forwarding or starting the scrcpy server, or its first frame, failed.
+        ScrcpyServerStartFailed => "scrcpy_server_start_failed": error,
+        /// The stream stopped: the server exited, the socket closed, a packet was malformed or
+        /// decoding failed.
+        ScrcpyStreamEnded => "scrcpy_stream_ended": error,
+        /// The encoder produced another video size than the unscaled crop requested, so a frame
+        /// would be scaled; it is refused instead.
+        ScrcpyVideoSizeMismatch => "scrcpy_video_size_mismatch": error,
+        /// No frame encoded after the capture floor arrived within the configured wait.
+        CaptureFrameStale => "capture_frame_stale": error,
+    }
+}
+
 actingcommand_contract::outcome_locations! {
     /// The device layer's own operations and steps that a device error's diagnostic context or
     /// developer text names: the adb shell input backend's connect steps, the Nemu capture

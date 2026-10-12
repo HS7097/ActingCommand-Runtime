@@ -74,6 +74,9 @@ actingcommand_contract::outcome_codes! {
         CaptureBackendInvalid => "capture_backend_invalid": error,
         TouchBackendMustBeExplicit => "touch_backend_must_be_explicit": error,
         CaptureBackendMustBeExplicit => "capture_backend_must_be_explicit": error,
+        /// #398 R1 §5.1 (RD-3i): an instance's device fields do not fit its device kind, for
+        /// example `capture_backend: scrcpy` on an emulator.
+        DeviceConfigInvalid => "device_config_invalid": error,
         NemuAppIndexInvalid => "nemu_app_index_invalid": error,
         NemuPairedInputConfigurationMissing => "nemu_paired_input_configuration_missing": error,
         InstanceRegistrationInvalid => "instance_registration_invalid": error,
