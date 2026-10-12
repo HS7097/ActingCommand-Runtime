@@ -377,7 +377,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. Nothing is sent; the Runtime never enters a credential.",
+      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
       "common_causes": "The phone locked itself after its screen timeout.",
       "handling": "Unlock the phone."
     }
