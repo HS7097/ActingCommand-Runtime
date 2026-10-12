@@ -14,9 +14,9 @@ use actingcommand_contract::{
     digest_named,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceSerial,
+    DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_execution_kernel::{
     ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
@@ -1903,8 +1903,11 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
         let target = DeviceTarget {
-            serial: self.serial,
+            serial: self
+                .serial
+                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
             host,
             port: port.unwrap_or(0),
             connect,
@@ -2263,11 +2266,13 @@ mod tests {
         use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
         use actingcommand_runtime_host::RuntimeHost;
 
+        // Workflow #398 RD-1a: a configured serial is bound for the whole test process and
+        // redacted wherever it appears, so the configured values are neutral fake serials.
         for (capture, endpoint) in [
-            (false, "127.0.0.1:16384"),
-            (true, "198.51.100.42:16416"),
-            (true, "[2001:db8::42]:16416"),
-            (true, "device.example.test:16416"),
+            (false, "TESTSERIAL0006"),
+            (true, "TESTSERIAL0007"),
+            (true, "TESTSERIAL0008"),
+            (true, "TESTSERIAL0009"),
         ] {
             let root = TempDir::new().expect("tempdir");
             let id = IdentifierIssuer::new()
@@ -2384,7 +2389,10 @@ mod tests {
             let native = lifecycle.native_detail().expect("native cause");
             assert!(!native.truncated());
             assert!(native.text().contains("failed to spawn adb"));
-            assert!(native.text().contains(endpoint));
+            // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
+            // reaches the native cause only as its label token.
+            assert!(!native.text().contains(endpoint));
+            assert!(native.text().contains("[device:handset:neutral.device]"));
             if !capture {
                 assert!(native.text().contains("child_operation=ensure_device"));
             }

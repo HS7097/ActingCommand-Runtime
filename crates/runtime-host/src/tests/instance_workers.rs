@@ -94,7 +94,7 @@ fn count(events: &[PersistedEvent], event_type: EventType) -> usize {
 }
 
 /// The ladder finished and released its key: nothing holds the instance any more.
-fn wait_for_ladder_end(host: &RuntimeHost, instance_alias: &str) {
+pub(super) fn wait_for_ladder_end(host: &RuntimeHost, instance_alias: &str) {
     wait_until("the ladder's end and its release", || {
         ladder_finished(&all_events(host)).is_some()
             && host
@@ -173,7 +173,7 @@ fn ladder_fixture_with(
 /// The ladder fixture's packages under `root`, its host configuration (the test `config`, with
 /// the scheduled package as the procedure's primary and as the instance's startup package) and
 /// the scheduled run's request, which binds the return-home package.
-fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
+pub(super) fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package = neutral_contained_task_package(true);
     let package_path = root.join("physical-scheduled-task.zip");
     fs::write(&package_path, &package).expect("write scheduled package");
@@ -218,7 +218,10 @@ fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
 }
 
 /// Activates the policy catalog and admits the scheduled run.
-fn admit_ladder_run(host: &RuntimeHost, request: &ContainedTaskRequest) -> Box<PolicyRunContext> {
+pub(super) fn admit_ladder_run(
+    host: &RuntimeHost,
+    request: &ContainedTaskRequest,
+) -> Box<PolicyRunContext> {
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(host, PolicyTrigger::FactsChanged);

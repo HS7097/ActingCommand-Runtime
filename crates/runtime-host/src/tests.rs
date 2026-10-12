@@ -118,6 +118,7 @@ mod gate_381b;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 mod gate_392_daa;
+mod gate_398_rd1a;
 mod gate_p0;
 mod home_entry;
 mod input;

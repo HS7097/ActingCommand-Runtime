@@ -1083,7 +1083,7 @@ pub struct AdbShellInputBackend {
 
 impl AdbShellInputBackend {
     pub fn new(adb_config: AdbConfig, target: DeviceTarget) -> Self {
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         Self {
             input_parameters: None,
             recovery: None,
@@ -1207,7 +1207,7 @@ impl AdbShellInputBackend {
         });
         self.close_result = None;
         Ok(DeviceInfo {
-            serial: self.serial.clone(),
+            serial: self.target.label(),
             state,
             screen_size,
         })

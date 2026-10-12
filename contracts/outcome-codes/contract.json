@@ -77,13 +77,14 @@
         "raw_code": "optional",
         "raw_text_truncated": "optional",
         "raw_text_sensitivity": "optional",
+        "raw_text_redacted": "optional",
         "exit_code": "optional",
-        "adb_serial": "optional"
+        "device_label": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "description": "adb failed or printed a failure; raw_text keeps its output, with every bound device serial replaced by its label token (raw_text_redacted).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

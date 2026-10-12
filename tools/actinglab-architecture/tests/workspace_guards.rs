@@ -5859,8 +5859,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "DeviceRuntimeConfig::runtime_state_root",
                 DeclaredVisibility::Private,
             ),
+            // Workflow #398 RD-1a: the test scaffolding keeps the configured serial as text, not a
+            // `DeviceTarget` holding a `DeviceSerial`, which would bind it for the test process.
             glue_test_owner(
-                "DeviceRuntimeConfig::target",
+                "DeviceRuntimeConfig::adb_serial",
                 SymbolKind::Field,
                 DeclaredVisibility::Super,
             ),
@@ -5876,6 +5878,11 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_test_owner(
                 "DeviceRuntimeConfig::touch_backend",
                 SymbolKind::Field,
+                DeclaredVisibility::Super,
+            ),
+            glue_test_owner(
+                "DeviceRuntimeConfig::test_adb_arg",
+                SymbolKind::Fn,
                 DeclaredVisibility::Super,
             ),
             glue_fn("DeviceRuntimeConfig::runtime_capture_endpoint"),
@@ -5897,7 +5904,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         invariants: &[
             glue_invariant("DeviceRuntimeConfig", "instance_alias: String"),
             glue_invariant("DeviceRuntimeConfig", "runtime_state_root: PathBuf"),
-            glue_invariant("DeviceRuntimeConfig", "target: DeviceTarget"),
+            glue_invariant("DeviceRuntimeConfig", "adb_serial: Option<String>"),
             glue_invariant("DeviceRuntimeConfig", "adb_source: AdbPathSource"),
             glue_invariant("DeviceRuntimeConfig", "adb_warning: Option<String>"),
             glue_invariant(
