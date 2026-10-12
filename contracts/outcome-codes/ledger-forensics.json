@@ -3,6 +3,7 @@
   "codes": {
     "artifact_redaction_pending": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "diagnostic_json_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "diagnostic_schema_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "effective_configuration_capture_evidence_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "effective_configuration_fields_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "effective_configuration_schema_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "effective_configuration_source_links_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "effective_configuration_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "instance_binding_malformed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "instance_bindings_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "instance_port_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "instance_port_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "invalid_event_filter": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "invalid_event_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "invalid_evidence_archive_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "invalid_request_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "invalid_signature_replay": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "invalid_state_root": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "invalid_task_record_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "invalid_view_options": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "legacy_diagnostic_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "legacy_diagnostic_read_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "material_not_provided": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -302,6 +325,7 @@
     },
     "material_read_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -315,6 +339,7 @@
     },
     "material_read_output_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -328,6 +353,7 @@
     },
     "report_serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -341,6 +367,7 @@
     },
     "runtime_facts_not_available": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "runtime_facts_position_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "runtime_facts_read_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "runtime_facts_source_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "stability_artifact_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "stability_fields_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "stability_schema_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -432,6 +465,7 @@
     },
     "stability_source_links_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "task_diagnostic_cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "task_diagnostic_cursor_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "task_diagnostic_cursor_outside_window": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "task_diagnostic_framing_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "task_diagnostic_header_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "task_diagnostic_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -523,6 +563,7 @@
     },
     "task_diagnostic_integrity_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -536,6 +577,7 @@
     },
     "task_diagnostic_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "task_diagnostic_page_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "task_diagnostic_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -575,6 +619,7 @@
     },
     "task_diagnostic_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -588,6 +633,7 @@
     },
     "task_diagnostic_record_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -601,6 +647,7 @@
     },
     "task_diagnostic_record_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -614,6 +661,7 @@
     },
     "task_diagnostic_trailing_data": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,
@@ -627,6 +675,7 @@
     },
     "task_diagnostic_unsealed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ledger-forensics",
       "layer": "store",
       "uncertain": false,

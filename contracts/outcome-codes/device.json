@@ -3,6 +3,7 @@
   "codes": {
     "installation_absent": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "installation_ambiguous": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "shared_adb_multiple_dll_versions": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "configured_adb_identity_unrecognized": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -68,6 +73,7 @@
     },
     "dll_outside_root": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -81,6 +87,7 @@
     },
     "dll_version_missing": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -94,6 +101,7 @@
     },
     "version_mismatch": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -107,6 +115,7 @@
     },
     "candidate_absent": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "candidate_outside_root": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "running_executable_topology_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "running_version_missing": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "target_identity_unavailable": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "target_identity_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "target_identity_mismatch": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "target_process_absent": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "target_process_ambiguous": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -224,6 +241,7 @@
     },
     "target_executable_missing": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -237,6 +255,7 @@
     },
     "capture_identity_uncoordinated": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -250,6 +269,7 @@
     },
     "provider_version_below_minimum": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -263,6 +283,7 @@
     },
     "provider_version_unparseable": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -276,6 +297,7 @@
     },
     "registry_source_unavailable": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
@@ -289,6 +311,7 @@
     },
     "registry_entry_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "device",
       "layer": "device",
       "uncertain": false,
