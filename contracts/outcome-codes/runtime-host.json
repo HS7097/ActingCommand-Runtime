@@ -2354,11 +2354,13 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry aspect mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "contained_task_geometry_frame_display_mismatch",
+      "description": "Retired (Workflow #392 DA-A). A contained task's first frame was not 16:9, or its aspect ratio differed from the logical display it was captured from, and the run was refused before any input. Since 0.12.0 the frame's own aspect ratio is recorded and never refused; the remaining mismatch is contained_task_geometry_frame_display_mismatch.",
+      "common_causes": "A device or emulator display that is not 16:9, or a capture backend whose frame did not match its display.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_geometry_budget_unavailable": {
       "category": "error",
@@ -2370,6 +2372,19 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task geometry budget unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_geometry_frame_display_mismatch": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task's frame and the logical display it was captured from have different aspect ratios (the task geometry conclusion aspect_mismatch, reason frame_and_logical_display_differ), so the run is refused before any input. The frame's own aspect ratio is never checked (Workflow #392 DA-A): any ratio is recorded in the instance's display facts and passes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
