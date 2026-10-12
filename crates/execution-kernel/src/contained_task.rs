@@ -1192,6 +1192,21 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                                     );
                                     result.extraction = Some(extraction);
                                 }
+                                // Workflow R-11 (OCR-CONF): a resolved value is accepted only
+                                // when the observation meets its OCR target's declared minimum.
+                                if reason == OcrFieldReason::Resolved {
+                                    let minimum = ocr_target_minimum_confidence(
+                                        context.evaluator(),
+                                        &field.target_id,
+                                    )?;
+                                    if !evaluated
+                                        .confidence
+                                        .is_some_and(|confidence| confidence >= minimum)
+                                    {
+                                        value = None;
+                                        reason = OcrFieldReason::LowConfidence;
+                                    }
+                                }
                                 result.normalized_text = Some(normalized);
                                 result.value = value;
                                 result.reason = reason;
@@ -1293,6 +1308,18 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         })
     }
 
+    /// The task failure of a failed field collection: `ocr_field_low_confidence` when the
+    /// recorded failure is a field below its target's declared minimum confidence (Workflow
+    /// R-11), `contained_task_ocr_fields_unresolved` for every other field failure.
+    fn field_failure_error(&self) -> Option<ContainedTaskError> {
+        self.field_failure.map(|reason| {
+            ContainedTaskError::new(match reason {
+                OcrFieldReason::LowConfidence => SharedCode::OcrFieldLowConfidence.code(),
+                _ => SharedCode::ContainedTaskOcrFieldsUnresolved.code(),
+            })
+        })
+    }
+
     fn finish(self) -> Result<Option<PostAdmissionOcrComparisonReport>, ContainedTaskError> {
         let Some(prepared) = self.prepared else {
             return Ok(None);
@@ -1367,6 +1394,25 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             unexpected,
             duplicates,
         }))
+    }
+}
+
+/// The `minimum_confidence` the OCR target `target_id` declares (Workflow R-11). Admission bound
+/// every field to exactly one OCR target, so a miss is a broken invariant.
+fn ocr_target_minimum_confidence(
+    evaluator: &RecognitionEvaluator,
+    target_id: &str,
+) -> Result<f32, ContainedTaskError> {
+    match evaluator
+        .pack()
+        .targets
+        .iter()
+        .find(|target| recognition_target_id(target) == target_id)
+    {
+        Some(RecognitionTarget::Ocr(target)) => Ok(target.minimum_confidence),
+        _ => Err(ContainedTaskError::new(
+            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInvalid.code(),
+        )),
     }
 }
 
@@ -4245,11 +4291,8 @@ impl PreparedContainedTask {
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
-            if ocr_collector.field_failure.is_some() {
-                return Err(ContainedTaskError::new(
-                    SharedCode::ContainedTaskOcrFieldsUnresolved.code(),
-                )
-                .into());
+            if let Some(error) = ocr_collector.field_failure_error() {
+                return Err(error.into());
             }
             Ok(Some(PageObservation {
                 page_label,
@@ -7816,6 +7859,55 @@ mod post_admission_ocr_tests {
             assert_eq!(report.records[0].fields[0].value, None);
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    // Workflow R-11 (OCR-CONF): a legal value read below the minimum_confidence its OCR target
+    // declares is refused; the field stays unresolved under a registered code.
+    #[test]
+    fn fields_v1_legal_value_below_declared_minimum_confidence_is_refused() {
+        let fields = PreparedOcrFields { declaration:serde_json::from_value(json!({"mode":"fields_v1","page_ids":["target"],
+            "fields":[{"id":"count","group":"snapshot","target_id":"fixture/ocr","required":true,
+                "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":50}}],
+            "limits":{"max_frames":2,"max_items":8,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":8},
+            "outcome_key":"fields_recorded"})).unwrap(), dictionaries:BTreeMap::new() };
+        // The observation reports confidence 0.9; its target declares 0.95.
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([provider_observation(
+                "call-0",
+                &["42".to_string()],
+            )])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let mut pack = evaluator(provider.clone()).pack().clone();
+        let RecognitionTarget::Ocr(target) = &mut pack.targets[0] else {
+            unreachable!("the fixture pack's only target is OCR")
+        };
+        target.minimum_confidence = 0.95;
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider,
+        )
+        .unwrap();
+        let mut collector = PostAdmissionOcrCollector::new(None);
+        collector.fields = Some(&fields);
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .unwrap()
+            .unwrap();
+        let report = collector.fields_report().unwrap();
+        let field = &report.records[0].fields[0];
+        assert_eq!(field.raw_text.as_deref(), Some("42"));
+        assert_eq!(field.value, None);
+        assert_eq!(field.reason, OcrFieldReason::LowConfidence);
+        assert_eq!(report.failure, Some(OcrFieldReason::LowConfidence));
+        assert_eq!(
+            collector
+                .field_failure_error()
+                .map(|error| error.code().as_str()),
+            Some(SharedCode::OcrFieldLowConfidence.as_str())
+        );
     }
 
     // Specification 4: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5551203604
