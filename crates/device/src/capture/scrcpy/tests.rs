@@ -534,15 +534,23 @@ fn server_arguments_change_no_device_setting_and_never_downsample() {
     }
 }
 
+/// Coordinator ruling 10-13 (board #403 direction): a server that is not the pinned one makes
+/// only this instance's scrcpy capture backend unavailable, with its code; it never stops the
+/// Runtime. The code is an error of class `none`; the refusal is not the non-transient device
+/// error the host treats as fatal on a capture open, and it holds no device resource.
 #[test]
-fn a_server_that_is_not_the_pinned_one_is_refused() {
+fn a_server_that_is_not_the_pinned_one_makes_only_this_instance_backend_unavailable() {
+    use actingcommand_contract::outcome::{Category, LadderClass};
+    let code = StreamCaptureCode::ScrcpyServerDigestMismatch;
+    assert_eq!(code.category(), Category::Error);
+    assert_eq!(code.ladder_class(), LadderClass::NotApplicable);
     let error = checked_server(b"not the pinned server").expect_err("refused");
     assert!(
-        error
-            .message()
-            .starts_with(StreamCaptureCode::ScrcpyServerDigestMismatch.as_str()),
+        error.message().starts_with(code.as_str()),
         "{}",
         error.message()
     );
-    assert_eq!(error.severity(), DeviceErrorSeverity::Fatal);
+    assert_eq!(error.severity(), DeviceErrorSeverity::Transient);
+    assert_eq!(error.resource_quiescence(), None);
+    assert!(error.resource_close_causes().is_empty());
 }

@@ -48,8 +48,9 @@ actingcommand_contract::outcome_codes! {
     /// carries the spelling as its message, as the frame memory codes do.
     pub enum StreamCaptureCode {
         /// The scrcpy server the executable carries does not match its pinned SHA-256 (or the
-        /// build embedded none).
-        ScrcpyServerDigestMismatch => "scrcpy_server_digest_mismatch": fatal / none,
+        /// build embedded none). Only that instance's scrcpy capture backend is unavailable;
+        /// the Runtime goes on (coordinator ruling 10-13, board #403 direction).
+        ScrcpyServerDigestMismatch => "scrcpy_server_digest_mismatch": error / none,
         /// Pushing, forwarding or starting the scrcpy server, or its first frame, failed.
         ScrcpyServerStartFailed => "scrcpy_server_start_failed": error / environment_fault,
         /// The stream stopped: the server exited, the socket closed, a packet was malformed or

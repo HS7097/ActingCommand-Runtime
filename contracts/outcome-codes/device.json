@@ -324,7 +324,7 @@
       "handling": "TBD"
     },
     "scrcpy_server_digest_mismatch": {
-      "category": "fatal",
+      "category": "error",
       "ladder_class": "none",
       "owner": "device",
       "layer": "device",
@@ -333,7 +333,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "#402 RD-3: the scrcpy server the executable carries does not match the SHA-256 pinned in scripts/windows-tools/windows-tool-sources.v1.json, or the build embedded none; the scrcpy capture backend does not open. A damaged or incomplete installation.",
+      "description": "#402 RD-3: the scrcpy server the executable carries does not match the SHA-256 pinned in scripts/windows-tools/windows-tool-sources.v1.json, or the build embedded none; the scrcpy capture backend of the instance that opens it does not open, and the server is never pushed to the device. A damaged or incomplete installation. Only that instance's scrcpy capture backend is unavailable; the Runtime goes on (coordinator ruling 10-13, board #403 direction).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

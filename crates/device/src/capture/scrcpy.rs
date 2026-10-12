@@ -1087,6 +1087,11 @@ impl LocalServerCopy {
 }
 
 /// #402 RD-3: the server bytes, only when their SHA-256 is the pinned one.
+///
+/// A mismatch is an error, not fatal (coordinator ruling 10-13, board #403 direction): only the
+/// scrcpy capture backend of the instance that opens it is unavailable, and the Runtime goes on.
+/// The refusal is therefore not a non-transient device error, which the host would treat as
+/// fatal on a capture open, and it is raised before anything is opened on the device.
 pub(crate) fn checked_server(bytes: &[u8]) -> DeviceResult<&[u8]> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut digest = String::with_capacity(64);
@@ -1099,7 +1104,7 @@ pub(crate) fn checked_server(bytes: &[u8]) -> DeviceResult<&[u8]> {
     } else {
         Err(coded_error(
             StreamCaptureCode::ScrcpyServerDigestMismatch,
-            DeviceErrorSeverity::Fatal,
+            DeviceErrorSeverity::Transient,
             "the scrcpy server this build carries does not match the pinned SHA-256",
         )
         .with_diagnostic(
