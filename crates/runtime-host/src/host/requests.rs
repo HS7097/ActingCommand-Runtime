@@ -547,8 +547,32 @@ impl HostShared {
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
+            // Workflow #389 U-1: the contract has these shapes and later slices add the
+            // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
+            // UpgradeStateStatus U-4). Until then each is refused and records nothing.
+            RuntimeOperation::BindChannel { .. } => Err(not_implemented("bind_channel")),
+            RuntimeOperation::LoadPack { .. } => Err(not_implemented("load_pack")),
+            RuntimeOperation::UnloadPack { .. } => Err(not_implemented("unload_pack")),
+            RuntimeOperation::UpgradeState { .. } => Err(not_implemented("upgrade_state")),
+            RuntimeOperation::UpgradeStateStatus { .. } => {
+                Err(not_implemented("upgrade_state_status"))
+            }
         }
     }
+}
+
+/// A request kind whose behaviour a later slice adds: Denied with the shared code
+/// `not_implemented` (Workflow #389 U-1).
+fn not_implemented(operation: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            actingcommand_contract::codes::SharedCode::NotImplemented.as_str(),
+            operation,
+            RuntimeErrorCode::InvalidRequest,
+        ),
+        RuntimeReceiptState::Denied,
+        None,
+    )
 }
 
 pub(super) struct RequestFailure {

@@ -3466,6 +3466,9 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
 const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "AcquireLease",
     "ApplicationLifecycle",
+    // Workflow #389 U-1: the new request kinds take no origin gate here; the channel decides
+    // at the door (U-6), and LoadPack and UnloadPack take the Lab-only gate with U-3.
+    "BindChannel",
     "CancelContainedTask",
     "CancelQueuedLease",
     "CaptureSequence",
@@ -3473,6 +3476,7 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "ConfigureMonitor",
     "Health",
     "Input",
+    "LoadPack",
     "MonitorStatus",
     "ObserveContainedPage",
     "ObserveReadonly",
@@ -3490,6 +3494,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "SafeReset",
     "Status",
     "SubscribeEvents",
+    "UnloadPack",
+    "UpgradeState",
+    "UpgradeStateStatus",
 ];
 
 const RUNTIME_CONTRACT_SOURCE: &str = "crates/actingcommand-contract/src/runtime.rs";

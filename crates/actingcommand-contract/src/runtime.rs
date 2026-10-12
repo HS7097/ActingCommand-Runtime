@@ -45,6 +45,11 @@ mod saved_artifact_ocr;
 pub use saved_artifact_ocr::*;
 mod material_read;
 pub use material_read::*;
+// Workflow #389 U-1: the request table and the package load/unload shapes.
+mod interface;
+pub use interface::*;
+mod pack_registry;
+pub use pack_registry::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -3368,6 +3373,36 @@ pub enum RuntimeOperation {
     ResourceTargetView {
         instance_alias: String,
     },
+    // Workflow #389 U-1: the shapes of the unified interface's new request kinds. Each slice
+    // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
+    /// Binds this connection to its channel, once, right after `Health` (section 3.2; U-2).
+    /// `via` names the counter that handed a Lab request over, on the Lab channel only.
+    BindChannel {
+        channel: RuntimeChannel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        via: Option<ChannelVia>,
+    },
+    /// The upgrade state (section 3.6, install-control revision 2; U-4): the installer's
+    /// instruction family for an upgrade. `target` is the Runtime it is meant for, as in
+    /// `InstallTransition`.
+    UpgradeState {
+        target: RuntimeShutdownTarget,
+        action: crate::UpgradeStateAction,
+    },
+    /// Reads the phase of one upgrade state from memory and records nothing (section 3.6; U-4).
+    UpgradeStateStatus {
+        transition_id: String,
+    },
+    /// Puts one package into the loaded-package table, in memory only (section 6; U-3).
+    LoadPack {
+        entry: PackLoadEntry,
+    },
+    /// Takes one entry out of the loaded-package table, stopping first the runs that use it,
+    /// and answers once they ended and reset or after `wait_ms` (section 6.4; U-3).
+    UnloadPack {
+        key: PackRegistryKey,
+        wait_ms: u64,
+    },
 }
 
 impl RuntimeOperation {
@@ -3607,6 +3642,17 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 request.validate()
             }
+            // Workflow #389 U-1. No channel judgement here (section 3.1): the binding rules (one
+            // binding per connection, `via` on the Lab channel only) are U-2's, and the
+            // package entries' checks come with U-3's `pack_registry_` codes.
+            Self::BindChannel { .. } | Self::LoadPack { .. } | Self::UnloadPack { .. } => Ok(()),
+            Self::UpgradeState { target, action } => {
+                target.validate()?;
+                action.validate()
+            }
+            Self::UpgradeStateStatus { transition_id } => {
+                crate::installation::validate_transition_id(transition_id)
+            }
         }
     }
 
@@ -3746,6 +3792,11 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ApplyResourceTargets(<document>)"
             }
             Self::ResourceTargetView { .. } => "RuntimeOperation::ResourceTargetView(<redacted>)",
+            Self::BindChannel { .. } => "RuntimeOperation::BindChannel(<channel>)",
+            Self::UpgradeState { .. } => "RuntimeOperation::UpgradeState(<transition>)",
+            Self::UpgradeStateStatus { .. } => "RuntimeOperation::UpgradeStateStatus(<transition>)",
+            Self::LoadPack { .. } => "RuntimeOperation::LoadPack(<redacted>)",
+            Self::UnloadPack { .. } => "RuntimeOperation::UnloadPack(<redacted>)",
         })
     }
 }
@@ -4579,6 +4630,39 @@ pub enum RuntimeResult {
     ResourceTargetView {
         view: Box<crate::ResourceTargetView>,
     },
+    // Workflow #389 U-1: the results of the new request kinds; the slices that add their
+    // behaviour answer with them.
+    /// `BindChannel`: the connection's channel, as bound (U-2).
+    ChannelBound {
+        channel: RuntimeChannel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        via: Option<ChannelVia>,
+    },
+    /// `UpgradeState`: the transition after the step, its ticket included (U-4). An accepted
+    /// `enter` answers drained, having accepted its own shutdown; `cancel` answers aborted;
+    /// `leave` answers released.
+    UpgradeState {
+        status: crate::InstallTransitionStatus,
+    },
+    /// `UpgradeStateStatus`: the transition's current phase (U-4).
+    UpgradeStateStatus {
+        status: crate::InstallTransitionStatus,
+    },
+    /// `LoadPack`: the entry now in the table (U-3). For a procedure binding,
+    /// `named_by_catalog` says whether a task of the catalog names it: a binding no task names
+    /// loads, but nothing uses it.
+    PackLoaded {
+        key: PackRegistryKey,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        named_by_catalog: Option<bool>,
+    },
+    /// `UnloadPack`: the entry left the table (U-3); the runs it stopped, and how many
+    /// admitted dispatches of it were withdrawn.
+    PackUnloaded {
+        key: PackRegistryKey,
+        stopped_runs: Vec<PackUnloadStoppedRun>,
+        withdrawn_dispatches: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4943,6 +5027,10 @@ impl RuntimeReceipt {
                     ));
                 }
             }
+            Some(
+                RuntimeResult::UpgradeState { status }
+                | RuntimeResult::UpgradeStateStatus { status },
+            ) => status.validate()?,
             Some(RuntimeResult::Status { status }) => status.validate()?,
             Some(RuntimeResult::InstancesDiscovered { discovery }) => discovery.validate()?,
             Some(RuntimeResult::SchedulingPaused {

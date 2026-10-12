@@ -33,6 +33,20 @@ pub struct RuntimeOwnerRecord {
     pub closed_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_disposition: Option<OwnerResourceDisposition>,
+    /// Workflow #389 section 3.6: who closed the epoch, when it was not a formal stop. Only an
+    /// inactive v2 record carries it; a record without it reads as before, and the schema
+    /// version is unchanged. This build reads it; its writers come with slice U-4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_by: Option<OwnerCloseMarker>,
+}
+
+/// Workflow #389 section 3.6: the marker of a close that the watchdog may take back, unlike a
+/// formal stop (`contracts/owner-journal.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerCloseMarker {
+    /// The upgrade state accepted its own shutdown; a maintenance owner that follows copies it.
+    UpgradeState,
 }
 
 pub struct OwnerJournalError {
@@ -576,6 +590,8 @@ fn record_valid(record: &RuntimeOwnerRecord) -> bool {
         && !(record.schema_version == OWNER_JOURNAL_SCHEMA
             && !record.active
             && record.resource_disposition != Some(OwnerResourceDisposition::None))
+        && (record.closed_by.is_none()
+            || (record.schema_version == OWNER_JOURNAL_SCHEMA && !record.active))
 }
 
 fn side_seal(side: &[u8]) -> Option<OwnerJournalCompactionSeal> {

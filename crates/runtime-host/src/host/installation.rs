@@ -198,6 +198,10 @@ impl HostShared {
                 | RuntimeOperation::QueryEvents { .. }
                 | RuntimeOperation::ReadMaterial { .. }
                 | RuntimeOperation::DeclareGovernanceIdentity { .. }
+                // Workflow #389 section 3.6: accepted while draining, held and preparing.
+                | RuntimeOperation::BindChannel { .. }
+                | RuntimeOperation::UpgradeState { .. }
+                | RuntimeOperation::UpgradeStateStatus { .. }
         )
     }
 

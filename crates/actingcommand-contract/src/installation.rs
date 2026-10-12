@@ -563,6 +563,53 @@ impl InstallTransitionAction {
     }
 }
 
+/// Workflow #389 section 3.6: the steps of the upgrade state, the installer's one instruction
+/// family for an upgrade (install-control revision 2). The Runtime drains, records its pause,
+/// releases and shuts down by itself; the installer only says which step. It reuses the
+/// transition machine of `InstallTransitionAction`, so its identities, bounds and phases are the
+/// same. U-1 fixes the shape; U-4 adds the behaviour and declares the revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UpgradeStateAction {
+    /// To the running Runtime: close admission and drain within `timeout_ms`; once drained,
+    /// and while this request's connection is still open, accept its own shutdown, whose owner
+    /// journal close record carries the upgrade state marker. A connection lost before that
+    /// counts as `Cancel`.
+    Enter {
+        transition_id: String,
+        #[serde(default = "default_install_timeout_ms")]
+        timeout_ms: u64,
+    },
+    /// Withdraws an upgrade state that is still draining; admission reopens.
+    Cancel { transition_id: String },
+    /// To the new Runtime started held: prepare the Provider, restore the pause of the previous
+    /// ticket and open admission within `timeout_ms`.
+    Leave {
+        ticket: InstallTransitionTicket,
+        #[serde(default = "default_install_timeout_ms")]
+        timeout_ms: u64,
+    },
+}
+
+impl UpgradeStateAction {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        match self {
+            Self::Enter {
+                transition_id,
+                timeout_ms,
+            } => {
+                validate_transition_id(transition_id)?;
+                validate_install_timeout(*timeout_ms)
+            }
+            Self::Cancel { transition_id } => validate_transition_id(transition_id),
+            Self::Leave { ticket, timeout_ms } => {
+                ticket.validate()?;
+                validate_install_timeout(*timeout_ms)
+            }
+        }
+    }
+}
+
 /// Startup input supplied by the installation transaction, before Provider assembly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -668,7 +715,7 @@ const fn default_install_timeout_ms() -> u64 {
     DEFAULT_INSTALL_TIMEOUT_MS
 }
 
-fn validate_transition_id(value: &str) -> RuntimeContractResult<()> {
+pub(crate) fn validate_transition_id(value: &str) -> RuntimeContractResult<()> {
     if value.is_empty()
         || value.len() > 128
         || !value
