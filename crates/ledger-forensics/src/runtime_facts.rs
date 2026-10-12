@@ -11,7 +11,7 @@ use actingcommand_contract::{
     RuntimeFactSnapshot, RuntimePayload, newest_complete_runtime_fact_snapshot_set,
 };
 use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, LedgerIoKind,
+    GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, LedgerCode, LedgerIoKind,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -80,34 +80,55 @@ impl ForensicFactsPhase {
     }
 }
 
-/// `runtime_facts_at` with the budget of each phase taken from `budget`.
+/// `runtime_facts_at` with the budget of each phase taken from `budget` (Workflow #395). A
+/// phase's deadline is its budget from the moment the phase starts, and the read-only snapshot
+/// serves each later phase under that phase's deadline, so a slow phase leaves the next one its
+/// whole budget. A deadline that runs out names its phase as the failure's operation.
 pub fn runtime_facts_at_per_phase(
     state_root: impl AsRef<Path>,
     position: u64,
     mut budget: impl FnMut(ForensicFactsPhase) -> Duration,
 ) -> ForensicRuntimeFactsResult {
-    runtime_facts_at(
-        state_root,
-        position,
-        Instant::now() + budget(ForensicFactsPhase::Position),
-    )
+    facts_at(state_root.as_ref(), position, |phase| {
+        Instant::now() + budget(phase)
+    })
 }
 
 /// Replays the runtime fact store at `position` (inclusive) from one read-only metadata
 /// snapshot: the newest complete `runtime.fact_snapshot` set at or before it (or an empty
 /// store), then every `runtime.fact_recorded` / `runtime.fact_invalidated` after its last
 /// part in ledger order, under the same acceptance rules as the Runtime's startup replay.
-/// Any refusal fails.
+/// Any refusal fails. `deadline` bounds all three phases together; when it runs out, the
+/// failure names the phase it ran out in (Workflow #395).
 pub fn runtime_facts_at(
     state_root: impl AsRef<Path>,
     position: u64,
     deadline: Instant,
 ) -> ForensicRuntimeFactsResult {
-    read(state_root.as_ref(), position, deadline).unwrap_or_else(|error| {
+    facts_at(state_root.as_ref(), position, |_| deadline)
+}
+
+/// Workflow #395: the one implementation behind both entries; `deadline_of` gives a phase its
+/// deadline when the phase starts. A deadline that runs out (the ledger's
+/// `ledger_read_budget_exceeded` or this reader's `runtime_facts_read_budget_exceeded`) names
+/// its phase as the failure's operation.
+fn facts_at(
+    state_root: &Path,
+    position: u64,
+    mut deadline_of: impl FnMut(ForensicFactsPhase) -> Instant,
+) -> ForensicRuntimeFactsResult {
+    let mut phase = ForensicFactsPhase::Position;
+    read(state_root, position, &mut phase, &mut deadline_of).unwrap_or_else(|error| {
+        let deadline_ran_out = error.code == LedgerCode::LedgerReadBudgetExceeded.as_str()
+            || error.code == ForensicsCode::RuntimeFactsReadBudgetExceeded.as_str();
         ForensicRuntimeFactsResult::Failed {
             position,
             code: error.code,
-            operation: error.operation,
+            operation: if deadline_ran_out {
+                phase.location().as_str()
+            } else {
+                error.operation
+            },
             detail: error.detail,
             io_kind: error.io_kind,
         }
@@ -117,7 +138,8 @@ pub fn runtime_facts_at(
 fn read(
     state_root: &Path,
     position: u64,
-    deadline: Instant,
+    phase: &mut ForensicFactsPhase,
+    deadline_of: &mut impl FnMut(ForensicFactsPhase) -> Instant,
 ) -> ForensicResult<ForensicRuntimeFactsResult> {
     if state_root.as_os_str().is_empty() {
         return Err(facts_error(
@@ -131,7 +153,9 @@ fn read(
             "ledger positions start at sequence 1",
         ));
     }
-    let snapshot = GlobalLedger::open_metadata(
+    *phase = ForensicFactsPhase::Position;
+    let deadline = deadline_of(*phase);
+    let mut snapshot = GlobalLedger::open_metadata(
         GlobalLedgerEvidenceConfig::new(state_root).with_deadline(deadline),
     )
     .map_err(map_ledger_error)?;
@@ -170,6 +194,9 @@ fn read(
             "no event at the position",
         )
     })?;
+    *phase = ForensicFactsPhase::SnapshotSet;
+    let deadline = deadline_of(*phase);
+    snapshot.set_read_deadline(deadline);
     let mut sealed = Vec::new();
     let snapshot_query = EventQuery {
         event_type: Some(EventType::RuntimeFactSnapshot),
@@ -205,6 +232,9 @@ fn read(
             from_sequence = last.saturating_add(1);
         }
     }
+    *phase = ForensicFactsPhase::Changes;
+    let deadline = deadline_of(*phase);
+    snapshot.set_read_deadline(deadline);
     let facts_query = EventQuery {
         from_sequence: Some(from_sequence),
         origin_module: Some(OriginModule::RuntimeFacts),

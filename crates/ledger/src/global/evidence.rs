@@ -340,6 +340,15 @@ pub(super) fn artifact_read_budget(
     (bytes, events, source_deadline.min(deadline))
 }
 
+/// Workflow #395: `budget` with its deadline replaced by `deadline`; byte and event limits stay.
+pub(super) fn phase_read_budget(
+    budget: Option<(u64, usize, Instant)>,
+    deadline: Instant,
+) -> (u64, usize, Instant) {
+    let (bytes, events, _) = budget.unwrap_or((u64::MAX, usize::MAX, deadline));
+    (bytes, events, deadline)
+}
+
 /// All events and retention proofs must come from the same fully authenticated source.
 pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
     events: &[E],
@@ -438,9 +447,10 @@ pub struct GlobalLedgerMetadata {
 
 impl GlobalLedgerMetadata {
     /// Workflow #395: bounds this snapshot's later reads (its view pages and artifact
-    /// resolution) by `deadline`; an earlier deadline it already holds stays in force.
+    /// resolution) by `deadline` in place of the deadline it holds, so an offline reader can
+    /// give each phase its own deadline. The opening's byte and event limits stay.
     pub fn set_read_deadline(&mut self, deadline: Instant) {
-        self.budget = Some(artifact_read_budget(self.budget, deadline));
+        self.budget = Some(phase_read_budget(self.budget, deadline));
         if let Some(sqlite) = &mut self.sqlite {
             sqlite.set_read_deadline(deadline);
         }

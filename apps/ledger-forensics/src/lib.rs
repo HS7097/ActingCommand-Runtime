@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::codes::{ActingledgerCode, ActingledgerLocation};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
@@ -21,7 +21,8 @@ use actingcommand_ledger_forensics::{
     MAX_FORENSIC_EVENTS, TaskRecordsRequest,
 };
 
-/// Cooperative deadline of one `facts` replay.
+/// Cooperative deadline of each phase of one `facts` replay, from the phase's own start
+/// (Workflow #395).
 const FACTS_READ_BUDGET: Duration = Duration::from_secs(30);
 
 enum CliRequest {
@@ -94,10 +95,10 @@ where
             state_root,
             position,
         } => Ok(ForensicOutput::Machine(ForensicReport::Facts(Box::new(
-            actingcommand_ledger_forensics::runtime_facts_at(
+            actingcommand_ledger_forensics::runtime_facts_at_per_phase(
                 state_root,
                 position,
-                Instant::now() + FACTS_READ_BUDGET,
+                |_| FACTS_READ_BUDGET,
             ),
         )))),
     }

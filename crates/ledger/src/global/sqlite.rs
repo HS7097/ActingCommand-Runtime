@@ -1315,7 +1315,7 @@ pub(super) struct SqliteViewSnapshot {
 impl SqliteViewSnapshot {
     /// Workflow #395: see `GlobalLedgerMetadata::set_read_deadline`.
     pub(super) fn set_read_deadline(&mut self, deadline: Instant) {
-        self.budget = Some(super::evidence::artifact_read_budget(self.budget, deadline));
+        self.budget = Some(super::evidence::phase_read_budget(self.budget, deadline));
     }
 
     /// Runtime-only: resolves against the writer's prefix, verified through this snapshot.

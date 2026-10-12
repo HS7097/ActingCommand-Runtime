@@ -227,7 +227,8 @@ impl ForensicMaterialPhase {
 }
 
 /// One offline request opens fresh authenticated metadata twice, holding only the original
-/// ArtifactStore reader across the second lookup and full material verification.
+/// ArtifactStore reader across the second lookup and full material verification. Each of its
+/// three phases gets `RUNTIME_MATERIAL_READ_BUDGET_MS` from its own start (Workflow #395).
 pub fn read_material_to<W: Write>(
     input: ForensicMaterialRequest,
     output: &mut W,
@@ -237,20 +238,17 @@ pub fn read_material_to<W: Write>(
     })
 }
 
-/// `read_material_to` with the budget of each phase taken from `budget`.
+/// `read_material_to` with the budget of each phase taken from `budget` (Workflow #395). A
+/// phase's deadline is its budget from the moment the phase starts, so a slow phase leaves the
+/// next one its whole budget. A deadline that runs out names its phase as the failure's
+/// location, in the report and in the returned error.
 pub fn read_material_to_per_phase<W: Write>(
     input: ForensicMaterialRequest,
     output: &mut W,
     mut budget: impl FnMut(ForensicMaterialPhase) -> Duration,
 ) -> ForensicResult<()> {
-    let deadline = Instant::now()
-        .checked_add(budget(ForensicMaterialPhase::Reference))
-        .ok_or_else(|| {
-            material_error(
-                SharedCode::MaterialReadDeadlineOverflow.code(),
-                "deadline overflow",
-            )
-        })?;
+    let mut phase = ForensicMaterialPhase::Reference;
+    let mut deadline = phase_deadline(phase, &mut budget)?;
     let request = input.request;
     let selection = LedgerArtifactSelection {
         event: request.event,
@@ -284,6 +282,8 @@ pub fn read_material_to_per_phase<W: Write>(
         if retained(&mut result) {
             return Ok(());
         }
+        phase = ForensicMaterialPhase::CurrentReference;
+        deadline = phase_deadline(phase, &mut budget).map_err(ReadError::Request)?;
         let reader = open_projected_stream(&input.state_root, original.reference())
             .map_err(ReadError::Artifact)?;
         let current_snapshot = GlobalLedger::open_metadata(
@@ -306,6 +306,8 @@ pub fn read_material_to_per_phase<W: Write>(
         if retained(&mut result) {
             return Ok(());
         }
+        phase = ForensicMaterialPhase::VerifiedRead;
+        deadline = phase_deadline(phase, &mut budget).map_err(ReadError::Request)?;
         let range = reader
             .read_verified_range(
                 result.request.offset,
@@ -336,6 +338,11 @@ pub fn read_material_to_per_phase<W: Write>(
     let mut native_error = None;
     if let Err(error) = work {
         let (state, limit, failure, error) = read_failure(error);
+        let (failure, error) = if limit == Some(RuntimeMaterialReadLimit::BudgetExceeded) {
+            at_phase(failure, error, phase)
+        } else {
+            (failure, error)
+        };
         native_error = Some(error);
         result.state = state;
         result.limit = limit;
@@ -364,10 +371,17 @@ pub fn read_material_to_per_phase<W: Write>(
         && native_error.is_none()
     {
         body.clear();
-        let code = if limit == RuntimeMaterialReadLimit::ReplyBytes {
-            SharedCode::MaterialReadReplyLimit.code()
+        // Workflow #395: a deadline that ran out names the phase it bounded.
+        let (code, operation) = if limit == RuntimeMaterialReadLimit::ReplyBytes {
+            (
+                SharedCode::MaterialReadReplyLimit.code(),
+                ForensicsLocation::ReadLedgerMaterial.location(),
+            )
         } else {
-            SharedCode::MaterialReadBudgetExceeded.code()
+            (
+                SharedCode::MaterialReadBudgetExceeded.code(),
+                phase.location(),
+            )
         };
         let ForensicReport::MaterialRead(result) = &mut report else {
             unreachable!()
@@ -377,14 +391,15 @@ pub fn read_material_to_per_phase<W: Write>(
         result.limit = Some(limit);
         result.failure = Some(RuntimeMaterialReadFailure {
             code: code.as_str().to_owned(),
-            operation: ForensicsLocation::ReadLedgerMaterial.as_str().to_owned(),
+            operation: operation.as_str().to_owned(),
             error: RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
         });
         result
             .validate()
             .map_err(|error| material_error(error.code(), "invalid bounded material result"))?;
-        native_error = Some(material_error(
+        native_error = Some(ForensicError::new(
             code,
+            operation,
             "cooperative read or complete reply bound exceeded",
         ));
         body = serde_json::to_vec(&report).map_err(|_| {
@@ -458,6 +473,33 @@ fn retention_limit(source: &RuntimeMaterialReadSource) -> Option<RuntimeMaterial
         ) => RuntimeMaterialReadLimit::Evicted,
         Some(ArtifactEvictionDisposition::Failed) => RuntimeMaterialReadLimit::EvictionFailed,
     })
+}
+
+/// Workflow #395: the deadline of `phase`, its budget from now.
+fn phase_deadline(
+    phase: ForensicMaterialPhase,
+    budget: &mut impl FnMut(ForensicMaterialPhase) -> Duration,
+) -> ForensicResult<Instant> {
+    Instant::now().checked_add(budget(phase)).ok_or_else(|| {
+        material_error(
+            SharedCode::MaterialReadDeadlineOverflow.code(),
+            "deadline overflow",
+        )
+    })
+}
+
+/// Workflow #395: a deadline that ran out names its phase as the failure's location.
+fn at_phase(
+    mut failure: RuntimeMaterialReadFailure,
+    error: ForensicError,
+    phase: ForensicMaterialPhase,
+) -> (RuntimeMaterialReadFailure, ForensicError) {
+    let location = phase.location().as_str();
+    failure.operation = location.to_owned();
+    (
+        failure,
+        ForensicError::relayed(error.code(), location, error.detail),
+    )
 }
 
 fn material_error(code: Code, detail: &str) -> ForensicError {
