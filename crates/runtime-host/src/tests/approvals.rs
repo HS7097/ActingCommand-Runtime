@@ -174,7 +174,9 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
         actingcommand_runtime_database::RuntimeDatabase::open_existing(root.path(), false)
             .expect("existing approval database");
     database
-        .connection("remove_derived_approval_projection")
+        .connection(
+            actingcommand_runtime_database::DatabaseLocation::OpenExistingDatabase.location(),
+        )
         .expect("database connection")
         .execute(
             "DELETE FROM projection_entries WHERE namespace = 'approval.latest.v1'",

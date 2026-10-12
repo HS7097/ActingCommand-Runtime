@@ -132,15 +132,19 @@ impl PlanningRows {
         transaction: &RuntimeTransaction<'_, '_>,
     ) -> RuntimeStateResult<PlanningEntries> {
         if !transaction.belongs_to(&self.store.database) {
-            return Err(planning_error("state_transaction_owner_mismatch"));
+            return Err(planning_error(
+                StateCode::StateTransactionOwnerMismatch.code(),
+            ));
         }
         self.baseline
             .keys()
             .map(|key| {
                 let entry = query_projection_entry(transaction.sql(), key.0, &key.1)?
                     .map(|row| {
-                        self.store
-                            .validate_projection_row(row, "apply_planning_projection")
+                        self.store.validate_projection_row(
+                            row,
+                            StateLocation::ApplyPlanningProjection.location(),
+                        )
                     })
                     .transpose()?;
                 Ok((key.clone(), entry))
@@ -164,7 +168,7 @@ impl PlanningRows {
             )?;
             if written != *entry {
                 return Err(planning_error(
-                    "policy_planning_projection_position_mismatch",
+                    StateCode::PolicyPlanningProjectionPositionMismatch.code(),
                 ));
             }
         }
@@ -188,14 +192,16 @@ impl PlanningSignalRows {
         );
         if detection != data.detection_budget.is_some() {
             return Err(planning_error(if detection {
-                "policy_detection_budget_missing"
+                SharedCode::PolicyDetectionBudgetMissing.code()
             } else {
-                "policy_detection_budget_unexpected"
+                SharedCode::PolicyDetectionBudgetUnexpected.code()
             }));
         }
         let signal_key = signal_key(&data.signal_id);
-        let signal_payload = serde_json::to_vec(&StoredPlanningSignal::from_data(data))
-            .map_err(|_| planning_error("policy_planning_signal_projection_encode_failed"))?;
+        let signal_payload =
+            serde_json::to_vec(&StoredPlanningSignal::from_data(data)).map_err(|_| {
+                planning_error(StateCode::PolicyPlanningSignalProjectionEncodeFailed.code())
+            })?;
         validate_projection_input(signal_key.0, &signal_key.1, 1, &signal_payload)?;
         let quota = data
             .detection_budget
@@ -209,7 +215,9 @@ impl PlanningSignalRows {
                     dispatch_used: budget.dispatch_used,
                     runtime_reserved_ms: budget.runtime_reserved_ms,
                 })
-                .map_err(|_| planning_error("policy_detection_quota_projection_encode_failed"))?;
+                .map_err(|_| {
+                    planning_error(StateCode::PolicyDetectionQuotaProjectionEncodeFailed.code())
+                })?;
                 validate_projection_input(key.0, &key.1, 1, &payload)?;
                 Ok::<_, RuntimeStateError>((key, payload))
             })
@@ -249,23 +257,26 @@ impl PlanningSignalRows {
             .as_ref()
             .is_some_and(|(position, data)| *position != sequence || data != &self.data)
         {
-            return Err(planning_error("policy_planning_signal_identity_conflict"));
+            return Err(planning_error(
+                SharedCode::PolicyPlanningSignalIdentityConflict.code(),
+            ));
         }
         let prior_quota = self.prior_quota(entries)?;
         let mut quota_already_projected = false;
         if let Some((position, usage)) = prior_quota {
-            let budget = self
-                .data
-                .detection_budget
-                .as_ref()
-                .ok_or_else(|| planning_error("policy_detection_budget_missing"))?;
+            let budget =
+                self.data.detection_budget.as_ref().ok_or_else(|| {
+                    planning_error(SharedCode::PolicyDetectionBudgetMissing.code())
+                })?;
             if position > sequence
                 || position == sequence
                     && (prior.is_none()
                         || usage.dispatch_used != budget.dispatch_used
                         || usage.runtime_reserved_ms != budget.runtime_reserved_ms)
             {
-                return Err(planning_error("policy_detection_quota_projection_conflict"));
+                return Err(planning_error(
+                    StateCode::PolicyDetectionQuotaProjectionConflict.code(),
+                ));
             }
             quota_already_projected = position == sequence;
         }
@@ -336,10 +347,14 @@ impl PreparedPlanningProjection {
         event: &PersistedEvent,
     ) -> RuntimeStateResult<()> {
         if self.rows.current(transaction)? != self.rows.baseline {
-            return Err(planning_error("policy_planning_projection_changed"));
+            return Err(planning_error(
+                StateCode::PolicyPlanningProjectionChanged.code(),
+            ));
         }
         if planning_event_data(event)? != self.signal.data {
-            return Err(planning_error("policy_planning_projection_fact_mismatch"));
+            return Err(planning_error(
+                StateCode::PolicyPlanningProjectionFactMismatch.code(),
+            ));
         }
         actingcommand_ledger::verify_transaction_event(
             &self.rows.store.database,
@@ -385,15 +400,22 @@ impl PreparedPlanningRecovery {
 
     /// Commits the prepared historical interval without appending any new fact.
     pub fn commit(self) -> RuntimeStateResult<()> {
-        let mut connection = self.rows.store.connection("recover_planning_projections")?;
+        let mut connection = self
+            .rows
+            .store
+            .connection(StateLocation::RecoverPlanningProjections.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| planning_sql_error("begin_planning_recovery", &error))?;
+            .map_err(|error| {
+                planning_sql_error(StateLocation::BeginPlanningRecovery.location(), &error)
+            })?;
         let work = (|| {
             let scope = self.rows.store.database.borrow_transaction(&transaction);
             let current = self.rows.current(&scope)?;
             if current != self.rows.baseline {
-                return Err(planning_error("policy_planning_projection_changed"));
+                return Err(planning_error(
+                    StateCode::PolicyPlanningProjectionChanged.code(),
+                ));
             }
             actingcommand_ledger::verify_transaction_planning_page(
                 &self.rows.store.database,
@@ -407,15 +429,18 @@ impl PreparedPlanningRecovery {
         if let Err(original) = work {
             return match transaction.rollback() {
                 Ok(()) => Err(original),
-                Err(rollback) => Err(planning_error("policy_planning_projection_rollback_failed")
-                    .with_detail(format!("primary={original}; rollback={rollback}"))),
+                Err(rollback) => Err(planning_error(
+                    StateCode::PolicyPlanningProjectionRollbackFailed.code(),
+                )
+                .with_detail(format!("primary={original}; rollback={rollback}"))),
             };
         }
         transaction.commit().map_err(|error| {
-            planning_sql_error("commit_planning_recovery", &error).with_detail(format!(
-                "commit_outcome=unknown; through_sequence={}; primary={error}",
-                self.page.through_sequence()
-            ))
+            planning_sql_error(StateLocation::CommitPlanningRecovery.location(), &error)
+                .with_detail(format!(
+                    "commit_outcome=unknown; through_sequence={}; primary={error}",
+                    self.page.through_sequence()
+                ))
         })?;
         Ok(())
     }
@@ -473,7 +498,9 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<PreparedPlanningRecovery> {
         let mut rows = PlanningRows::new(self)?;
         if checkpoint(rows.entry(&checkpoint_key())?)?.unwrap_or(0) != page.after_sequence() {
-            return Err(planning_error("policy_planning_projection_changed"));
+            return Err(planning_error(
+                StateCode::PolicyPlanningProjectionChanged.code(),
+            ));
         }
         let mut steps = Vec::new();
         for event in page.planning_events() {
@@ -493,7 +520,7 @@ fn prepared_entry<'a>(
     entries
         .get(key)
         .map(Option::as_ref)
-        .ok_or_else(|| planning_error("policy_planning_projection_unprepared"))
+        .ok_or_else(|| planning_error(StateCode::PolicyPlanningProjectionUnprepared.code()))
 }
 
 fn stage_entry(
@@ -505,8 +532,8 @@ fn stage_entry(
     validate_projection_input(key.0, &key.1, sequence, &payload)?;
     sqlite_integer(
         sequence,
-        "projection_sequence_overflow",
-        "prepare_planning_projection",
+        StateCode::ProjectionSequenceOverflow.code(),
+        StateLocation::PreparePlanningProjection.location(),
     )?;
     prepared_entry(entries, key)?;
     entries.insert(
@@ -526,7 +553,9 @@ fn stage_checkpoint(entries: &mut PlanningEntries, sequence: u64) -> RuntimeStat
     let key = checkpoint_key();
     if let Some(prior) = checkpoint(prepared_entry(entries, &key)?)? {
         if prior > sequence {
-            return Err(planning_error("policy_planning_checkpoint_ahead"));
+            return Err(planning_error(
+                SharedCode::PolicyPlanningCheckpointAhead.code(),
+            ));
         }
         if prior == sequence {
             return Ok(());
@@ -536,7 +565,7 @@ fn stage_checkpoint(entries: &mut PlanningEntries, sequence: u64) -> RuntimeStat
         schema_version: SIGNAL_SCHEMA.to_owned(),
         through_sequence: sequence,
     })
-    .map_err(|_| planning_error("policy_planning_checkpoint_encode_failed"))?;
+    .map_err(|_| planning_error(StateCode::PolicyPlanningCheckpointEncodeFailed.code()))?;
     stage_entry(entries, &key, sequence, payload)
 }
 
@@ -548,9 +577,11 @@ fn decode_signal(
         return Ok(None);
     };
     let stored: StoredPlanningSignal = serde_json::from_slice(entry.payload())
-        .map_err(|_| planning_error("policy_planning_signal_projection_invalid"))?;
+        .map_err(|_| planning_error(StateCode::PolicyPlanningSignalProjectionInvalid.code()))?;
     if stored.schema_version != SIGNAL_SCHEMA || stored.signal_id != signal_id {
-        return Err(planning_error("policy_planning_signal_projection_invalid"));
+        return Err(planning_error(
+            StateCode::PolicyPlanningSignalProjectionInvalid.code(),
+        ));
     }
     Ok(Some((entry.ledger_sequence(), stored.into_data())))
 }
@@ -564,12 +595,14 @@ fn decode_quota(
         return Ok(None);
     };
     let stored: StoredDetectionQuota = serde_json::from_slice(entry.payload())
-        .map_err(|_| planning_error("policy_detection_quota_projection_invalid"))?;
+        .map_err(|_| planning_error(StateCode::PolicyDetectionQuotaProjectionInvalid.code()))?;
     if stored.schema_version != QUOTA_SCHEMA
         || stored.instance_id != instance_id
         || stored.window_id != window_id
     {
-        return Err(planning_error("policy_detection_quota_projection_invalid"));
+        return Err(planning_error(
+            StateCode::PolicyDetectionQuotaProjectionInvalid.code(),
+        ));
     }
     Ok(Some((
         entry.ledger_sequence(),
@@ -585,10 +618,12 @@ fn checkpoint(entry: Option<&ProjectionEntry>) -> RuntimeStateResult<Option<u64>
         return Ok(None);
     };
     let stored: PlanningSignalCheckpoint = serde_json::from_slice(entry.payload())
-        .map_err(|_| planning_error("policy_planning_checkpoint_invalid"))?;
+        .map_err(|_| planning_error(StateCode::PolicyPlanningCheckpointInvalid.code()))?;
     if stored.schema_version != SIGNAL_SCHEMA || stored.through_sequence != entry.ledger_sequence()
     {
-        return Err(planning_error("policy_planning_checkpoint_invalid"));
+        return Err(planning_error(
+            StateCode::PolicyPlanningCheckpointInvalid.code(),
+        ));
     }
     Ok(Some(stored.through_sequence))
 }
@@ -601,11 +636,15 @@ fn planning_event_data(
         || event.origin().actor() != EventActor::Scheduler
         || event.origin().module() != OriginModule::Policy
     {
-        return Err(planning_error("policy_planning_projection_origin_invalid"));
+        return Err(planning_error(
+            StateCode::PolicyPlanningProjectionOriginInvalid.code(),
+        ));
     }
     let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
     else {
-        return Err(planning_error("policy_recovery_query_mismatch"));
+        return Err(planning_error(
+            SharedCode::PolicyRecoveryQueryMismatch.code(),
+        ));
     };
     Ok(PolicyPlanningSignalEventData {
         signal_id: payload.signal_id().to_owned(),
@@ -642,12 +681,20 @@ fn checkpoint_key() -> PlanningKey {
     )
 }
 
-fn planning_error(code: &'static str) -> RuntimeStateError {
-    fatal(code, "persist_planning_projection")
+fn planning_error(code: Code) -> RuntimeStateError {
+    fatal(code, StateLocation::PersistPlanningProjection.location())
 }
 fn planning_ledger_error(error: actingcommand_ledger::GlobalLedgerError) -> RuntimeStateError {
-    planning_error(error.code()).with_detail(format!("{error}; detail={:?}", error.detail()))
+    RuntimeStateError::relayed_fatal(
+        error.code(),
+        StateLocation::PersistPlanningProjection.as_str(),
+    )
+    .with_detail(format!("{error}; detail={:?}", error.detail()))
 }
-fn planning_sql_error(operation: &'static str, error: &rusqlite::Error) -> RuntimeStateError {
-    fatal("policy_planning_projection_transaction_failed", operation).with_detail(error.to_string())
+fn planning_sql_error(operation: Location, error: &rusqlite::Error) -> RuntimeStateError {
+    fatal(
+        StateCode::PolicyPlanningProjectionTransactionFailed.code(),
+        operation,
+    )
+    .with_detail(error.to_string())
 }

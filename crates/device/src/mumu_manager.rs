@@ -31,6 +31,7 @@ use crate::{
     DeviceResult, NemuResolutionContext, NemuResolutionCountKind, NemuResolutionReason,
 };
 use actingcommand_contract::EmulatorInstanceAction;
+use actingcommand_contract::codes::ContractLocation;
 use std::cmp::Ordering;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -343,7 +344,7 @@ fn with_mumu_manager_discovery_detail(error: DeviceError) -> DeviceError {
         .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, "mumu_manager.discover")
         .with_diagnostic_context_if_absent(
             "mumu_manager",
-            "discover_instances",
+            ContractLocation::DiscoverInstances.as_str(),
             DeviceErrorSensitivity::Sensitive,
         );
     if producer_complete || producer_message {
@@ -939,7 +940,7 @@ fn elapsed_ms_between(started: Duration, now: Duration) -> u64 {
 fn control_failure_context(error: DeviceError) -> DeviceError {
     error.with_diagnostic_context_if_absent(
         "mumu_manager",
-        "control_instance",
+        ContractLocation::ControlInstance.as_str(),
         DeviceErrorSensitivity::Sensitive,
     )
 }

@@ -5,6 +5,9 @@
 
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     InstallHeldStartup, InstallTransitionAction, InstallTransitionPhase as Phase,
     InstallTransitionStatus, InstallTransitionTicket, RuntimeShutdownDecision,
@@ -41,7 +44,7 @@ impl LifecycleAdmission {
     pub(super) fn new(held: Option<InstallHeldStartup>) -> RuntimeHostResult<Self> {
         if let Some(held) = &held {
             held.validate()
-                .map_err(|error| install_error(error.code().as_str()))?;
+                .map_err(|error| install_error(error.code()))?;
         }
         Ok(Self {
             closed: true,
@@ -84,15 +87,19 @@ impl Drop for LifecycleWork<'_> {
     }
 }
 
-fn install_error(code: &'static str) -> RuntimeHostError {
-    RuntimeHostError::request(code, "install_transition", RuntimeErrorCode::InvalidRequest)
+fn install_error(code: impl Into<Code>) -> RuntimeHostError {
+    RuntimeHostError::request(
+        code,
+        ContractLocation::InstallTransition,
+        RuntimeErrorCode::InvalidRequest,
+    )
 }
 
 fn prepared<T>(value: &OnceLock<T>) -> RuntimeHostResult<&T> {
     value.get().ok_or_else(|| {
         RuntimeHostError::fatal(
-            "runtime_component_not_prepared",
-            "access_prepared_runtime",
+            HostCode::RuntimeComponentNotPrepared,
+            HostLocation::AccessPreparedRuntime,
             RuntimeErrorCode::RuntimeFatal,
         )
     })
@@ -101,8 +108,8 @@ fn prepared<T>(value: &OnceLock<T>) -> RuntimeHostResult<&T> {
 pub(super) fn set_prepared<T>(slot: &OnceLock<T>, value: T) -> RuntimeHostResult<()> {
     slot.set(value).map_err(|_| {
         RuntimeHostError::fatal(
-            "runtime_component_already_prepared",
-            "prepare_runtime",
+            HostCode::RuntimeComponentAlreadyPrepared,
+            HostLocation::PrepareRuntime,
             RuntimeErrorCode::RuntimeFatal,
         )
     })
@@ -139,7 +146,7 @@ impl HostShared {
     }
 
     pub(super) fn begin_work(&self) -> RuntimeHostResult<Option<LifecycleWork<'_>>> {
-        let mut admission = lock(&self.lifecycle_admission, "admit_runtime_work")?;
+        let mut admission = lock(&self.lifecycle_admission, HostLocation::AdmitRuntimeWork)?;
         if admission.stopping
             || (admission.closed && !admission.active.contains_key(&thread::current().id()))
         {
@@ -150,12 +157,15 @@ impl HostShared {
 
     /// Cleanup is part of admitted work even when shutdown has already closed the root gate.
     pub(super) fn work_guard(&self) -> RuntimeHostResult<LifecycleWork<'_>> {
-        let mut admission = lock(&self.lifecycle_admission, "admit_runtime_cleanup")?;
+        let mut admission = lock(&self.lifecycle_admission, HostLocation::AdmitRuntimeCleanup)?;
         Ok(self.count_work(&mut admission))
     }
 
     pub(super) fn begin_continuation(&self) -> RuntimeHostResult<Option<LifecycleWork<'_>>> {
-        let mut admission = lock(&self.lifecycle_admission, "admit_runtime_continuation")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::AdmitRuntimeContinuation,
+        )?;
         let draining = admission.transition.as_ref().is_some_and(|transition| {
             matches!(transition.status.phase, Phase::Draining | Phase::Drained)
         });
@@ -168,7 +178,10 @@ impl HostShared {
     /// Workflow #369-1 (review L1): whether the host is stopping or an install transition is
     /// draining it, so a long wait on the host-work thread ends at its next poll.
     pub(super) fn lifecycle_draining(&self) -> RuntimeHostResult<bool> {
-        let admission = lock(&self.lifecycle_admission, "read_lifecycle_draining")?;
+        let admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::ReadLifecycleDraining,
+        )?;
         Ok(admission.stopping
             || admission.transition.as_ref().is_some_and(|transition| {
                 matches!(transition.status.phase, Phase::Draining | Phase::Drained)
@@ -201,7 +214,10 @@ impl HostShared {
             return Ok(None);
         }
         if let RuntimeOperation::SafeReset { instance_alias, .. } = operation {
-            let mut admission = lock(&self.lifecycle_admission, "admit_install_reset_cleanup")?;
+            let mut admission = lock(
+                &self.lifecycle_admission,
+                HostLocation::AdmitInstallResetCleanup,
+            )?;
             if admission.stopping {
                 return Ok(None);
             }
@@ -210,8 +226,11 @@ impl HostShared {
                     matches!(transition.status.phase, Phase::Draining | Phase::Drained)
                 });
                 if !draining
-                    || !lock(&self.scheduling_pause, "read_install_reset_cleanup")?
-                        .install_reset_continuation(instance_alias, connection)
+                    || !lock(
+                        &self.scheduling_pause,
+                        HostLocation::ReadInstallResetCleanup,
+                    )?
+                    .install_reset_continuation(instance_alias, connection)
                 {
                     return Ok(None);
                 }
@@ -243,9 +262,10 @@ impl HostShared {
             return Ok(false);
         }
         Ok({
-            let scheduler = lock(&self.scheduler, "check_install_leases")?;
+            let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
             scheduler.active_tokens().is_empty() && scheduler.queued_total() == 0
-        } && !lock(&self.scheduling_pause, "check_install_cleanup")?.install_cleanup_pending())
+        } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
+            .install_cleanup_pending())
     }
 
     pub(super) fn request_shutdown(
@@ -253,7 +273,10 @@ impl HostShared {
         request: &ValidatedRuntimeRequest<'_>,
         target: RuntimeShutdownTarget,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut admission = lock(&self.lifecycle_admission, "request_runtime_shutdown")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            ContractLocation::RequestRuntimeShutdown,
+        )?;
         self.shutdown_under_gate(request, target, &mut admission)
     }
 
@@ -303,8 +326,8 @@ impl HostShared {
         } else {
             Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "runtime_shutdown_denied",
-                    "request_runtime_shutdown",
+                    HostCode::RuntimeShutdownDenied,
+                    ContractLocation::RequestRuntimeShutdown,
                     match decision {
                         RuntimeShutdownDecision::Busy => RuntimeErrorCode::RuntimeBusy,
                         RuntimeShutdownDecision::OwnerMismatch => {
@@ -325,14 +348,14 @@ impl HostShared {
         rows: Vec<BTreeMap<String, FactScalar>>,
     ) -> RuntimeHostResult<Option<EventId>> {
         let now = self.clock.sample()?.unix_ms;
-        let previous = lock(&self.runtime_facts, "read_install_fact_clock")?
+        let previous = lock(&self.runtime_facts, HostLocation::ReadInstallFactClock)?
             .get(&RuntimeFactScope::Runtime, key)
             .map(|record| record.observed_at_unix_ms);
         let observed_at_unix_ms = match previous {
             Some(previous) => now.max(
                 previous
                     .checked_add(1)
-                    .ok_or_else(|| install_error("install_fact_clock_overflow"))?,
+                    .ok_or_else(|| install_error(HostCode::InstallFactClockOverflow))?,
             ),
             None => now,
         };
@@ -364,7 +387,7 @@ impl HostShared {
     ) -> RuntimeHostResult<Option<EventId>> {
         status
             .validate()
-            .map_err(|error| install_error(error.code().as_str()))?;
+            .map_err(|error| install_error(error.code()))?;
         let mut row = BTreeMap::from([
             (
                 "owner_epoch".to_owned(),
@@ -411,8 +434,9 @@ impl HostShared {
         &self,
         admission: &LifecycleAdmission,
         action: &InstallTransitionAction,
-        code: &'static str,
+        code: impl Into<Code>,
     ) -> RequestFailure {
+        let code: Code = code.into();
         let mut error = install_error(code);
         error.lifecycle.installation_effect = Some(EffectDisposition::NotPerformed);
         let stage = match action {
@@ -450,21 +474,31 @@ impl HostShared {
         action: &InstallTransitionAction,
         connection: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut admission = lock(&self.lifecycle_admission, "install_transition")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            ContractLocation::InstallTransition,
+        )?;
         if target != self.shutdown_target {
-            return Err(self.install_refusal(&admission, action, "install_owner_mismatch"));
+            return Err(self.install_refusal(&admission, action, HostCode::InstallOwnerMismatch));
         }
         // Workflow #381 A R2: the read-only Query needs no governance identity; while the new
         // owner prepares and before its deadline it reads Host memory only and appends nothing.
         if !matches!(action, InstallTransitionAction::Query { .. })
-            && !lock(&self.governance_connections, "authorize_install_transition")?
-                .contains(&connection)
+            && !lock(
+                &self.governance_connections,
+                HostLocation::AuthorizeInstallTransition,
+            )?
+            .contains(&connection)
         {
-            return Err(self.install_refusal(&admission, action, "install_identity_required"));
+            return Err(self.install_refusal(
+                &admission,
+                action,
+                HostCode::InstallIdentityRequired,
+            ));
         }
         self.tick_install_under_gate(&mut admission)?;
         if admission.stopping {
-            return Err(self.install_refusal(&admission, action, "install_owner_stopping"));
+            return Err(self.install_refusal(&admission, action, HostCode::InstallOwnerStopping));
         }
         match action {
             InstallTransitionAction::BeginDrain {
@@ -479,7 +513,7 @@ impl HostShared {
                     return Err(self.install_refusal(
                         &admission,
                         action,
-                        "install_transition_conflict",
+                        HostCode::InstallTransitionConflict,
                     ));
                 }
                 let status = InstallTransitionStatus {
@@ -515,7 +549,7 @@ impl HostShared {
                     return Err(self.install_refusal(
                         &admission,
                         action,
-                        "install_transition_unknown",
+                        HostCode::InstallTransitionUnknown,
                     ));
                 }
             }
@@ -526,14 +560,14 @@ impl HostShared {
                     return Err(self.install_refusal(
                         &admission,
                         action,
-                        "install_transition_unknown",
+                        HostCode::InstallTransitionUnknown,
                     ));
                 };
                 if transition.status.ticket != *ticket {
                     return Err(self.install_refusal(
                         &admission,
                         action,
-                        "install_ticket_mismatch",
+                        HostCode::InstallTicketMismatch,
                     ));
                 }
                 let mut status = transition.status.clone();
@@ -543,7 +577,7 @@ impl HostShared {
                             return Err(self.install_refusal(
                                 &admission,
                                 action,
-                                "install_abort_state_invalid",
+                                HostCode::InstallAbortStateInvalid,
                             ));
                         }
                         status.phase = Phase::Aborted;
@@ -556,7 +590,7 @@ impl HostShared {
                             return Err(self.install_refusal(
                                 &admission,
                                 action,
-                                "install_not_drained",
+                                HostCode::InstallNotDrained,
                             ));
                         }
                         return self.shutdown_under_gate(request, ticket.target, &mut admission);
@@ -566,7 +600,7 @@ impl HostShared {
                             return Err(self.install_refusal(
                                 &admission,
                                 action,
-                                "install_release_state_invalid",
+                                HostCode::InstallReleaseStateInvalid,
                             ));
                         }
                         status.phase = Phase::Preparing;
@@ -604,9 +638,12 @@ impl HostShared {
     pub(super) fn invalid_install_request(
         &self,
         action: &InstallTransitionAction,
-        code: &'static str,
+        code: impl Into<Code>,
     ) -> RuntimeHostResult<RequestFailure> {
-        let admission = lock(&self.lifecycle_admission, "reject_install_request")?;
+        let admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::RejectInstallRequest,
+        )?;
         let failure = self.install_refusal(&admission, action, code);
         if failure.poison_runtime {
             Err(*failure.error)
@@ -616,7 +653,10 @@ impl HostShared {
     }
 
     pub(super) fn tick_install(&self) -> RuntimeHostResult<()> {
-        let mut admission = lock(&self.lifecycle_admission, "advance_install_transition")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::AdvanceInstallTransition,
+        )?;
         self.tick_install_under_gate(&mut admission)
     }
 
@@ -636,17 +676,17 @@ impl HostShared {
             let (stage, code, reopen) = match status.phase {
                 Phase::Draining | Phase::Drained => (
                     RuntimeLifecycleFailureStage::InstallDrain,
-                    "drain_timeout",
+                    HostCode::DrainTimeout,
                     true,
                 ),
                 Phase::Held => (
                     RuntimeLifecycleFailureStage::InstallHeld,
-                    HostCode::HeldTimeout.as_str(),
+                    HostCode::HeldTimeout,
                     false,
                 ),
                 _ => (
                     RuntimeLifecycleFailureStage::InstallRelease,
-                    HostCode::ReleaseTimeout.as_str(),
+                    HostCode::ReleaseTimeout,
                     false,
                 ),
             };
@@ -668,7 +708,7 @@ impl HostShared {
                 Phase::Failed
             };
             status.admission_closed = !reopen;
-            status.failure_code = Some(code.to_owned());
+            status.failure_code = Some(code.as_str().to_owned());
             self.record_install_status(&status)?;
             admission.closed = !reopen;
             // A drain timeout reopens the old owner; a held or release timeout ends the start.
@@ -697,7 +737,10 @@ impl HostShared {
     }
 
     pub(super) fn initialize_installation(&self) -> RuntimeHostResult<()> {
-        let mut admission = lock(&self.lifecycle_admission, "initialize_install_transition")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::InitializeInstallTransition,
+        )?;
         let held = admission.held.clone();
         // Read only this exact predecessor before invalidating both keys on every new epoch.
         let previous = held
@@ -708,7 +751,7 @@ impl HostShared {
             })
             .transpose();
         for key in [TRANSITION_KEY, PAUSES_KEY] {
-            let present = lock(&self.runtime_facts, "read_old_install_transition")?
+            let present = lock(&self.runtime_facts, HostLocation::ReadOldInstallTransition)?
                 .get(&RuntimeFactScope::Runtime, key)
                 .is_some();
             if present {
@@ -750,13 +793,11 @@ impl HostShared {
     fn install_start_stopped(&self, stopping: bool) -> RuntimeHostResult<Option<RuntimeHostError>> {
         if let Some(cause) = self.fatal.current()? {
             return Ok(Some(
-                install_error(HostCode::InstallStartupStopped.as_str()).with_latched_cause(&cause),
+                install_error(HostCode::InstallStartupStopped).with_latched_cause(&cause),
             ));
         }
         if stopping || self.fatal.is_shutdown_requested() {
-            return Ok(Some(install_error(
-                HostCode::InstallStartupShutDown.as_str(),
-            )));
+            return Ok(Some(install_error(HostCode::InstallStartupShutDown)));
         }
         Ok(None)
     }
@@ -766,7 +807,7 @@ impl HostShared {
             if let Some(stopped) = self.install_start_stopped(false)? {
                 return Err(stopped);
             }
-            let mut admission = lock(&self.lifecycle_admission, "wait_install_release")?;
+            let mut admission = lock(&self.lifecycle_admission, HostLocation::WaitInstallRelease)?;
             if admission.held.is_none()
                 || admission
                     .transition
@@ -788,7 +829,10 @@ impl HostShared {
 
     pub(super) fn check_install_preparation(&self) -> RuntimeHostResult<()> {
         self.tick_install()?;
-        let admission = lock(&self.lifecycle_admission, "check_install_preparation")?;
+        let admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::CheckInstallPreparation,
+        )?;
         if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
             return Err(stopped);
         }
@@ -800,7 +844,7 @@ impl HostShared {
         {
             // #672 ruling (R5′): a release that timed out ends the start under its own code.
             return Err(Self::install_start_timed_out(&admission)
-                .unwrap_or_else(|| install_error("install_preparation_not_authorized")));
+                .unwrap_or_else(|| install_error(HostCode::InstallPreparationNotAuthorized)));
         }
         Ok(())
     }
@@ -808,7 +852,7 @@ impl HostShared {
     pub(super) fn install_preparation_deadline(&self) -> RuntimeHostResult<Option<Instant>> {
         let admission = lock(
             &self.lifecycle_admission,
-            "read_install_preparation_deadline",
+            HostLocation::ReadInstallPreparationDeadline,
         )?;
         Ok(admission
             .transition
@@ -822,11 +866,14 @@ impl HostShared {
         instance_id: InstanceId,
         check: &SchedulingResumeSelfCheck,
     ) -> RuntimeHostResult<()> {
-        let admission = lock(&self.lifecycle_admission, "check_install_selfcheck")?;
+        let admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::CheckInstallSelfcheck,
+        )?;
         if admission.held.is_some()
             && (check.failure_code.is_some() || !check.capture.ok || !check.touch.ok)
         {
-            let mut error = install_error("install_preparation_selfcheck_failed");
+            let mut error = install_error(HostCode::InstallPreparationSelfcheckFailed);
             error.lifecycle.instance_id = Some(instance_id);
             return Err(error);
         }
@@ -835,7 +882,10 @@ impl HostShared {
 
     pub(super) fn finish_install_preparation(&self) -> RuntimeHostResult<()> {
         self.tick_install()?;
-        let mut admission = lock(&self.lifecycle_admission, "finish_install_preparation")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::FinishInstallPreparation,
+        )?;
         if let Some(stopped) = self.install_start_stopped(admission.stopping)? {
             return Err(stopped);
         }
@@ -845,7 +895,7 @@ impl HostShared {
                 return Err(transition
                     .timed_out
                     .clone()
-                    .unwrap_or_else(|| install_error("install_preparation_not_authorized")));
+                    .unwrap_or_else(|| install_error(HostCode::InstallPreparationNotAuthorized)));
             }
             let mut status = transition.status.clone();
             status.phase = Phase::Released;
@@ -863,13 +913,16 @@ impl HostShared {
     }
 
     pub(super) fn restore_install_pauses(&self) -> RuntimeHostResult<()> {
-        let mut admission = lock(&self.lifecycle_admission, "restore_install_pauses")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::RestoreInstallPauses,
+        )?;
         if let Some(pauses) = admission.previous_pauses.take() {
             pauses.validate_install_scopes(&*lock(
                 &self.registered_instances,
-                "validate_install_pause_scopes",
+                HostLocation::ValidateInstallPauseScopes,
             )?)?;
-            *lock(&self.scheduling_pause, "restore_install_pauses")? = pauses;
+            *lock(&self.scheduling_pause, HostLocation::RestoreInstallPauses)? = pauses;
         }
         Ok(())
     }
@@ -878,7 +931,10 @@ impl HostShared {
         &self,
         error: &RuntimeHostError,
     ) -> RuntimeHostResult<()> {
-        let mut admission = lock(&self.lifecycle_admission, "fail_install_preparation")?;
+        let mut admission = lock(
+            &self.lifecycle_admission,
+            HostLocation::FailInstallPreparation,
+        )?;
         let preparing = admission.preparing;
         admission.closed = true;
         admission.preparing = false;
@@ -921,15 +977,18 @@ impl HostShared {
     }
 
     fn record_install_pauses(&self, ticket: &InstallTransitionTicket) -> RuntimeHostResult<()> {
-        let instances = lock(&self.registered_instances, "read_install_pause_instances")?;
-        let pauses = lock(&self.scheduling_pause, "read_install_pauses")?;
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ReadInstallPauseInstances,
+        )?;
+        let pauses = lock(&self.scheduling_pause, HostLocation::ReadInstallPauses)?;
         let mut rows = vec![pause_identity(ticket, "transition")?];
         if let Some(pause) = pauses.global_state() {
             let mut row = pause_identity(ticket, "global")?;
             pause_fields(
                 &mut row,
                 pause.revision,
-                pause.pause_reason.as_str(),
+                &pause.pause_reason,
                 pause.since_unix_ms,
             );
             rows.push(row);
@@ -955,7 +1014,7 @@ impl HostShared {
                 pause_fields(
                     &mut row,
                     pause.revision,
-                    pause.pause_reason.as_str(),
+                    &pause.pause_reason,
                     pause.since_unix_ms,
                 );
                 rows.push(row);
@@ -972,41 +1031,41 @@ impl HostShared {
         deadline: Instant,
     ) -> RuntimeHostResult<SchedulingPauseTable> {
         if ticket.target.owner_epoch == self.owner_epoch {
-            return Err(install_error("install_previous_owner_invalid"));
+            return Err(install_error(HostCode::InstallPreviousOwnerInvalid));
         }
-        let store = lock(&self.runtime_facts, "read_install_previous_facts")?;
+        let store = lock(&self.runtime_facts, HostLocation::ReadInstallPreviousFacts)?;
         let transition = store
             .get(&RuntimeFactScope::Runtime, TRANSITION_KEY)
             .filter(|record| record.source == OriginModule::Runtime)
-            .ok_or_else(|| install_error("install_previous_transition_missing"))?
+            .ok_or_else(|| install_error(HostCode::InstallPreviousTransitionMissing))?
             .clone();
         let pauses = store
             .get(&RuntimeFactScope::Runtime, PAUSES_KEY)
             .filter(|record| record.source == OriginModule::Runtime)
-            .ok_or_else(|| install_error("install_previous_pauses_missing"))?
+            .ok_or_else(|| install_error(HostCode::InstallPreviousPausesMissing))?
             .clone();
         drop(store);
         let ContractFactValue::RecordList(rows) = &transition.value else {
-            return Err(install_error("install_previous_transition_invalid"));
+            return Err(install_error(HostCode::InstallPreviousTransitionInvalid));
         };
         if rows.len() != 1
             || !matching_ticket(&rows[0], ticket)?
             || row_string(&rows[0], "phase")? != "drained"
             || rows[0].get("admission_closed") != Some(&FactScalar::Boolean(true))
         {
-            return Err(install_error("install_previous_transition_invalid"));
+            return Err(install_error(HostCode::InstallPreviousTransitionInvalid));
         }
         // Bound recovery by the same Host control maximum; a missing or unread proof never
         // restores a pause. Pages are streamed, and only the exact record supplies a position.
         let through = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("verify_install_previous"))?;
+            .map_err(|_| ledger_error(HostLocation::VerifyInstallPrevious))?;
         let mut after = 0;
         let mut drained_at = None;
         loop {
             if Instant::now() >= deadline {
-                return Err(install_error("install_previous_verification_timeout"));
+                return Err(install_error(HostCode::InstallPreviousVerificationTimeout));
             }
             let page = self
                 .ledger
@@ -1020,7 +1079,7 @@ impl HostShared {
                     through,
                     128,
                 )
-                .map_err(|_| ledger_error("verify_install_previous"))?;
+                .map_err(|_| ledger_error(HostLocation::VerifyInstallPrevious))?;
             for event in &page {
                 if matches!(event.payload(), EventPayload::Runtime(RuntimePayload::FactRecorded(payload)) if payload.record() == &transition)
                 {
@@ -1035,11 +1094,11 @@ impl HostShared {
             }
         }
         let mut after =
-            drained_at.ok_or_else(|| install_error("install_previous_drain_unverified"))?;
+            drained_at.ok_or_else(|| install_error(HostCode::InstallPreviousDrainUnverified))?;
         let mut closed = false;
         loop {
             if Instant::now() >= deadline {
-                return Err(install_error("install_previous_verification_timeout"));
+                return Err(install_error(HostCode::InstallPreviousVerificationTimeout));
             }
             let page = self
                 .ledger
@@ -1052,7 +1111,7 @@ impl HostShared {
                     through,
                     128,
                 )
-                .map_err(|_| ledger_error("verify_install_previous_shutdown"))?;
+                .map_err(|_| ledger_error(HostLocation::VerifyInstallPreviousShutdown))?;
             for event in &page {
                 if matches!(event.payload(), EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload))
                     if payload.owner_epoch() == ticket.target.owner_epoch
@@ -1072,37 +1131,41 @@ impl HostShared {
             }
         }
         if !closed {
-            return Err(install_error("install_previous_shutdown_unverified"));
+            return Err(install_error(HostCode::InstallPreviousShutdownUnverified));
         }
         let ContractFactValue::RecordList(rows) = &pauses.value else {
-            return Err(install_error("install_previous_pauses_invalid"));
+            return Err(install_error(HostCode::InstallPreviousPausesInvalid));
         };
         let mut global = None;
         let mut instances = BTreeMap::new();
         let mut identity = false;
         for row in rows {
             if !matching_ticket(row, ticket)? {
-                return Err(install_error("install_previous_pause_identity_mismatch"));
+                return Err(install_error(
+                    HostCode::InstallPreviousPauseIdentityMismatch,
+                ));
             }
             let scope = row_string(row, "scope")?;
             if scope == "transition" {
                 if identity {
-                    return Err(install_error("install_previous_pauses_invalid"));
+                    return Err(install_error(HostCode::InstallPreviousPausesInvalid));
                 }
                 identity = true;
                 continue;
             }
             let revision = row_string(row, "revision")?
                 .parse::<u64>()
-                .map_err(|_| install_error("install_previous_pause_revision_invalid"))?;
+                .map_err(|_| install_error(HostCode::InstallPreviousPauseRevisionInvalid))?;
             let pause_reason = actingcommand_contract::SchedulingPauseReason::new(row_string(
                 row,
                 "pause_reason",
             )?)
-            .map_err(|error| install_error(error.code().as_str()))?;
+            .map_err(|error| install_error(error.code()))?;
             let since_unix_ms = match row.get("since_unix_ms") {
                 Some(FactScalar::TimestampMs(value)) => *value,
-                _ => return Err(install_error("install_previous_pause_time_invalid")),
+                _ => {
+                    return Err(install_error(HostCode::InstallPreviousPauseTimeInvalid));
+                }
             };
             match scope {
                 "global" => {
@@ -1113,16 +1176,18 @@ impl HostShared {
                     };
                     pause
                         .validate()
-                        .map_err(|error| install_error(error.code().as_str()))?;
+                        .map_err(|error| install_error(error.code()))?;
                     if global.replace(pause).is_some() {
-                        return Err(install_error("install_previous_pauses_invalid"));
+                        return Err(install_error(HostCode::InstallPreviousPausesInvalid));
                     }
                 }
                 "instance" => {
                     let stage = match row_string(row, "stage")? {
                         "paused" => actingcommand_contract::InstancePauseStage::Paused,
                         "released" => actingcommand_contract::InstancePauseStage::Released,
-                        _ => return Err(install_error("install_previous_pause_not_settled")),
+                        _ => {
+                            return Err(install_error(HostCode::InstallPreviousPauseNotSettled));
+                        }
                     };
                     let pause = actingcommand_contract::InstancePauseState {
                         revision,
@@ -1132,19 +1197,21 @@ impl HostShared {
                     };
                     pause
                         .validate()
-                        .map_err(|error| install_error(error.code().as_str()))?;
+                        .map_err(|error| install_error(error.code()))?;
                     if instances
                         .insert(row_string(row, "instance_alias")?.to_owned(), pause)
                         .is_some()
                     {
-                        return Err(install_error("install_previous_pauses_invalid"));
+                        return Err(install_error(HostCode::InstallPreviousPausesInvalid));
                     }
                 }
-                _ => return Err(install_error("install_previous_pause_scope_invalid")),
+                _ => {
+                    return Err(install_error(HostCode::InstallPreviousPauseScopeInvalid));
+                }
             }
         }
         if !identity {
-            return Err(install_error("install_previous_pause_identity_missing"));
+            return Err(install_error(HostCode::InstallPreviousPauseIdentityMissing));
         }
         Ok(SchedulingPauseTable::from_install_pauses(global, instances))
     }
@@ -1171,14 +1238,19 @@ fn pause_identity(
     ]))
 }
 
-fn pause_fields(row: &mut BTreeMap<String, FactScalar>, revision: u64, reason: &str, since: u64) {
+fn pause_fields(
+    row: &mut BTreeMap<String, FactScalar>,
+    revision: u64,
+    reason: &actingcommand_contract::SchedulingPauseReason,
+    since: u64,
+) {
     row.insert(
         "revision".to_owned(),
         FactScalar::String(revision.to_string()),
     );
     row.insert(
         "pause_reason".to_owned(),
-        FactScalar::String(reason.to_owned()),
+        FactScalar::String(reason.as_str().to_owned()),
     );
     row.insert("since_unix_ms".to_owned(), FactScalar::TimestampMs(since));
 }
@@ -1186,7 +1258,7 @@ fn pause_fields(row: &mut BTreeMap<String, FactScalar>, revision: u64, reason: &
 fn row_string<'a>(row: &'a BTreeMap<String, FactScalar>, key: &str) -> RuntimeHostResult<&'a str> {
     match row.get(key) {
         Some(FactScalar::String(value)) => Ok(value),
-        _ => Err(install_error("install_fact_field_invalid")),
+        _ => Err(install_error(HostCode::InstallFactFieldInvalid)),
     }
 }
 
@@ -1203,9 +1275,9 @@ fn matching_ticket(
 
 fn identity_scalar(value: &impl serde::Serialize) -> RuntimeHostResult<FactScalar> {
     match serde_json::to_value(value)
-        .map_err(|_| install_error("install_identity_encode_failed"))?
+        .map_err(|_| install_error(HostCode::InstallIdentityEncodeFailed))?
     {
         serde_json::Value::String(value) => Ok(FactScalar::String(value)),
-        _ => Err(install_error("install_identity_encode_failed")),
+        _ => Err(install_error(HostCode::InstallIdentityEncodeFailed)),
     }
 }

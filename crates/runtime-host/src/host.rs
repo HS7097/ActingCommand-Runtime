@@ -5,6 +5,7 @@ use crate::agent_dispatcher::{
 };
 use crate::approval::ApprovalProjection;
 use crate::catalog_plan::{CatalogTransitionPlan, CatalogTransitionRequest};
+use crate::codes::{HostCode, HostLocation};
 use crate::events::RuntimeEvents;
 use crate::fact_store::{
     InstanceFactStore, POLICY_INSTANCE_AVAILABLE_KEY, POLICY_INSTANCE_CAPABILITIES_KEY,
@@ -41,6 +42,8 @@ use actingcommand_artifact_store::{
     PreparedArtifact, RecognitionState, build_capture_pipeline_summary, capture_summary_record,
     read_projected_verified,
 };
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ActionId, AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
@@ -242,7 +245,7 @@ use requests::{
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
     critical_plan_error, diagnostic_for_projection, policy_admission_fatal,
     policy_admission_request, policy_contract_error, policy_id_error, protocol_error,
-    receipt_error, terminal,
+    protocol_error_at_code_spelling, receipt_error, terminal,
 };
 use state_control::reconcile_runtime_state;
 
@@ -276,12 +279,14 @@ pub enum RuntimeLifecycleFailure<'a> {
         decision_id: &'a str,
     },
     Client {
-        code: &'static str,
-        operation: &'static str,
+        code: Code,
+        operation: Location,
         fatal: bool,
         runtime_code: Option<RuntimeErrorCode>,
         message: &'a str,
     },
+    /// actingd's own failure; its code may be a runtime host code that actingd holds as a
+    /// spelling (`ErrorCode::Host`) until A2c and A2d type the codes the host relays.
     Process {
         code: &'static str,
     },
@@ -364,7 +369,9 @@ fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
     let marker =
         std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("policy crash marker path");
     fs::write(marker, b"fail_policy_execution_append").expect("policy append failure marker");
-    Err(ledger_error("append_policy_execution"))
+    Err(ledger_error(
+        crate::codes::test_spellings::TestLocation::AppendPolicyExecution,
+    ))
 }
 
 /// Workflow #381 A (HOST-I3): the checkpoints of a held start that a test hook sees, in the
@@ -386,7 +393,7 @@ pub enum PreparationTestAction {
     /// Latches the Runtime's fatal state with `ledger_failure` during `operation`, as a request
     /// whose ledger write failed would, then continues.
     LatchLedgerFailure {
-        operation: &'static str,
+        operation: Location,
     },
 }
 
@@ -402,7 +409,7 @@ impl PreparationProbe<'_> {
     pub fn ledger_head(&self) -> RuntimeHostResult<u64> {
         self.ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("read_test_ledger_head"))
+            .map_err(|_| ledger_error(HostLocation::ReadTestLedgerHead))
     }
 }
 
@@ -833,21 +840,21 @@ impl RuntimeHostConfig {
     }
 
     pub fn validate(&self) -> RuntimeHostResult<()> {
-        self.scheduler
-            .validate()
-            .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
+        self.scheduler.validate().map_err(|error| {
+            RuntimeHostError::scheduler(HostLocation::ValidateRuntimeConfig, &error)
+        })?;
         self.policy_cadence.validate()?;
         self.failed_run_retention.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "invalid_failed_run_retention_policy",
-                "validate_runtime_config",
+                SharedCode::InvalidFailedRunRetentionPolicy,
+                HostLocation::ValidateRuntimeConfig,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         self.capacity_thresholds.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "invalid_capacity_thresholds",
-                "validate_runtime_config",
+                SharedCode::InvalidCapacityThresholds,
+                HostLocation::ValidateRuntimeConfig,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -858,8 +865,8 @@ impl RuntimeHostConfig {
         if let Some(config_manifest) = &self.config_manifest {
             config_manifest.validate().map_err(|error| {
                 RuntimeHostError::fatal(
-                    "invalid_runtime_config_manifest",
-                    "validate_runtime_config",
+                    HostCode::InvalidRuntimeConfigManifest,
+                    HostLocation::ValidateRuntimeConfig,
                     RuntimeErrorCode::RuntimeFatal,
                 )
                 .with_native_detail(error.code().as_str().to_owned())
@@ -870,8 +877,8 @@ impl RuntimeHostConfig {
                 || request.validate().is_err()
             {
                 return Err(RuntimeHostError::fatal(
-                    "invalid_startup_package",
-                    "validate_runtime_config",
+                    HostCode::InvalidStartupPackage,
+                    HostLocation::ValidateRuntimeConfig,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -881,8 +888,8 @@ impl RuntimeHostConfig {
                 || settings.validate().is_err()
             {
                 return Err(RuntimeHostError::fatal(
-                    "invalid_stuck_recovery",
-                    "validate_runtime_config",
+                    HostCode::InvalidStuckRecovery,
+                    HostLocation::ValidateRuntimeConfig,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -895,8 +902,8 @@ impl RuntimeHostConfig {
             .any(|client| actingcommand_contract::validate_governance_client(client).is_err())
         {
             return Err(RuntimeHostError::fatal(
-                "invalid_governance_policy",
-                "validate_runtime_config",
+                HostCode::InvalidGovernancePolicy,
+                HostLocation::ValidateRuntimeConfig,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -908,8 +915,8 @@ impl RuntimeHostConfig {
             || self.secret_fingerprint_salt.is_empty()
         {
             return Err(RuntimeHostError::fatal(
-                "invalid_runtime_host_config",
-                "validate_runtime_config",
+                HostCode::InvalidRuntimeHostConfig,
+                HostLocation::ValidateRuntimeConfig,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1038,8 +1045,8 @@ impl RuntimeHost {
             installation::LifecycleAdmission::new(config.install_held.clone())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
-                "state_root_create_failed",
-                "start_runtime_host",
+                SharedCode::StateRootCreateFailed,
+                HostLocation::StartRuntimeHost,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -1067,8 +1074,8 @@ impl RuntimeHost {
         ] {
             if config.state_root.join(material).try_exists().map_err(|_| {
                 RuntimeHostError::fatal(
-                    "state_root_inspect_failed",
-                    "select_runtime_storage",
+                    SharedCode::StateRootInspectFailed,
+                    HostLocation::SelectRuntimeStorage,
                     RuntimeErrorCode::LedgerFailure,
                 )
             })? {
@@ -1076,7 +1083,7 @@ impl RuntimeHost {
             }
         }
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
-            .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
+            .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
         let database = Arc::new(if fresh_storage {
             RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
@@ -1119,7 +1126,7 @@ impl RuntimeHost {
             })?,
         )
         .map_err(|error| {
-            RuntimeHostError::fatal(
+            RuntimeHostError::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::LedgerFailure,
@@ -1128,7 +1135,7 @@ impl RuntimeHost {
         })?;
         if fresh_storage {
             maintenance.initialize_empty(&database).map_err(|error| {
-                RuntimeHostError::fatal(
+                RuntimeHostError::relayed_fatal(
                     error.code(),
                     error.operation(),
                     RuntimeErrorCode::LedgerFailure,
@@ -1137,7 +1144,7 @@ impl RuntimeHost {
             })?;
         }
         if !maintenance.formal_ready(&database).map_err(|error| {
-            RuntimeHostError::fatal(
+            RuntimeHostError::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::LedgerFailure,
@@ -1145,8 +1152,8 @@ impl RuntimeHost {
             .with_native_detail(format!("{error:?}"))
         })? {
             return Err(RuntimeHostError::fatal(
-                "ledger_migration_required",
-                "select_runtime_storage",
+                SharedCode::LedgerMigrationRequired,
+                HostLocation::SelectRuntimeStorage,
                 RuntimeErrorCode::LedgerFailure,
             ));
         }
@@ -1162,7 +1169,7 @@ impl RuntimeHost {
             limits.timeout_seconds.saturating_mul(1000)
         );
         let ledger = opened.map_err(|error| {
-            RuntimeHostError::fatal(
+            RuntimeHostError::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::LedgerFailure,
@@ -1184,7 +1191,7 @@ impl RuntimeHost {
             });
         if let Err(mut original) = recovery {
             let ledger_closed = ledger.close().map_err(|error| {
-                RuntimeHostError::fatal(
+                RuntimeHostError::relayed_fatal(
                     error.code(),
                     error.operation(),
                     RuntimeErrorCode::LedgerFailure,
@@ -1225,7 +1232,7 @@ impl RuntimeHost {
             Ok(performance) => performance,
             Err(mut original) => {
                 let ledger_closed = ledger.close().map_err(|error| {
-                    RuntimeHostError::fatal(
+                    RuntimeHostError::relayed_fatal(
                         error.code(),
                         error.operation(),
                         RuntimeErrorCode::LedgerFailure,
@@ -1259,7 +1266,7 @@ impl RuntimeHost {
                 ledger
                     .reconcile_prior_epoch_closes(owner_epoch, journal, deadline)
                     .map_err(|error| {
-                        RuntimeHostError::fatal(
+                        RuntimeHostError::relayed_fatal(
                             error.code(),
                             error.operation(),
                             RuntimeErrorCode::LedgerFailure,
@@ -1269,7 +1276,7 @@ impl RuntimeHost {
             });
         if let Err(mut original) = prior_epoch_recovery {
             let ledger_closed = ledger.close().map_err(|error| {
-                RuntimeHostError::fatal(
+                RuntimeHostError::relayed_fatal(
                     error.code(),
                     error.operation(),
                     RuntimeErrorCode::LedgerFailure,
@@ -1291,22 +1298,22 @@ impl RuntimeHost {
         }
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_bind_failed",
-                "start_runtime_host",
+                HostCode::RuntimeBindFailed,
+                HostLocation::StartRuntimeHost,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         listener.set_nonblocking(true).map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_listener_config_failed",
-                "start_runtime_host",
+                HostCode::RuntimeListenerConfigFailed,
+                HostLocation::StartRuntimeHost,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         let local_address = listener.local_addr().map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_listener_address_failed",
-                "start_runtime_host",
+                HostCode::RuntimeListenerAddressFailed,
+                HostLocation::StartRuntimeHost,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -1335,8 +1342,8 @@ impl RuntimeHost {
             )
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "runtime_info_invalid",
-                    "start_runtime_host",
+                    SharedCode::RuntimeInfoInvalid,
+                    HostLocation::StartRuntimeHost,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -1373,7 +1380,7 @@ impl RuntimeHost {
                         device_diagnostic::confirm_deferred_appends(
                             &ledger,
                             GlobalLedger::REPLY_TIMEOUT,
-                            "append_device_diagnostic_budget",
+                            HostLocation::AppendDeviceDiagnosticBudget,
                         )
                     }) {
                         return Err(device_diagnostic::summary_incomplete(
@@ -1539,8 +1546,8 @@ impl RuntimeHost {
                     })
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "runtime_accept_spawn_failed",
-                            "start_runtime_host",
+                            HostCode::RuntimeAcceptSpawnFailed,
+                            HostLocation::StartRuntimeHost,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })?,
@@ -1703,8 +1710,8 @@ impl RuntimeHost {
                 )?;
             } else if agent_dispatcher.has_live_obligations() {
                 return Err(RuntimeHostError::fatal(
-                    "agent_dispatcher_config_missing",
-                    "start_runtime_host",
+                    HostCode::AgentDispatcherConfigMissing,
+                    HostLocation::StartRuntimeHost,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -1722,15 +1729,22 @@ impl RuntimeHost {
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
             installation::set_prepared(&shared.stuck_recovery, stuck_recovery)?;
-            *lock(&shared.registered_instances, "prepare_registered_instances")? =
-                registered_instances;
+            *lock(
+                &shared.registered_instances,
+                HostLocation::PrepareRegisteredInstances,
+            )? = registered_instances;
             *lock(
                 &shared.authoritative_policy_outcomes,
-                "prepare_policy_outcomes",
+                HostLocation::PreparePolicyOutcomes,
             )? = authoritative_policy_outcomes;
-            *lock(&shared.policy_dispatch_clocks, "prepare_policy_clocks")? =
-                policy_dispatch_clocks;
-            *lock(&shared.agent_dispatcher, "prepare_agent_dispatcher")? = agent_dispatcher;
+            *lock(
+                &shared.policy_dispatch_clocks,
+                HostLocation::PreparePolicyClocks,
+            )? = policy_dispatch_clocks;
+            *lock(
+                &shared.agent_dispatcher,
+                HostLocation::PrepareAgentDispatcher,
+            )? = agent_dispatcher;
             shared.seed_policy_instance_facts()?;
             if let Some(config_manifest) = &config.config_manifest {
                 shared.record_config_manifest(config_manifest)?;
@@ -1753,8 +1767,11 @@ impl RuntimeHost {
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
             shared.check_install_preparation()?;
-            lock(&shared.performance, "sample_capacity_before_business")?
-                .sample_and_record_capacity(&shared.ledger, &shared.events)?;
+            lock(
+                &shared.performance,
+                HostLocation::SampleCapacityBeforeBusiness,
+            )?
+            .sample_and_record_capacity(&shared.ledger, &shared.events)?;
             let sweep_shared = Arc::clone(&shared);
             host.sweep_thread = Some(
                 thread::Builder::new()
@@ -1762,8 +1779,8 @@ impl RuntimeHost {
                     .spawn(move || lease_sweep_loop(sweep_shared))
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "runtime_sweeper_spawn_failed",
-                            "start_runtime_host",
+                            HostCode::RuntimeSweeperSpawnFailed,
+                            HostLocation::StartRuntimeHost,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })?,
@@ -1775,8 +1792,8 @@ impl RuntimeHost {
                     .spawn(move || monitor_probe_loop(monitor_shared))
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "runtime_monitor_spawn_failed",
-                            "start_runtime_host",
+                            HostCode::RuntimeMonitorSpawnFailed,
+                            HostLocation::StartRuntimeHost,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })?,
@@ -1789,8 +1806,8 @@ impl RuntimeHost {
                         .spawn(move || performance_monitor_loop(performance_shared, interval))
                         .map_err(|_| {
                             RuntimeHostError::fatal(
-                                "runtime_performance_spawn_failed",
-                                "start_runtime_host",
+                                HostCode::RuntimePerformanceSpawnFailed,
+                                HostLocation::StartRuntimeHost,
                                 RuntimeErrorCode::RuntimeFatal,
                             )
                         })?,
@@ -1841,10 +1858,12 @@ impl RuntimeHost {
         &self,
         page_events: Option<usize>,
     ) -> RuntimeHostResult<AgentDispatcherState> {
-        let shared = self.shared_ref("recover_agent_dispatcher_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::RecoverAgentDispatcherForTest,
+        )?;
         let instance_ids = lock(
             &shared.registered_instances,
-            "recover_agent_dispatcher_for_test",
+            crate::codes::test_spellings::TestLocation::RecoverAgentDispatcherForTest,
         )?
         .values()
         .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
@@ -1869,7 +1888,7 @@ impl RuntimeHost {
     /// The daemon checks fatal_error first, then returns through its owned close path.
     pub fn is_shutdown_requested(&self) -> RuntimeHostResult<bool> {
         Ok(self
-            .shared_ref("read_runtime_shutdown")?
+            .shared_ref(HostLocation::ReadRuntimeShutdown)?
             .fatal
             .is_shutdown_requested())
     }
@@ -1878,14 +1897,14 @@ impl RuntimeHost {
     /// the host is stopping. An in-process reader only; the daemon's policy monitor waits while
     /// this is true instead of sending a subscription the drain would refuse.
     pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
-        self.shared_ref("read_lifecycle_draining")?
+        self.shared_ref(HostLocation::ReadLifecycleDraining)?
             .lifecycle_draining()
     }
 
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
     pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         Ok(self
-            .shared_ref("begin_policy_work")?
+            .shared_ref(HostLocation::BeginPolicyWork)?
             .begin_work()?
             .map(|guard| RuntimePolicyWork { _guard: guard }))
     }
@@ -1908,9 +1927,9 @@ impl RuntimeHost {
     }
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        let shared = self.shared_ref("read_runtime_health")?;
+        let shared = self.shared_ref(HostLocation::ReadRuntimeHealth)?;
         if let Err(error) = shared.ledger.check_writer_health() {
-            shared.fatal.mark(RuntimeHostError::fatal(
+            shared.fatal.mark(RuntimeHostError::relayed_fatal(
                 error.code(),
                 error.operation(),
                 RuntimeErrorCode::LedgerFailure,
@@ -1920,7 +1939,7 @@ impl RuntimeHost {
     }
 
     pub fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
-        self.shared_ref("read_active_policy_catalog")?
+        self.shared_ref(HostLocation::ReadActivePolicyCatalog)?
             .active_policy_catalog()
     }
 
@@ -1928,7 +1947,7 @@ impl RuntimeHost {
         &self,
         sources: &CatalogSources,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        self.work_ref("activate_policy_catalog")?
+        self.work_ref(HostLocation::ActivatePolicyCatalog)?
             .activate_policy_catalog(sources)
     }
 
@@ -1941,7 +1960,7 @@ impl RuntimeHost {
         request: Option<&CatalogTransitionRequest>,
         approval_ids: &[String],
     ) -> RuntimeHostResult<CatalogTransitionPlan> {
-        self.work_ref("plan_policy_catalog_transition")?
+        self.work_ref(HostLocation::PlanPolicyCatalogTransition)?
             .plan_policy_catalog_transition(sources, request, approval_ids)
     }
 
@@ -1950,7 +1969,7 @@ impl RuntimeHost {
         &self,
         plan: &CatalogTransitionPlan,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        self.work_ref("apply_policy_catalog_transition")?
+        self.work_ref(HostLocation::ApplyPolicyCatalogTransition)?
             .apply_policy_catalog_transition(plan)
     }
 
@@ -1960,7 +1979,7 @@ impl RuntimeHost {
         &self,
         approval_ids: &[String],
     ) -> RuntimeHostResult<BTreeMap<String, ApprovalDecisionRecord>> {
-        self.work_ref("read_latest_approval_decisions")?
+        self.work_ref(HostLocation::ReadLatestApprovalDecisions)?
             .latest_approval_decisions(approval_ids)
     }
 
@@ -1969,7 +1988,7 @@ impl RuntimeHost {
         &self,
         generation: &CatalogGeneration,
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
-        self.work_ref("read_superseded_catalog_approvals")?
+        self.work_ref(HostLocation::ReadSupersededCatalogApprovals)?
             .superseded_catalog_approvals(generation)
     }
 
@@ -1983,9 +2002,11 @@ impl RuntimeHost {
     )> {
         let table = lock(
             &self
-                .shared_ref("read_scheduling_pauses_for_test")?
+                .shared_ref(
+                    crate::codes::test_spellings::TestLocation::ReadSchedulingPausesForTest,
+                )?
                 .scheduling_pause,
-            "read_scheduling_pauses_for_test",
+            crate::codes::test_spellings::TestLocation::ReadSchedulingPausesForTest,
         )?
         .clone();
         Ok((table.global_state(), table.instance_states()))
@@ -2000,9 +2021,14 @@ impl RuntimeHost {
         RuntimeHostResult<CatalogGeneration>,
         Option<actingcommand_runtime_state::StateDocument>,
     )> {
-        let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
-        let catalog =
-            lock(shared.policy()?, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ActivatePolicyCatalogWithExpectedForTest,
+        )?;
+        let catalog = lock(
+            shared.policy()?,
+            crate::codes::test_spellings::TestLocation::StagePolicyCatalogForCasTest,
+        )?
+        .stage(sources)?;
         let result = shared.switch_policy_catalog(
             catalog,
             Some(expected),
@@ -2021,7 +2047,7 @@ impl RuntimeHost {
         &self,
         catalog_hash: &str,
     ) -> RuntimeHostResult<CatalogGeneration> {
-        self.work_ref("rollback_policy_catalog")?
+        self.work_ref(HostLocation::RollbackPolicyCatalog)?
             .rollback_policy_catalog(catalog_hash)
     }
 
@@ -2030,22 +2056,22 @@ impl RuntimeHost {
         manifest: RuntimeReleaseSet,
         sources: &ReleaseArtifactSources,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.work_ref("stage_release_set")?
+        self.work_ref(HostLocation::StageReleaseSet)?
             .stage_release_set(manifest, sources)
     }
 
     pub fn active_release_set(&self) -> RuntimeHostResult<Option<RuntimeReleaseSet>> {
-        self.shared_ref("read_active_release_set")?
+        self.shared_ref(HostLocation::ReadActiveReleaseSet)?
             .active_release_set()
     }
 
     pub fn activate_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.work_ref("activate_release_set")?
+        self.work_ref(HostLocation::ActivateReleaseSet)?
             .switch_release_set(ReleaseTransitionKind::Activate, release_id)
     }
 
     pub fn rollback_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
-        self.work_ref("rollback_release_set")?
+        self.work_ref(HostLocation::RollbackReleaseSet)?
             .switch_release_set(ReleaseTransitionKind::Rollback, release_id)
     }
 
@@ -2054,7 +2080,7 @@ impl RuntimeHost {
         &self,
         bytes: &[u8],
     ) -> RuntimeHostResult<ProjectedArtifactReference> {
-        self.shared_ref("store_test_report")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::StoreTestReport)?
             .store_test_report(bytes)
     }
 
@@ -2063,13 +2089,13 @@ impl RuntimeHost {
         report: &StrategicReport,
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<StrategicPlanPreparation> {
-        self.work_ref("prepare_strategic_report")?
+        self.work_ref(ContractLocation::PrepareStrategicReport)?
             .prepare_strategic_report(report, evidence)
     }
 
     /// Evaluates one policy cycle from Runtime-owned facts, resources, time, and seed.
     pub fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {
-        self.work_ref("evaluate_policy_cycle")?
+        self.work_ref(HostLocation::EvaluatePolicyCycle)?
             .evaluate_policy_cycle(trigger)
     }
 
@@ -2082,7 +2108,7 @@ impl RuntimeHost {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
-        self.work_ref("evaluate_policy_cycle")?
+        self.work_ref(crate::codes::HostLocation::EvaluatePolicyCycle)?
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
     }
 
@@ -2091,8 +2117,10 @@ impl RuntimeHost {
         &self,
         procedure_manifest: ProcedureManifest,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("replace_procedure_manifest_for_test")?
-            .replace_procedure_manifest_for_test(procedure_manifest)
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ReplaceProcedureManifestForTest,
+        )?
+        .replace_procedure_manifest_for_test(procedure_manifest)
     }
 
     /// Runs a bounded future dry-run through the same pure policy evaluator used for admission.
@@ -2104,7 +2132,7 @@ impl RuntimeHost {
         seed: u64,
         config: ForwardProjectionConfig,
     ) -> RuntimeHostResult<ForwardProjection> {
-        self.work_ref("project_policy_forward")?
+        self.work_ref(ContractLocation::ProjectPolicyForward)?
             .project_policy_forward(facts, resources, time, seed, config)
     }
 
@@ -2113,13 +2141,14 @@ impl RuntimeHost {
         &self,
         query: &MaintenanceLedgerQuery,
     ) -> RuntimeHostResult<MaintenanceAssessment> {
-        self.work_ref("assess_predictive_maintenance")?
+        self.work_ref(ContractLocation::AssessPredictiveMaintenance)?
             .assess_and_publish_predictive_maintenance(query)
     }
 
     /// Validates and durably publishes one Runtime-owned fact into the GlobalLedger.
     pub fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
-        self.work_ref("publish_fact")?.publish_fact(record)
+        self.work_ref(ContractLocation::PublishFact)?
+            .publish_fact(record)
     }
 
     /// Returns an immutable ledger-pinned fact projection for one instance context.
@@ -2127,13 +2156,13 @@ impl RuntimeHost {
         &self,
         context: InstanceFactContext,
     ) -> RuntimeHostResult<InstanceFactSnapshot> {
-        self.shared_ref("read_instance_fact_snapshot")?
+        self.shared_ref(HostLocation::ReadInstanceFactSnapshot)?
             .instance_fact_snapshot(context)
     }
 
     /// Returns the sealed image of the Runtime's own fact store at the ledger's latest sequence.
     pub fn runtime_fact_snapshot(&self) -> RuntimeHostResult<RuntimeFactSnapshot> {
-        self.shared_ref("read_runtime_fact_snapshot")?
+        self.shared_ref(HostLocation::ReadRuntimeFactSnapshot)?
             .runtime_fact_snapshot()
     }
 
@@ -2143,10 +2172,10 @@ impl RuntimeHost {
         reason_chain: &DecisionReasonChain,
         context: &PolicyAdmissionContext,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        match self.work_ref("admit_policy_dispatch") {
+        match self.work_ref(HostLocation::AdmitPolicyDispatch) {
             Ok(work) => work.admit_policy_dispatch(intent, reason_chain, context, None),
             Err(error) => self
-                .shared_ref("record_policy_admission_failure")?
+                .shared_ref(HostLocation::RecordPolicyAdmissionFailure)?
                 .record_policy_admission_result(intent, Err(error), None),
         }
     }
@@ -2159,12 +2188,12 @@ impl RuntimeHost {
         context: &PolicyAdmissionContext,
         task_request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<PolicyDispatchAdmission> {
-        match self.work_ref("admit_policy_dispatch") {
+        match self.work_ref(HostLocation::AdmitPolicyDispatch) {
             Ok(work) => {
                 work.admit_policy_dispatch(intent, reason_chain, context, Some(task_request))
             }
             Err(error) => self
-                .shared_ref("record_policy_admission_failure")?
+                .shared_ref(HostLocation::RecordPolicyAdmissionFailure)?
                 .record_policy_admission_result(intent, Err(error), None),
         }
     }
@@ -2173,13 +2202,13 @@ impl RuntimeHost {
         &self,
         decision_id: &str,
     ) -> RuntimeHostResult<Option<CatalogGeneration>> {
-        self.shared_ref("read_pinned_policy_catalog")?
+        self.shared_ref(HostLocation::ReadPinnedPolicyCatalog)?
             .pinned_policy_catalog(decision_id)
     }
 
     #[cfg(test)]
     pub(crate) fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
-        self.work_ref("complete_policy_dispatch")?
+        self.work_ref(crate::codes::HostLocation::CompletePolicyDispatch)?
             .record_policy_dispatch_outcome(decision_id, &PolicyExecutionInput::Succeeded, None)
             .map(|_| ())
     }
@@ -2190,7 +2219,7 @@ impl RuntimeHost {
         decision_id: &str,
         input: &PolicyExecutionInput,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
-        self.work_ref("record_policy_dispatch_outcome")?
+        self.work_ref(crate::codes::HostLocation::RecordPolicyDispatchOutcome)?
             .record_policy_dispatch_outcome(decision_id, input, None)
     }
 
@@ -2200,7 +2229,7 @@ impl RuntimeHost {
         context: &PolicyRunContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let shared =
-            self.shared_ref("complete_scheduled_policy_success_without_terminal_for_test")?;
+            self.shared_ref(crate::codes::test_spellings::TestLocation::CompleteScheduledPolicySuccessWithoutTerminalForTest)?;
         shared.ensure_scheduled_policy_lease_released(context)?;
         shared.record_policy_dispatch_outcome(
             context.decision_id(),
@@ -2214,7 +2243,7 @@ impl RuntimeHost {
         &self,
         context: &PolicyRunContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
-        let shared = self.shared_ref("complete_policy_success_with_partial_links_for_test")?;
+        let shared = self.shared_ref(crate::codes::test_spellings::TestLocation::CompletePolicySuccessWithPartialLinksForTest)?;
         shared.ensure_scheduled_policy_lease_released(context)?;
         shared.record_policy_dispatch_outcome(
             context.decision_id(),
@@ -2229,7 +2258,7 @@ impl RuntimeHost {
         context: &PolicyRunContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let shared =
-            self.shared_ref("complete_scheduled_policy_failure_without_terminal_for_test")?;
+            self.shared_ref(crate::codes::test_spellings::TestLocation::CompleteScheduledPolicyFailureWithoutTerminalForTest)?;
         shared.ensure_scheduled_policy_lease_released(context)?;
         shared.record_policy_dispatch_outcome_with_cache_update(
             context.decision_id(),
@@ -2249,7 +2278,9 @@ impl RuntimeHost {
         admission_request_id: RequestId,
         through_sequence: u64,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("validate_policy_admission_request_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ValidatePolicyAdmissionRequestForTest,
+        )?;
         validate_policy_run_admission_request(
             &shared.ledger,
             context.lease_token().instance_id(),
@@ -2268,29 +2299,37 @@ impl RuntimeHost {
     pub(crate) fn policy_outcome_key_snapshot_for_test(
         &self,
     ) -> RuntimeHostResult<PolicyOutcomeKeySnapshot> {
-        let shared = self.shared_ref("policy_outcome_key_snapshot_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::PolicyOutcomeKeySnapshotForTest,
+        )?;
         let _gate = lock(
             &shared.policy_outcome_gate,
-            "policy_outcome_key_snapshot_for_test",
+            crate::codes::test_spellings::TestLocation::PolicyOutcomeKeySnapshotForTest,
         )?;
-        lock(shared.policy()?, "policy_outcome_key_snapshot_for_test")?.outcome_key_snapshot()
+        lock(
+            shared.policy()?,
+            crate::codes::test_spellings::TestLocation::PolicyOutcomeKeySnapshotForTest,
+        )?
+        .outcome_key_snapshot()
     }
 
     #[cfg(test)]
     pub(crate) fn pause_policy_outcome_transition_for_test(
         &self,
     ) -> RuntimeHostResult<PolicyOutcomeTransitionTestControl> {
-        let shared = self.shared_ref("install_policy_outcome_transition_test_hook")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InstallPolicyOutcomeTransitionTestHook,
+        )?;
         let completion_committed = Arc::new(Barrier::new(2));
         let resume = Arc::new(Barrier::new(2));
         let mut slot = lock(
             &shared.policy_outcome_transition_test_hook,
-            "install_policy_outcome_transition_test_hook",
+            crate::codes::test_spellings::TestLocation::InstallPolicyOutcomeTransitionTestHook,
         )?;
         if slot.is_some() {
             return Err(RuntimeHostError::fatal(
-                "policy_outcome_transition_test_hook_already_installed",
-                "install_policy_outcome_transition_test_hook",
+                crate::codes::test_spellings::TestCode::PolicyOutcomeTransitionTestHookAlreadyInstalled,
+                crate::codes::test_spellings::TestLocation::InstallPolicyOutcomeTransitionTestHook,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -2335,15 +2374,17 @@ impl RuntimeHost {
         identity: ScheduledPolicyCheckpointIdentity,
         action: ScheduledPolicyCheckpointTestAction,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("install_scheduled_policy_checkpoint_test_hook")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InstallScheduledPolicyCheckpointTestHook,
+        )?;
         let mut slot = lock(
             &shared.scheduled_policy_checkpoint_test_hook,
-            "install_scheduled_policy_checkpoint_test_hook",
+            crate::codes::test_spellings::TestLocation::InstallScheduledPolicyCheckpointTestHook,
         )?;
         if slot.is_some() {
             return Err(RuntimeHostError::fatal(
-                "scheduled_policy_checkpoint_test_hook_already_installed",
-                "install_scheduled_policy_checkpoint_test_hook",
+                crate::codes::test_spellings::TestCode::ScheduledPolicyCheckpointTestHookAlreadyInstalled,
+                crate::codes::test_spellings::TestLocation::InstallScheduledPolicyCheckpointTestHook,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -2409,17 +2450,19 @@ impl RuntimeHost {
     where
         F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
     {
-        let shared = self.shared_ref("install_contained_task_checkpoint_test_hook")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InstallContainedTaskCheckpointTestHook,
+        )?;
         let consumed = Arc::new(AtomicU64::new(0));
         let observed = Arc::new(Mutex::new(None));
         let mut slot = lock(
             &shared.contained_task_checkpoint_test_hook,
-            "install_contained_task_checkpoint_test_hook",
+            crate::codes::test_spellings::TestLocation::InstallContainedTaskCheckpointTestHook,
         )?;
         if slot.is_some() {
             return Err(RuntimeHostError::fatal(
-                "contained_task_checkpoint_test_hook_already_installed",
-                "install_contained_task_checkpoint_test_hook",
+                crate::codes::test_spellings::TestCode::ContainedTaskCheckpointTestHookAlreadyInstalled,
+                crate::codes::test_spellings::TestLocation::InstallContainedTaskCheckpointTestHook,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -2443,7 +2486,7 @@ impl RuntimeHost {
         context: &PolicyRunContext,
         request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<RuntimeReceipt> {
-        let shared = self.work_ref("run_scheduled_contained_task")?;
+        let shared = self.work_ref(HostLocation::RunScheduledContainedTask)?;
         let (request, success) = match shared.run_scheduled_contained_task(context, request) {
             Ok(success) => success,
             Err(failure) => {
@@ -2473,7 +2516,7 @@ impl RuntimeHost {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
-        let shared = self.work_ref("complete_scheduled_policy_run")?;
+        let shared = self.work_ref(HostLocation::CompleteScheduledPolicyRun)?;
         let result = shared.complete_scheduled_policy_run(context, receipt);
         if let Err(error) = &result {
             shared.record_scheduled_policy_failure(context, error)?;
@@ -2491,12 +2534,12 @@ impl RuntimeHost {
                 | actingcommand_contract::PolicyPlanningSignalKind::DetectionQuotaExhausted
         ) {
             return Err(RuntimeHostError::request(
-                "policy_detection_signal_runtime_owned",
-                "record_policy_planning_signal",
+                HostCode::PolicyDetectionSignalRuntimeOwned,
+                HostLocation::RecordPolicyPlanningSignal,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
-        self.work_ref("record_policy_planning_signal")?
+        self.work_ref(HostLocation::RecordPolicyPlanningSignal)?
             .record_policy_planning_signal(signal)
     }
 
@@ -2504,7 +2547,7 @@ impl RuntimeHost {
         &self,
         signal: PipelinePerformanceSignal,
     ) -> RuntimeHostResult<()> {
-        self.work_ref("record_pipeline_performance")?
+        self.work_ref(HostLocation::RecordPipelinePerformance)?
             .record_pipeline_performance(signal)
     }
 
@@ -2512,7 +2555,7 @@ impl RuntimeHost {
         &self,
         instance_id: &str,
     ) -> RuntimeHostResult<PerformanceControlDirective> {
-        self.shared_ref("read_performance_control_directive")?
+        self.shared_ref(HostLocation::ReadPerformanceControlDirective)?
             .performance_control_directive(instance_id)
     }
 
@@ -2526,8 +2569,8 @@ impl RuntimeHost {
             .as_ref()
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "runtime_host_closed",
-                    "process_test_request",
+                    crate::codes::HostCode::RuntimeHostClosed,
+                    crate::codes::test_spellings::TestLocation::ProcessTestRequest,
                     RuntimeErrorCode::RuntimeUnavailable,
                 )
             })?
@@ -2540,10 +2583,11 @@ impl RuntimeHost {
         &self,
         request_id: RequestId,
     ) -> RuntimeHostResult<Option<String>> {
-        let shared = self.shared_ref("read_failure_detail_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest)?;
         Ok(lock(
             &shared.failure_details_for_test,
-            "read_failure_detail_for_test",
+            crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest,
         )?
         .get(&request_id)
         .cloned())
@@ -2555,17 +2599,19 @@ impl RuntimeHost {
         operation: QueueOperationTestKind,
         request_id: RequestId,
     ) -> RuntimeHostResult<QueueOperationTestControl> {
-        let shared = self.shared_ref("install_queue_operation_test_hook")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InstallQueueOperationTestHook,
+        )?;
         let snapshot_reached = Arc::new(Barrier::new(2));
         let resume = Arc::new(Barrier::new(2));
         let mut slot = lock(
             &shared.queue_operation_test_hook,
-            "install_queue_operation_test_hook",
+            crate::codes::test_spellings::TestLocation::InstallQueueOperationTestHook,
         )?;
         if slot.is_some() {
             return Err(RuntimeHostError::fatal(
-                "queue_operation_test_hook_already_installed",
-                "install_queue_operation_test_hook",
+                crate::codes::test_spellings::TestCode::QueueOperationTestHookAlreadyInstalled,
+                crate::codes::test_spellings::TestLocation::InstallQueueOperationTestHook,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -2583,7 +2629,7 @@ impl RuntimeHost {
 
     #[cfg(test)]
     pub(crate) fn expire_all_queued_for_test(&self) -> RuntimeHostResult<()> {
-        self.shared_ref("expire_all_queued_for_test")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireAllQueuedForTest)?
             .expire_all_queued_runtime()
     }
 
@@ -2595,7 +2641,9 @@ impl RuntimeHost {
         &self,
         context: &PolicyRunContext,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("release_policy_dispatch_lease_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ReleasePolicyDispatchLeaseForTest,
+        )?;
         let request = context
             .request()
             .validate()
@@ -2606,8 +2654,9 @@ impl RuntimeHost {
             .mint_request_id()
             .map_err(|_| runtime_identifier_error())?
             .transport();
-        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
-            .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
+            RuntimeHostError::scheduler(crate::codes::HostLocation::BuildPolicyConnection, &error)
+        })?;
         shared
             .release_lease(
                 &request,
@@ -2623,7 +2672,7 @@ impl RuntimeHost {
     /// Workflow #369 S1: one sweep tick (queue expiry, lapsed leases, backstop pump).
     #[cfg(test)]
     pub(crate) fn expire_due_leases_for_test(&self) -> RuntimeHostResult<()> {
-        self.shared_ref("expire_due_leases_for_test")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireDueLeasesForTest)?
             .expire_due_leases()
     }
 
@@ -2633,7 +2682,8 @@ impl RuntimeHost {
         &self,
         instance_alias: &str,
     ) -> RuntimeHostResult<Arc<Mutex<()>>> {
-        let shared = self.shared_ref("instance_admission_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceAdmissionForTest)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
@@ -2651,18 +2701,20 @@ impl RuntimeHost {
         instance_alias: &str,
         endpoint: Option<ResolvedInstanceEndpoint>,
     ) -> RuntimeHostResult<Option<ResolvedInstanceEndpoint>> {
-        let shared = self.shared_ref("replace_instance_endpoint_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ReplaceInstanceEndpointForTest,
+        )?;
         let mut registry = lock(
             &shared.registered_instances,
-            "replace_test_instance_endpoint",
+            crate::codes::test_spellings::TestLocation::ReplaceTestInstanceEndpoint,
         )?;
         let instance = registry
             .values_mut()
             .find(|instance| instance.instance_alias == instance_alias)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "test_instance_missing",
-                    "replace_instance_endpoint_for_test",
+                    crate::codes::test_spellings::TestCode::TestInstanceMissing,
+                    crate::codes::test_spellings::TestLocation::ReplaceInstanceEndpointForTest,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -2676,7 +2728,8 @@ impl RuntimeHost {
         instance_alias: &str,
         kind: ClaimKind,
     ) -> RuntimeHostResult<HostClaimForTest> {
-        let shared = self.shared_ref("request_host_claim_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::RequestHostClaimForTest)?;
         let (actor, source) = scheduled_request_transport_origin(
             shared
                 .resolve_instance(instance_alias)
@@ -2705,8 +2758,12 @@ impl RuntimeHost {
             },
         )
         .map_err(|_| runtime_identifier_error())?;
-        let connection_id = ConnectionId::new(u64::MAX - 64)
-            .map_err(|error| RuntimeHostError::scheduler("build_test_claim_connection", &error))?;
+        let connection_id = ConnectionId::new(u64::MAX - 64).map_err(|error| {
+            RuntimeHostError::scheduler(
+                crate::codes::test_spellings::TestLocation::BuildTestClaimConnection,
+                &error,
+            )
+        })?;
         let admission = shared
             .request_host_claim(lease::HostClaim {
                 request: &request,
@@ -2744,12 +2801,13 @@ impl RuntimeHost {
         let claim = self.request_host_claim_for_test(instance_alias, ClaimKind::StartupPackage)?;
         let token = claim.granted.clone().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "test_claim_not_granted",
-                "run_package_on_held_claim_for_test",
+                crate::codes::test_spellings::TestCode::TestClaimNotGranted,
+                crate::codes::test_spellings::TestLocation::RunPackageOnHeldClaimForTest,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        let shared = self.shared_ref("run_package_on_held_claim_for_test")?;
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::RunPackageOnHeldClaimForTest)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
@@ -2793,7 +2851,9 @@ impl RuntimeHost {
         &self,
         instance_alias: &str,
     ) -> RuntimeHostResult<StartupPackageDisposition> {
-        let shared = self.shared_ref("schedule_startup_package_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
+        )?;
         let resolved = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?;
@@ -2813,7 +2873,10 @@ impl RuntimeHost {
         let instance_guard = shared
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "schedule_startup_package_for_test")?;
+        let admission = lock(
+            &instance_guard,
+            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
+        )?;
         let pending = shared
             .prepare_startup_package(&resolved, links, control_request_id)
             .map_err(|failure| *failure.error)?;
@@ -2825,27 +2888,47 @@ impl RuntimeHost {
     /// Workflow #369 W-2: the next payload any instance worker takes panics at its start.
     #[cfg(test)]
     pub(crate) fn inject_instance_worker_panic_for_test(&self) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_instance_worker_panic_for_test")?
-            .worker_panic_for_test
-            .store(true, Ordering::Release);
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectInstanceWorkerPanicForTest,
+        )?
+        .worker_panic_for_test
+        .store(true, Ordering::Release);
         Ok(())
     }
 
     /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
+    /// Read under the instance's queue-order lock, as `holds_key` reads a key: a lease
+    /// transition changes the scheduler before its outcome record is durable (a release's
+    /// `lease.released` is appended after the scheduler let the lease go) and holds that lock
+    /// until the record is written, so a reader outside it can see a holder-less instance whose
+    /// release is not in the ledger yet.
     #[cfg(test)]
     pub(crate) fn instance_claims_for_test(
         &self,
         instance_alias: &str,
     ) -> RuntimeHostResult<(Option<ClaimKind>, Vec<ClaimKind>)> {
-        let shared = self.shared_ref("instance_claims_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
-        let scheduler = lock(&shared.scheduler, "read_instance_claims_for_test")?;
+        let order_lock = shared
+            .queue_order_lock(instance_id)
+            .map_err(|failure| *failure.error)?;
+        let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
+        let scheduler = lock(
+            &shared.scheduler,
+            crate::codes::test_spellings::TestLocation::ReadInstanceClaimsForTest,
+        )?;
         let queued = scheduler
             .queued_on(instance_id)
-            .map_err(|error| RuntimeHostError::scheduler("read_instance_claims_for_test", &error))?
+            .map_err(|error| {
+                RuntimeHostError::scheduler(
+                    crate::codes::test_spellings::TestLocation::ReadInstanceClaimsForTest,
+                    &error,
+                )
+            })?
             .iter()
             .map(QueuedLease::kind)
             .collect();
@@ -2865,7 +2948,8 @@ impl RuntimeHost {
         token: &LeaseToken,
         lease_ttl_ms: u64,
     ) -> RuntimeHostResult<LeaseToken> {
-        let shared = self.shared_ref("renew_host_claim_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::RenewHostClaimForTest)?;
         let validated = claim
             .request
             .validate()
@@ -2882,7 +2966,7 @@ impl RuntimeHost {
         claim: &HostClaimForTest,
         token: &LeaseToken,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("release_host_claim_for_test")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ReleaseHostClaimForTest)?
             .cleanup_token(
                 token,
                 claim.connection_id,
@@ -2901,7 +2985,9 @@ impl RuntimeHost {
         actingcommand_contract::TaskId,
         actingcommand_contract::RunId,
     )> {
-        let shared = self.shared_ref("fail_scheduled_host_claim_for_test")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::FailScheduledHostClaimForTest,
+        )?;
         let validated = claim
             .request
             .validate()
@@ -2932,10 +3018,11 @@ impl RuntimeHost {
         &self,
         token: &LeaseToken,
     ) -> RuntimeHostResult<TerminalEvent> {
-        let shared = self.shared_ref("expire_lease_once_for_test")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest)?;
         let _scan = lock(
             &shared.lease_expiry_scan_test_gate,
-            "serialize_test_lease_expiry_scan",
+            crate::codes::test_spellings::TestLocation::SerializeTestLeaseExpiryScan,
         )?;
         if let Some(terminal) = shared.replay_lease_expiry_checkpoint_for_test(token)? {
             return Ok(terminal);
@@ -2945,37 +3032,40 @@ impl RuntimeHost {
             .is_some()
         {
             return Err(RuntimeHostError::fatal(
-                "test_lease_expiry_checkpoint_missing",
-                "expire_lease_once_for_test",
+                crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointMissing,
+                crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
 
         let now = shared.monotonic_ms()?;
         let connection_id = {
-            let scheduler = lock(&shared.scheduler, "scan_test_lease_expiry")?;
+            let scheduler = lock(
+                &shared.scheduler,
+                crate::codes::test_spellings::TestLocation::ScanTestLeaseExpiry,
+            )?;
             let mut candidates = scheduler
                 .active_tokens()
                 .into_iter()
                 .filter(|active| lease_token_identity_match_count(active, token) >= 4);
             let active = candidates.next().ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "test_lease_expiry_token_missing",
-                    "expire_lease_once_for_test",
+                    crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenMissing,
+                    crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
             if candidates.next().is_some() {
                 return Err(RuntimeHostError::fatal(
-                    "test_lease_expiry_token_candidate_not_unique",
-                    "expire_lease_once_for_test",
+                    crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenCandidateNotUnique,
+                    crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
             if active != *token {
                 return Err(RuntimeHostError::fatal(
-                    "test_lease_expiry_token_identity_mismatch",
-                    "expire_lease_once_for_test",
+                    crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenIdentityMismatch,
+                    crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -2985,13 +3075,16 @@ impl RuntimeHost {
                 .any(|due| due == *token)
             {
                 return Err(RuntimeHostError::fatal(
-                    "test_lease_expiry_token_not_due",
-                    "expire_lease_once_for_test",
+                    crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenNotDue,
+                    crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
             scheduler.connection_for_token(token).map_err(|error| {
-                RuntimeHostError::scheduler("read_test_lease_expiry_connection", &error)
+                RuntimeHostError::scheduler(
+                    crate::codes::test_spellings::TestLocation::ReadTestLeaseExpiryConnection,
+                    &error,
+                )
             })?
         };
 
@@ -3007,7 +3100,7 @@ impl RuntimeHost {
         instance_id: &str,
         observed_at_unix_ms: u64,
     ) -> RuntimeHostResult<PerformanceContext> {
-        self.shared_ref("read_test_performance_context")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ReadTestPerformanceContext)?
             .performance_context(instance_id, observed_at_unix_ms)
     }
 
@@ -3016,8 +3109,12 @@ impl RuntimeHost {
         &self,
         sampler: Box<dyn actingcommand_host_metrics::HostSampler>,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("replace_test_capacity_sampler")?;
-        let mut performance = lock(&shared.performance, "replace_test_capacity_sampler")?;
+        let shared = self
+            .shared_ref(crate::codes::test_spellings::TestLocation::ReplaceTestCapacitySampler)?;
+        let mut performance = lock(
+            &shared.performance,
+            crate::codes::test_spellings::TestLocation::ReplaceTestCapacitySampler,
+        )?;
         performance.replace_capacity_sampler_for_test(sampler);
         performance.sample_and_record_capacity(&shared.ledger, &shared.events)
     }
@@ -3028,21 +3125,24 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Box<dyn Fn() -> RuntimeHostResult<()> + Send>> {
         let owner = Arc::downgrade(self.shared.as_ref().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "runtime_host_closed",
-                "sample_test_capacity",
+                crate::codes::HostCode::RuntimeHostClosed,
+                crate::codes::test_spellings::TestLocation::SampleTestCapacity,
                 RuntimeErrorCode::RuntimeUnavailable,
             )
         })?);
         Ok(Box::new(move || {
             let shared = owner.upgrade().ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "runtime_host_closed",
-                    "sample_test_capacity",
+                    crate::codes::HostCode::RuntimeHostClosed,
+                    crate::codes::test_spellings::TestLocation::SampleTestCapacity,
                     RuntimeErrorCode::RuntimeUnavailable,
                 )
             })?;
-            lock(&shared.performance, "sample_test_capacity")?
-                .sample_and_record_capacity(&shared.ledger, &shared.events)
+            lock(
+                &shared.performance,
+                crate::codes::test_spellings::TestLocation::SampleTestCapacity,
+            )?
+            .sample_and_record_capacity(&shared.ledger, &shared.events)
         }))
     }
 
@@ -3051,7 +3151,7 @@ impl RuntimeHost {
         &self,
         observation: crate::PerformanceControlObservation,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("observe_test_performance_control")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ObserveTestPerformanceControl)?
             .reconcile_performance_control(observation)
     }
 
@@ -3062,7 +3162,8 @@ impl RuntimeHost {
         actor: EventActor,
         decision: ApprovalDecisionRecord,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("append_test_approval_event")?;
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::AppendTestApprovalEvent)?;
         shared.append_event_raw(
             EventSeverity::Info,
             source,
@@ -3130,7 +3231,9 @@ impl RuntimeHost {
         run_id: IssuedRunId,
         fact: TaskSemanticFact,
     ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("append_test_contained_task_semantic")?;
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::AppendTestContainedTaskSemantic,
+        )?;
         let validated = request.validate().expect("test Runtime request is valid");
         let links = shared
             .events
@@ -3210,9 +3313,11 @@ impl RuntimeHost {
 
     #[cfg(test)]
     pub(crate) fn fail_next_scheduling_terminal_append_for_test(&self) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_scheduling_terminal_append_failure")?
-            .scheduling_terminal_append_failures
-            .store(1, Ordering::Release);
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectTestSchedulingTerminalAppendFailure,
+        )?
+        .scheduling_terminal_append_failures
+        .store(1, Ordering::Release);
         Ok(())
     }
 
@@ -3220,7 +3325,7 @@ impl RuntimeHost {
     pub(crate) fn fail_next_contained_task_stability_persistence_for_test(
         &self,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_contained_task_stability_persistence_failure")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InjectTestContainedTaskStabilityPersistenceFailure)?
             .contained_task_stability_persistence_failures
             .store(1, Ordering::Release);
         Ok(())
@@ -3230,7 +3335,7 @@ impl RuntimeHost {
     pub(crate) fn fail_next_contained_task_stability_event_append_for_test(
         &self,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_contained_task_stability_event_append_failure")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InjectTestContainedTaskStabilityEventAppendFailure)?
             .contained_task_stability_persistence_failures
             .store(2, Ordering::Release);
         Ok(())
@@ -3240,7 +3345,7 @@ impl RuntimeHost {
     pub(crate) fn fail_next_contained_task_ocr_failure_persistence_for_test(
         &self,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_contained_task_ocr_failure_persistence")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InjectTestContainedTaskOcrFailurePersistence)?
             .contained_task_ocr_failure_persistence_failures
             .store(1, Ordering::Release);
         Ok(())
@@ -3248,9 +3353,11 @@ impl RuntimeHost {
 
     #[cfg(test)]
     pub(crate) fn fail_next_policy_outcome_projection_for_test(&self) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_policy_outcome_projection_failure")?
-            .policy_outcome_projection_failures
-            .store(1, Ordering::Release);
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectTestPolicyOutcomeProjectionFailure,
+        )?
+        .policy_outcome_projection_failures
+        .store(1, Ordering::Release);
         Ok(())
     }
 
@@ -3259,10 +3366,12 @@ impl RuntimeHost {
         &self,
         query: EventQuery,
     ) -> RuntimeHostResult<Vec<PersistedEvent>> {
-        self.shared_ref("query_test_persisted_events")?
+        self.shared_ref(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)?
             .ledger
             .query(query)
-            .map_err(|_| ledger_error("query_test_persisted_events"))
+            .map_err(|_| {
+                ledger_error(crate::codes::test_spellings::TestLocation::QueryTestPersistedEvents)
+            })
     }
 
     #[cfg(test)]
@@ -3270,9 +3379,11 @@ impl RuntimeHost {
         &self,
         ledger_position: u64,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("inject_test_policy_outcome_projection_position")?
-            .policy_outcome_projection_position_override
-            .store(ledger_position, Ordering::Release);
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectTestPolicyOutcomeProjectionPosition,
+        )?
+        .policy_outcome_projection_position_override
+        .store(ledger_position, Ordering::Release);
         Ok(())
     }
 
@@ -3285,25 +3396,27 @@ impl RuntimeHost {
         stage: RuntimeLifecycleFailureStage,
         failure: RuntimeLifecycleFailure<'_>,
     ) -> RuntimeHostResult<()> {
-        self.shared_ref("record_runtime_lifecycle_failure")?
+        self.shared_ref(HostLocation::RecordRuntimeLifecycleFailure)?
             .append_lifecycle_failure(stage, failure, EventLinksDraft::default(), None)
     }
 
-    fn shared_ref(&self, operation: &'static str) -> RuntimeHostResult<&HostShared> {
+    fn shared_ref(&self, operation: impl Into<Location>) -> RuntimeHostResult<&HostShared> {
+        let operation: Location = operation.into();
         self.shared.as_deref().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "runtime_host_closed",
+                HostCode::RuntimeHostClosed,
                 operation,
                 RuntimeErrorCode::RuntimeUnavailable,
             )
         })
     }
 
-    fn work_ref(&self, operation: &'static str) -> RuntimeHostResult<HostWork<'_>> {
+    fn work_ref(&self, operation: impl Into<Location>) -> RuntimeHostResult<HostWork<'_>> {
+        let operation: Location = operation.into();
         let shared = self.shared_ref(operation)?;
         let guard = shared.begin_work()?.ok_or_else(|| {
             RuntimeHostError::request(
-                "runtime_stopping",
+                HostCode::RuntimeStopping,
                 operation,
                 RuntimeErrorCode::RuntimeUnavailable,
             )
@@ -3347,17 +3460,17 @@ impl RuntimeHost {
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
-            join_runtime_thread(self.accept_thread.take(), "join_runtime_accept"),
+            join_runtime_thread(self.accept_thread.take(), HostLocation::JoinRuntimeAccept),
         );
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
-            join_runtime_thread(self.sweep_thread.take(), "join_runtime_sweeper"),
+            join_runtime_thread(self.sweep_thread.take(), HostLocation::JoinRuntimeSweeper),
         );
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
-            join_runtime_thread(self.monitor_thread.take(), "join_runtime_monitor"),
+            join_runtime_thread(self.monitor_thread.take(), HostLocation::JoinRuntimeMonitor),
         );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
@@ -3375,7 +3488,10 @@ impl RuntimeHost {
         shared.record_lifecycle_result(
             RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
-            join_runtime_thread(self.performance_thread.take(), "join_runtime_performance"),
+            join_runtime_thread(
+                self.performance_thread.take(),
+                HostLocation::JoinRuntimePerformance,
+            ),
         );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -3384,8 +3500,8 @@ impl RuntimeHost {
                 RuntimeLifecycleFailureStage::InfoFileRemoval,
                 &mut failure,
                 Err(RuntimeHostError::fatal(
-                    "runtime_info_remove_failed",
-                    "close_runtime_host",
+                    HostCode::RuntimeInfoRemoveFailed,
+                    HostLocation::CloseRuntimeHost,
                     RuntimeErrorCode::RuntimeFatal,
                 )
                 .with_native_detail(error.to_string())),
@@ -3398,8 +3514,8 @@ impl RuntimeHost {
                     RuntimeLifecycleFailureStage::RetainedReference,
                     &mut failure,
                     Err(RuntimeHostError::fatal(
-                        "runtime_reference_leaked",
-                        "close_runtime_host",
+                        HostCode::RuntimeReferenceLeaked,
+                        HostLocation::CloseRuntimeHost,
                         RuntimeErrorCode::RuntimeFatal,
                     )),
                 );
@@ -3634,8 +3750,8 @@ fn initial_registered_instances(
     for instance_alias in provider.instance_aliases() {
         let resolved = provider.resolve(&instance_alias).ok_or_else(|| {
             RuntimeHostError::fatal(
-                "execution_backend_registry_incomplete",
-                "initialize_runtime_instance_registry",
+                SharedCode::ExecutionBackendRegistryIncomplete,
+                HostLocation::InitializeRuntimeInstanceRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -3651,8 +3767,8 @@ fn initial_registered_instances(
             .is_some()
         {
             return Err(RuntimeHostError::fatal(
-                "duplicate_runtime_instance_id",
-                "initialize_runtime_instance_registry",
+                HostCode::DuplicateRuntimeInstanceId,
+                HostLocation::InitializeRuntimeInstanceRegistry,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -3884,7 +4000,7 @@ impl HostShared {
         let hook = {
             let mut slot = lock(
                 &self.scheduled_policy_checkpoint_test_hook,
-                "consume_scheduled_policy_checkpoint_test_hook",
+                crate::codes::test_spellings::TestLocation::ConsumeScheduledPolicyCheckpointTestHook,
             )?;
             slot.as_ref()
                 .is_some_and(|hook| {
@@ -3908,8 +4024,8 @@ impl HostShared {
                 )
                 .map_err(|_| {
                     RuntimeHostError::fatal(
-                        "scheduled_policy_checkpoint_marker_write_failed",
-                        "consume_scheduled_policy_checkpoint_test_hook",
+                        crate::codes::test_spellings::TestCode::ScheduledPolicyCheckpointMarkerWriteFailed,
+                        crate::codes::test_spellings::TestLocation::ConsumeScheduledPolicyCheckpointTestHook,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
@@ -3920,7 +4036,7 @@ impl HostShared {
 
     fn close(self) -> RuntimeHostResult<()> {
         let mut failure = None;
-        let tokens = match lock(&self.scheduler, "list_runtime_leases") {
+        let tokens = match lock(&self.scheduler, HostLocation::ListRuntimeLeases) {
             Ok(scheduler) => scheduler.active_tokens(),
             Err(error) => {
                 self.record_lifecycle_result(
@@ -3933,9 +4049,9 @@ impl HostShared {
         };
         for token in tokens {
             let connection_id =
-                lock(&self.scheduler, "read_lease_connection").and_then(|scheduler| {
+                lock(&self.scheduler, HostLocation::ReadLeaseConnection).and_then(|scheduler| {
                     scheduler.connection_for_token(&token).map_err(|error| {
-                        RuntimeHostError::scheduler("read_lease_connection", &error)
+                        RuntimeHostError::scheduler(HostLocation::ReadLeaseConnection, &error)
                     })
                 });
             match connection_id {
@@ -3961,7 +4077,10 @@ impl HostShared {
                                 .execution()?
                                 .has_session(instance_id)
                                 .map_err(|error| {
-                                    RuntimeHostError::execution("inspect_retained_session", &error)
+                                    RuntimeHostError::execution(
+                                        HostLocation::InspectRetainedSession,
+                                        &error,
+                                    )
                                 })?
                             {
                                 return Ok(());
@@ -3969,7 +4088,8 @@ impl HostShared {
                             let instance_guard = self
                                 .instance_guard(instance_id)
                                 .map_err(|failure| *failure.error)?;
-                            let admission = lock(&instance_guard, "lock_instance_admission")?;
+                            let admission =
+                                lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
                             self.close_retained_instance_while_guarded(
                                 instance_id,
                                 EventLinksDraft::default(),
@@ -3978,7 +4098,10 @@ impl HostShared {
                                 &admission,
                             )?
                             .map_err(|error| {
-                                RuntimeHostError::execution("close_execution_session", &error)
+                                RuntimeHostError::execution(
+                                    HostLocation::CloseExecutionSession,
+                                    &error,
+                                )
                             })
                         })();
                         self.record_lifecycle_result(
@@ -3992,13 +4115,14 @@ impl HostShared {
                     RuntimeLifecycleFailureStage::SessionClose,
                     &mut failure,
                     Err(RuntimeHostError::execution(
-                        "list_retained_sessions",
+                        HostLocation::ListRetainedSessions,
                         &error,
                     )),
                 ),
             }
             if let Err(mut error) = execution.close_after_resource_retirement() {
-                let aggregate_error = RuntimeHostError::execution("close_execution_kernel", &error);
+                let aggregate_error =
+                    RuntimeHostError::execution(HostLocation::CloseExecutionKernel, &error);
                 let unconfirmed =
                     error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed);
                 let closed_sessions = error.take_closed_sessions();
@@ -4007,14 +4131,16 @@ impl HostShared {
                         RuntimeLifecycleFailureStage::SessionClose,
                         &mut failure,
                         Err(RuntimeHostError::execution(
-                            "close_execution_kernel",
+                            HostLocation::CloseExecutionKernel,
                             &error,
                         )),
                     );
                 } else {
                     for (instance_id, session_error) in closed_sessions {
-                        let mut session_error =
-                            RuntimeHostError::execution("close_execution_kernel", &session_error);
+                        let mut session_error = RuntimeHostError::execution(
+                            HostLocation::CloseExecutionKernel,
+                            &session_error,
+                        );
                         session_error.lifecycle.instance_id = Some(instance_id);
                         self.record_lifecycle_result(
                             RuntimeLifecycleFailureStage::SessionClose,
@@ -4025,19 +4151,18 @@ impl HostShared {
                     // Keep the kernel reduction after the original per-session errors.
                     record_failure(
                         &mut failure,
-                        Err(
-                            RuntimeHostError::execution("close_execution_kernel", &error)
-                                .with_failure_stage(
-                                    RuntimeLifecycleFailureStage::SessionClose.as_str(),
-                                ),
-                        ),
+                        Err(RuntimeHostError::execution(
+                            HostLocation::CloseExecutionKernel,
+                            &error,
+                        )
+                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.as_str())),
                     );
                 }
                 if unconfirmed {
                     self.record_lifecycle_result(
                         RuntimeLifecycleFailureStage::SessionClose,
                         &mut failure,
-                        lock(&self.owner, "retain_unconfirmed_owner")
+                        lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
                             .and_then(|mut owner| owner.retain_unconfirmed()),
                     );
                     self.record_lifecycle_result(
@@ -4067,17 +4192,26 @@ impl HostShared {
         // Every deferred append is confirmed before the ledger writer is shut down.
         record_failure(
             &mut failure,
-            self.confirm_deferred_appends(GlobalLedger::REPLY_TIMEOUT, "confirm_deferred_appends"),
+            self.confirm_deferred_appends(
+                GlobalLedger::REPLY_TIMEOUT,
+                HostLocation::ConfirmDeferredAppends,
+            ),
         );
         let HostShared { owner, ledger, .. } = self;
         if ledger.close().is_err() {
-            record_failure(&mut failure, Err(ledger_error("close_global_ledger")));
+            record_failure(
+                &mut failure,
+                Err(ledger_error(HostLocation::CloseGlobalLedger)),
+            );
         }
         match owner.into_inner() {
             Ok(mut owner) => {
                 record_failure(&mut failure, unix_ms_now().and_then(|now| owner.close(now)))
             }
-            Err(_) => record_failure(&mut failure, Err(lock_poison_error("close_owner_file"))),
+            Err(_) => record_failure(
+                &mut failure,
+                Err(lock_poison_error(HostLocation::CloseOwnerFile)),
+            ),
         }
         failure.map_or(Ok(()), Err)
     }
@@ -4093,8 +4227,8 @@ impl HostShared {
             .checked_sub(self.clock_origin_monotonic_ms)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "monotonic_clock_regressed",
-                    "read_runtime_clock",
+                    HostCode::MonotonicClockRegressed,
+                    HostLocation::ReadRuntimeClock,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -4129,8 +4263,10 @@ fn accept_loop(
                 let connection_id = match ConnectionId::new(connection_serial) {
                     Ok(connection_id) => connection_id,
                     Err(error) => {
-                        let error =
-                            RuntimeHostError::scheduler("accept_runtime_connection", &error);
+                        let error = RuntimeHostError::scheduler(
+                            HostLocation::AcceptRuntimeConnection,
+                            &error,
+                        );
                         record_failure(&mut failure, shared.fatal.mark(error.clone()));
                         record_failure(&mut failure, Err(error));
                         break;
@@ -4160,8 +4296,8 @@ fn accept_loop(
                     Ok(thread) => thread,
                     Err(_) => {
                         let error = RuntimeHostError::fatal(
-                            "runtime_connection_spawn_failed",
-                            "accept_runtime_connection",
+                            HostCode::RuntimeConnectionSpawnFailed,
+                            HostLocation::AcceptRuntimeConnection,
                             RuntimeErrorCode::RuntimeFatal,
                         );
                         record_failure(&mut failure, shared.fatal.mark(error.clone()));
@@ -4176,8 +4312,8 @@ fn accept_loop(
             }
             Err(_) => {
                 let error = RuntimeHostError::fatal(
-                    "runtime_accept_failed",
-                    "accept_runtime_connection",
+                    HostCode::RuntimeAcceptFailed,
+                    HostLocation::AcceptRuntimeConnection,
                     RuntimeErrorCode::RuntimeFatal,
                 );
                 record_failure(&mut failure, shared.fatal.mark(error.clone()));
@@ -4194,8 +4330,8 @@ fn accept_loop(
                     RuntimeLifecycleFailureStage::ShutdownJoin,
                     &mut failure,
                     Err(RuntimeHostError::fatal(
-                        "runtime_connection_panicked",
-                        "join_runtime_connection",
+                        HostCode::RuntimeConnectionPanicked,
+                        HostLocation::JoinRuntimeConnection,
                         RuntimeErrorCode::RuntimeFatal,
                     )),
                 );
@@ -4225,8 +4361,8 @@ fn reap_finished_connections(
         let connection = connections.swap_remove(index);
         let result = connection.join().map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_connection_panicked",
-                "join_runtime_connection",
+                HostCode::RuntimeConnectionPanicked,
+                HostLocation::JoinRuntimeConnection,
                 RuntimeErrorCode::RuntimeFatal,
             )
         });
@@ -4274,9 +4410,20 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     Ok(())
 }
 
-fn artifact_store_error(operation: &'static str) -> RuntimeHostError {
+/// An artifact-store failure whose operation is spelled like a shared code
+/// (`effective_configuration_too_large`: one spelling for a code and a location, M378:90). A2-P
+/// renames one side; then `artifact_store_error` takes it.
+fn artifact_store_error_at_code_spelling(code_spelled_operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::relayed_fatal(
+        HostCode::ArtifactStoreFailure.as_str(),
+        code_spelled_operation,
+        RuntimeErrorCode::RuntimeFatal,
+    )
+}
+
+fn artifact_store_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "artifact_store_failure",
+        HostCode::ArtifactStoreFailure,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
@@ -4285,8 +4432,8 @@ fn artifact_store_error(operation: &'static str) -> RuntimeHostError {
 fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()> {
     let parent = path.parent().ok_or_else(|| {
         RuntimeHostError::fatal(
-            "runtime_info_parent_missing",
-            "publish_runtime_info",
+            HostCode::RuntimeInfoParentMissing,
+            HostLocation::PublishRuntimeInfo,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
@@ -4294,8 +4441,8 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
     remove_temporary_runtime_info(&temporary)?;
     let encoded = serde_json::to_vec_pretty(info).map_err(|_| {
         RuntimeHostError::fatal(
-            "runtime_info_encode_failed",
-            "publish_runtime_info",
+            HostCode::RuntimeInfoEncodeFailed,
+            HostLocation::PublishRuntimeInfo,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
@@ -4305,8 +4452,8 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         .open(&temporary)
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_info_create_failed",
-                "publish_runtime_info",
+                HostCode::RuntimeInfoCreateFailed,
+                HostLocation::PublishRuntimeInfo,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -4315,8 +4462,8 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         .and_then(|()| file.sync_all())
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "runtime_info_write_failed",
-                "publish_runtime_info",
+                HostCode::RuntimeInfoWriteFailed,
+                HostLocation::PublishRuntimeInfo,
                 RuntimeErrorCode::RuntimeFatal,
             )
         });
@@ -4330,16 +4477,16 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
     {
         remove_temporary_runtime_info(&temporary)?;
         return Err(RuntimeHostError::fatal(
-            "runtime_info_replace_failed",
-            "publish_runtime_info",
+            HostCode::RuntimeInfoReplaceFailed,
+            HostLocation::PublishRuntimeInfo,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }
     if fs::rename(&temporary, path).is_err() {
         remove_temporary_runtime_info(&temporary)?;
         return Err(RuntimeHostError::fatal(
-            "runtime_info_publish_failed",
-            "publish_runtime_info",
+            HostCode::RuntimeInfoPublishFailed,
+            HostLocation::PublishRuntimeInfo,
             RuntimeErrorCode::RuntimeFatal,
         ));
     }
@@ -4351,8 +4498,8 @@ fn remove_temporary_runtime_info(path: &Path) -> RuntimeHostResult<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(RuntimeHostError::fatal(
-            "runtime_info_temp_remove_failed",
-            "publish_runtime_info",
+            HostCode::RuntimeInfoTempRemoveFailed,
+            HostLocation::PublishRuntimeInfo,
             RuntimeErrorCode::RuntimeFatal,
         )),
     }
@@ -4360,8 +4507,8 @@ fn remove_temporary_runtime_info(path: &Path) -> RuntimeHostResult<()> {
 
 fn runtime_identifier_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "runtime_identifier_issue_failed",
-        "run_contained_task",
+        SharedCode::RuntimeIdentifierIssueFailed,
+        ContractLocation::RunContainedTask,
         RuntimeErrorCode::RuntimeFatal,
     )
 }
@@ -4373,13 +4520,17 @@ const fn terminal_from_projected(event: &actingcommand_contract::ProjectedEvent)
     }
 }
 
-fn ledger_error(operation: &'static str) -> RuntimeHostError {
-    RuntimeHostError::fatal("ledger_failure", operation, RuntimeErrorCode::LedgerFailure)
+fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        RuntimeErrorCode::LedgerFailure,
+        operation,
+        RuntimeErrorCode::LedgerFailure,
+    )
 }
 
-fn lock_poison_error(operation: &'static str) -> RuntimeHostError {
+fn lock_poison_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "runtime_state_poisoned",
+        HostCode::RuntimeStatePoisoned,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
@@ -4387,8 +4538,9 @@ fn lock_poison_error(operation: &'static str) -> RuntimeHostError {
 
 fn lock<'a, T>(
     mutex: &'a Mutex<T>,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<MutexGuard<'a, T>> {
+    let operation: Location = operation.into();
     mutex.lock().map_err(|_| lock_poison_error(operation))
 }
 
@@ -4415,14 +4567,15 @@ fn audit_path(path: &Path) -> AuditInput {
 
 fn join_runtime_thread(
     thread: Option<JoinHandle<RuntimeHostResult<()>>>,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<()> {
+    let operation: Location = operation.into();
     let Some(thread) = thread else {
         return Ok(());
     };
     thread.join().map_err(|_| {
         RuntimeHostError::fatal(
-            "runtime_thread_panicked",
+            HostCode::RuntimeThreadPanicked,
             operation,
             RuntimeErrorCode::RuntimeFatal,
         )

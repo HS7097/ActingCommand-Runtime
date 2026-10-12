@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::page_projection::{FrameIdentity, FrameKind};
 use actingcommand_contract::{
     ContainedObservationEvidence, ContainedObservationRequest, ContainedPageObservation,
     MAX_OBSERVATION_ARTIFACT_BYTES, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus,
 };
-use actingcommand_execution_kernel::{OnlineObservationError, PreparedPageObservation};
+use actingcommand_execution_kernel::{
+    ExecutionKernelLocation, OnlineObservationError, PreparedPageObservation,
+};
 
 impl HostShared {
     pub(super) fn capture_material_failure(
@@ -62,7 +68,7 @@ impl HostShared {
                 continue;
             }
             let context = pipeline.frame_context(failure.frame_index).ok_or_else(|| {
-                observation_integrity_failure("observation_frame_context_missing")
+                observation_integrity_failure(HostCode::ObservationFrameContextMissing)
             })?;
             let runtime = RuntimeHostError::artifact(failure.error.clone());
             self.append_lifecycle_failure(
@@ -96,8 +102,8 @@ impl HostShared {
             let path = Path::new(input.package_path());
             if !path.is_absolute() {
                 return Err(observation_admission_error(
-                    "observation_path_not_absolute",
-                    "open_observation_package",
+                    HostCode::ObservationPathNotAbsolute,
+                    HostLocation::OpenObservationPackage,
                     "absolute package path required",
                 ));
             }
@@ -108,8 +114,8 @@ impl HostShared {
                     ))
                     .ok_or_else(|| {
                         observation_admission_error(
-                            "observation_package_deadline_overflow",
-                            "admit_contained_observation",
+                            HostCode::ObservationPackageDeadlineOverflow,
+                            ContractLocation::AdmitContainedObservation,
                             "admission deadline overflow",
                         )
                     })?;
@@ -125,8 +131,8 @@ impl HostShared {
             }
             let file = fs::File::open(path).map_err(|error| {
                 observation_admission_error(
-                    "observation_package_open_failed",
-                    "open_observation_package",
+                    HostCode::ObservationPackageOpenFailed,
+                    HostLocation::OpenObservationPackage,
                     error,
                 )
             })?;
@@ -135,31 +141,31 @@ impl HostShared {
                 .read_to_end(&mut bytes)
                 .map_err(|error| {
                     observation_admission_error(
-                        "observation_package_read_failed",
-                        "read_observation_package",
+                        HostCode::ObservationPackageReadFailed,
+                        HostLocation::ReadObservationPackage,
                         error,
                     )
                 })?;
             if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
                 return Err(observation_admission_error(
-                    "observation_package_limit_exceeded",
-                    "read_observation_package",
+                    HostCode::ObservationPackageLimitExceeded,
+                    HostLocation::ReadObservationPackage,
                     "compressed package limit exceeded",
                 ));
             }
             let expected = ExternalExpectedSha256::parse_hex(
                 input.expected_sha256().legacy_sha256().ok_or_else(|| {
                     observation_admission_error(
-                        "observation_hash_invalid",
-                        "admit_contained_observation",
+                        HostCode::ObservationHashInvalid,
+                        ContractLocation::AdmitContainedObservation,
                         "legacy package reference required",
                     )
                 })?,
             )
             .map_err(|error| {
                 observation_admission_error(
-                    "observation_hash_invalid",
-                    "admit_contained_observation",
+                    HostCode::ObservationHashInvalid,
+                    ContractLocation::AdmitContainedObservation,
                     error,
                 )
             })?;
@@ -191,7 +197,7 @@ impl HostShared {
         let png = read_projected_verified(self.artifacts.root(), completed.observation.artifact())
             .map_err(observation_artifact_failure)?;
         let recognition_id = self.events.issuer().mint_recognition_id().map_err(|_| {
-            observation_integrity_failure("observation_recognition_id_issue_failed")
+            observation_integrity_failure(HostCode::ObservationRecognitionIdIssueFailed)
         })?;
         let links = completed.links.with_recognition_id(recognition_id);
         self.append_event(
@@ -211,7 +217,9 @@ impl HostShared {
                     .artifact()
                     .sha256
                     .strip_prefix("sha256:")
-                    .ok_or_else(|| observation_integrity_failure("observation_frame_hash_invalid"))?
+                    .ok_or_else(|| {
+                        observation_integrity_failure(HostCode::ObservationFrameHashInvalid)
+                    })?
                     .to_string(),
                 width: completed.observation.width(),
                 height: completed.observation.height(),
@@ -237,11 +245,12 @@ impl HostShared {
             facts: evaluated.facts,
             private_facts: evaluated.private_facts,
         };
-        let bytes = serde_json::to_vec(&evidence)
-            .map_err(|_| observation_integrity_failure("observation_evidence_encode_failed"))?;
+        let bytes = serde_json::to_vec(&evidence).map_err(|_| {
+            observation_integrity_failure(HostCode::ObservationEvidenceEncodeFailed)
+        })?;
         if bytes.len() > MAX_OBSERVATION_ARTIFACT_BYTES {
             return Err(observation_integrity_failure(
-                "observation_evidence_limit_exceeded",
+                HostCode::ObservationEvidenceLimitExceeded,
             ));
         }
         let (artifact, verified) =
@@ -298,7 +307,7 @@ impl HostShared {
         };
         observation
             .validate()
-            .map_err(|_| observation_integrity_failure("observation_result_invalid"))?;
+            .map_err(|_| observation_integrity_failure(HostCode::ObservationResultInvalid))?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Observed,
             terminal: Some(terminal(&final_event)),
@@ -316,7 +325,7 @@ impl HostShared {
     ) -> Result<(ProjectedArtifactReference, PersistedEvent), RequestFailure> {
         if bytes.len() > MAX_OBSERVATION_ARTIFACT_BYTES {
             return Err(observation_integrity_failure(
-                "observation_evidence_limit_exceeded",
+                HostCode::ObservationEvidenceLimitExceeded,
             ));
         }
         let mut sink = ObservationArtifactSink {
@@ -345,12 +354,12 @@ impl HostShared {
                 &mut sink,
             )
             .map_err(observation_artifact_failure)?;
-        let verified = sink
-            .verified
-            .ok_or_else(|| observation_integrity_failure("observation_verified_event_missing"))?;
+        let verified = sink.verified.ok_or_else(|| {
+            observation_integrity_failure(HostCode::ObservationVerifiedEventMissing)
+        })?;
         if verified.artifacts() != [artifact.reference().clone()] {
             return Err(observation_integrity_failure(
-                "observation_verified_artifact_mismatch",
+                HostCode::ObservationVerifiedArtifactMismatch,
             ));
         }
         Ok((artifact.reference().project(true), verified))
@@ -412,8 +421,8 @@ impl HostShared {
 }
 
 pub(super) fn observation_admission_error(
-    code: &'static str,
-    stage: &'static str,
+    code: impl Into<Code>,
+    stage: impl Into<Location>,
     cause: impl ToString,
 ) -> RuntimeHostError {
     RuntimeHostError::request(code, stage, RuntimeErrorCode::InvalidRequest)
@@ -423,10 +432,9 @@ pub(super) fn observation_kernel_error(error: OnlineObservationError) -> Runtime
     RuntimeHostError::request(
         error.code(),
         error.stage(),
-        if matches!(
-            error.stage(),
-            "admit_contained_observation" | "load_observation_resources"
-        ) {
+        if error.stage() == ContractLocation::AdmitContainedObservation.location()
+            || error.stage() == ExecutionKernelLocation::LoadObservationResources.location()
+        {
             RuntimeErrorCode::InvalidRequest
         } else {
             RuntimeErrorCode::RecognitionFailed
@@ -434,10 +442,10 @@ pub(super) fn observation_kernel_error(error: OnlineObservationError) -> Runtime
     )
     .with_native_detail(error.cause().to_string())
 }
-pub(super) fn observation_integrity_failure(code: &'static str) -> RequestFailure {
+pub(super) fn observation_integrity_failure(code: impl Into<Code>) -> RequestFailure {
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
-        "persist_contained_page_observation",
+        HostLocation::PersistContainedPageObservation,
         RuntimeErrorCode::RuntimeFatal,
     ))
 }
@@ -475,7 +483,7 @@ impl ObservationArtifactSink<'_> {
         let frame_id = request.context().event_links().frame_id().copied();
         if frame_id.is_none() {
             return Err(ArtifactStoreError::fatal(
-                "observation_frame_identity_missing",
+                HostCode::ObservationFrameIdentityMissing.as_str(),
                 "publish_capture_frame",
                 "frame publication requires its original frame identity",
             ));
@@ -496,7 +504,7 @@ impl ObservationArtifactSink<'_> {
         let artifact = store.put(request, &mut frame_sink)?;
         let verified = frame_sink.verified.ok_or_else(|| {
             ArtifactStoreError::fatal(
-                "observation_verified_event_missing",
+                HostCode::ObservationVerifiedEventMissing.as_str(),
                 "publish_capture_frame",
                 "successful frame publication has no verified Ledger receipt",
             )

@@ -1795,8 +1795,8 @@ impl ActingdError {
             RuntimeLifecycleFailure::Host(error)
         } else if let Some(error) = &self.client {
             RuntimeLifecycleFailure::Client {
-                code: error.code().as_str(),
-                operation: error.operation().as_str(),
+                code: error.code(),
+                operation: error.operation(),
                 fatal: error.is_fatal(),
                 runtime_code: error.projection().map(|projection| projection.code),
                 message: &client_message,

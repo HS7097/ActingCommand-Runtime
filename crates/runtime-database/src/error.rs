@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::DatabaseCode;
+use actingcommand_contract::outcome::{Code, Location};
 use std::error::Error;
 use std::fmt;
 
 /// Physical database failures retain the state owner's established diagnostic identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeDatabaseError {
-    code: &'static str,
-    operation: &'static str,
+    code: Code,
+    operation: Location,
     detail: Option<String>,
     warnings: Vec<crate::MaintenanceWarning>,
 }
 
 impl RuntimeDatabaseError {
-    pub(crate) const fn new(code: &'static str, operation: &'static str) -> Self {
+    pub(crate) const fn new(code: Code, operation: Location) -> Self {
         Self {
             code,
             operation,
@@ -22,7 +24,7 @@ impl RuntimeDatabaseError {
         }
     }
 
-    pub(crate) fn io(code: &'static str, operation: &'static str, error: &std::io::Error) -> Self {
+    pub(crate) fn io(code: Code, operation: Location, error: &std::io::Error) -> Self {
         Self {
             code,
             operation,
@@ -35,9 +37,9 @@ impl RuntimeDatabaseError {
         }
     }
 
-    pub(crate) fn sql(operation: &'static str, error: &rusqlite::Error) -> Self {
+    pub(crate) fn sql(operation: Location, error: &rusqlite::Error) -> Self {
         Self {
-            code: "database_maintenance_sql_failed",
+            code: DatabaseCode::DatabaseMaintenanceSqlFailed.code(),
             operation,
             warnings: Vec::new(),
             detail: error
@@ -63,12 +65,27 @@ impl RuntimeDatabaseError {
         self.detail.as_deref()
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
-    pub const fn operation(&self) -> &'static str {
+    pub const fn operation(&self) -> Location {
         self.operation
+    }
+}
+
+/// The derived form this error printed before its code and operation were typed: both print
+/// as quoted spellings, so a `{:?}` rendering (which callers keep as native detail) is
+/// unchanged.
+impl fmt::Debug for RuntimeDatabaseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeDatabaseError")
+            .field("code", &self.code.as_str())
+            .field("operation", &self.operation.as_str())
+            .field("detail", &self.detail)
+            .field("warnings", &self.warnings)
+            .finish()
     }
 }
 

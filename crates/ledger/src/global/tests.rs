@@ -63,7 +63,7 @@ fn idle_writer_health_needs_no_command_sender_or_new_fact() {
 fn idle_writer_health_reports_exit_without_business_commands() {
     let temp = TempDir::new().expect("temp");
     let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
-    let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+    let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
     ledger
         .sender
         .as_ref()
@@ -171,7 +171,7 @@ fn store_open_failure_joins_waiting_writer() {
     let temp = TempDir::new().expect("temp");
     let error =
         GlobalLedger::open_with_store::<SegmentStore, _>(config(&temp, "writer-failed"), |_| {
-            Err(GlobalLedgerError::fatal(
+            Err(GlobalLedgerError::fatal_untyped(
                 "test_store_open_failed",
                 "open_test_store",
             ))
@@ -1744,7 +1744,7 @@ mod subscription {
                 SubscriptionOptions::new(2).expect("subscription options"),
             )
             .expect("subscribe");
-        let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+        let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
         ledger
             .sender
             .as_ref()
@@ -1886,8 +1886,10 @@ mod subscription {
             liveness: Some(liveness),
         };
 
-        let terminal =
-            GlobalLedgerError::fatal("subscription_replay_invalid", "validate_replay_page");
+        let terminal = GlobalLedgerError::fatal(
+            LedgerCode::SubscriptionReplayInvalid.code(),
+            LedgerLocation::ValidateReplayPage.location(),
+        );
         assert_eq!(subscription.latch_terminal(terminal.clone()), terminal);
         assert!(weak.upgrade().is_none());
         assert_eq!(subscription.terminal_error, Some(terminal));

@@ -7,6 +7,8 @@ use actingcommand_artifact_store::{
     verify_evidence_archive, verify_projected_read_only,
 };
 use actingcommand_contract::ArtifactProducer;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ActionId, ArtifactKind, ArtifactRedactionState, EFFECTIVE_CONFIGURATION_SCHEMA,
     EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventQuery, EventType, FrameId,
@@ -26,12 +28,14 @@ use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 mod bindings;
+mod codes;
 mod material;
 mod runtime_facts;
 mod signatures;
 mod task_records;
 mod views;
 pub use bindings::{InstanceBinding, InstanceBindings, instance_bindings};
+pub use codes::{ForensicsCode, ForensicsLocation};
 pub use material::{
     ForensicMaterialCompleteResult, ForensicMaterialRequest, read_material_complete,
     read_material_to,
@@ -127,15 +131,15 @@ impl ForensicEventFilter {
         }))
         .map_err(|_| {
             ForensicError::new(
-                "invalid_event_filter",
-                "validate_event_filter",
+                ForensicsCode::InvalidEventFilter.code(),
+                ForensicsLocation::ValidateEventFilter.location(),
                 "event filter contains an unknown enum or invalid token",
             )
         })?;
         query.validate().map_err(|error| {
             ForensicError::new(
-                error.code().as_str(),
-                "validate_event_filter",
+                error.code(),
+                ForensicsLocation::ValidateEventFilter.location(),
                 "event filter violates the typed query rules",
             )
         })?;
@@ -163,8 +167,8 @@ impl ForensicEventsRequest {
             || through_sequence.is_some_and(|through| after_sequence > through)
         {
             return Err(ForensicError::new(
-                "invalid_event_page",
-                "validate_event_page",
+                ForensicsCode::InvalidEventPage.code(),
+                ForensicsLocation::ValidateEventPage.location(),
                 "event page limit or sequence boundary is invalid",
             ));
         }
@@ -248,8 +252,8 @@ impl ForensicRequest {
             || records.limit > actingcommand_contract::MAX_TASK_DIAGNOSTIC_PAGE_RECORDS
         {
             return Err(ForensicError::new(
-                "invalid_task_record_page",
-                "task_evidence",
+                ForensicsCode::InvalidTaskRecordPage.code(),
+                ForensicsLocation::TaskEvidence.location(),
                 "invalid task record pagination",
             ));
         }
@@ -583,7 +587,15 @@ pub struct ForensicError {
 }
 
 impl ForensicError {
-    fn new(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
+    /// A forensic failure with a registered code and location.
+    fn new(code: Code, operation: Location, detail: impl Into<String>) -> Self {
+        Self::relayed(code.as_str(), operation.as_str(), detail)
+    }
+
+    /// A failure that relays a ledger or artifact store error's code and operation. They stay
+    /// spelled as they came: those errors carry strings until slice A2b types the runtime
+    /// host's codes that fill them (Workflow #378).
+    fn relayed(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             operation,
@@ -623,8 +635,8 @@ pub type ForensicResult<T> = Result<T, ForensicError>;
 pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     if request.state_root.as_os_str().is_empty() {
         return Err(ForensicError::new(
-            "invalid_state_root",
-            "validate_forensic_request",
+            ForensicsCode::InvalidStateRoot.code(),
+            ForensicsLocation::ValidateForensicRequest.location(),
             "state root is empty",
         ));
     }
@@ -632,8 +644,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         && (request_id.is_empty() || request_id.len() > MAX_REQUEST_ID_BYTES)
     {
         return Err(ForensicError::new(
-            "invalid_request_id",
-            "validate_forensic_request",
+            ForensicsCode::InvalidRequestId.code(),
+            ForensicsLocation::ValidateForensicRequest.location(),
             "request id is empty or exceeds the bounded length",
         ));
     }
@@ -734,7 +746,11 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         if artifact_failures.len() > 64 {
             detail.push_str(&format!(" … and {} more", artifact_failures.len() - 64));
         }
-        return Err(ForensicError::new(failure.code, failure.operation, detail));
+        return Err(ForensicError::relayed(
+            failure.code,
+            failure.operation,
+            detail,
+        ));
     }
 
     match request.command {
@@ -821,8 +837,8 @@ pub fn query_view_page(
 pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> {
     if request.zip_path.as_os_str().is_empty() {
         return Err(ForensicError::new(
-            "invalid_evidence_archive_path",
-            "validate_forensic_replay",
+            ForensicsCode::InvalidEvidenceArchivePath.code(),
+            ForensicsLocation::ValidateForensicReplay.location(),
             "evidence archive path is empty",
         ));
     }
@@ -848,8 +864,8 @@ fn task_evidence_report(
     use actingcommand_contract::{EventPayload, InputPayload, TaskPayload, TaskSemanticFact};
     if request.filter != ForensicEventFilter::default() {
         return Err(ForensicError::new(
-            "invalid_event_page",
-            "task_evidence",
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::TaskEvidence.location(),
             "task evidence accepts only sequence page bounds",
         ));
     }
@@ -1201,8 +1217,8 @@ fn events_report(
         .unwrap_or_else(|| snapshot.latest_sequence());
     if request.after_sequence > through_sequence {
         return Err(ForensicError::new(
-            "invalid_event_page",
-            "validate_event_page",
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::ValidateEventPage.location(),
             "after sequence exceeds the frozen through sequence",
         ));
     }
@@ -1253,8 +1269,8 @@ fn performance_report(
     if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
     {
         return Err(ForensicError::new(
-            "invalid_event_page",
-            "validate_performance_page",
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::ValidatePerformancePage.location(),
             "performance pages require an ordered sequence range and no event filters",
         ));
     }
@@ -1348,54 +1364,54 @@ fn check_diagnostic_artifact_size(
     byte_limit: u64,
 ) -> Result<(), ArtifactStoreError> {
     reference.validate().map_err(|_| {
-        ArtifactStoreError::fatal(
-            "artifact_reference_invalid",
-            "bound_stability_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactReferenceInvalid.code(),
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "invalid reference",
         )
     })?;
     if reference.byte_count > byte_limit {
-        return Err(ArtifactStoreError::fatal(
+        return Err(ArtifactStoreError::new(
             if byte_limit == MAX_STABILITY_ARTIFACT_BYTES {
-                "stability_artifact_too_large"
+                ForensicsCode::StabilityArtifactTooLarge.code()
             } else {
-                "effective_configuration_too_large"
+                SharedCode::EffectiveConfigurationTooLarge.code()
             },
-            "bound_stability_artifact",
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "declared bytes exceed limit",
         ));
     }
     let key = reference.object_key().ok_or_else(|| {
-        ArtifactStoreError::fatal(
-            "artifact_object_key_missing",
-            "bound_stability_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "missing object key",
         )
     })?;
     // ArtifactStore publishes immutable objects. Check actual size as well as the
     // ledger declaration before its canonical reader allocates the object bytes.
     let metadata = std::fs::metadata(root.join(key)).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "artifact_read_failed",
-            "bound_stability_artifact",
+        ArtifactStoreError::new(
+            SharedCode::ArtifactReadFailed.code(),
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "cannot inspect referenced object",
         )
     })?;
     if !metadata.is_file() {
-        return Err(ArtifactStoreError::fatal(
-            "artifact_read_failed",
-            "bound_stability_artifact",
+        return Err(ArtifactStoreError::new(
+            SharedCode::ArtifactReadFailed.code(),
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "referenced object is not a file",
         ));
     }
     if metadata.len() > byte_limit {
-        return Err(ArtifactStoreError::fatal(
+        return Err(ArtifactStoreError::new(
             if byte_limit == MAX_STABILITY_ARTIFACT_BYTES {
-                "stability_artifact_too_large"
+                ForensicsCode::StabilityArtifactTooLarge.code()
             } else {
-                "effective_configuration_too_large"
+                SharedCode::EffectiveConfigurationTooLarge.code()
             },
-            "bound_stability_artifact",
+            ForensicsLocation::BoundStabilityArtifact.location(),
             "stored bytes exceed limit",
         ));
     }
@@ -1415,8 +1431,8 @@ fn stability_report(
     if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
     {
         return Err(ForensicError::new(
-            "invalid_event_page",
-            "validate_stability_page",
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::ValidateStabilityPage.location(),
             "stability pages require an ordered sequence range and no event filters",
         ));
     }
@@ -1511,42 +1527,43 @@ fn project_stability(
     let invalid = |code| {
         ForensicError::new(
             code,
-            "project_stability_artifact",
+            ForensicsLocation::ProjectStabilityArtifact.location(),
             "diagnostic could not be projected; raw content withheld",
         )
     };
     if reference.redaction_state == ArtifactRedactionState::Pending {
-        return Err(invalid("artifact_redaction_pending"));
+        return Err(invalid(ForensicsCode::ArtifactRedactionPending.code()));
     }
     check_diagnostic_artifact_size(root, reference, MAX_STABILITY_ARTIFACT_BYTES)
         .map_err(map_artifact_store_error)?;
     let bytes = read_projected_verified(root, reference).map_err(map_artifact_store_error)?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| invalid("diagnostic_json_invalid"))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid(ForensicsCode::DiagnosticJsonInvalid.code()))?;
     let schema = value
         .get("schema_version")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| invalid("diagnostic_schema_unavailable"))?;
+        .ok_or_else(|| invalid(ForensicsCode::DiagnosticSchemaUnavailable.code()))?;
     if !schema.starts_with(STABILITY_SCHEMA_PREFIX) {
         return Ok(None);
     }
     *matched_count += 1;
     if schema != STABILITY_SCHEMA {
-        return Err(invalid("stability_schema_unsupported"));
+        return Err(invalid(ForensicsCode::StabilitySchemaUnsupported.code()));
     }
-    let comparison: StabilityComparison =
-        serde_json::from_value(value).map_err(|_| invalid("stability_fields_invalid"))?;
+    let comparison: StabilityComparison = serde_json::from_value(value)
+        .map_err(|_| invalid(ForensicsCode::StabilityFieldsInvalid.code()))?;
     if comparison.comparison_mode != "exact_pixels_v1"
         || !comparison.comparison_parameters.is_empty()
         || !matches!(comparison.result.as_str(), "changed" | "unchanged")
         || comparison.terminal_reason.as_deref().is_some_and(|value| {
-            !matches!(
-                value,
-                "consecutive_unchanged_threshold_reached" | "max_steps_reached"
-            )
+            ![
+                SharedCode::ConsecutiveUnchangedThresholdReached.as_str(),
+                SharedCode::MaxStepsReached.as_str(),
+            ]
+            .contains(&value)
         })
     {
-        return Err(invalid("stability_fields_invalid"));
+        return Err(invalid(ForensicsCode::StabilityFieldsInvalid.code()));
     }
     let links = event.links();
     if links.task_id() != Some(&comparison.task_id)
@@ -1556,7 +1573,7 @@ fn project_stability(
         || reference.run_id.as_ref() != Some(&comparison.run_id)
         || reference.frame_id.as_ref() != Some(&comparison.current_frame_id)
     {
-        return Err(invalid("stability_source_links_mismatch"));
+        return Err(invalid(ForensicsCode::StabilitySourceLinksMismatch.code()));
     }
     Ok(Some(comparison))
 }
@@ -1626,7 +1643,7 @@ fn writer_report(observation: &GlobalLedgerWriterMetadataObservation) -> WriterO
 
 fn corrupt_tail_report(tail: &GlobalLedgerCorruptTail) -> CorruptTailReport {
     CorruptTailReport {
-        code: tail.code.to_owned(),
+        code: tail.code.as_str().to_owned(),
         segment_index: tail.segment_index,
         byte_offset: tail.byte_offset,
         dangling_byte_count: tail.dangling_byte_count,
@@ -1690,8 +1707,8 @@ fn render_export(
         "storage_snapshot: {}",
         serde_json::to_string(&open.storage_snapshot).map_err(|error| {
             ForensicError::new(
-                "report_serialization_failed",
-                "render_storage_snapshot",
+                ForensicsCode::ReportSerializationFailed.code(),
+                ForensicsLocation::RenderStorageSnapshot.location(),
                 error.to_string(),
             )
         })?
@@ -1812,19 +1829,19 @@ fn render_export(
             let invalid = |code| {
                 ForensicError::new(
                     code,
-                    "project_effective_configuration",
+                    ForensicsLocation::ProjectEffectiveConfiguration.location(),
                     "configuration could not be projected; raw content withheld",
                 )
             };
             if reference.redaction_state == ArtifactRedactionState::Pending {
-                return Err(invalid("artifact_redaction_pending"));
+                return Err(invalid(ForensicsCode::ArtifactRedactionPending.code()));
             }
             check_diagnostic_artifact_size(root, &reference, MAX_EFFECTIVE_CONFIGURATION_BYTES)
                 .map_err(map_artifact_store_error)?;
             let bytes =
                 read_projected_verified(root, &reference).map_err(map_artifact_store_error)?;
-            let value: serde_json::Value =
-                serde_json::from_slice(&bytes).map_err(|_| invalid("diagnostic_json_invalid"))?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|_| invalid(ForensicsCode::DiagnosticJsonInvalid.code()))?;
             let Some(schema) = value
                 .get("schema_version")
                 .and_then(serde_json::Value::as_str)
@@ -1835,10 +1852,12 @@ fn render_export(
                 continue;
             }
             if schema != EFFECTIVE_CONFIGURATION_SCHEMA {
-                return Err(invalid("effective_configuration_schema_unsupported"));
+                return Err(invalid(
+                    ForensicsCode::EffectiveConfigurationSchemaUnsupported.code(),
+                ));
             }
             let record: EffectiveConfigurationRecord = serde_json::from_value(value)
-                .map_err(|_| invalid("effective_configuration_fields_invalid"))?;
+                .map_err(|_| invalid(ForensicsCode::EffectiveConfigurationFieldsInvalid.code()))?;
             let links = event.links();
             if links.request_id() != Some(&record.request_id)
                 || links.task_id() != Some(&record.task_id)
@@ -1848,7 +1867,9 @@ fn render_export(
                 || reference.run_id.as_ref() != Some(&record.run_id)
                 || reference.frame_id.as_ref() != record.frame_id.as_ref()
             {
-                return Err(invalid("effective_configuration_source_links_mismatch"));
+                return Err(invalid(
+                    ForensicsCode::EffectiveConfigurationSourceLinksMismatch.code(),
+                ));
             }
             match &record.facts {
                 EffectiveConfigurationFacts::Initial {
@@ -1867,7 +1888,9 @@ fn render_export(
                         || *host_remaining_ms
                             != host_deadline_monotonic_ms.saturating_sub(*observed_at_monotonic_ms)
                     {
-                        return Err(invalid("effective_configuration_fields_invalid"));
+                        return Err(invalid(
+                            ForensicsCode::EffectiveConfigurationFieldsInvalid.code(),
+                        ));
                     }
                 }
                 EffectiveConfigurationFacts::EntryRecovery { package_sha256, .. } => {
@@ -1876,21 +1899,25 @@ fn render_export(
                         || record.frame_id.is_some()
                         || record.action_id.is_some()
                     {
-                        return Err(invalid("effective_configuration_fields_invalid"));
+                        return Err(invalid(
+                            ForensicsCode::EffectiveConfigurationFieldsInvalid.code(),
+                        ));
                     }
                 }
                 EffectiveConfigurationFacts::Capture { .. }
                 | EffectiveConfigurationFacts::Input { .. } => {
-                    let sequence = record
-                        .source_sequence
-                        .ok_or_else(|| invalid("effective_configuration_source_missing"))?;
+                    let sequence = record.source_sequence.ok_or_else(|| {
+                        invalid(ForensicsCode::EffectiveConfigurationSourceMissing.code())
+                    })?;
                     let source = snapshot
                         .events()
                         .iter()
                         .find(|source| {
                             source.sequence() == sequence && source.sequence() < event.sequence()
                         })
-                        .ok_or_else(|| invalid("effective_configuration_source_missing"))?;
+                        .ok_or_else(|| {
+                            invalid(ForensicsCode::EffectiveConfigurationSourceMissing.code())
+                        })?;
                     let capture =
                         matches!(record.facts, EffectiveConfigurationFacts::Capture { .. });
                     if source.links().request_id() != Some(&record.request_id)
@@ -1904,7 +1931,9 @@ fn render_export(
                                 || source.event_type() != EventType::InputCommitted
                                 || source.links().action_id() != record.action_id.as_ref()))
                     {
-                        return Err(invalid("effective_configuration_source_links_mismatch"));
+                        return Err(invalid(
+                            ForensicsCode::EffectiveConfigurationSourceLinksMismatch.code(),
+                        ));
                     }
                     if capture
                         && !snapshot.events().iter().any(|frame| {
@@ -1920,7 +1949,9 @@ fn render_export(
                                     .any(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
                         })
                     {
-                        return Err(invalid("effective_configuration_capture_evidence_missing"));
+                        return Err(invalid(
+                            ForensicsCode::EffectiveConfigurationCaptureEvidenceMissing.code(),
+                        ));
                     }
                 }
             }
@@ -1932,23 +1963,27 @@ fn render_export(
 }
 
 fn map_ledger_error(error: GlobalLedgerError) -> ForensicError {
-    let mut mapped = ForensicError::new(error.code(), error.operation(), error.to_string());
+    let mut mapped = ForensicError::relayed(error.code(), error.operation(), error.to_string());
     mapped.io_kind = error.io_kind();
     mapped
 }
 
 fn map_artifact_store_error(error: ArtifactStoreError) -> ForensicError {
-    ForensicError::new(error.code(), error.operation(), error.to_string())
+    ForensicError::relayed(error.code(), error.operation(), error.to_string())
 }
 
 fn query_error(error: serde_json::Error) -> ForensicError {
-    ForensicError::new("invalid_request_id", "parse_event_query", error.to_string())
+    ForensicError::new(
+        ForensicsCode::InvalidRequestId.code(),
+        ForensicsLocation::ParseEventQuery.location(),
+        error.to_string(),
+    )
 }
 
 fn serialization_error(error: serde_json::Error) -> ForensicError {
     ForensicError::new(
-        "serialization_failed",
-        "serialize_forensic_export",
+        SharedCode::SerializationFailed.code(),
+        ForensicsLocation::SerializeForensicExport.location(),
         error.to_string(),
     )
 }

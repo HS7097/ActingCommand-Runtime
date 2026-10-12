@@ -9,5 +9,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 imageproc = "0.25"

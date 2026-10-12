@@ -4,11 +4,14 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use actingcommand_contract::outcome::Code;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 mod capacity;
+pub mod codes;
 pub use capacity::{CapacitySample, CapacityTarget, CapacityUnavailable, sample_capacity};
+pub use codes::{HostMetricsCode, HostMetricsLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalMemorySample {
@@ -17,14 +20,14 @@ pub struct PhysicalMemorySample {
 }
 
 /// Uses the same platform memory observation as the existing host RAM counter.
-pub fn sample_physical_memory() -> Result<PhysicalMemorySample, &'static str> {
+pub fn sample_physical_memory() -> Result<PhysicalMemorySample, Code> {
     #[cfg(windows)]
     {
         windows::sample_physical_memory()
     }
     #[cfg(not(windows))]
     {
-        Err("performance_sampler_unsupported")
+        Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
     }
 }
 
@@ -42,7 +45,7 @@ pub enum ProcessProbe {
     /// No running process has this id: none exists, or the one that exists has exited.
     NotRunning,
     /// The operating system did not decide, for example because it refused the query.
-    Unknown(&'static str),
+    Unknown(Code),
 }
 
 pub fn probe_process(pid: u32) -> ProcessProbe {
@@ -53,7 +56,7 @@ pub fn probe_process(pid: u32) -> ProcessProbe {
     #[cfg(not(windows))]
     {
         let _ = pid;
-        ProcessProbe::Unknown("process_probe_unsupported")
+        ProcessProbe::Unknown(HostMetricsCode::ProcessProbeUnsupported.code())
     }
 }
 
@@ -140,15 +143,15 @@ pub trait HostSampler: Send {
         owned_processes: &BTreeMap<u32, String>,
         top_process_count: usize,
         thresholds: ProcessLoadThresholds,
-    ) -> Result<HostSample, &'static str>;
+    ) -> Result<HostSample, Code>;
 }
 
 #[cfg(windows)]
-pub fn system_sampler() -> Result<Box<dyn HostSampler>, &'static str> {
+pub fn system_sampler() -> Result<Box<dyn HostSampler>, Code> {
     windows::WindowsHostSampler::new().map(|sampler| Box::new(sampler) as Box<dyn HostSampler>)
 }
 
 #[cfg(not(windows))]
-pub fn system_sampler() -> Result<Box<dyn HostSampler>, &'static str> {
-    Err("performance_sampler_unsupported")
+pub fn system_sampler() -> Result<Box<dyn HostSampler>, Code> {
+    Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
 }

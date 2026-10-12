@@ -3,9 +3,11 @@
 //! Windows implementation of the host-counter boundary.
 
 use crate::{
-    ForegroundSample, HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
+    ForegroundSample, HostMetric, HostMetricsCode, HostSample, HostSampler, ProcessLoadThresholds,
     ProcessMetricCoverage, ProcessOwnership, ProcessSample,
 };
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
@@ -46,7 +48,7 @@ const DISK_LATENCY_COUNTER: &str = r"\PhysicalDisk(_Total)\Avg. Disk sec/Transfe
 const GPU_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
 const MIN_PROCESS_READABLE_BASIS_POINTS: u16 = 9_900;
 /// Mirrors `MAX_PROCESS_NAME_BYTES` of `PerformanceProcessSummary::validate` in
-/// `crates/actingcommand-contract/src/performance.rs`; this crate has no contract dependency.
+/// `crates/actingcommand-contract/src/performance.rs`.
 const MAX_PROCESS_NAME_BYTES: usize = 260;
 
 #[derive(Clone, Copy)]
@@ -85,7 +87,7 @@ enum ProcessRecordOutcome {
 
 trait ProcessEnumerator {
     fn current(&self) -> &PROCESSENTRY32W;
-    fn advance(&mut self) -> Result<bool, &'static str>;
+    fn advance(&mut self) -> Result<bool, Code>;
 }
 
 struct ToolhelpProcessEnumerator {
@@ -94,19 +96,19 @@ struct ToolhelpProcessEnumerator {
 }
 
 impl ToolhelpProcessEnumerator {
-    fn open() -> Result<Self, &'static str> {
+    fn open() -> Result<Self, Code> {
         // SAFETY: Toolhelp owns a stable snapshot; PROCESSENTRY32W has the required size.
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snapshot == INVALID_HANDLE_VALUE {
-                return Err("performance_process_snapshot_failed");
+                return Err(HostMetricsCode::PerformanceProcessSnapshotFailed.code());
             }
             let snapshot = OwnedHandle(snapshot);
             let mut entry: PROCESSENTRY32W = zeroed();
             entry.dwSize = u32::try_from(size_of::<PROCESSENTRY32W>())
-                .map_err(|_| "performance_process_structure_invalid")?;
+                .map_err(|_| HostMetricsCode::PerformanceProcessStructureInvalid.code())?;
             if Process32FirstW(snapshot.0, &mut entry) == 0 {
-                return Err("performance_process_enumeration_failed");
+                return Err(HostMetricsCode::PerformanceProcessEnumerationFailed.code());
             }
             Ok(Self { snapshot, entry })
         }
@@ -118,7 +120,7 @@ impl ProcessEnumerator for ToolhelpProcessEnumerator {
         &self.entry
     }
 
-    fn advance(&mut self) -> Result<bool, &'static str> {
+    fn advance(&mut self) -> Result<bool, Code> {
         // SAFETY: the snapshot and entry remain valid for this enumerator's lifetime.
         if unsafe { Process32NextW(self.snapshot.0, &mut self.entry) } != 0 {
             return Ok(true);
@@ -127,7 +129,7 @@ impl ProcessEnumerator for ToolhelpProcessEnumerator {
         if unsafe { GetLastError() } == ERROR_NO_MORE_FILES {
             Ok(false)
         } else {
-            Err("performance_process_enumeration_failed")
+            Err(HostMetricsCode::PerformanceProcessEnumerationFailed.code())
         }
     }
 }
@@ -152,11 +154,11 @@ struct PdhQuery {
 }
 
 impl PdhQuery {
-    fn open() -> Result<Self, &'static str> {
+    fn open() -> Result<Self, Code> {
         let mut query: PDH_HQUERY = null_mut();
         // SAFETY: PDH initializes the out handle; the null data source requests live counters.
         if unsafe { PdhOpenQueryW(null(), 0, &mut query) } != 0 || query.is_null() {
-            return Err("performance_pdh_open_failed");
+            return Err(HostMetricsCode::PerformancePdhOpenFailed.code());
         }
         let mut result = Self {
             handle: query as usize,
@@ -171,7 +173,7 @@ impl PdhQuery {
         result.gpu = result.add_counter(GPU_COUNTER);
         // The first collection seeds rate counters; individual unavailable counters remain explicit.
         if unsafe { PdhCollectQueryData(result.query()) } != 0 {
-            return Err("performance_pdh_seed_failed");
+            return Err(HostMetricsCode::PerformancePdhSeedFailed.code());
         }
         Ok(result)
     }
@@ -211,7 +213,7 @@ pub(crate) struct WindowsHostSampler {
 }
 
 impl WindowsHostSampler {
-    pub(crate) fn new() -> Result<Self, &'static str> {
+    pub(crate) fn new() -> Result<Self, Code> {
         Ok(Self {
             previous_system: system_times()?,
             previous_processes: BTreeMap::new(),
@@ -228,12 +230,12 @@ impl HostSampler for WindowsHostSampler {
         owned_processes: &BTreeMap<u32, String>,
         top_process_count: usize,
         thresholds: ProcessLoadThresholds,
-    ) -> Result<HostSample, &'static str> {
+    ) -> Result<HostSample, Code> {
         if self
             .previous_observed_at_unix_ms
             .is_some_and(|previous| previous >= observed_at_unix_ms)
         {
-            return Err("performance_sample_time_invalid");
+            return Err(SharedCode::PerformanceSampleTimeInvalid.code());
         }
         let current_system = system_times()?;
         let total_delta = current_system
@@ -248,7 +250,7 @@ impl HostSampler for WindowsHostSampler {
             .idle
             .saturating_sub(self.previous_system.idle);
         if total_delta == 0 || idle_delta > total_delta {
-            return Err("performance_system_counter_invalid");
+            return Err(HostMetricsCode::PerformanceSystemCounterInvalid.code());
         }
         let cpu_total_basis_points = ratio_basis_points(total_delta - idle_delta, total_delta);
         let process_rates_available = self.previous_observed_at_unix_ms.is_some();
@@ -400,14 +402,14 @@ impl HostSampler for WindowsHostSampler {
     }
 }
 
-fn system_times() -> Result<SystemTimes, &'static str> {
+fn system_times() -> Result<SystemTimes, Code> {
     // SAFETY: all FILETIME out pointers are valid for the duration of the call.
     unsafe {
         let mut idle = zeroed();
         let mut kernel = zeroed();
         let mut user = zeroed();
         if GetSystemTimes(&mut idle, &mut kernel, &mut user) == 0 {
-            return Err("performance_system_times_failed");
+            return Err(HostMetricsCode::PerformanceSystemTimesFailed.code());
         }
         Ok(SystemTimes {
             idle: filetime(idle),
@@ -417,7 +419,7 @@ fn system_times() -> Result<SystemTimes, &'static str> {
     }
 }
 
-fn memory_used_basis_points() -> Result<u16, &'static str> {
+fn memory_used_basis_points() -> Result<u16, Code> {
     let memory = sample_physical_memory()?;
     Ok(ratio_basis_points(
         memory.total_bytes.saturating_sub(memory.available_bytes),
@@ -425,14 +427,14 @@ fn memory_used_basis_points() -> Result<u16, &'static str> {
     ))
 }
 
-pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, &'static str> {
+pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, Code> {
     // SAFETY: MEMORYSTATUSEX is initialized with its documented byte size.
     unsafe {
         let mut status: MEMORYSTATUSEX = zeroed();
         status.dwLength = u32::try_from(size_of::<MEMORYSTATUSEX>())
-            .map_err(|_| "performance_memory_structure_invalid")?;
+            .map_err(|_| HostMetricsCode::PerformanceMemoryStructureInvalid.code())?;
         if GlobalMemoryStatusEx(&mut status) == 0 || status.ullTotalPhys == 0 {
-            return Err("performance_memory_status_failed");
+            return Err(HostMetricsCode::PerformanceMemoryStatusFailed.code());
         }
         Ok(super::PhysicalMemorySample {
             total_bytes: status.ullTotalPhys,
@@ -449,22 +451,24 @@ const UNIX_EPOCH_WINDOWS_100NS: u64 = 116_444_736_000_000_000;
 pub(super) fn probe_process(pid: u32) -> super::ProcessProbe {
     use super::ProcessProbe;
     if pid == 0 {
-        return ProcessProbe::Unknown("process_id_reserved");
+        return ProcessProbe::Unknown(HostMetricsCode::ProcessIdReserved.code());
     }
     // SAFETY: OpenProcess takes no pointers; a non-null handle is closed by OwnedHandle.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
         return match unsafe { GetLastError() } {
             ERROR_INVALID_PARAMETER => ProcessProbe::NotRunning,
-            ERROR_ACCESS_DENIED => ProcessProbe::Unknown("process_query_refused"),
-            _ => ProcessProbe::Unknown("process_open_failed"),
+            ERROR_ACCESS_DENIED => {
+                ProcessProbe::Unknown(HostMetricsCode::ProcessQueryRefused.code())
+            }
+            _ => ProcessProbe::Unknown(HostMetricsCode::ProcessOpenFailed.code()),
         };
     }
     let handle = OwnedHandle(handle);
     let mut exit_code = 0u32;
     // SAFETY: the handle is live and the out pointer is valid for the call.
     if unsafe { GetExitCodeProcess(handle.0, &mut exit_code) } == 0 {
-        return ProcessProbe::Unknown("process_exit_code_unavailable");
+        return ProcessProbe::Unknown(HostMetricsCode::ProcessExitCodeUnavailable.code());
     }
     // An exited process whose object another handle still holds is not running.
     if exit_code != STILL_ACTIVE as u32 {
@@ -476,13 +480,13 @@ pub(super) fn probe_process(pid: u32) -> super::ProcessProbe {
     let mut user: FILETIME = unsafe { zeroed() };
     // SAFETY: the handle is live and all FILETIME out pointers are valid for the call.
     if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
-        return ProcessProbe::Unknown("process_times_unavailable");
+        return ProcessProbe::Unknown(HostMetricsCode::ProcessTimesUnavailable.code());
     }
     match filetime(creation).checked_sub(UNIX_EPOCH_WINDOWS_100NS) {
         Some(since_epoch) if since_epoch > 0 => ProcessProbe::Running {
             created_at_unix_ms: since_epoch / 10_000,
         },
-        _ => ProcessProbe::Unknown("process_creation_time_invalid"),
+        _ => ProcessProbe::Unknown(HostMetricsCode::ProcessCreationTimeInvalid.code()),
     }
 }
 
@@ -491,7 +495,7 @@ fn process_samples(
     elapsed_ms: u64,
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
-) -> Result<ProcessScan, &'static str> {
+) -> Result<ProcessScan, Code> {
     let mut enumerator = ToolhelpProcessEnumerator::open()?;
     scan_processes(&mut enumerator, |entry| {
         // SAFETY: the entry comes from the live Toolhelp snapshot and is read only here.
@@ -499,7 +503,7 @@ fn process_samples(
     })
 }
 
-fn scan_processes<E, F>(enumerator: &mut E, mut record: F) -> Result<ProcessScan, &'static str>
+fn scan_processes<E, F>(enumerator: &mut E, mut record: F) -> Result<ProcessScan, Code>
 where
     E: ProcessEnumerator,
     F: FnMut(&PROCESSENTRY32W) -> ProcessRecordOutcome,
@@ -713,19 +717,19 @@ fn confirmed_protection_level(level: u32) -> bool {
     )
 }
 
-fn checked_process_count(value: usize) -> Result<usize, &'static str> {
+fn checked_process_count(value: usize) -> Result<usize, Code> {
     value
         .checked_add(1)
-        .ok_or("performance_process_count_overflow")
+        .ok_or(SharedCode::PerformanceProcessCountOverflow.code())
 }
 
-fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, &'static str> {
+fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, Code> {
     let sampled = scan.records.len();
     let readable_denominator = sampled
         .checked_add(scan.unconfirmed_access_denied_processes)
-        .ok_or("performance_process_count_overflow")?
+        .ok_or(SharedCode::PerformanceProcessCountOverflow.code())?
         .checked_add(scan.inaccessible_processes)
-        .ok_or("performance_process_count_overflow")?;
+        .ok_or(SharedCode::PerformanceProcessCountOverflow.code())?;
     let sampled_processes = process_count_u32(sampled)?;
     let readable_processes = process_count_u32(readable_denominator)?;
     let readable_basis_points = if readable_denominator == 0 {
@@ -745,8 +749,8 @@ fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, &'stati
     })
 }
 
-fn process_count_u32(value: usize) -> Result<u32, &'static str> {
-    u32::try_from(value).map_err(|_| "performance_process_count_overflow")
+fn process_count_u32(value: usize) -> Result<u32, Code> {
+    u32::try_from(value).map_err(|_| SharedCode::PerformanceProcessCountOverflow.code())
 }
 
 fn mark_partial_process_metrics(
@@ -950,8 +954,8 @@ mod tests {
             &self.entry
         }
 
-        fn advance(&mut self) -> Result<bool, &'static str> {
-            Err("performance_process_enumeration_failed")
+        fn advance(&mut self) -> Result<bool, Code> {
+            Err(HostMetricsCode::PerformanceProcessEnumerationFailed.code())
         }
     }
 
@@ -1109,7 +1113,10 @@ mod tests {
         let result = scan_processes(&mut enumerator, |_| {
             ProcessRecordOutcome::Sampled(process_record_fixture(1))
         });
-        assert_eq!(result.err(), Some("performance_process_enumeration_failed"));
+        assert_eq!(
+            result.err().map(Code::as_str),
+            Some("performance_process_enumeration_failed")
+        );
     }
 
     #[test]

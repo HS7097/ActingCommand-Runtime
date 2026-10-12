@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod codes;
+
+pub use codes::PageDetectorCode;
+
+use actingcommand_contract::outcome::Code;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     RecognitionEvaluator, RecognitionPackError, TargetEvaluation, TargetKind,
@@ -167,12 +172,19 @@ pub enum PageUnexecutedReason {
     BatchTerminated,
 }
 
+impl PageUnexecutedReason {
+    /// The registered code this reason names.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::BatchValidationFailed => PageDetectorCode::BatchValidationFailed.code(),
+            Self::BatchTerminated => PageDetectorCode::BatchTerminated.code(),
+        }
+    }
+}
+
 impl fmt::Display for PageUnexecutedReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BatchValidationFailed => formatter.write_str("batch_validation_failed"),
-            Self::BatchTerminated => formatter.write_str("batch_terminated"),
-        }
+        formatter.write_str(self.code().as_str())
     }
 }
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::{ArtifactStore, ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome};
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{ArtifactReference, CapturePressureState, PinnedFrameReason};
 use actingcommand_device::{Frame, FrameMemoryBudget, FrameMemoryCharge, PixelFormat};
 use serde::{Deserialize, Serialize};
@@ -44,8 +46,38 @@ pub struct FrameStoreControl {
     pub flush_workspace_reserve_bytes: Option<u64>,
 }
 
+/// A refused frame store setting (Workflow #378): its registered code, and the English text
+/// that the store error raised for it carries as its detail (the developer text this validator
+/// returned before its refusals were typed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameStoreConfigRefusal {
+    code: Code,
+    text: String,
+}
+
+impl FrameStoreConfigRefusal {
+    fn new(code: StoreCode, text: String) -> Self {
+        Self {
+            code: code.code(),
+            text,
+        }
+    }
+
+    pub fn code(&self) -> Code {
+        self.code
+    }
+}
+
+impl std::fmt::Display for FrameStoreConfigRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for FrameStoreConfigRefusal {}
+
 impl FrameStoreControl {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), FrameStoreConfigRefusal> {
         if let Some(value) = self.similarity_threshold {
             validate_ratio_f32("frame_store.similarity_threshold", value)?;
         }
@@ -60,13 +92,17 @@ impl FrameStoreControl {
             }
         }
         if self.max_mem_bytes == Some(0) {
-            return Err("frame_store.max_mem_bytes must be positive when provided".to_string());
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "frame_store.max_mem_bytes must be positive when provided".to_string(),
+            ));
         }
         if self.flush_workspace_reserve_bytes == Some(0) {
-            return Err(
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreFlushReserveInvalid,
                 "frame_store.flush_workspace_reserve_bytes must be positive when provided"
                     .to_string(),
-            );
+            ));
         }
         Ok(())
     }
@@ -129,20 +165,29 @@ impl Default for FrameStoreConfig {
 }
 
 impl FrameStoreConfig {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), FrameStoreConfigRefusal> {
         validate_ratio_f32("similarity_threshold", self.similarity_threshold)?;
         validate_ratio_f64("tier1_ratio", self.tier1_ratio)?;
         validate_ratio_f64("tier2_ratio", self.tier2_ratio)?;
         validate_ratio_f64("tier3_ratio", self.tier3_ratio)?;
         validate_ratio_f64("hysteresis_ratio", self.hysteresis_ratio)?;
         if !(self.tier1_ratio < self.tier2_ratio && self.tier2_ratio < self.tier3_ratio) {
-            return Err("frame store watermarks must satisfy tier1 < tier2 < tier3".to_string());
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreWatermarksInvalid,
+                "frame store watermarks must satisfy tier1 < tier2 < tier3".to_string(),
+            ));
         }
         if self.max_mem_bytes == Some(0) {
-            return Err("max_mem_bytes must be positive when provided".to_string());
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreMemoryLimitInvalid,
+                "max_mem_bytes must be positive when provided".to_string(),
+            ));
         }
         if self.flush_workspace_reserve_bytes == 0 {
-            return Err("flush_workspace_reserve_bytes must be positive".to_string());
+            return Err(FrameStoreConfigRefusal::new(
+                StoreCode::FrameStoreFlushReserveInvalid,
+                "flush_workspace_reserve_bytes must be positive".to_string(),
+            ));
         }
         Ok(())
     }
@@ -665,9 +710,9 @@ impl FrameStore {
             .find(|entry| entry.frame_index == frame_index)
             .ok_or_else(|| CliError::usage("pin frame identity is not in this capture"))?;
         if !entry.retained || matches!(entry.storage, FrameStorage::Dropped) {
-            return Err(CliError::fatal(
-                "frame_material_unavailable",
-                "pin_frame",
+            return Err(CliError::new(
+                StoreCode::FrameMaterialUnavailable.code(),
+                StoreLocation::PinFrame.location(),
                 "original frame material has already been released",
             ));
         }
@@ -1056,9 +1101,9 @@ impl FrameStore {
                 CliError::usage(format!("unknown frame index {frame_index} for persistence"))
             })?;
         if !entry.retained {
-            return Err(CliError::fatal(
-                "frame_material_unavailable",
-                "persist_capture_frame",
+            return Err(CliError::new(
+                StoreCode::FrameMaterialUnavailable.code(),
+                StoreLocation::PersistCaptureFrame.location(),
                 "original frame is not retained",
             ));
         }
@@ -1107,9 +1152,9 @@ impl FrameStore {
         if reference.byte_count() != entry.material.byte_count
             || reference.sha256() != entry.material.sha256
         {
-            return Err(CliError::fatal(
-                "frame_material_hash_mismatch",
-                "mark_capture_frame_persisted",
+            return Err(CliError::new(
+                StoreCode::FrameMaterialHashMismatch.code(),
+                StoreLocation::MarkCaptureFramePersisted.location(),
                 "persisted artifact differs from the original PNG",
             ));
         }
@@ -1249,9 +1294,9 @@ impl FrameStore {
             return Ok(());
         }
         let Some(material) = self.entries[index].artifact_material.take() else {
-            return Err(CliError::fatal(
-                "frame_material_unavailable",
-                "release_persisted_frame_memory",
+            return Err(CliError::new(
+                StoreCode::FrameMaterialUnavailable.code(),
+                StoreLocation::ReleasePersistedFrameMemory.location(),
                 "persisted frame has no original material reference",
             ));
         };
@@ -1574,9 +1619,9 @@ impl FrameEntry {
                 Cow::Owned(material.store.read_verified(&material.reference)?)
             }
             FrameStorage::Dropped => {
-                return Err(CliError::fatal(
-                    "frame_material_unavailable",
-                    "read_original_frame",
+                return Err(CliError::new(
+                    StoreCode::FrameMaterialUnavailable.code(),
+                    StoreLocation::ReadOriginalFrame.location(),
                     "original frame material is unavailable",
                 ));
             }
@@ -1584,9 +1629,9 @@ impl FrameEntry {
         if png.len() as u64 != self.material.byte_count
             || crate::store::canonical_sha256(&png) != self.material.sha256
         {
-            return Err(CliError::fatal(
-                "frame_material_hash_mismatch",
-                "read_original_frame",
+            return Err(CliError::new(
+                StoreCode::FrameMaterialHashMismatch.code(),
+                StoreLocation::ReadOriginalFrame.location(),
                 "materialized frame differs from its original PNG",
             ));
         }
@@ -1730,19 +1775,25 @@ fn ratio_bytes(bytes: u64, ratio: f64) -> u64 {
     ((bytes as f64) * ratio).floor() as u64
 }
 
-fn validate_ratio_f32(name: &str, value: f32) -> Result<(), String> {
+fn validate_ratio_f32(name: &str, value: f32) -> Result<(), FrameStoreConfigRefusal> {
     if value.is_finite() && value > 0.0 && value < 1.0 {
         Ok(())
     } else {
-        Err(format!("{name} must be > 0 and < 1"))
+        Err(FrameStoreConfigRefusal::new(
+            StoreCode::FrameStoreRatioInvalid,
+            format!("{name} must be > 0 and < 1"),
+        ))
     }
 }
 
-fn validate_ratio_f64(name: &str, value: f64) -> Result<(), String> {
+fn validate_ratio_f64(name: &str, value: f64) -> Result<(), FrameStoreConfigRefusal> {
     if value.is_finite() && value > 0.0 && value < 1.0 {
         Ok(())
     } else {
-        Err(format!("{name} must be > 0 and < 1"))
+        Err(FrameStoreConfigRefusal::new(
+            StoreCode::FrameStoreRatioInvalid,
+            format!("{name} must be > 0 and < 1"),
+        ))
     }
 }
 

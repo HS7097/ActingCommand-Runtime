@@ -4,7 +4,10 @@ use super::contained_task::{SCHEDULING_PAUSE_DRAIN_POLL_INTERVAL, SchedulingPaus
 use super::scheduling_pause::{PauseOrigin, pause_row};
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
 use crate::policy_host::InstanceOccupancy;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
     SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
@@ -36,11 +39,14 @@ fn dispatch_contended_error(now_unix_ms: u64) -> RuntimeHostResult<RuntimeHostEr
     let next_eligible_unix_ms = now_unix_ms
         .checked_add(DISPATCH_CONTENDED_RETRY_AFTER_MS)
         .ok_or_else(|| {
-            policy_admission_fatal("policy_admission_clock_overflow", "admit_policy_dispatch")
+            policy_admission_fatal(
+                HostCode::PolicyAdmissionClockOverflow,
+                HostLocation::AdmitPolicyDispatch,
+            )
         })?;
     let mut error = RuntimeHostError::with_projection(
-        HostCode::DispatchInstanceContended.as_str(),
-        "admit_policy_dispatch",
+        HostCode::DispatchInstanceContended,
+        HostLocation::AdmitPolicyDispatch,
         RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
             .with_retry_after(DISPATCH_CONTENDED_RETRY_AFTER_MS),
     );
@@ -57,10 +63,13 @@ impl HostShared {
         &self,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<BTreeMap<String, InstanceOccupancy>> {
-        let instances = lock(&self.registered_instances, "read_policy_instance_registry")?
-            .values()
-            .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
-            .collect::<Vec<_>>();
+        let instances = lock(
+            &self.registered_instances,
+            HostLocation::ReadPolicyInstanceRegistry,
+        )?
+        .values()
+        .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
         let mut occupancy = BTreeMap::new();
         for (instance_id, instance_alias) in instances {
             if let Some(state) = self.instance_occupancy(instance_id, now_unix_ms)? {
@@ -80,7 +89,7 @@ impl HostShared {
     ) -> RuntimeHostResult<Option<InstanceOccupancy>> {
         let gate = self.routine_gate(instance_id)?;
         let now_monotonic_ms = self.monotonic_ms()?;
-        let scheduler = lock(&self.scheduler, "read_policy_instance_occupancy")?;
+        let scheduler = lock(&self.scheduler, HostLocation::ReadPolicyInstanceOccupancy)?;
         let count = scheduler.eligible_count(instance_id, gate, now_monotonic_ms);
         // A lapsed holder is no hold: the sweep, or the admission's own expiry, ends it.
         let holder_kind = scheduler
@@ -97,8 +106,8 @@ impl HostShared {
         };
         let until_unix_ms = now_unix_ms.checked_add(remaining_ms).ok_or_else(|| {
             policy_admission_fatal(
-                "policy_admission_clock_overflow",
-                "read_policy_instance_occupancy",
+                HostCode::PolicyAdmissionClockOverflow,
+                HostLocation::ReadPolicyInstanceOccupancy,
             )
         })?;
         Ok(Some(InstanceOccupancy::Cooldown { until_unix_ms }))
@@ -123,8 +132,8 @@ impl HostShared {
         };
         Ok(Some(
             RuntimeHostError::request(
-                HostCode::DispatchInstanceHeld.as_str(),
-                "admit_policy_dispatch",
+                HostCode::DispatchInstanceHeld,
+                HostLocation::AdmitPolicyDispatch,
                 RuntimeErrorCode::InvalidRequest,
             )
             .with_native_detail(format!(
@@ -139,15 +148,16 @@ fn validate_static_fact_pool_authority(
     catalog: &actingcommand_policy::CompiledCatalog,
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<()> {
+    let operation: Location = operation.into();
     for pool in &catalog.catalog().pools.pools {
         if pool.value_source.is_static() {
             continue;
         }
         let actingcommand_policy::ObservationRef::Fact { fact_key } = &pool.observation else {
             return Err(policy_admission_request(
-                "policy_pool_binding_invalid",
+                HostCode::PolicyPoolBindingInvalid,
                 operation,
             ));
         };
@@ -158,7 +168,7 @@ fn validate_static_fact_pool_authority(
                 .any(|fact| fact.scope == pool.scope && fact.fact_key == *fact_key)
         {
             return Err(policy_admission_request(
-                "policy_pool_authority_conflict",
+                HostCode::PolicyPoolAuthorityConflict,
                 operation,
             ));
         }
@@ -195,8 +205,8 @@ impl TrustedPolicyDispatchStore {
                 .find(|reason| reason.id == intent.reason_chain_id)
                 .ok_or_else(|| {
                     policy_admission_fatal(
-                        "policy_reason_chain_missing",
-                        "record_trusted_policy_dispatch",
+                        SharedCode::PolicyReasonChainMissing,
+                        HostLocation::RecordTrustedPolicyDispatch,
                     )
                 })?;
             let trusted = TrustedPolicyDispatch {
@@ -209,8 +219,8 @@ impl TrustedPolicyDispatchStore {
                     || existing.reason_chain != trusted.reason_chain
                 {
                     return Err(policy_admission_fatal(
-                        "policy_decision_identity_conflict",
-                        "record_trusted_policy_dispatch",
+                        HostCode::PolicyDecisionIdentityConflict,
+                        HostLocation::RecordTrustedPolicyDispatch,
                     ));
                 }
                 continue;
@@ -233,14 +243,14 @@ impl TrustedPolicyDispatchStore {
     ) -> RuntimeHostResult<TrustedPolicyDispatch> {
         let trusted = self.entries.get(&intent.decision_id).ok_or_else(|| {
             policy_admission_request(
-                "policy_decision_not_host_evaluated",
-                "authorize_policy_dispatch",
+                HostCode::PolicyDecisionNotHostEvaluated,
+                HostLocation::AuthorizePolicyDispatch,
             )
         })?;
         if trusted.intent != *intent || trusted.reason_chain != *reason_chain {
             return Err(policy_admission_request(
-                "policy_trusted_context_mismatch",
-                "authorize_policy_dispatch",
+                HostCode::PolicyTrustedContextMismatch,
+                HostLocation::AuthorizePolicyDispatch,
             ));
         }
         Ok(trusted.clone())
@@ -290,8 +300,8 @@ impl SchedulingPauseTable {
         let origin = |scope: Option<String>| {
             self.origins.get(&scope).ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "scheduling_pause_origin_missing",
-                    "persist_scheduling_pause",
+                    HostCode::SchedulingPauseOriginMissing,
+                    HostLocation::PersistSchedulingPause,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })
@@ -300,7 +310,7 @@ impl SchedulingPauseTable {
         if let Some(pause) = &self.global {
             rows.push(pause_row(
                 None,
-                pause.pause_reason.as_str(),
+                &pause.pause_reason,
                 pause.since_unix_ms,
                 origin(None)?,
             ));
@@ -308,7 +318,7 @@ impl SchedulingPauseTable {
         for (alias, pause) in &self.instances {
             rows.push(pause_row(
                 Some(alias),
-                pause.pause_reason.as_str(),
+                &pause.pause_reason,
                 pause.since_unix_ms,
                 origin(Some(alias.clone()))?,
             ));
@@ -371,7 +381,7 @@ impl SchedulingPauseTable {
     pub(super) fn hold_instance_at_start(
         &mut self,
         instance_alias: &str,
-        pause_reason: &str,
+        pause_reason: Code,
         since_unix_ms: u64,
         origin: PauseOrigin,
     ) -> RuntimeHostResult<bool> {
@@ -385,14 +395,15 @@ impl SchedulingPauseTable {
         )?;
         let invalid = || {
             RuntimeHostError::fatal(
-                "scheduling_pause_state_invalid",
-                "hold_start_instance_pause",
+                HostCode::SchedulingPauseStateInvalid,
+                HostLocation::HoldStartInstancePause,
                 RuntimeErrorCode::RuntimeFatal,
             )
         };
         let state = InstancePauseState {
             revision,
-            pause_reason: SchedulingPauseReason::new(pause_reason).map_err(|_| invalid())?,
+            pause_reason: SchedulingPauseReason::new(pause_reason.as_str())
+                .map_err(|_| invalid())?,
             since_unix_ms,
             stage: InstancePauseStage::Released,
         };
@@ -411,8 +422,8 @@ impl SchedulingPauseTable {
                 .any(|instance| &instance.instance_alias == alias)
         }) {
             return Err(RuntimeHostError::request(
-                "install_pause_scope_mismatch",
-                "restore_install_pauses",
+                HostCode::InstallPauseScopeMismatch,
+                HostLocation::RestoreInstallPauses,
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
@@ -434,8 +445,8 @@ impl SchedulingPauseTable {
             .filter(|state| state.revision == revision && state.stage == from)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "scheduling_pause_state_lost",
-                    "pause_scheduling",
+                    HostCode::SchedulingPauseStateLost,
+                    ContractLocation::PauseScheduling,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -465,12 +476,18 @@ impl SchedulingPauseTable {
             .is_some_and(|connections| connections.contains(&connection))
     }
 
-    /// The deferral code a policy dispatch to `instance_alias` meets, if a gate is closed.
+    /// The pause that defers a dispatch on `instance_alias`, as the spelling the policy
+    /// evaluator's scheduling-pause callback takes (the policy crate types it in A2d).
     pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {
+        self.deferral_code(instance_alias).map(HostCode::as_str)
+    }
+
+    /// The pause that defers a dispatch on `instance_alias`.
+    pub(super) fn deferral_code(&self, instance_alias: &str) -> Option<HostCode> {
         if self.global.is_some() {
-            Some("dispatch_paused_global")
+            Some(HostCode::DispatchPausedGlobal)
         } else if self.instances.contains_key(instance_alias) {
-            Some("dispatch_paused_instance")
+            Some(HostCode::DispatchPausedInstance)
         } else {
             None
         }
@@ -503,15 +520,18 @@ impl SchedulingPauseTable {
 fn next_scheduling_pause_revision(revision: &mut u64) -> RuntimeHostResult<u64> {
     *revision = revision.checked_add(1).ok_or_else(|| {
         RuntimeHostError::fatal(
-            "scheduling_pause_revision_overflow",
-            "change_scheduling_pause",
+            HostCode::SchedulingPauseRevisionOverflow,
+            HostLocation::ChangeSchedulingPause,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
     Ok(*revision)
 }
 
-fn scheduling_pause_denied(code: &'static str, operation: &'static str) -> RequestFailure {
+fn scheduling_pause_denied(
+    code: impl Into<Code>,
+    operation: impl Into<Location>,
+) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest),
         RuntimeReceiptState::Denied,
@@ -532,14 +552,14 @@ fn check_scheduling_pause_expectation(
     };
     if expected.owner_epoch != owner_epoch {
         return Err(scheduling_pause_denied(
-            "scheduling_pause_owner_epoch_mismatch",
-            "resume_scheduling",
+            HostCode::SchedulingPauseOwnerEpochMismatch,
+            ContractLocation::ResumeScheduling,
         ));
     }
     if expected.revision != revision {
         return Err(scheduling_pause_denied(
-            "scheduling_pause_revision_mismatch",
-            "resume_scheduling",
+            HostCode::SchedulingPauseRevisionMismatch,
+            ContractLocation::ResumeScheduling,
         ));
     }
     Ok(())
@@ -669,9 +689,14 @@ impl HostShared {
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
         {
-            let _gate = lock(&self.fact_write_gate, "set_test_policy_inputs")?;
-            *lock(&self.policy_inputs, "set_test_policy_inputs")? =
-                Some(PolicyInputSnapshot::new(facts.clone(), resources.clone()));
+            let _gate = lock(
+                &self.fact_write_gate,
+                crate::codes::test_spellings::TestLocation::SetTestPolicyInputs,
+            )?;
+            *lock(
+                &self.policy_inputs,
+                crate::codes::test_spellings::TestLocation::SetTestPolicyInputs,
+            )? = Some(PolicyInputSnapshot::new(facts.clone(), resources.clone()));
         }
         // The replaced configuration seeds the instance fact store exactly as a startup does.
         self.seed_policy_instance_facts()?;
@@ -688,24 +713,36 @@ impl HostShared {
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
-        let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
-        let procedure_manifest = lock(&self.procedure_manifest, "read_procedure_manifest")?
-            .clone()
-            .ok_or_else(|| {
-                policy_admission_request("procedure_manifest_unconfigured", "evaluate_policy_cycle")
-            })?;
+        let _detection_gate = lock(
+            &self.detection_write_gate,
+            HostLocation::PlanPolicyDetection,
+        )?;
+        let procedure_manifest = lock(
+            &self.procedure_manifest,
+            HostLocation::ReadProcedureManifest,
+        )?
+        .clone()
+        .ok_or_else(|| {
+            policy_admission_request(
+                HostCode::ProcedureManifestUnconfigured,
+                HostLocation::EvaluatePolicyCycle,
+            )
+        })?;
         let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
-            let _outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let mut policy = lock(self.policy()?, "read_policy_outcome_keys")?;
+            let _outcome_gate = lock(
+                &self.policy_outcome_gate,
+                HostLocation::SnapshotPolicyOutcomeState,
+            )?;
+            let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
             // this cycle's inputs are projected (Workflow #308 slice 5b).
             policy.apply_eligibility_verdicts();
             let outcome_keys = policy.outcome_key_snapshot()?;
-            let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
+            let _gate = lock(&self.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
             let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
                 .project_authoritative_policy_inputs_with_gaps_under_gate(
                     &mut policy,
-                    "evaluate_policy_cycle",
+                    HostLocation::EvaluatePolicyCycle,
                     &outcome_keys,
                     None,
                     Some(time.unix_ms),
@@ -719,12 +756,12 @@ impl HostShared {
                 unknown_offset_tasks,
             )
         };
-        let workloads = lock(self.policy()?, "read_policy_performance_workloads")?
+        let workloads = lock(self.policy()?, HostLocation::ReadPolicyPerformanceWorkloads)?
             .active_performance_workloads()?;
         let mut controlled_resources = resources;
         lock(
             &self.performance_control,
-            "apply_policy_performance_control",
+            HostLocation::ApplyPolicyPerformanceControl,
         )?
         .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
         let seed = match seed {
@@ -733,15 +770,18 @@ impl HostShared {
         };
         // Workflow #191 ps1: the scheduling pauses as this cycle starts; a paused candidate is
         // deferred exactly as admission would refuse it.
-        let scheduling_pause =
-            lock(&self.scheduling_pause, "read_policy_scheduling_pause")?.clone();
+        let scheduling_pause = lock(
+            &self.scheduling_pause,
+            HostLocation::ReadPolicySchedulingPause,
+        )?
+        .clone();
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
         let suspension_lift = self.suspension_lift_view(&procedure_manifest);
         let (mut cycle, eligibility_unknown_pairs) = {
-            let mut policy = lock(self.policy()?, "evaluate_policy_cycle")?;
+            let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             let cycle = policy.evaluate(
                 &facts,
@@ -783,7 +823,7 @@ impl HostShared {
         }
         lock(
             &self.trusted_policy_dispatches,
-            "record_trusted_policy_dispatches",
+            HostLocation::RecordTrustedPolicyDispatches,
         )?
         .record_cycle(&cycle, observed_monotonic_ms)?;
         Ok(cycle)
@@ -794,10 +834,13 @@ impl HostShared {
         &self,
         procedure_manifest: ProcedureManifest,
     ) -> RuntimeHostResult<()> {
-        let _gate = lock(&self.fact_write_gate, "replace_procedure_manifest_for_test")?;
+        let _gate = lock(
+            &self.fact_write_gate,
+            crate::codes::test_spellings::TestLocation::ReplaceProcedureManifestForTest,
+        )?;
         *lock(
             &self.procedure_manifest,
-            "replace_procedure_manifest_for_test",
+            crate::codes::test_spellings::TestLocation::ReplaceProcedureManifestForTest,
         )? = Some(procedure_manifest);
         Ok(())
     }
@@ -805,7 +848,7 @@ impl HostShared {
     pub(super) fn project_authoritative_policy_inputs_under_gate(
         &self,
         policy: &mut PolicyHost,
-        operation: &'static str,
+        operation: impl Into<Location>,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
@@ -832,7 +875,7 @@ impl HostShared {
     pub(super) fn project_authoritative_policy_inputs_with_gaps_under_gate(
         &self,
         policy: &mut PolicyHost,
-        operation: &'static str,
+        operation: impl Into<Location>,
         outcome_keys: &PolicyOutcomeKeySnapshot,
         as_of_ledger_position: Option<u64>,
         offsets_at_unix_ms: Option<u64>,
@@ -843,19 +886,22 @@ impl HostShared {
         MissingPolicyInstanceFacts,
         UnknownPriorityOffsetTasks,
     )> {
+        let operation: Location = operation.into();
         self.synchronize_fact_store_under_gate()?;
-        let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
+        let inputs = lock(&self.policy_inputs, HostLocation::ReadPolicyInputs)?
             .clone()
-            .ok_or_else(|| policy_admission_request("policy_inputs_unconfigured", operation))?;
+            .ok_or_else(|| {
+                policy_admission_request(HostCode::PolicyInputsUnconfigured, operation)
+            })?;
         self.validate_policy_input_authority(&inputs, operation)?;
         let latest_ledger_position = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("read_policy_fact_position"))?;
+            .map_err(|_| ledger_error(HostLocation::ReadPolicyFactPosition))?;
         let ledger_position = match as_of_ledger_position {
             Some(position) if position == 0 || position > latest_ledger_position => {
                 return Err(policy_admission_request(
-                    "policy_input_position_unavailable",
+                    HostCode::PolicyInputPositionUnavailable,
                     operation,
                 ));
             }
@@ -876,7 +922,7 @@ impl HostShared {
         };
         // The instance set is read from the fact store at the projected position; the
         // configuration contributes the static identity only (alias, host, server, game).
-        let fact_store = lock(&self.facts, "project_policy_facts")?;
+        let fact_store = lock(&self.facts, HostLocation::ProjectPolicyFacts)?;
         let historical;
         let fact_projection = if ledger_position == latest_ledger_position {
             &*fact_store
@@ -917,7 +963,7 @@ impl HostShared {
                 configured.task_id == offset.task_id && configured.instance_id == offset.instance_id
             }) {
                 return Err(policy_admission_request(
-                    "policy_fact_authority_conflict",
+                    HostCode::PolicyFactAuthorityConflict,
                     operation,
                 ));
             }
@@ -933,7 +979,7 @@ impl HostShared {
         });
         let authoritative_outcomes = lock(
             &self.authoritative_policy_outcomes,
-            "project_policy_scheduling_outcomes",
+            HostLocation::ProjectPolicySchedulingOutcomes,
         )?;
         if base_facts
             .outcomes
@@ -941,7 +987,7 @@ impl HostShared {
             .any(|outcome| outcome_keys.keys.contains_key(&outcome.task_id))
         {
             return Err(policy_admission_request(
-                "policy_outcome_authority_conflict",
+                HostCode::PolicyOutcomeAuthorityConflict,
                 operation,
             ));
         }
@@ -955,7 +1001,7 @@ impl HostShared {
             ) {
                 if authoritative_outcomes.contains_key(key) {
                     return Err(RuntimeHostError::fatal(
-                        "policy_outcome_failed_run_residual",
+                        HostCode::PolicyOutcomeFailedRunResidual,
                         operation,
                         RuntimeErrorCode::RuntimeFatal,
                     ));
@@ -964,7 +1010,7 @@ impl HostShared {
             }
             let outcome = authoritative_outcomes.get(key).ok_or_else(|| {
                 RuntimeHostError::request(
-                    "outcome_projection_not_ready",
+                    SharedCode::OutcomeProjectionNotReady,
                     operation,
                     RuntimeErrorCode::RuntimeUnavailable,
                 )
@@ -972,7 +1018,7 @@ impl HostShared {
             let identity = outcome.identity();
             if !completed_run_matches_outcome(expected_run, outcome) {
                 return Err(RuntimeHostError::request(
-                    "outcome_projection_not_ready",
+                    SharedCode::OutcomeProjectionNotReady,
                     operation,
                     RuntimeErrorCode::RuntimeUnavailable,
                 ));
@@ -995,7 +1041,7 @@ impl HostShared {
             }
             if ledger_position < identity.terminal_sequence() {
                 return Err(RuntimeHostError::request(
-                    "outcome_projection_not_ready",
+                    SharedCode::OutcomeProjectionNotReady,
                     operation,
                     RuntimeErrorCode::RuntimeUnavailable,
                 ));
@@ -1007,7 +1053,7 @@ impl HostShared {
                 != 0
             {
                 return Err(RuntimeHostError::fatal(
-                    "policy_outcome_projection_injected_failure",
+                    crate::codes::test_spellings::TestCode::PolicyOutcomeProjectionInjectedFailure,
                     operation,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
@@ -1016,21 +1062,23 @@ impl HostShared {
                 .ledger
                 .project_scheduling_outcomes(identity.clone(), ledger_position)
                 .map_err(|error| {
-                    if error.code() == "outcome_projection_not_ready"
-                        || error.code() == "outcome_projection_position_invalid"
+                    if error.code() == SharedCode::OutcomeProjectionNotReady.as_str()
+                        || error.code()
+                            == actingcommand_ledger::LedgerCode::OutcomeProjectionPositionInvalid
+                                .as_str()
                     {
                         RuntimeHostError::request(
-                            "outcome_projection_not_ready",
+                            SharedCode::OutcomeProjectionNotReady,
                             operation,
                             RuntimeErrorCode::RuntimeUnavailable,
                         )
                     } else {
-                        ledger_error("project_policy_scheduling_outcome")
+                        ledger_error(HostLocation::ProjectPolicySchedulingOutcome)
                     }
                 })?;
             if projected.outcome() != outcome {
                 return Err(RuntimeHostError::fatal(
-                    "policy_outcome_projection_mismatch",
+                    HostCode::PolicyOutcomeProjectionMismatch,
                     operation,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
@@ -1052,7 +1100,7 @@ impl HostShared {
             let PolicyExecutionOutcome::Succeeded { runtime_ms } = &expected_run.execution_outcome
             else {
                 return Err(RuntimeHostError::fatal(
-                    "policy_outcome_failed_run_residual",
+                    HostCode::PolicyOutcomeFailedRunResidual,
                     operation,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
@@ -1062,7 +1110,7 @@ impl HostShared {
                     .map(PolicyFactValue::Integer)
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "policy_settlement_outcome_overflow",
+                            HostCode::PolicySettlementOutcomeOverflow,
                             operation,
                             RuntimeErrorCode::RuntimeFatal,
                         )
@@ -1148,11 +1196,12 @@ impl HostShared {
     pub(super) fn validate_policy_input_authority(
         &self,
         inputs: &PolicyInputSnapshot,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
+        let operation: Location = operation.into();
         let registered = lock(
             &self.registered_instances,
-            "validate_policy_instance_metadata",
+            HostLocation::ValidatePolicyInstanceMetadata,
         )?;
         let registered_aliases = registered
             .values()
@@ -1164,7 +1213,7 @@ impl HostShared {
             .collect::<BTreeSet<_>>();
         if registered_aliases != configured_aliases {
             return Err(policy_admission_request(
-                "policy_instance_metadata_untrusted",
+                HostCode::PolicyInstanceMetadataUntrusted,
                 operation,
             ));
         }
@@ -1179,7 +1228,7 @@ impl HostShared {
             .any(|identity| !host_ids.contains(identity.host_id))
         {
             return Err(policy_admission_request(
-                "policy_resource_metadata_untrusted",
+                HostCode::PolicyResourceMetadataUntrusted,
                 operation,
             ));
         }
@@ -1196,22 +1245,22 @@ impl HostShared {
     ) -> RuntimeHostResult<ForwardProjection> {
         let declared_facts = facts;
         let (facts, fact_projection) = {
-            let mut fact_projection = lock(&self.facts, "project_forward_facts")?.clone();
+            let mut fact_projection = lock(&self.facts, HostLocation::ProjectForwardFacts)?.clone();
             fact_projection.synchronize(&self.ledger)?;
             let ledger_position = self
                 .ledger
                 .latest_sequence()
-                .map_err(|_| ledger_error("project_forward_fact_position"))?;
+                .map_err(|_| ledger_error(HostLocation::ProjectForwardFactPosition))?;
             let facts =
                 fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?;
             (facts, fact_projection)
         };
         let (catalog, workloads) = {
-            let policy = lock(self.policy()?, "project_forward_catalog")?;
+            let policy = lock(self.policy()?, HostLocation::ProjectForwardCatalog)?;
             let catalog = policy.active_loaded().ok_or_else(|| {
                 RuntimeHostError::request(
-                    "policy_catalog_unavailable",
-                    "project_policy_forward",
+                    SharedCode::PolicyCatalogUnavailable,
+                    ContractLocation::ProjectPolicyForward,
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
@@ -1221,7 +1270,7 @@ impl HostShared {
             catalog.compiled(),
             declared_facts,
             resources,
-            "project_policy_forward",
+            ContractLocation::ProjectPolicyForward,
         )?;
         fact_projection
             .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
@@ -1229,14 +1278,14 @@ impl HostShared {
             actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
         lock(
             &self.performance_control,
-            "apply_forward_performance_control",
+            HostLocation::ApplyForwardPerformanceControl,
         )?
         .apply_to_resources(&mut resources.hosts, &workloads)?;
         project_forward(catalog.compiled(), &facts, &resources, time, seed, config).map_err(
             |error| {
                 RuntimeHostError::request(
                     error.code(),
-                    "project_policy_forward",
+                    ContractLocation::ProjectPolicyForward,
                     RuntimeErrorCode::InvalidRequest,
                 )
             },
@@ -1253,14 +1302,14 @@ impl HostShared {
         let mut rejection = None;
         let result = (|| {
             {
-                let policy = lock(self.policy()?, "validate_policy_dispatch")?;
+                let policy = lock(self.policy()?, HostLocation::ValidatePolicyDispatch)?;
                 if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
                     return Ok(replay);
                 }
             }
             let trusted = lock(
                 &self.trusted_policy_dispatches,
-                "authorize_trusted_policy_dispatch",
+                HostLocation::AuthorizeTrustedPolicyDispatch,
             )?
             .authorize(intent, reason_chain)?;
             if context.fact_ledger_position != trusted.intent.input_ledger_position
@@ -1268,8 +1317,8 @@ impl HostShared {
                 || context.fencing_owner_epoch != self.owner_epoch
             {
                 return Err(policy_admission_request(
-                    "policy_admission_context_untrusted",
-                    "admit_policy_dispatch",
+                    HostCode::PolicyAdmissionContextUntrusted,
+                    HostLocation::AdmitPolicyDispatch,
                 ));
             }
             let admission_time = || {
@@ -1278,8 +1327,8 @@ impl HostShared {
                     .checked_sub(trusted.observed_monotonic_ms)
                     .ok_or_else(|| {
                         policy_admission_fatal(
-                            "policy_admission_clock_regressed",
-                            "admit_policy_dispatch",
+                            HostCode::PolicyAdmissionClockRegressed,
+                            HostLocation::AdmitPolicyDispatch,
                         )
                     })?;
                 trusted
@@ -1289,15 +1338,18 @@ impl HostShared {
                     .checked_add(elapsed_ms)
                     .ok_or_else(|| {
                         policy_admission_fatal(
-                            "policy_admission_clock_overflow",
-                            "admit_policy_dispatch",
+                            HostCode::PolicyAdmissionClockOverflow,
+                            HostLocation::AdmitPolicyDispatch,
                         )
                     })
             };
             let now_unix_ms = admission_time()?;
             // Approval projection and dispatch admission share one order so a concurrent revocation
             // cannot appear in the ledger before a dispatch authorized by the superseded fact.
-            let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
+            let _governance_gate = lock(
+                &self.governance_write_gate,
+                HostLocation::ProjectPolicyApprovals,
+            )?;
             let approval_fact_ids =
                 match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
                     Ok(projection) => projection.active_for_dispatch(intent),
@@ -1316,8 +1368,11 @@ impl HostShared {
             let context = &authoritative_context;
             // Workflow #191 ps1: an operator scheduling pause (global, then this instance)
             // defers the dispatch before the performance and capacity gates are consulted.
-            let pause_deferral = lock(&self.scheduling_pause, "gate_policy_scheduling_pause")?
-                .deferral(&intent.instance_id);
+            let pause_deferral = lock(
+                &self.scheduling_pause,
+                HostLocation::GatePolicySchedulingPause,
+            )?
+            .deferral_code(&intent.instance_id);
             // Workflow #369 W-1: a holder or an eligible waiting claim, read under the scheduler
             // lock, rejects the dispatch at Info after its intent.
             let held = match pause_deferral {
@@ -1327,13 +1382,13 @@ impl HostShared {
             let mut gate_error = match (pause_deferral, held) {
                 (Some(code), _) => Some(RuntimeHostError::request(
                     code,
-                    "admit_policy_dispatch",
+                    HostLocation::AdmitPolicyDispatch,
                     RuntimeErrorCode::InvalidRequest,
                 )),
                 (None, Some(held)) => Some(held),
                 (None, None) => match lock(
                     &self.performance_control,
-                    "gate_policy_performance_dispatch",
+                    HostLocation::GatePolicyPerformanceDispatch,
                 )?
                 .gate_dispatch(
                     &intent.instance_id,
@@ -1356,7 +1411,7 @@ impl HostShared {
                         == Some(
                             actingcommand_contract::PerformanceDeadlineDisposition::CapacityFailure,
                         ) {
-                        "performance_capacity_deadline_conflict"
+                        HostCode::PerformanceCapacityDeadlineConflict.code()
                     } else {
                         reason
                     };
@@ -1367,7 +1422,7 @@ impl HostShared {
                         }
                         let mut error = RuntimeHostError::with_projection(
                             code,
-                            "admit_policy_dispatch",
+                            HostLocation::AdmitPolicyDispatch,
                             projection,
                         );
                         // A throttle deferral tells the driver when this instance may start: the
@@ -1378,8 +1433,8 @@ impl HostShared {
                                 .checked_add(retry_after_ms)
                                 .ok_or_else(|| {
                                     policy_admission_fatal(
-                                        "policy_admission_clock_overflow",
-                                        "admit_policy_dispatch",
+                                        HostCode::PolicyAdmissionClockOverflow,
+                                        HostLocation::AdmitPolicyDispatch,
                                     )
                                 })?;
                             let mut rejection = error.policy_rejection();
@@ -1405,27 +1460,27 @@ impl HostShared {
                 .events
                 .issuer()
                 .mint_request_id()
-                .map_err(|_| policy_id_error("issue_policy_request_id"))?;
+                .map_err(|_| policy_id_error(HostLocation::IssuePolicyRequestId))?;
             let correlation_id = self
                 .events
                 .issuer()
                 .mint_correlation_id()
-                .map_err(|_| policy_id_error("issue_policy_correlation_id"))?;
+                .map_err(|_| policy_id_error(HostLocation::IssuePolicyCorrelationId))?;
             let holder = self
                 .events
                 .issuer()
                 .mint_holder_id()
-                .map_err(|_| policy_id_error("issue_policy_holder_id"))?;
+                .map_err(|_| policy_id_error(HostLocation::IssuePolicyHolderId))?;
             let task_id = self
                 .events
                 .issuer()
                 .mint_task_id()
-                .map_err(|_| policy_id_error("issue_policy_task_id"))?;
+                .map_err(|_| policy_id_error(HostLocation::IssuePolicyTaskId))?;
             let run_id = self
                 .events
                 .issuer()
                 .mint_run_id()
-                .map_err(|_| policy_id_error("issue_policy_run_id"))?;
+                .map_err(|_| policy_id_error(HostLocation::IssuePolicyRunId))?;
             let run_links = RuntimeRunLinks::new(task_id, run_id);
             let holder_id = *holder.transport();
             let request = RuntimeRequest::new(
@@ -1437,12 +1492,13 @@ impl HostShared {
                 context.now_unix_ms,
                 RuntimeOperation::acquire_lease(intent.instance_id.clone(), holder),
             )
-            .map_err(|_| policy_contract_error("build_policy_runtime_request"))?;
+            .map_err(|_| policy_contract_error(HostLocation::BuildPolicyRuntimeRequest))?;
             let validated = request
                 .validate()
-                .map_err(|_| policy_contract_error("validate_policy_runtime_request"))?;
-            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
-                .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+                .map_err(|_| policy_contract_error(HostLocation::ValidatePolicyRuntimeRequest))?;
+            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::BuildPolicyConnection, &error)
+            })?;
             let action_id = self.events.action_id()?;
             let links = run_links.apply(self.events.request_links(
                 &validated,
@@ -1465,8 +1521,11 @@ impl HostShared {
             // Workflow #191 U5-F1: the policy guard is taken after the outcome gate and held
             // from here across the intent append, the lease and the outcome append until both
             // events are applied (lock order: policy_outcome_gate -> policy -> fact_write_gate).
-            let outcome_gate = lock(&self.policy_outcome_gate, "snapshot_policy_outcome_state")?;
-            let mut policy = lock(self.policy()?, "read_policy_outcome_keys")?;
+            let outcome_gate = lock(
+                &self.policy_outcome_gate,
+                HostLocation::SnapshotPolicyOutcomeState,
+            )?;
+            let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             let (outcome_keys, current_facts, fact_gate) = {
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
@@ -1474,17 +1533,20 @@ impl HostShared {
                         || generation.catalog_version() != intent.catalog_version
                 }) {
                     return Err(policy_admission_request(
-                        "catalog_active_generation_changed",
-                        "admit_policy_dispatch",
+                        HostCode::CatalogActiveGenerationChanged,
+                        HostLocation::AdmitPolicyDispatch,
                     ));
                 }
-                let fact_gate = lock(&self.fact_write_gate, "validate_policy_fact_freshness")?;
+                let fact_gate = lock(
+                    &self.fact_write_gate,
+                    HostLocation::ValidatePolicyFactFreshness,
+                )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
                 let (current_facts, _, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
-                        "admit_policy_dispatch",
+                        HostLocation::AdmitPolicyDispatch,
                         &outcome_keys,
                         None,
                         None,
@@ -1495,19 +1557,22 @@ impl HostShared {
             drop(outcome_gate);
             if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
                 return Err(policy_admission_request(
-                    "policy_facts_stale",
-                    "admit_policy_dispatch",
+                    HostCode::PolicyFactsStale,
+                    HostLocation::AdmitPolicyDispatch,
                 ));
             }
-            let procedure_manifest = lock(&self.procedure_manifest, "validate_procedure_manifest")?
-                .clone()
-                .ok_or_else(|| {
-                    policy_admission_request(
-                        "procedure_manifest_unconfigured",
-                        "admit_policy_dispatch",
-                    )
-                })?;
-            procedure_manifest.validate_intent(intent, "admit_policy_dispatch")?;
+            let procedure_manifest = lock(
+                &self.procedure_manifest,
+                HostLocation::ValidateProcedureManifest,
+            )?
+            .clone()
+            .ok_or_else(|| {
+                policy_admission_request(
+                    HostCode::ProcedureManifestUnconfigured,
+                    HostLocation::AdmitPolicyDispatch,
+                )
+            })?;
+            procedure_manifest.validate_intent(intent, HostLocation::AdmitPolicyDispatch)?;
             // Workflow #336 L6 (§12.7): the evaluation's lift rule, under the admission lock.
             let suspension_lift = self.suspension_lift_view(&procedure_manifest);
             let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
@@ -1537,7 +1602,7 @@ impl HostShared {
                         Err(_) => {
                             return CriticalActionReport::Failed {
                                 error: RequestFailure::poison_without_terminal(ledger_error(
-                                    "read_policy_ledger_position",
+                                    HostLocation::ReadPolicyLedgerPosition,
                                 )),
                                 effect: EffectDisposition::NotPerformed,
                             };
@@ -1612,8 +1677,8 @@ impl HostShared {
                             task_request.validate().map_err(|_| {
                                 RequestFailure::request(
                                     policy_admission_request(
-                                        "policy_task_request_invalid",
-                                        "admit_policy_dispatch",
+                                        HostCode::PolicyTaskRequestInvalid,
+                                        HostLocation::AdmitPolicyDispatch,
                                     ),
                                     RuntimeReceiptState::Denied,
                                     None,
@@ -1624,8 +1689,8 @@ impl HostShared {
                             {
                                 return Err(RequestFailure::request(
                                     policy_admission_request(
-                                        "procedure_package_digest_mismatch",
-                                        "admit_policy_dispatch",
+                                        HostCode::ProcedurePackageDigestMismatch,
+                                        HostLocation::AdmitPolicyDispatch,
                                     ),
                                     RuntimeReceiptState::Denied,
                                     None,
@@ -1692,8 +1757,8 @@ impl HostShared {
                             _ => CriticalActionReport::Failed {
                                 error: RequestFailure::poison_without_terminal(
                                     RuntimeHostError::fatal(
-                                        "policy_lease_result_invalid",
-                                        "admit_policy_dispatch",
+                                        HostCode::PolicyLeaseResultInvalid,
+                                        HostLocation::AdmitPolicyDispatch,
                                         RuntimeErrorCode::RuntimeFatal,
                                     ),
                                 ),
@@ -1766,8 +1831,8 @@ impl HostShared {
                         )
                     }
                     _ => Err(policy_admission_fatal(
-                        "policy_admission_event_invalid",
-                        "apply_policy_admission_events",
+                        HostCode::PolicyAdmissionEventInvalid,
+                        HostLocation::ApplyPolicyAdmissionEvents,
                     )),
                 },
                 Err(CriticalExecutionError::Action { outcome, .. }) => match appended.as_slice() {
@@ -1775,8 +1840,8 @@ impl HostShared {
                         policy.apply_admission_events(intent, outcome, None)
                     }
                     _ => Err(policy_admission_fatal(
-                        "policy_admission_event_invalid",
-                        "apply_policy_admission_events",
+                        HostCode::PolicyAdmissionEventInvalid,
+                        HostLocation::ApplyPolicyAdmissionEvents,
                     )),
                 },
                 Err(
@@ -1829,13 +1894,16 @@ impl HostShared {
                         admission.activity.admitted_at_unix_ms,
                         started_at_monotonic_ms,
                     );
-                    if lock(&self.policy_dispatch_clocks, "record_policy_dispatch_start")?
-                        .insert(intent.decision_id.clone(), clock)
-                        .is_some()
+                    if lock(
+                        &self.policy_dispatch_clocks,
+                        HostLocation::RecordPolicyDispatchStart,
+                    )?
+                    .insert(intent.decision_id.clone(), clock)
+                    .is_some()
                     {
                         let error = policy_admission_fatal(
-                            "policy_dispatch_clock_identity_conflict",
-                            "record_policy_dispatch_start",
+                            HostCode::PolicyDispatchClockIdentityConflict,
+                            HostLocation::RecordPolicyDispatchStart,
                         );
                         self.fatal.mark(error.clone())?;
                         return Err(error);
@@ -1955,14 +2023,14 @@ impl HostShared {
             SchedulingPauseScope::Global => {
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
-                    "persist_global_scheduling_pause",
+                    HostLocation::PersistGlobalSchedulingPause,
                 )?;
                 let mut prospective =
-                    lock(&self.scheduling_pause, "pause_global_scheduling")?.clone();
+                    lock(&self.scheduling_pause, HostLocation::PauseGlobalScheduling)?.clone();
                 if prospective.global.is_some() {
                     return Err(scheduling_pause_denied(
-                        "scheduling_already_paused",
-                        "pause_scheduling",
+                        HostCode::SchedulingAlreadyPaused,
+                        ContractLocation::PauseScheduling,
                     ));
                 }
                 let revision = next_scheduling_pause_revision(&mut prospective.global_revision)?;
@@ -1973,7 +2041,8 @@ impl HostShared {
                 };
                 prospective.set_global(state.clone(), origin.clone());
                 self.persist_scheduling_pauses(&prospective)?;
-                lock(&self.scheduling_pause, "pause_global_scheduling")?.set_global(state, origin);
+                lock(&self.scheduling_pause, HostLocation::PauseGlobalScheduling)?
+                    .set_global(state, origin);
                 return Ok(OperationSuccess {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
@@ -1988,14 +2057,17 @@ impl HostShared {
                 let instance_id = self.resolve_instance(instance_alias)?.instance_id();
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
-                    "persist_instance_scheduling_pause",
+                    HostLocation::PersistInstanceSchedulingPause,
                 )?;
-                let mut prospective =
-                    lock(&self.scheduling_pause, "pause_instance_scheduling")?.clone();
+                let mut prospective = lock(
+                    &self.scheduling_pause,
+                    HostLocation::PauseInstanceScheduling,
+                )?
+                .clone();
                 if prospective.instances.contains_key(instance_alias) {
                     return Err(scheduling_pause_denied(
-                        "scheduling_already_paused",
-                        "pause_scheduling",
+                        HostCode::SchedulingAlreadyPaused,
+                        ContractLocation::PauseScheduling,
                     ));
                 }
                 let revision = next_scheduling_pause_revision(
@@ -2012,17 +2084,21 @@ impl HostShared {
                 };
                 prospective.set_instance(instance_alias, state.clone(), origin.clone());
                 self.persist_scheduling_pauses(&prospective)?;
-                lock(&self.scheduling_pause, "pause_instance_scheduling")?.set_instance(
-                    instance_alias,
-                    state,
-                    origin,
-                );
+                lock(
+                    &self.scheduling_pause,
+                    HostLocation::PauseInstanceScheduling,
+                )?
+                .set_instance(instance_alias, state, origin);
                 (instance_alias, instance_id, revision)
             }
         };
         let staged = SchedulingPauseDeadlines::after(drain_timeout_ms).and_then(|deadlines| {
             let mut drained = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
-            lock(&self.scheduling_pause, "finish_instance_pause_drain")?.advance_instance(
+            lock(
+                &self.scheduling_pause,
+                HostLocation::FinishInstancePauseDrain,
+            )?
+            .advance_instance(
                 instance_alias,
                 revision,
                 InstancePauseStage::Draining,
@@ -2035,7 +2111,11 @@ impl HostShared {
                 deadlines,
                 &mut drained,
             )?;
-            lock(&self.scheduling_pause, "finish_instance_pause_release")?.advance_instance(
+            lock(
+                &self.scheduling_pause,
+                HostLocation::FinishInstancePauseRelease,
+            )?
+            .advance_instance(
                 instance_alias,
                 revision,
                 InstancePauseStage::Paused,
@@ -2088,7 +2168,7 @@ impl HostShared {
         // granted or refused; passing it once makes that lease visible to the check below.
         drop(lock(
             &self.governance_write_gate,
-            "await_policy_admissions_for_pause",
+            HostLocation::AwaitPolicyAdmissionsForPause,
         )?);
         let links = self
             .events
@@ -2103,19 +2183,19 @@ impl HostShared {
             }
             if self.fatal.is_shutdown_requested() {
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                    "scheduling_pause_release_interrupted",
-                    "release_paused_instance",
+                    HostCode::SchedulingPauseReleaseInterrupted,
+                    HostLocation::ReleasePausedInstance,
                     RuntimeErrorCode::RuntimeUnavailable,
                 )));
             }
             let instance_guard = self.instance_guard(instance_id)?;
-            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
             let gate = self.routine_gate(instance_id)?;
             let now_monotonic_ms = self
                 .monotonic_ms()
                 .map_err(RequestFailure::poison_without_terminal)?;
             let (lease_held, queue_waiting) = {
-                let scheduler = lock(&self.scheduler, "read_released_instance_lease")?;
+                let scheduler = lock(&self.scheduler, HostLocation::ReadReleasedInstanceLease)?;
                 (
                     scheduler.active_lease(instance_id).is_some(),
                     scheduler.refusing_count(instance_id, gate, now_monotonic_ms) > 0,
@@ -2126,16 +2206,19 @@ impl HostShared {
             if queue_waiting {
                 return Err(scheduling_pause_release_failure(
                     RuntimeHostError::scheduler(
-                        "prepare_resource_close_lease",
+                        HostLocation::PrepareResourceCloseLease,
                         &SchedulerError::TransferNotSafe,
                     ),
                 ));
             }
-            let run_in_flight = lock(&self.contained_runs, "read_released_instance_runs")?
+            let run_in_flight = lock(&self.contained_runs, HostLocation::ReadReleasedInstanceRuns)?
                 .values()
                 .any(|control| control.instance_id == instance_id);
-            let reset_awaited = lock(&self.scheduling_pause, "read_awaited_client_resets")?
-                .awaits_client_reset(instance_alias);
+            let reset_awaited = lock(
+                &self.scheduling_pause,
+                HostLocation::ReadAwaitedClientResets,
+            )?
+            .awaits_client_reset(instance_alias);
             if !run_in_flight && !reset_awaited && !lease_held {
                 // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
                 // instance outside the multi-Nemu gate closes its session here.
@@ -2151,7 +2234,10 @@ impl HostShared {
                 ) {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(close_error)) => Err(scheduling_pause_release_failure(
-                        RuntimeHostError::execution("close_paused_instance_session", &close_error),
+                        RuntimeHostError::execution(
+                            HostLocation::ClosePausedInstanceSession,
+                            &close_error,
+                        ),
                     )),
                     Err(error) => Err(scheduling_pause_release_failure(error)),
                 };
@@ -2161,8 +2247,8 @@ impl HostShared {
                 let again = self.drain_contained_runs_for_pause(instance_id, deadlines)?;
                 let overflow = || {
                     RuntimeHostError::fatal(
-                        "scheduling_pause_drain_count_overflow",
-                        "release_paused_instance",
+                        HostCode::SchedulingPauseDrainCountOverflow,
+                        HostLocation::ReleasePausedInstance,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 };
@@ -2178,8 +2264,8 @@ impl HostShared {
             }
             if Instant::now() >= deadlines.grace {
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(
-                    "scheduling_pause_release_busy",
-                    "release_paused_instance",
+                    HostCode::SchedulingPauseReleaseBusy,
+                    HostLocation::ReleasePausedInstance,
                     RuntimeErrorCode::LeaseBusy,
                 )));
             }
@@ -2216,10 +2302,10 @@ impl HostShared {
             let revision = {
                 let _persist = lock(
                     &self.scheduling_pause_persist_gate,
-                    "persist_global_scheduling_resume",
+                    HostLocation::PersistGlobalSchedulingResume,
                 )?;
                 let mut prospective = {
-                    let table = lock(&self.scheduling_pause, "resume_scheduling")?;
+                    let table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
                     check_scheduling_pause_expectation(
                         expected,
                         self.owner_epoch,
@@ -2227,15 +2313,15 @@ impl HostShared {
                     )?;
                     if table.global.is_none() {
                         return Err(scheduling_pause_denied(
-                            "scheduling_not_paused",
-                            "resume_scheduling",
+                            HostCode::SchedulingNotPaused,
+                            ContractLocation::ResumeScheduling,
                         ));
                     }
                     table.clone()
                 };
                 prospective.lift_global()?;
                 self.persist_scheduling_pauses(&prospective)?;
-                lock(&self.scheduling_pause, "resume_scheduling")?.lift_global()?
+                lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?.lift_global()?
             };
             return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
@@ -2258,12 +2344,15 @@ impl HostShared {
         let lifted = (|| -> Result<u64, RequestFailure> {
             let _persist = lock(
                 &self.scheduling_pause_persist_gate,
-                "persist_instance_scheduling_resume",
+                HostLocation::PersistInstanceSchedulingResume,
             )?;
             let mut prospective = self.resumable_instance_pauses(instance_alias, expected)?;
             prospective.lift_instance(instance_alias)?;
             self.persist_scheduling_pauses(&prospective)?;
-            Ok(lock(&self.scheduling_pause, "resume_scheduling")?.lift_instance(instance_alias)?)
+            Ok(
+                lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?
+                    .lift_instance(instance_alias)?,
+            )
         })();
         let revision = match lifted {
             Ok(revision) => revision,
@@ -2309,7 +2398,7 @@ impl HostShared {
         instance_alias: &str,
         expected: Option<&SchedulingPauseExpectation>,
     ) -> Result<SchedulingPauseTable, RequestFailure> {
-        let table = lock(&self.scheduling_pause, "resume_scheduling")?;
+        let table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
         check_scheduling_pause_expectation(
             expected,
             self.owner_epoch,
@@ -2321,16 +2410,16 @@ impl HostShared {
         )?;
         match table.instances.get(instance_alias).map(|state| state.stage) {
             None => Err(scheduling_pause_denied(
-                "scheduling_not_paused",
-                "resume_scheduling",
+                HostCode::SchedulingNotPaused,
+                ContractLocation::ResumeScheduling,
             )),
             Some(InstancePauseStage::Draining) => Err(scheduling_pause_denied(
-                "scheduling_pause_draining",
-                "resume_scheduling",
+                HostCode::SchedulingPauseDraining,
+                ContractLocation::ResumeScheduling,
             )),
             Some(InstancePauseStage::Paused) => Err(scheduling_pause_denied(
-                "scheduling_pause_releasing",
-                "resume_scheduling",
+                HostCode::SchedulingPauseReleasing,
+                ContractLocation::ResumeScheduling,
             )),
             Some(InstancePauseStage::Released) => Ok(table.clone()),
         }
@@ -2375,7 +2464,7 @@ impl HostShared {
         instance_alias: &str,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<()> {
-        lock(&self.scheduling_pause, "await_client_reset")?
+        lock(&self.scheduling_pause, HostLocation::AwaitClientReset)?
             .client_resets
             .entry(instance_alias.to_owned())
             .or_default()
@@ -2389,7 +2478,7 @@ impl HostShared {
         instance_alias: &str,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<()> {
-        let mut table = lock(&self.scheduling_pause, "settle_client_reset")?;
+        let mut table = lock(&self.scheduling_pause, HostLocation::SettleClientReset)?;
         if let Some(connections) = table.client_resets.get_mut(instance_alias) {
             connections.remove(&connection_id);
             if connections.is_empty() {
@@ -2404,7 +2493,7 @@ impl HostShared {
         &self,
         connection_id: ConnectionId,
     ) -> RuntimeHostResult<()> {
-        lock(&self.scheduling_pause, "forget_client_resets")?
+        lock(&self.scheduling_pause, HostLocation::ForgetClientResets)?
             .client_resets
             .retain(|_, connections| {
                 connections.remove(&connection_id);
@@ -2417,7 +2506,10 @@ impl HostShared {
         &self,
         decision_id: &str,
     ) -> RuntimeHostResult<Option<CatalogGeneration>> {
-        Ok(lock(self.policy()?, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
+        Ok(
+            lock(self.policy()?, HostLocation::ReadPinnedPolicyCatalog)?
+                .pinned_catalog(decision_id),
+        )
     }
 
     pub(super) fn project_policy_input_identity(
@@ -2427,29 +2519,35 @@ impl HostShared {
         let identity = (|| {
             if as_of_ledger_position == 0 {
                 return Err(RuntimeHostError::request(
-                    "policy_input_position_unavailable",
-                    "project_policy_input_identity",
+                    HostCode::PolicyInputPositionUnavailable,
+                    ContractLocation::ProjectPolicyInputIdentity,
                     RuntimeErrorCode::InvalidRequest,
                 ));
             }
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
-                "snapshot_policy_input_identity_outcome_state",
+                HostLocation::SnapshotPolicyInputIdentityOutcomeState,
             )?;
-            let mut policy = lock(self.policy()?, "read_policy_input_identity_outcome_keys")?;
+            let mut policy = lock(
+                self.policy()?,
+                HostLocation::ReadPolicyInputIdentityOutcomeKeys,
+            )?;
             let outcome_keys = policy.outcome_key_snapshot()?;
-            let _fact_gate = lock(&self.fact_write_gate, "project_policy_input_identity_facts")?;
+            let _fact_gate = lock(
+                &self.fact_write_gate,
+                HostLocation::ProjectPolicyInputIdentityFacts,
+            )?;
             let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
                 &mut policy,
-                "project_policy_input_identity",
+                ContractLocation::ProjectPolicyInputIdentity,
                 &outcome_keys,
                 Some(as_of_ledger_position),
             )?;
             RuntimePolicyInputIdentity::new(facts.ledger_position, facts.fact_snapshot_id).map_err(
                 |_| {
                     RuntimeHostError::fatal(
-                        "policy_input_identity_invalid",
-                        "project_policy_input_identity",
+                        HostCode::PolicyInputIdentityInvalid,
+                        ContractLocation::ProjectPolicyInputIdentity,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 },
@@ -2605,7 +2703,7 @@ fn attach_eligible_since_unknown_reasons(
             continue;
         }
         decision.reasons.push(DecisionReason {
-            code: "eligible_since_unknown".to_owned(),
+            code: HostCode::EligibleSinceUnknown.as_str().to_owned(),
             detail: "eligibility age is kept in memory only and is not rebuilt after a start; \
                      this candidate's age counts from this cycle"
                 .to_owned(),
@@ -2658,14 +2756,14 @@ fn policy_event_data(
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
     let package_digest = intent.package_digest.clone().ok_or_else(|| {
         policy_admission_fatal(
-            "procedure_package_digest_missing",
-            "build_policy_dispatch_event",
+            HostCode::ProcedurePackageDigestMissing,
+            HostLocation::BuildPolicyDispatchEvent,
         )
     })?;
     let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
         policy_admission_fatal(
-            "procedure_binding_digest_missing",
-            "build_policy_dispatch_event",
+            HostCode::ProcedureBindingDigestMissing,
+            HostLocation::BuildPolicyDispatchEvent,
         )
     })?;
     Ok(PolicyDispatchEventData {
@@ -2700,8 +2798,8 @@ fn runtime_policy_seed(
 ) -> RuntimeHostResult<u64> {
     let bytes = serde_json::to_vec(&(fact_snapshot_id, time, owner_epoch)).map_err(|_| {
         RuntimeHostError::fatal(
-            "policy_seed_encode_failed",
-            "derive_policy_seed",
+            HostCode::PolicySeedEncodeFailed,
+            HostLocation::DerivePolicySeed,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;

@@ -221,12 +221,18 @@ fn closure_gate(code: &str) -> GateClass {
 
 /// A placement block's class; other blocks are not traced.
 fn placement_gate(code: &str) -> Option<GateClass> {
-    match code {
-        "instance_override_disabled" | "capability_missing" | "activity_profile_missing" => {
-            Some(GateClass::Persistent)
-        }
-        "instance_unavailable" => Some(GateClass::QueueWait),
-        _ => None,
+    if [
+        actingcommand_policy::PolicyCode::InstanceOverrideDisabled.as_str(),
+        actingcommand_policy::PolicyCode::CapabilityMissing.as_str(),
+        actingcommand_policy::PolicyCode::ActivityProfileMissing.as_str(),
+    ]
+    .contains(&code)
+    {
+        Some(GateClass::Persistent)
+    } else if code == actingcommand_policy::PolicyCode::InstanceUnavailable.as_str() {
+        Some(GateClass::QueueWait)
+    } else {
+        None
     }
 }
 
@@ -399,7 +405,7 @@ impl Preview<'_> {
         // refusal because the window closed, which is its consequence.
         let blocking = match kind {
             SlotRecord::Deferred => Some(SlotRecord::Refused),
-            SlotRecord::Refused if gate.code == "policy_activity_window_closed" => {
+            SlotRecord::Refused if gate.code == HostCode::PolicyActivityWindowClosed.as_str() => {
                 Some(SlotRecord::Deferred)
             }
             SlotRecord::Refused | SlotRecord::Owed => None,

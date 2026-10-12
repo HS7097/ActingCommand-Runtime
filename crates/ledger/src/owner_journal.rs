@@ -4,6 +4,9 @@
 //! capability, not a serialized request or a second persistence path.
 //! Workflow #191 O: the guard may fold every record but the last into one leading
 //! checkpoint line (`contracts/owner-journal.md`); the reader derives the same state.
+use crate::codes::{LedgerCode, LedgerLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     InstanceId, OWNER_JOURNAL_LIMIT, OWNER_JOURNAL_SCHEMA, OwnerClosedRevision, OwnerEpoch,
     OwnerEpochCloseEvidence, OwnerResourceDisposition,
@@ -47,8 +50,8 @@ pub enum OwnerCloseMarker {
 }
 
 pub struct OwnerJournalError {
-    pub code: &'static str,
-    pub operation: &'static str,
+    pub code: Code,
+    pub operation: Location,
 }
 
 /// Workflow #191 O: the schema of the checkpoint line, only ever the journal's first line.
@@ -234,8 +237,8 @@ impl RuntimeOwnerJournal {
     /// OwnerGuard holds its original exclusive lock throughout this read and startup.
     pub fn read_locked(file: &mut File) -> Result<Self, OwnerJournalError> {
         let error = |code, operation| OwnerJournalError { code, operation };
-        let invalid = |operation| error("owner_record_invalid", operation);
-        let mut content = read_journal_file(file, "read_owner_file")?;
+        let invalid = |operation| error(LedgerCode::OwnerRecordInvalid.code(), operation);
+        let mut content = read_journal_file(file, LedgerLocation::ReadOwnerFile.location())?;
         if content.is_empty() {
             let empty = format!("{:x}", Sha256::new().finalize());
             return Ok(Self {
@@ -256,13 +259,21 @@ impl RuntimeOwnerJournal {
                 .iter()
                 .rposition(|byte| *byte == b'\n')
                 .map(|index| index + 1)
-                .ok_or_else(|| invalid("recover_owner_file"))?
+                .ok_or_else(|| invalid(LedgerLocation::RecoverOwnerFile.location()))?
         };
         if complete_length < content.len() {
-            file.set_len(complete_length as u64)
-                .map_err(|_| error("owner_tail_truncate_failed", "recover_owner_file"))?;
-            file.sync_data()
-                .map_err(|_| error("owner_tail_sync_failed", "recover_owner_file"))?;
+            file.set_len(complete_length as u64).map_err(|_| {
+                error(
+                    LedgerCode::OwnerTailTruncateFailed.code(),
+                    LedgerLocation::RecoverOwnerFile.location(),
+                )
+            })?;
+            file.sync_data().map_err(|_| {
+                error(
+                    LedgerCode::OwnerTailSyncFailed.code(),
+                    LedgerLocation::RecoverOwnerFile.location(),
+                )
+            })?;
             content.truncate(complete_length);
         }
         let parsed = parse_journal(&content)?;
@@ -294,14 +305,14 @@ impl RuntimeOwnerJournal {
     pub fn compaction_locked(
         file: &mut File,
     ) -> Result<Option<OwnerJournalCompaction>, OwnerJournalError> {
-        const OPERATION: &str = "compact_owner_file";
+        const OPERATION: Location = ContractLocation::CompactOwnerFile.location();
         let error = |code| OwnerJournalError {
             code,
             operation: OPERATION,
         };
         let content = read_journal_file(file, OPERATION)?;
         if !content.is_empty() && content.last() != Some(&b'\n') {
-            return Err(error("owner_compaction_incomplete_tail"));
+            return Err(error(LedgerCode::OwnerCompactionIncompleteTail.code()));
         }
         let original = parse_journal(&content)?;
         let Some((kept, folded)) = original.records.split_last() else {
@@ -360,25 +371,26 @@ impl RuntimeOwnerJournal {
                 })
                 .collect(),
         };
-        let mut image =
-            serde_json::to_vec(&checkpoint).map_err(|_| error("owner_compaction_mismatch"))?;
+        let mut image = serde_json::to_vec(&checkpoint)
+            .map_err(|_| error(LedgerCode::OwnerCompactionMismatch.code()))?;
         image.push(b'\n');
         image.extend_from_slice(&content[kept.line.clone()]);
         if image.len() as u64 > OWNER_JOURNAL_LIMIT {
-            return Err(error("owner_journal_too_large"));
+            return Err(error(LedgerCode::OwnerJournalTooLarge.code()));
         }
-        let replaced = parse_journal(&image).map_err(|_| error("owner_compaction_mismatch"))?;
+        let replaced =
+            parse_journal(&image).map_err(|_| error(LedgerCode::OwnerCompactionMismatch.code()))?;
         let derived = derive_journal(
             replaced.checkpoint.as_ref(),
             &replaced.records,
             replaced.bytes,
             &replaced.sha256,
         )
-        .map_err(|_| error("owner_compaction_mismatch"))?;
+        .map_err(|_| error(LedgerCode::OwnerCompactionMismatch.code()))?;
         let mut supported = replaced.prefixes.clone();
         supported.extend(derived.carried.iter().cloned());
         if !same_state(&full, &derived) || !needed.is_subset(&supported) {
-            return Err(error("owner_compaction_mismatch"));
+            return Err(error(LedgerCode::OwnerCompactionMismatch.code()));
         }
         let seal = OwnerJournalCompactionSeal {
             schema_version: OWNER_JOURNAL_COMPACTION_SCHEMA.to_owned(),
@@ -389,8 +401,10 @@ impl RuntimeOwnerJournal {
             predecessor_sha256: original.sha256,
         };
         let mut side_file = image.clone();
-        side_file
-            .extend(serde_json::to_vec(&seal).map_err(|_| error("owner_compaction_mismatch"))?);
+        side_file.extend(
+            serde_json::to_vec(&seal)
+                .map_err(|_| error(LedgerCode::OwnerCompactionMismatch.code()))?,
+        );
         side_file.push(b'\n');
         Ok(Some(OwnerJournalCompaction {
             image,
@@ -409,7 +423,7 @@ impl RuntimeOwnerJournal {
         file: &mut File,
         side: &[u8],
     ) -> Result<OwnerCompactionRecovery, OwnerJournalError> {
-        const OPERATION: &str = "recover_owner_compaction";
+        const OPERATION: Location = ContractLocation::RecoverOwnerCompaction.location();
         let error = |code| OwnerJournalError {
             code,
             operation: OPERATION,
@@ -427,7 +441,7 @@ impl RuntimeOwnerJournal {
         if prefix_is(seal.predecessor_bytes, &seal.predecessor_sha256) {
             return Ok(OwnerCompactionRecovery::Stale);
         }
-        let repair = |_| error("owner_compaction_repair_failed");
+        let repair = |_| error(LedgerCode::OwnerCompactionRepairFailed.code());
         // R3: the image is in place; classify what follows it.
         if prefix_is(seal.image_bytes, &seal.image_sha256) {
             let rest = &current[seal.image_bytes as usize..];
@@ -450,7 +464,7 @@ impl RuntimeOwnerJournal {
                 // The torn tail of a later append goes to the ordinary tail recovery.
                 return Ok(OwnerCompactionRecovery::Completed);
             }
-            return Err(error("owner_compaction_unrecoverable"));
+            return Err(error(SharedCode::OwnerCompactionUnrecoverable.code()));
         }
         // R4: an interrupted in-place write leaves exactly these lengths.
         if length == seal.image_bytes
@@ -464,7 +478,7 @@ impl RuntimeOwnerJournal {
             file.sync_all().map_err(repair)?;
             return Ok(OwnerCompactionRecovery::Rewritten);
         }
-        Err(error("owner_compaction_unrecoverable"))
+        Err(error(SharedCode::OwnerCompactionUnrecoverable.code()))
     }
 }
 
@@ -530,23 +544,20 @@ struct DerivedJournal {
     block_starts: BTreeSet<(u64, String)>,
 }
 
-fn read_journal_file(
-    file: &mut File,
-    operation: &'static str,
-) -> Result<Vec<u8>, OwnerJournalError> {
+fn read_journal_file(file: &mut File, operation: Location) -> Result<Vec<u8>, OwnerJournalError> {
     let error = |code| OwnerJournalError { code, operation };
     let length = file
         .metadata()
-        .map_err(|_| error("owner_metadata_failed"))?
+        .map_err(|_| error(LedgerCode::OwnerMetadataFailed.code()))?
         .len();
     if length > OWNER_JOURNAL_LIMIT {
-        return Err(error("owner_journal_too_large"));
+        return Err(error(LedgerCode::OwnerJournalTooLarge.code()));
     }
     file.seek(SeekFrom::Start(0))
-        .map_err(|_| error("owner_seek_failed"))?;
+        .map_err(|_| error(SharedCode::OwnerSeekFailed.code()))?;
     let mut content = Vec::new();
     file.read_to_end(&mut content)
-        .map_err(|_| error("owner_read_failed"))?;
+        .map_err(|_| error(LedgerCode::OwnerReadFailed.code()))?;
     Ok(content)
 }
 
@@ -600,14 +611,15 @@ fn side_seal(side: &[u8]) -> Option<OwnerJournalCompactionSeal> {
 /// continue from its base (0 without one).
 fn parse_journal(content: &[u8]) -> Result<ParsedJournal, OwnerJournalError> {
     let invalid = |operation| OwnerJournalError {
-        code: "owner_record_invalid",
+        code: LedgerCode::OwnerRecordInvalid.code(),
         operation,
     };
     let checkpoint_invalid = || OwnerJournalError {
-        code: "owner_checkpoint_invalid",
-        operation: "validate_owner_checkpoint",
+        code: LedgerCode::OwnerCheckpointInvalid.code(),
+        operation: LedgerLocation::ValidateOwnerCheckpoint.location(),
     };
-    let text = std::str::from_utf8(content).map_err(|_| invalid("read_owner_file"))?;
+    let text = std::str::from_utf8(content)
+        .map_err(|_| invalid(LedgerLocation::ReadOwnerFile.location()))?;
     let mut checkpoint = None::<OwnerJournalCheckpoint>;
     let mut checkpoint_end = 0;
     let mut records = Vec::new();
@@ -632,9 +644,9 @@ fn parse_journal(content: &[u8]) -> Result<ParsedJournal, OwnerJournalError> {
             Ok(record) => record,
             Err(_) => {
                 let probe = serde_json::from_str::<SchemaProbe>(line)
-                    .map_err(|_| invalid("read_owner_file"))?;
+                    .map_err(|_| invalid(LedgerLocation::ReadOwnerFile.location()))?;
                 if probe.schema_version != OWNER_JOURNAL_CHECKPOINT_SCHEMA {
-                    return Err(invalid("read_owner_file"));
+                    return Err(invalid(LedgerLocation::ReadOwnerFile.location()));
                 }
                 if checkpoint.is_some() || !records.is_empty() {
                     return Err(checkpoint_invalid());
@@ -650,7 +662,7 @@ fn parse_journal(content: &[u8]) -> Result<ParsedJournal, OwnerJournalError> {
         if !record_valid(&record)
             || base.checked_add(records.len() as u64 + 1) != Some(record.revision)
         {
-            return Err(invalid("validate_owner_file"));
+            return Err(invalid(LedgerLocation::ValidateOwnerFile.location()));
         }
         records.push(PhysicalRecord {
             record,
@@ -699,8 +711,8 @@ fn derive_journal(
         .map(|physical| &physical.record)
         .or(checkpoint.map(|checkpoint| &checkpoint.last_record))
         .ok_or(OwnerJournalError {
-            code: "owner_record_invalid",
-            operation: "read_owner_file",
+            code: LedgerCode::OwnerRecordInvalid.code(),
+            operation: LedgerLocation::ReadOwnerFile.location(),
         })?
         .clone();
     let through = last.revision;
@@ -869,8 +881,8 @@ fn seed_checkpoint(
     proofs: &mut BTreeMap<OwnerEpoch, OwnerEpochCloseEvidence>,
 ) -> Result<(), OwnerJournalError> {
     let invalid = || OwnerJournalError {
-        code: "owner_checkpoint_invalid",
-        operation: "validate_owner_checkpoint",
+        code: LedgerCode::OwnerCheckpointInvalid.code(),
+        operation: LedgerLocation::ValidateOwnerCheckpoint.location(),
     };
     let last = &checkpoint.last_record;
     if checkpoint.schema_version != OWNER_JOURNAL_CHECKPOINT_SCHEMA

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
+mod codes;
 mod contained_task;
 mod drive;
 mod environment;
@@ -26,6 +27,7 @@ mod run;
 mod session;
 
 pub use bundle::*;
+pub use codes::{ExecutionKernelCode, ExecutionKernelLocation};
 pub use contained_task::*;
 pub use drive::*;
 pub use environment::*;

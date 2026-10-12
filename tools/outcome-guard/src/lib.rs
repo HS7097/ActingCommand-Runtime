@@ -55,43 +55,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/actinglab",
         "A2d lists it until B4 converts the actinglab sites",
     ),
-    member("apps/ledger-forensics", "A2c converts actingledger"),
-    member("crates/artifact-store", "A2c converts the artifact store"),
-    member(
-        "crates/device",
-        "A2e converts the device crate (mechanical: registry, constructors, literals)",
-    ),
-    member(
-        "crates/execution-kernel",
-        "A2d converts the execution kernel",
-    ),
-    member("crates/host-metrics", "A2b converts host-metrics"),
     member("crates/lab", "A2d lists it until B4 converts the lab sites"),
-    member("crates/ledger", "A2c converts the ledger"),
-    member("crates/ledger-forensics", "A2c converts ledger-forensics"),
-    member(
-        "crates/onnx-provider-support",
-        "A2d converts onnx-provider-support",
-    ),
-    member("crates/pack-containment", "A2d converts pack-containment"),
-    member("crates/page-detector", "A2d converts the page detector"),
-    member("crates/policy", "A2d converts policy"),
-    member("crates/recognition", "A2d converts recognition"),
-    member("crates/recognition-pack", "A2d converts recognition-pack"),
-    member("crates/resource-tooling", "A2d converts resource-tooling"),
-    member(
-        "crates/runtime-database",
-        "A2c converts the runtime database",
-    ),
-    member("crates/runtime-host", "A2b converts the runtime host"),
-    member("crates/runtime-state", "A2c converts the runtime state"),
-    member("crates/scheduler", "A2b converts the scheduler"),
-    member("crates/selection-policy", "A2d converts selection-policy"),
-    member("crates/vision-ffi", "A2d converts vision-ffi"),
-    member(
-        "providers/ppocr-onnx-json",
-        "A2d converts the ppocr provider",
-    ),
     member(
         "tools/actinglab-architecture",
         "standing: a test tool, not a result path",
@@ -99,6 +63,303 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     member(
         "tools/outcome-guard",
         "standing: the guard itself, not a result path",
+    ),
+    // A2c bridges: channels of the ledger, runtime-state, runtime-database, artifact-store and
+    // the two ledger-forensics members that stay strings until the slice the reason names
+    // removes the entry (brief-a2bcd.md; brief-a2a.md A2a-9).
+    bridge(
+        "crates/ledger/src/global.rs",
+        "GlobalLedgerError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "GlobalLedgerError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "GlobalLedgerError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "GlobalLedgerError::operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "GlobalLedgerError::relayed_fatal",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "TransactionWorkError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "TransactionWorkError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/global.rs",
+        "is_scheduled_settlement_refusal_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a ledger error carries the runtime host's transaction work codes (TransactionWorkError), which are the host error's codes and still relay ledger, store and kernel spellings (RuntimeHostError::relayed_*); the ledger and host channels take Code together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/critical.rs",
+        "CriticalExecutionError::OutcomeUndurable.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a ledger append error's code (GlobalLedgerError::code); it takes Code with the ledger error once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/critical.rs",
+        "persist_outcome",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a ledger append error's code (GlobalLedgerError::code); it takes Code with the ledger error once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger/src/lib.rs",
+        "low_margin_suspicion",
+        &[Check::G3],
+        "B3: a Lab suspicion record's JSON key (read by actinglab); B3 builds the record from a typed struct",
+    ),
+    bridge(
+        "crates/ledger/src/lib.rs",
+        "forbidden_target_suspicion",
+        &[Check::G3],
+        "B3: a Lab suspicion record's JSON key (read by actinglab); B3 builds the record from a typed struct",
+    ),
+    bridge(
+        "crates/ledger/src/lib.rs",
+        "guard_reject_suspicion",
+        &[Check::G3],
+        "B3: a Lab suspicion record's JSON key (read by actinglab); B3 builds the record from a typed struct",
+    ),
+    bridge(
+        "crates/ledger/src/lib.rs",
+        "stale_frame_suspicion",
+        &[Check::G3],
+        "B3: a Lab suspicion record's JSON key (read by actinglab); B3 builds the record from a typed struct",
+    ),
+    bridge(
+        "crates/runtime-state/src/error.rs",
+        "RuntimeStateError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-state/src/error.rs",
+        "RuntimeStateError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-state/src/error.rs",
+        "RuntimeStateError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-state/src/error.rs",
+        "RuntimeStateError::operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-state/src/error.rs",
+        "RuntimeStateError::relayed_fatal",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-state/src/store/planning.rs",
+        "StoredPlanningSignal.fact_code",
+        &[Check::G2],
+        "A2-P: carries the runtime host's planning-signal fact code, a dynamic family A2-P splits into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-database/src/maintenance.rs",
+        "MaintenanceWarning.code",
+        &[Check::G2],
+        "A6a: a ledger-maintenance warning (backup manifest and report); A6a gives ledger-maintenance its outcome",
+    ),
+    bridge(
+        "crates/runtime-database/src/maintenance.rs",
+        "MaintenanceWarning.operation",
+        &[Check::G2],
+        "A6a: a ledger-maintenance warning (backup manifest and report); A6a gives ledger-maintenance its outcome",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "ArtifactStoreError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "ArtifactStoreError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "ArtifactStoreError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "ArtifactStoreError::operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/error.rs",
+        "ArtifactStoreError::fatal",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host builds store errors with its own codes and relays ledger codes (ArtifactStoreError::fatal); it takes Code once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/artifact-store/src/frame_store.rs",
+        "RecognitionState::Failed.reason",
+        &[Check::G2],
+        "A2-P: carries the page detector's English error text (the Display of PageDetectorError or BatchLevelError, cut to 256 characters) as a frame's recognition failure reason; giving it a registered code changes the timeline's reason text",
+    ),
+    bridge(
+        "crates/artifact-store/src/frame_store.rs",
+        "RecognitionState::as_json",
+        &[Check::G3],
+        "B3: a frame store timeline JSON key (reason, pinned_reason); B3 builds the timeline from typed records",
+    ),
+    bridge(
+        "crates/artifact-store/src/frame_store.rs",
+        "FrameStore::timeline",
+        &[Check::G3],
+        "B3: a frame store timeline JSON key (reason, pinned_reason); B3 builds the timeline from typed records",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicError::operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicError::relayed",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicEventFilter.diagnostic_code",
+        &[Check::G2],
+        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicEventFilter::new",
+        &[Check::G2],
+        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "ForensicEventFilter::query",
+        &[Check::G3],
+        "A3: the actingledger event filter echoes the user's --diagnostic-code token; A3 types it with the revision-3 readers",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "CorruptTailReport.code",
+        &[Check::G2],
+        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "StabilityFailure.code",
+        &[Check::G2],
+        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "StabilityFailure.operation",
+        &[Check::G2],
+        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "StabilityComparison.terminal_reason",
+        &[Check::G2],
+        "A3: an actingledger report field that carries the execution kernel's stop reason as read (SharedCode::MaxStepsReached, SharedCode::ConsecutiveUnchangedThresholdReached); A3 replaces the forensic reports",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/lib.rs",
+        "task_evidence_report",
+        &[Check::G5],
+        "A2-P: the report gap token artifact_verification_failed shares its spelling with a contract code; A2-P renames one side (model section 2.2)",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/runtime_facts.rs",
+        "ForensicRuntimeFactsResult::Failed.code",
+        &[Check::G2],
+        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
+    ),
+    bridge(
+        "crates/ledger-forensics/src/runtime_facts.rs",
+        "ForensicRuntimeFactsResult::Failed.operation",
+        &[Check::G2],
+        "A3: an actingledger report field filled by ledger and store error codes; A3 replaces the forensic reports' failures with outcomes",
+    ),
+    bridge(
+        "apps/ledger-forensics/src/lib.rs",
+        "CliError.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "apps/ledger-forensics/src/lib.rs",
+        "CliError.operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "apps/ledger-forensics/src/lib.rs",
+        "CliError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
+    ),
+    bridge(
+        "apps/ledger-forensics/src/lib.rs",
+        "CliError::relayed",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
     ),
     // A2a part 1 bridges: channels of the contract crate and runtime-client that stay strings
     // until the slice the reason names removes the entry (brief-a2a.md A2a-9).
@@ -124,7 +385,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/emulator.rs",
         "EmulatorVersionEvidence::Unavailable.reason",
         &[Check::G2],
-        "A2e: carries the device layer's reason; A2e registers it and retypes the channel",
+        "A2-P: the unavailable version's reason is English text (the device layer's offline fake, the host's backend registry) sent in Status capabilities; a typed reason changes that emitted value, so A2-P replaces it (A2e keeps every emitted string)",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/artifact.rs",
@@ -556,61 +817,61 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/installation.rs",
         "InstallTransitionStatus.failure_code",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "EnvelopeError.code",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LabError.code",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LedgerProjection.reason",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "NeedsDetection.reason",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LabError::new",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LabError::not_implemented",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LabError::safety_blocked",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "LedgerProjection::skipped",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/lab.rs",
         "NeedsDetection::unresolved_environment",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/page_projection.rs",
@@ -634,7 +895,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/ppocr_diagnostic.rs",
         "PpocrCpuAssignedNodeDiagnostic.placement_reason",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "A2-P: carries the vision provider's placement token unavailable, which breaks the form; A2-P renames it (or makes it a vocabulary), then the field is retyped",
     ),
     bridge(
         "crates/actingcommand-contract/src/primitive.rs",
@@ -670,7 +931,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/runtime.rs",
         "ResourceAuthoringEvent.failure_code",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
@@ -688,19 +949,19 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/runtime.rs",
         "SchedulingResumeSelfCheck.failure_code",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
         "ResourceAuthoringEvent::failure_code",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
         "ContainedTaskCancellationReason::from_failure_code",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A3: takes a cancelled terminal's committed failure_code as read back from the ledger (the persisted task terminal and payload failure_code fields are A3 bridges); ledger revision 3 replaces it with an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
@@ -712,7 +973,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/runtime.rs",
         "ResourceAuthoringEvent::new",
         &[Check::G2],
-        "A2d: carries the Lab, recognition or vision owners' code; A2d registers it and retypes the channel",
+        "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
@@ -724,19 +985,19 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/runtime/lab_operation.rs",
         "LabOperationFailure.code",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime/material_read.rs",
         "RuntimeMaterialReadFailure.code",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime/material_read.rs",
         "RuntimeMaterialReadFailure.operation",
         &[Check::G2],
-        "A2b: carries the host's code; A2b registers it and retypes the channel",
+        "A2b/A2c merge follow-up: filled with a runtime host error's operation (RuntimeHostError::operation, which still relays ledger, state and artifact-store operations until the host and ledger channels take Location together after the A2 train); then the field takes a Location",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime_fact.rs",
@@ -750,13 +1011,123 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         &[Check::G2],
         "A3: persisted payload field or record; ledger revision 3 replaces it with an outcome",
     ),
+    // A2e bridges: channels of the device crate that stay strings until the slice the reason
+    // names removes the entry (brief-a2e.md; A2e is mechanical and keeps every emitted string).
+    bridge(
+        "crates/device/src/adb.rs",
+        "CommandProgram.timeout_stage",
+        &[Check::G2],
+        "A2-P: a child program's bound-expiry stage (mumu_manager.timeout) is dotted and breaks the form; A2-P renames it",
+    ),
+    bridge(
+        "crates/device/src/adb_bounds_diagnostic.rs",
+        "AdbBoundsAction::operation",
+        &[Check::G2],
+        "A2-P: the adb input bounds operations tap and swipe are one word and break the form; A2-P renames them",
+    ),
+    bridge(
+        "crates/device/src/capture.rs",
+        "NemuCaptureResolutionDetail::stage",
+        &[Check::G2],
+        "A2-P: the Nemu capture resolution stages (nemu.installation.resolve, nemu.capture.identity, nemu.target.resolve) are dotted and break the form; A2-P renames them",
+    ),
+    bridge(
+        "crates/device/src/discovery.rs",
+        "mumu_instance_id",
+        &[Check::G2],
+        "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
+    ),
+    bridge(
+        "crates/device/src/discovery.rs",
+        "parse_dash_v_instance",
+        &[Check::G2],
+        "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic.stage",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic::new",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorDiagnostic::stage",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_if_absent",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorContext.operation",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceErrorContext::operation",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_context",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/error.rs",
+        "DeviceError::with_diagnostic_context_if_absent",
+        &[Check::G2],
+        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
+    ),
+    bridge(
+        "crates/device/src/mumu_manager.rs",
+        "registry_error",
+        &[Check::G2],
+        "B5: the Windows registry step (open, enumerate, query) names a foreign failure inside developer text; B5 wraps the registry failure as a foreign_os_error link",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "TouchBackendAttempt.error_reason",
+        &[Check::G2],
+        "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "TouchBackendDiagnostics::push_failure",
+        &[Check::G2],
+        "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
+    ),
+    bridge(
+        "crates/device/src/touch.rs",
+        "adb_shell_input_connect_error",
+        &[Check::G2],
+        "A2-P: the stage parameter carries a dotted device stage (adb.*) and the operation parameter feeds the device error's operation channel, which carries one-word operations; A2-P renames them",
+    ),
     // A2a part 2 bridges: channels of actingd, actingctl and vision-provider-check that stay
     // strings until the slice the reason names removes the entry (brief-a2a.md A2a-9).
     bridge(
         "apps/actingd/src/main.rs",
         "ErrorCode::Host.host_code",
         &[Check::G2],
-        "A2b: the runtime host's code inside an actingd error; A2b registers the host's codes",
+        "A2b/A2c merge follow-up: the runtime host's code inside an actingd error (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
         "apps/actingd/src/check_config.rs",
@@ -948,7 +1319,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/actingctl/src/mcp/tools.rs",
         "ToolError::host_code",
         &[Check::G2],
-        "A2b: reads the runtime host's code out of the error details; A2b registers the host's codes",
+        "A5: reads the runtime host's code out of the MCP error details (a received spelling, which may be a relayed ledger, state, artifact-store or kernel code); A5's {class, outcome} error shape replaces the details",
     ),
     bridge(
         "apps/actingctl/src/mcp/tools.rs",
@@ -1098,8 +1469,423 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/vision-provider-check/src/main.rs",
         "InvalidModelReport.reason",
         &[Check::G2],
-        "A2d: carries vision-ffi's model folder reason; A2d registers it and retypes the field",
+        "A2-P: carries vision-ffi's model folder refusal, English text that the tool prints as the folder's reason; giving it a registered code changes that text",
     ),
+    // A2b bridges: channels of runtime-host, the scheduler and host-metrics that stay strings
+    // until the slice the reason names removes the entry (brief-a2bcd.md; the A2a pattern).
+    // A2b/A2c merge follow-up: the runtime host error still relays the ledger, state,
+    // artifact-store and kernel codes, which carry the host's codes back, so both sides take
+    // Code together after the A2 train; A2-P: an emitted spelling that only a rename or a family
+    // split can type without changing output.
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "HostErrorCode::Relayed.relayed_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "HostErrorOperation::Relayed.relayed_operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::operation",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::relayed_fatal",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::relayed_request",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::relayed_with_projection",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostError::with_failure_stage",
+        &[Check::G2],
+        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
+    ),
+    bridge(
+        "crates/runtime-host/src/error.rs",
+        "RuntimeHostFailureContext.failure_stage",
+        &[Check::G2],
+        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
+    ),
+    bridge(
+        "crates/runtime-host/src/failure_identity.rs",
+        "FailureIdentity::parse",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/failure_identity.rs",
+        "encode_failure_base",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/failure_identity.rs",
+        "failure_accumulates",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/failure_identity.rs",
+        "failure_key",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/host.rs",
+        "RuntimeLifecycleFailure::Process.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: actingd's own failure code may be a runtime host code that actingd holds as a spelling (ErrorCode::Host, filled from RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "ContainedTaskTerminalDraft.failure_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "EntryRecoveryRuntime::record_guard_evaluation",
+        &[Check::G2],
+        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "FailedTaskTerminal.failure_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "RuntimeContainedTask::record_guard_evaluation",
+        &[Check::G2],
+        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "RuntimeContainedTask::record_post_admission_ocr_failure",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "RuntimeContainedTaskOcrFailureDiagnostic.failure_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "bounded_post_admission_ocr_failure_detail",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "fail_contained_task_entry",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/contained_task.rs",
+        "resource_reading_failure_detail",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/evidence_export.rs",
+        "relayed_evidence_request_error",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/failure_settlement.rs",
+        "recorded_failure_input",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/frame_retention.rs",
+        "FrameRetentionWarning::stage",
+        &[Check::G2],
+        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/frame_retention.rs",
+        "pin_failure",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: builds an artifact-store error, whose constructor takes spellings because the runtime host fills it with its own codes (A2c's ArtifactStoreError::fatal bridge); it takes Code with the store error when the host and ledger channels take Code together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/lifecycle.rs",
+        "HostShared::append_lifecycle_failure_with_severity",
+        &[Check::G3],
+        "A3: the persisted runtime lifecycle failure message is a JSON document with code, operation and runtime_code keys; ledger revision 3 replaces it with an outcome",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/policy_dispatch.rs",
+        "policy_rejection_severity",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/policy_dispatch.rs",
+        "scheduling_resume_selfcheck",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/policy_outcome.rs",
+        "HostShared::validate_scheduled_policy_terminal",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/prerequisite.rs",
+        "record_closed",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the execution kernel's task failure code by its spelling (ContainedTaskCode::as_str), whose Host variant relays the runtime host's own code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the channel takes Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "HostShared::append_recovery_rung_finished",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "HostShared::finish_interrupted_ladder",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "RungAttempt::Failed.reason",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "is_hold_interruption",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/recovery_ladder.rs",
+        "recovery_entry_skip",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/requests.rs",
+        "TaskFailureEvidence.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/requests.rs",
+        "protocol_error_at_code_spelling",
+        &[Check::G2],
+        "A2-P: an operation spelled like a shared code (material_read_deadline_overflow, material_read_length_overflow: one spelling for a code and a location); A2-P renames one side",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/requests.rs",
+        "receipt_error",
+        &[Check::G5],
+        "A2-P: the host's receipt-build failure keeps the spelling runtime_receipt_invalid, which the runtime client registered with another meaning (M378:90); A2-P renames the host side",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/saved_artifact_ocr.rs",
+        "relayed_source_error",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/signatures.rs",
+        "relayed_signature_request_error",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/task_diagnostic.rs",
+        "RuntimeContainedTask::diagnostic_guard",
+        &[Check::G2],
+        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/task_diagnostic.rs",
+        "RuntimeContainedTask::diagnostic_guard_inner",
+        &[Check::G2],
+        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
+    ),
+    bridge(
+        "crates/runtime-host/src/ledger_maintenance.rs",
+        "LedgerMaintenanceFailure.code",
+        &[Check::G2],
+        "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
+    ),
+    bridge(
+        "crates/runtime-host/src/ledger_maintenance.rs",
+        "LedgerMaintenanceFailure.operation",
+        &[Check::G2],
+        "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
+    ),
+    bridge(
+        "crates/runtime-host/src/owner_unlock.rs",
+        "OwnerUnlockFailure.stage",
+        &[Check::G2],
+        "A2-P: the one-word unlock stages journal and ledger break the form; A2-P renames them (unlock-owner v2 is A6a's)",
+    ),
+    bridge(
+        "crates/runtime-host/src/performance.rs",
+        "PerformanceMonitor::ingest_monitor_failure",
+        &[Check::G2],
+        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/performance.rs",
+        "PerformanceMonitor::record_monitor_failure",
+        &[Check::G2],
+        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/performance.rs",
+        "rejected_event_code",
+        &[Check::G2],
+        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/performance.rs",
+        "valid_error_code",
+        &[Check::G2],
+        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/performance/capacity.rs",
+        "PerformanceMonitor::degrade_for_rejected_summary",
+        &[Check::G2],
+        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_control.rs",
+        "FailureStreak.error_code",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_control.rs",
+        "PolicyExecutionInput::Failed.error_code",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_control.rs",
+        "interruption_lifted_by_restart",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_host/clock_slot.rs",
+        "Deferral.code",
+        &[Check::G2],
+        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_host/clock_slot.rs",
+        "Gate.code",
+        &[Check::G2],
+        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_host/clock_slot.rs",
+        "SlotValues.gate_code",
+        &[Check::G2],
+        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_host/clock_slot.rs",
+        "closure_gate",
+        &[Check::G2, Check::G5],
+        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/runtime-host/src/policy_host/clock_slot.rs",
+        "placement_gate",
+        &[Check::G2],
+        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/runtime-host/src/procedure_manifest.rs",
+        "field_refusal",
+        &[Check::G2],
+        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
+    ),
+    bridge(
+        "crates/runtime-host/src/procedure_manifest.rs",
+        "validate_token",
+        &[Check::G2],
+        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
+    ),
+    bridge(
+        "crates/runtime-host/src/provider.rs",
+        "DeviceRegistryInputDiagnosticBackend::run",
+        &[Check::G2],
+        "A2-P: passes the device layer's one-word input operation names (tap, swipe, key, ...) to the device error's diagnostic context, whose operation channel stays a string (A2e bridge DeviceErrorContext.operation); A2-P renames them",
+    ),
+    bridge(
+        "crates/runtime-host/src/provider_startup.rs",
+        "ProviderStartup::failed",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
+    ),
+    bridge(
+        "crates/runtime-host/src/suspension_report.rs",
+        "Snapshot::frames",
+        &[Check::G3],
+        "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
+    ),
+    bridge(
+        "crates/runtime-host/src/suspension_report.rs",
+        "Snapshot::run_failure",
+        &[Check::G2],
+        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
+    ),
+    bridge(
+        "crates/runtime-host/src/suspension_report.rs",
+        "suspension_report",
+        &[Check::G3],
+        "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
+    ),
+    bridge(
+        "crates/runtime-host/src/host.rs",
+        "artifact_store_error_at_code_spelling",
+        &[Check::G2],
+        "A2-P: an operation spelled like a shared code (effective_configuration_too_large: one spelling for a code and a location); A2-P renames one side",
+    ),
+    // End of the A2b bridges.
     AllowEntry {
         path: "apps/actingctl/src/mcp/protocol.rs",
         item: Some("error_response"),
@@ -1112,6 +1898,723 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         checks: &[Check::G5],
         reason: "standing: the configuration manifest's subsystem names are vocabulary tokens, not codes or locations (model section 2.1); the subsystem runtime_fact_snapshot equals the runtime client's location of that spelling",
     },
+    // A2d bridges: channels of the execution and recognition group that stay strings until the
+    // slice the reason names removes the entry (brief-a2bcd.md; A2-P changes emitted strings).
+    bridge(
+        "crates/execution-kernel/src/contained_task.rs",
+        "ContainedTaskCode::Host.host_code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the runtime host's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the variant takes Code",
+    ),
+    bridge(
+        "crates/execution-kernel/src/contained_task.rs",
+        "ContainedTaskRunError::task",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: the runtime host passes its own code, still a spelling (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train), into a contained task failure; then the constructor takes Code",
+    ),
+    bridge(
+        "crates/execution-kernel/src/contained_task.rs",
+        "ContainedTaskRuntime::record_guard_evaluation",
+        &[Check::G2],
+        "A2-P: the guard evaluation reason is a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is; A2-P renames it, then types the parameter",
+    ),
+    bridge(
+        "crates/execution-kernel/src/contained_task/linear.rs",
+        "optional_runs",
+        &[Check::G2],
+        "B4: not an outcome code: the token is a contained_task_linear_invalid reason the caller writes into the failure's detail as reason=<token>",
+    ),
+    bridge(
+        "crates/execution-kernel/src/contained_task/selection.rs",
+        "check_policy",
+        &[Check::G2],
+        "B4: the error is the English text of a selection policy mismatch, which the caller reports under contained_task_select_policy_mismatch; B4 types it",
+    ),
+    bridge(
+        "crates/execution-kernel/src/contained_task/selection.rs",
+        "read_policy",
+        &[Check::G2],
+        "B4: the error is the English text of a selection policy document refusal, which the caller reports under contained_task_select_policy_invalid; B4 types it",
+    ),
+    bridge(
+        "crates/execution-kernel/src/environment.rs",
+        "EnvironmentStateErrorKind::reason",
+        &[Check::G2],
+        "A2-P: the reason set includes the single word expired and the spelling low_confidence that other owners use as a vocabulary token, which the kernel cannot register as they are; A2-P renames them, then types the getter",
+    ),
+    bridge(
+        "crates/execution-kernel/src/environment.rs",
+        "env_rect_from_value",
+        &[Check::G2],
+        "B4: the error is the English text of an invalid environment region, which the caller reports as a deserialization error; B4 types it",
+    ),
+    bridge(
+        "crates/execution-kernel/src/online_observation.rs",
+        "PreparedPageObservation::evaluate",
+        &[Check::G3],
+        "A3: the observation evidence rows' json keys stage, reason and code are persisted in observation records; ledger revision 3 replaces them with an outcome",
+    ),
+    bridge(
+        "crates/execution-kernel/src/provider.rs",
+        "InstanceDiscoveryFailure.code",
+        &[Check::G2],
+        "A2b/A2c merge follow-up: carries the runtime host's or the contract's discovery code (HostCode::MumuManagerVersionUnsupported, SharedCode::InstanceDiscoveryUnavailable), which actingd passes to ProviderStartup::failed beside the host's relayed codes; both take Code in the follow-up after the A2 train",
+    ),
+    bridge(
+        "crates/execution-kernel/src/provider.rs",
+        "VisionFfiProvider::retire",
+        &[Check::G2],
+        "B4: not an outcome code: the English text of why a model slot was retired, which later provider errors repeat as their message",
+    ),
+    bridge(
+        "crates/execution-kernel/src/provider.rs",
+        "invalid_folder",
+        &[Check::G2],
+        "B4: not an outcome code: vision-ffi's English model folder refusal, which the provider error's message embeds",
+    ),
+    bridge(
+        "crates/execution-kernel/src/recovery.rs",
+        "NodeOutcome::reason",
+        &[Check::G2],
+        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
+    ),
+    bridge(
+        "crates/execution-kernel/src/recovery.rs",
+        "RecoveryExecutionReport.terminal_reason",
+        &[Check::G2],
+        "B4: not an outcome code: English text saying why a recovery graph run ended",
+    ),
+    bridge(
+        "crates/execution-kernel/src/recovery.rs",
+        "RecoveryRuntime::save_on_error",
+        &[Check::G2],
+        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
+    ),
+    bridge(
+        "crates/execution-kernel/src/run.rs",
+        "RunStateConfig.designated_operation",
+        &[Check::G2],
+        "B4: not an outcome code or location: the id of a task operation that the package declares (pack data)",
+    ),
+    bridge(
+        "crates/execution-kernel/src/run.rs",
+        "RunStateConfig::with_phases",
+        &[Check::G2],
+        "B4: not an outcome code or location: the id of a task operation that the package declares (pack data)",
+    ),
+    bridge(
+        "crates/execution-kernel/src/run.rs",
+        "RunStateMachine.executing_operation",
+        &[Check::G2],
+        "B4: not an outcome code or location: the id of a task operation that the package declares (pack data)",
+    ),
+    bridge(
+        "crates/onnx-provider-support/src/lib.rs",
+        "OrtRuntimeInitializer::ensure",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "crates/onnx-provider-support/src/lib.rs",
+        "OrtRuntimeInitializer::ensure_with",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "crates/onnx-provider-support/src/lib.rs",
+        "ensure_same_runtime",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "crates/pack-containment/src/source/mod.rs",
+        "ParseFiles::length",
+        &[Check::G2],
+        "B4: the error is the English text of a source snapshot entry that was not supplied or not read (with the OS error), which the caller reports under package_invalid; B4 types it",
+    ),
+    bridge(
+        "crates/pack-containment/src/source/mod.rs",
+        "ParseFiles::read",
+        &[Check::G2],
+        "B4: the error is the English text of a source snapshot entry that was not supplied or not read (with the OS error), which the caller reports under package_invalid; B4 types it",
+    ),
+    bridge(
+        "crates/policy/src/canonical.rs",
+        "canonical_json",
+        &[Check::G2],
+        "B4: the error is the English text of a canonical encoding failure, which its caller reports under a registered code; B4 types it",
+    ),
+    bridge(
+        "crates/policy/src/canonical.rs",
+        "canonical_serialized",
+        &[Check::G2],
+        "B4: the error is the English text of a canonical encoding failure, which its caller reports under a registered code; B4 types it",
+    ),
+    bridge(
+        "crates/policy/src/canonical.rs",
+        "catalog_hash",
+        &[Check::G2],
+        "B4: the error is the English text of a canonical encoding failure, which its caller reports under a registered code; B4 types it",
+    ),
+    bridge(
+        "crates/policy/src/canonical.rs",
+        "write_value",
+        &[Check::G2],
+        "B4: the error is the English text of a canonical encoding failure, which its caller reports under a registered code; B4 types it",
+    ),
+    bridge(
+        "crates/policy/src/compiler.rs",
+        "preflight_diagnostic",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/evaluator.rs",
+        "DecisionReason.code",
+        &[Check::G2],
+        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/policy/src/evaluator.rs",
+        "DetectionSuggestion.reason",
+        &[Check::G2],
+        "B4: carries detection-suggestion reasons, unknown_reason vocabulary tokens next to registered codes; B4 types the channel as a vocabulary or a code",
+    ),
+    bridge(
+        "crates/policy/src/evaluator.rs",
+        "last_reason_code",
+        &[Check::G2],
+        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/policy/src/evaluator.rs",
+        "reason",
+        &[Check::G2],
+        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
+    ),
+    bridge(
+        "crates/policy/src/forward.rs",
+        "ForwardEvidenceGap.code",
+        &[Check::G2],
+        "B4: carries detection-suggestion reasons, unknown_reason vocabulary tokens next to registered codes; B4 types the channel as a vocabulary or a code",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "add_score_fraction",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "check_target_v2",
+        &[Check::G2],
+        "B4: not an outcome code: the refusal's String is the JSON pointer of the refused field, beside the typed ResourceTargetsRejectionReason",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "resolution_why",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "resolve_instance_targets",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "resolve_target",
+        &[Check::G2],
+        "B4: not an outcome code: the refusal's String is the JSON pointer of the refused field, beside the typed ResourceTargetsRejectionReason",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "resolve_target_pool",
+        &[Check::G2],
+        "B4: not an outcome code: the refusal's String is the JSON pointer of the refused field, beside the typed ResourceTargetsRejectionReason",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "resolve_v2",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "target_effects",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/schema.rs",
+        "CatalogDiagnostic.reason",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/source.rs",
+        "JsonScanner::invalid",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/source.rs",
+        "ScanError::Invalid.reason",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/source.rs",
+        "SourceMap::diagnostic",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/source.rs",
+        "basic_diagnostic",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/policy/src/source.rs",
+        "bounded_reason",
+        &[Check::G2],
+        "B4: not an outcome code: the English explanation of a catalog diagnostic, whose code is the typed CatalogDiagnosticCode",
+    ),
+    bridge(
+        "crates/recognition-pack/src/candidate_consensus.rs",
+        "CandidateConsensus::validate",
+        &[Check::G2],
+        "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
+    ),
+    bridge(
+        "crates/recognition-pack/src/candidate_identity.rs",
+        "CandidateIdentityDeclaration::validate",
+        &[Check::G2],
+        "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
+    ),
+    bridge(
+        "crates/recognition-pack/src/candidate_layout.rs",
+        "CandidateIntegerDeclaration::validate",
+        &[Check::G2],
+        "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
+    ),
+    bridge(
+        "crates/recognition-pack/src/candidate_layout.rs",
+        "CandidateProjectionFailure::unmeasurable",
+        &[Check::G2],
+        "B4: not an outcome code: English text saying why a target cannot be measured, written into the failure's detail",
+    ),
+    bridge(
+        "crates/recognition-pack/src/lib.rs",
+        "UnsupportedRecognitionTarget.reason",
+        &[Check::G2],
+        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/recognition-pack/src/lib.rs",
+        "unsupported_template_reason",
+        &[Check::G2],
+        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/recognition-pack/src/target_consensus.rs",
+        "TargetConsensus::validate",
+        &[Check::G2],
+        "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/api.rs",
+        "UnsupportedRecognitionTargetResponse.reason",
+        &[Check::G2],
+        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/resource-tooling/src/authoring.rs",
+        "AuthoringEvent.failure_code",
+        &[Check::G2],
+        "B4: carries a LabError's code, which stays a spelling until B4 converts the Lab sites",
+    ),
+    bridge(
+        "crates/resource-tooling/src/business_catalog.rs",
+        "CatalogUnknown.reason",
+        &[Check::G2],
+        "B4: not an outcome code: the business catalog's unknown-value reason token (not_confirmed), a vocabulary",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "PublicationEnvironment::current_process",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "PublicationEnvironment::inspect_process",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "PublicationEnvironment::now_unix_ms",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "PublicationEnvironment::random_seed",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "SystemPublicationEnvironment::current_process",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "SystemPublicationEnvironment::inspect_process",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "SystemPublicationEnvironment::now_unix_ms",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "SystemPublicationEnvironment::random_seed",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "inspect_system_process",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "parse_seed_hex",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "system_powershell_path",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/package_publish.rs",
+        "system_random_seed",
+        &[Check::G2],
+        "B4: the error is the English text of a publication environment probe (process, clock, random seed, PowerShell path) with the OS's own text; B4 types it",
+    ),
+    bridge(
+        "crates/resource-tooling/src/resource_restore.rs",
+        "record_provenance",
+        &[Check::G3],
+        "B4: the restore provenance record's json keys stage and code hold a Lab operation failure's stage and code; B4 converts the Lab sites and builds the record from typed members",
+    ),
+    bridge(
+        "crates/resource-tooling/src/resource_restore.rs",
+        "restore_authoring_draft",
+        &[Check::G5],
+        "A2-P: the restore report's record_gaps token input_failed has the spelling of the contract's input_failed code with another meaning; resource tooling's side is the more specific one and A2-P renames it (CD-8), which changes the report",
+    ),
+    bridge(
+        "crates/selection-policy/src/evaluator.rs",
+        "Assessment::Aborted.reason",
+        &[Check::G2],
+        "B4: not an outcome code: the String is the detail text beside the typed UnknownReason",
+    ),
+    bridge(
+        "crates/selection-policy/src/evaluator.rs",
+        "DecisionReason.code",
+        &[Check::G2],
+        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
+    ),
+    bridge(
+        "crates/selection-policy/src/evaluator.rs",
+        "DecisionReason::new",
+        &[Check::G2],
+        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
+    ),
+    bridge(
+        "crates/selection-policy/src/evaluator.rs",
+        "SelectionOutcome::key",
+        &[Check::G2],
+        "B4: not an outcome code: the selection document's outcome key (pack vocabulary outcome_key)",
+    ),
+    bridge(
+        "crates/vision-ffi/src/ffi.rs",
+        "RuntimeLibraryClosureState::Poisoned.reason",
+        &[Check::G2],
+        "B4: not an outcome code: the native loader's failure text (foreign) kept for the poisoned closure's message",
+    ),
+    bridge(
+        "crates/vision-ffi/src/ffi.rs",
+        "cuda_success",
+        &[Check::G2],
+        "B4: not an outcome code: the name of the CUDA driver call in developer text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "InvalidModelFolder.reason",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "VisionModelDescription::validate",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "VisionModelDescription::validate_params",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "classify_folder",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "directory",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "read_description",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "crates/vision-ffi/src/models.rs",
+        "regular_file",
+        &[Check::G2],
+        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "NodePlacementLogCapture.failure",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "NodePlacementLogCapture::diagnostic",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "PpocrCtcModel::load_detector",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "ProviderSessionPlan::from_key",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "RectUsize::from_vision_rect",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "argmax_with_softmax_confidence",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "capture_cuda_node_placement",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "check_class_count",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "component_to_vision_rect",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "decode_ctc_output",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "detect_text_boxes_from_probability_map",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "detector_probability_map",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "dynamic_detection_shape_for_region",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "dynamic_width_for_region",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "frame_region_to_detection_tensor",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "frame_region_to_recognition_tensor",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "load_ort_session",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "node_placement_diagnostic_requested",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "output_layout",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "padded_rect",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "parse_dictionary",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "parse_node_placement",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "parse_provider_summary",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "positive_or_default",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "read_channels",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "read_rgb_pixel",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "remaining_inference_budget",
+        &[Check::G2],
+        "B4: not an outcome code: the name of the provider's inference step in developer text",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "require_recognizer_classes",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "select_detection_input_shape",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "select_recognition_input_shape",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/lib.rs",
+        "union_rect",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/nn.rs",
+        "frame_to_tensor",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/nn.rs",
+        "labels_from_scores",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/nn.rs",
+        "load_session",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    bridge(
+        "providers/ppocr-onnx-json/src/nn.rs",
+        "select_input_shape",
+        &[Check::G2],
+        "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
+    ),
+    // End of the A2d bridges.
 ];
 
 /// One bridge: a function (`Type::method`, `Trait::method` or a free function's name), or a
@@ -1298,9 +2801,10 @@ pub fn check_channels(workspace: &Workspace) -> Vec<String> {
     violations
 }
 
-/// G7: `outcome_keys!` equals the catalog key table (names, types, record fields; UI-only
-/// `setup_`/`console_` keys are ignored), and every vocabulary built from an enum equals its
-/// catalog vocabulary.
+/// G7: `outcome_keys!` equals the catalog key table (names, types, record fields), and every
+/// vocabulary built from an enum equals its catalog vocabulary. A `setup_` or `console_` key is a
+/// violation on either side: UI-only keys live only in the UI's own table (Workflow #378, board
+/// comment 6108644961).
 pub fn check_keys(workspace: &Workspace) -> Vec<String> {
     let catalog = match &workspace.catalog {
         Ok(catalog) => catalog,
@@ -1396,6 +2900,10 @@ fn compare_key_table(catalog: &Catalog, table: &[KeyLine], violations: &mut Vec<
     }
     for (name, entry) in &catalog.keys {
         if is_ui_key(name) {
+            violations.push(format!(
+                "G7 catalog key {name}: the setup_ and console_ prefixes are the UI's; its keys \
+                 belong to the UI's own table"
+            ));
             continue;
         }
         let Some(line) = lines.get(name.as_str()) else {
@@ -1431,7 +2939,12 @@ fn compare_key_table(catalog: &Catalog, table: &[KeyLine], violations: &mut Vec<
         }
     }
     for name in lines.keys() {
-        if !is_ui_key(name) && !catalog.keys.contains_key(*name) {
+        if is_ui_key(name) {
+            violations.push(format!(
+                "G7 outcome_keys! key {name}: the setup_ and console_ prefixes are the UI's; its \
+                 keys belong to the UI's own table"
+            ));
+        } else if !catalog.keys.contains_key(*name) {
             violations.push(format!("G7 outcome_keys! key {name} is not in the catalog"));
         }
     }
@@ -1471,7 +2984,9 @@ fn compare_tokens(
 }
 
 fn is_ui_key(name: &str) -> bool {
-    name.starts_with("setup_") || name.starts_with("console_")
+    catalog::UI_PREFIXES
+        .into_iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 fn prefixed(check: &str, errors: &[String]) -> Vec<String> {

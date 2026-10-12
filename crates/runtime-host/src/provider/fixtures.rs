@@ -3,6 +3,7 @@
 //! Fixture simulation backends: device-free instances that replay configured frames and
 //! accept a bounded number of inputs. Compiled only with the `fixture-backends` feature.
 
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::{BackendOpenEntry, FencedWrite, InstanceId};
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity,
@@ -87,7 +88,7 @@ impl FixtureEntry {
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    "observe_foreground_application",
+                    ContractLocation::ObserveForegroundApplication.as_str(),
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )

@@ -2,6 +2,7 @@
 
 use crate::{AdbInputBoundsContext, NemuConfiguredAdbClass, NemuResolutionContext};
 use actingcommand_contract::ResourceDispositionScope;
+use actingcommand_contract::codes::SharedCode;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -624,13 +625,17 @@ impl DeviceError {
 
     pub fn frame_memory(failure: crate::FrameMemoryFailure) -> Self {
         let mut error = match failure {
-            crate::FrameMemoryFailure::Capacity => Self::transient("frame_workspace_unavailable"),
-            crate::FrameMemoryFailure::Owner => {
-                Self::fatal("frame_memory_owner_missing_or_mismatched")
+            crate::FrameMemoryFailure::Capacity => {
+                Self::transient(SharedCode::FrameWorkspaceUnavailable.as_str())
             }
-            crate::FrameMemoryFailure::Accounting => Self::fatal("frame_memory_accounting_invalid"),
+            crate::FrameMemoryFailure::Owner => {
+                Self::fatal(SharedCode::FrameMemoryOwnerMissingOrMismatched.as_str())
+            }
+            crate::FrameMemoryFailure::Accounting => {
+                Self::fatal(SharedCode::FrameMemoryAccountingInvalid.as_str())
+            }
             crate::FrameMemoryFailure::BudgetSource => {
-                Self::fatal("frame_memory_budget_source_failed")
+                Self::fatal(SharedCode::FrameMemoryBudgetSourceFailed.as_str())
             }
         };
         error

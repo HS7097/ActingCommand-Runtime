@@ -5,6 +5,8 @@ use crate::readonly::{
     rect_response, target_evaluation_response,
 };
 use crate::{Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_execution_kernel::{
     DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
@@ -65,7 +67,7 @@ impl<P: LabPorts> Lab<P> {
             record_env_needs_detection(
                 ledger,
                 "tap-target",
-                "target_below_threshold",
+                SharedCode::TargetBelowThreshold.code(),
                 &request.target,
                 &env_resolved,
             )?;
@@ -76,7 +78,7 @@ impl<P: LabPorts> Lab<P> {
             attach_env_details(
                 &mut details,
                 "tap-target",
-                "target_below_threshold",
+                SharedCode::TargetBelowThreshold.code(),
                 &request.target,
                 &env_resolved,
             )?;
@@ -199,7 +201,7 @@ impl<P: LabPorts> Lab<P> {
             record_env_needs_detection(
                 ledger,
                 "navigate",
-                "current_page_unknown",
+                SharedCode::CurrentPageUnknown.code(),
                 &start.page,
                 &env_resolved,
             )?;
@@ -391,9 +393,11 @@ fn drive_decision_error(error: DriveDecisionError) -> LabError {
     match error.kind() {
         DriveDecisionErrorKind::InvalidInput => LabError::usage(error.message()),
         DriveDecisionErrorKind::PackageInvalid => LabError::package_invalid(error.message()),
-        DriveDecisionErrorKind::SafetyBlocked => {
-            LabError::safety_blocked(error.code(), error.message(), error.required_conditions())
-        }
+        DriveDecisionErrorKind::SafetyBlocked => LabError::safety_blocked(
+            error.code().as_str(),
+            error.message(),
+            error.required_conditions(),
+        ),
     }
 }
 
@@ -596,7 +600,7 @@ fn record_env_resolved(
 fn record_env_needs_detection(
     ledger: &mut SemanticLedgerContext,
     command: &str,
-    reason: &str,
+    reason: Code,
     subject: &str,
     values: &[EnvResolved],
 ) -> LabResult<()> {
@@ -613,7 +617,7 @@ fn record_env_needs_detection(
 fn attach_env_details(
     details: &mut Value,
     command: &str,
-    reason: &str,
+    reason: Code,
     subject: &str,
     values: &[EnvResolved],
 ) -> LabResult<()> {

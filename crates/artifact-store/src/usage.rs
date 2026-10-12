@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{StoreCode, StoreLocation};
 use crate::kept::{self, KEPT_DIRECTORY};
 use crate::{ArtifactStoreError, ArtifactStoreResult};
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactEvictionIntentRecord, ArtifactMaterial, ProjectedArtifactReference,
 };
@@ -71,12 +74,12 @@ pub(crate) fn publication_guard(
     let lock = open_lock(root, reference, true)?;
     let Some(lock) = lock else {
         return Err(failure(
-            "artifact_use_lock_missing",
+            StoreCode::ArtifactUseLockMissing.code(),
             "publication lock was not created",
         ));
     };
     lock.try_lock_shared()
-        .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
+        .map_err(|error| lock_failure(StoreCode::ArtifactUseLockFailed.code(), error))?;
     Ok(ArtifactUseGuard { _lock: Some(lock) })
 }
 
@@ -88,13 +91,13 @@ pub(crate) fn reader_guard(
     let lock = open_lock(root, reference, false)?;
     if let Some(lock) = &lock {
         lock.try_lock_shared()
-            .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
+            .map_err(|error| lock_failure(StoreCode::ArtifactUseLockFailed.code(), error))?;
     }
     // Existing offline roots need no new lock file. The material lock also fences
     // a deleter that first creates the fixed lock while this reader is open.
     material
         .try_lock_shared()
-        .map_err(|error| lock_failure("artifact_use_lock_failed", error))?;
+        .map_err(|error| lock_failure(StoreCode::ArtifactUseLockFailed.code(), error))?;
     Ok(ArtifactUseGuard { _lock: lock })
 }
 
@@ -106,19 +109,26 @@ pub fn try_artifact_delete_guard(
     let root = root
         .as_ref()
         .canonicalize()
-        .map_err(|error| io_failure("artifact_root_failed", error))?;
-    let lock = open_lock(&root, reference, true)?
-        .ok_or_else(|| failure("artifact_use_lock_missing", "delete lock was not created"))?;
+        .map_err(|error| io_failure(StoreCode::ArtifactRootFailed.code(), error))?;
+    let lock = open_lock(&root, reference, true)?.ok_or_else(|| {
+        failure(
+            StoreCode::ArtifactUseLockMissing.code(),
+            "delete lock was not created",
+        )
+    })?;
     match lock.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => return Ok(None),
         Err(TryLockError::Error(error)) => {
-            return Err(io_failure("artifact_use_lock_failed", error));
+            return Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error));
         }
     }
-    let key = reference
-        .object_key()
-        .ok_or_else(|| failure("artifact_object_key_missing", "object key required"))?;
+    let key = reference.object_key().ok_or_else(|| {
+        failure(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            "object key required",
+        )
+    })?;
     let path = crate::store::safe_object_path(&root, key)?;
     let material = match OpenOptions::new().read(true).write(true).open(&path) {
         Ok(mut file) => {
@@ -126,18 +136,18 @@ pub fn try_artifact_delete_guard(
                 Ok(()) => {}
                 Err(TryLockError::WouldBlock) => return Ok(None),
                 Err(TryLockError::Error(error)) => {
-                    return Err(io_failure("artifact_use_lock_failed", error));
+                    return Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error));
                 }
             }
             let material = ArtifactMaterial::read_from(
                 &mut (&mut file).take(reference.byte_count.saturating_add(1)),
             )
-            .map_err(|error| io_failure("artifact_read_failed", error))?;
+            .map_err(|error| io_failure(SharedCode::ArtifactReadFailed.code(), error))?;
             if material.byte_count() != reference.byte_count
                 || material.sha256() != reference.sha256
             {
                 return Err(failure(
-                    "artifact_hash_mismatch",
+                    StoreCode::ArtifactHashMismatch.code(),
                     "exclusive material identity differs from the original Ledger reference",
                 ));
             }
@@ -147,7 +157,9 @@ pub fn try_artifact_delete_guard(
         // Workflow #375 R5d: a file another program holds (os error 32 or 33) is busy, like a
         // held lock; any other error fails this guard without stopping the Runtime.
         Err(error) if is_busy_io(&error) => return Ok(None),
-        Err(error) => return Err(io_failure("artifact_read_failed", error).non_fatal()),
+        Err(error) => {
+            return Err(io_failure(SharedCode::ArtifactReadFailed.code(), error).non_fatal());
+        }
     };
     Ok(Some(ArtifactDeleteGuard {
         root,
@@ -165,27 +177,33 @@ fn open_lock(
 ) -> ArtifactStoreResult<Option<File>> {
     reference
         .validate()
-        .map_err(|error| failure("artifact_reference_invalid", error))?;
-    let key = reference
-        .object_key()
-        .ok_or_else(|| failure("artifact_object_key_missing", "object key required"))?;
+        .map_err(|error| failure(SharedCode::ArtifactReferenceInvalid.code(), error))?;
+    let key = reference.object_key().ok_or_else(|| {
+        failure(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            "object key required",
+        )
+    })?;
     let relative = Path::new(key);
-    let name = relative
-        .file_name()
-        .ok_or_else(|| failure("artifact_path_invalid", "object filename required"))?;
+    let name = relative.file_name().ok_or_else(|| {
+        failure(
+            StoreCode::ArtifactPathInvalid.code(),
+            "object filename required",
+        )
+    })?;
     let directory = root.join("artifact-use-locks");
     if create {
         fs::create_dir_all(&directory)
-            .map_err(|error| io_failure("artifact_use_lock_failed", error))?;
+            .map_err(|error| io_failure(StoreCode::ArtifactUseLockFailed.code(), error))?;
     }
     let directory_meta = match fs::symlink_metadata(&directory) {
         Ok(metadata) => metadata,
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io_failure("artifact_use_lock_failed", error)),
+        Err(error) => return Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error)),
     };
     if !directory_meta.is_dir() || is_link(&directory_meta) {
         return Err(failure(
-            "artifact_path_invalid",
+            StoreCode::ArtifactPathInvalid.code(),
             "artifact lock directory must not be a link",
         ));
     }
@@ -193,13 +211,13 @@ fn open_lock(
     match fs::symlink_metadata(&path) {
         Ok(metadata) if !metadata.is_file() || is_link(&metadata) => {
             return Err(failure(
-                "artifact_path_invalid",
+                StoreCode::ArtifactPathInvalid.code(),
                 "artifact lock must be a regular file",
             ));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_failure("artifact_use_lock_failed", error)),
+        Err(error) => return Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error)),
     }
     match OpenOptions::new()
         .read(true)
@@ -210,19 +228,23 @@ fn open_lock(
     {
         Ok(file) => Ok(Some(file)),
         Err(error) if !create && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(io_failure("artifact_use_lock_failed", error)),
+        Err(error) => Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error)),
     }
 }
 
-fn failure(code: &'static str, detail: impl ToString) -> ArtifactStoreError {
-    ArtifactStoreError::fatal(code, "artifact_material_use", detail.to_string())
+fn failure(code: Code, detail: impl ToString) -> ArtifactStoreError {
+    ArtifactStoreError::new(
+        code,
+        StoreLocation::ArtifactMaterialUse.location(),
+        detail.to_string(),
+    )
 }
 
-fn io_failure(code: &'static str, error: std::io::Error) -> ArtifactStoreError {
+fn io_failure(code: Code, error: std::io::Error) -> ArtifactStoreError {
     failure(code, format!("{:?}: {error}", error.kind())).with_io_error(&error)
 }
 
-fn lock_failure(code: &'static str, error: TryLockError) -> ArtifactStoreError {
+fn lock_failure(code: Code, error: TryLockError) -> ArtifactStoreError {
     match error {
         // Workflow #375 R5d: the kind marks a held lock as busy, so a reader retries.
         TryLockError::WouldBlock => failure(code, "WouldBlock: artifact material is in use")
@@ -271,28 +293,38 @@ pub(crate) fn hold_frame(
     root: &Path,
     reference: &ProjectedArtifactReference,
 ) -> ArtifactStoreResult<Held> {
-    let key = reference
-        .object_key()
-        .ok_or_else(|| failure("artifact_object_key_missing", "object key required").non_fatal())?;
+    let key = reference.object_key().ok_or_else(|| {
+        failure(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            "object key required",
+        )
+        .non_fatal()
+    })?;
     let path = crate::store::safe_object_path(root, key).map_err(ArtifactStoreError::non_fatal)?;
     // A stat first: an absent frame takes no lock.
     match fs::symlink_metadata(&path) {
         Ok(_) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Held::Absent),
         Err(error) if is_busy_io(&error) => return Ok(Held::Busy),
-        Err(error) => return Err(io_failure("artifact_cleanup_failed", error).non_fatal()),
+        Err(error) => {
+            return Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal());
+        }
     }
     let lock = open_lock(root, reference, true)
         .map_err(ArtifactStoreError::non_fatal)?
         .ok_or_else(|| {
-            failure("artifact_use_lock_missing", "delete lock was not created").non_fatal()
+            failure(
+                StoreCode::ArtifactUseLockMissing.code(),
+                "delete lock was not created",
+            )
+            .non_fatal()
         })?;
     match lock.try_lock() {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => return Ok(Held::Busy),
         Err(TryLockError::Error(error)) if is_busy_io(&error) => return Ok(Held::Busy),
         Err(TryLockError::Error(error)) => {
-            return Err(io_failure("artifact_use_lock_failed", error).non_fatal());
+            return Err(io_failure(StoreCode::ArtifactUseLockFailed.code(), error).non_fatal());
         }
     }
     match open_for_deletion(&path) {
@@ -303,7 +335,7 @@ pub(crate) fn hold_frame(
         })),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(Held::Absent),
         Err(error) if is_busy_io(&error) => Ok(Held::Busy),
-        Err(error) => Err(io_failure("artifact_cleanup_failed", error).non_fatal()),
+        Err(error) => Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal()),
     }
 }
 
@@ -330,7 +362,7 @@ fn open_for_deletion(path: &Path) -> std::io::Result<File> {
 
 fn canonical_root(root: &Path) -> ArtifactStoreResult<PathBuf> {
     root.canonicalize()
-        .map_err(|error| io_failure("artifact_root_failed", error).non_fatal())
+        .map_err(|error| io_failure(StoreCode::ArtifactRootFailed.code(), error).non_fatal())
 }
 
 /// Workflow #375 R5d: the frame cleaner deletes the frame at `<root>\<object key>`, and never
@@ -350,7 +382,7 @@ pub fn remove_frame_file(
         Ok(()) => Ok(FrameFileOutcome::Removed),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(FrameFileOutcome::Absent),
         Err(error) if is_busy_io(&error) => Ok(FrameFileOutcome::Busy),
-        Err(error) => Err(io_failure("artifact_cleanup_failed", error).non_fatal()),
+        Err(error) => Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal()),
     };
     drop(hold);
     outcome
@@ -379,16 +411,20 @@ pub(crate) fn move_frame_file_with(
     before_rename: impl FnOnce(),
 ) -> ArtifactStoreResult<FrameFileOutcome> {
     let root = canonical_root(root)?;
-    let key = reference
-        .object_key()
-        .ok_or_else(|| failure("artifact_object_key_missing", "object key required").non_fatal())?;
+    let key = reference.object_key().ok_or_else(|| {
+        failure(
+            SharedCode::ArtifactObjectKeyMissing.code(),
+            "object key required",
+        )
+        .non_fatal()
+    })?;
     let object_file = Path::new(key)
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
         .filter(|name| kept::object_id(name).is_some())
         .ok_or_else(|| {
             failure(
-                "artifact_path_invalid",
+                StoreCode::ArtifactPathInvalid.code(),
                 "only an artifact_<hex>.png frame is kept",
             )
             .non_fatal()
@@ -398,13 +434,19 @@ pub(crate) fn move_frame_file_with(
         .join(leaf)
         .join(file_name);
     if relative.components().count() != 4 {
-        return Err(failure("artifact_path_invalid", "a kept path has four parts").non_fatal());
+        return Err(failure(
+            StoreCode::ArtifactPathInvalid.code(),
+            "a kept path has four parts",
+        )
+        .non_fatal());
     }
     let destination = crate::store::safe_object_path(&root, relative.as_path())
         .map_err(ArtifactStoreError::non_fatal)?;
     let folder = destination
         .parent()
-        .ok_or_else(|| failure("artifact_path_invalid", "kept folder missing").non_fatal())?
+        .ok_or_else(|| {
+            failure(StoreCode::ArtifactPathInvalid.code(), "kept folder missing").non_fatal()
+        })?
         .to_path_buf();
     let hold = match hold_frame(&root, reference)? {
         Held::Frame(hold) => hold,
@@ -415,7 +457,7 @@ pub(crate) fn move_frame_file_with(
         return if is_busy_io(&error) {
             Ok(FrameFileOutcome::Busy)
         } else {
-            Err(io_failure("artifact_directory_failed", error).non_fatal())
+            Err(io_failure(StoreCode::ArtifactDirectoryFailed.code(), error).non_fatal())
         };
     }
     kept::remember(&root, object_file, destination.clone());
@@ -437,7 +479,7 @@ pub(crate) fn move_frame_file_with(
             } else if is_busy_io(&error) {
                 Ok(FrameFileOutcome::Busy)
             } else {
-                Err(io_failure("artifact_cleanup_failed", error).non_fatal())
+                Err(io_failure(StoreCode::ArtifactCleanupFailed.code(), error).non_fatal())
             }
         }
     };

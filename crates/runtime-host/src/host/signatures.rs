@@ -2,6 +2,7 @@
 
 use super::*;
 use actingcommand_artifact_store::verify_projected_read_only;
+use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::{
     DiagnosticSignatureDefinition, LedgerPayloadDraft, LedgerSignatureEvent,
     RuntimeSignatureMatchRequest, SignatureRegistrationRef,
@@ -27,7 +28,10 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         definition: &DiagnosticSignatureDefinition,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let _gate = lock(&self.signature_write_gate, "register_diagnostic_signature")?;
+        let _gate = lock(
+            &self.signature_write_gate,
+            ContractLocation::RegisterDiagnosticSignature,
+        )?;
         let catalog = self.current_signature_catalog()?;
         catalog
             .validate_registration(definition)
@@ -59,7 +63,10 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         registration: &SignatureRegistrationRef,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let _gate = lock(&self.signature_write_gate, "retire_diagnostic_signature")?;
+        let _gate = lock(
+            &self.signature_write_gate,
+            ContractLocation::RetireDiagnosticSignature,
+        )?;
         let catalog = self.current_signature_catalog()?;
         catalog
             .validate_retirement(registration)
@@ -103,9 +110,9 @@ impl HostShared {
             GlobalLedgerEvidenceConfig::new(root).sqlite_material_per_artifact(),
             |reference| verify_projected_read_only(root, reference).ok(),
         )
-        .map_err(|error| signature_request_error(error.code()))?;
+        .map_err(|error| relayed_signature_request_error(error.code()))?;
         let input = SignaturePrefix::from_evidence(&snapshot, request.input_through)
-            .map_err(|error| signature_request_error(error.code()))?;
+            .map_err(|error| relayed_signature_request_error(error.code()))?;
         let page =
             replay_signatures(&input, &catalog, &request.page).map_err(signature_ledger_error)?;
         let event = self.append_event(
@@ -137,17 +144,21 @@ impl HostShared {
 
 fn signature_ledger_error(error: GlobalLedgerError) -> RequestFailure {
     if error.is_fatal() {
-        RequestFailure::poison_without_terminal(ledger_error("diagnostic_signatures"))
+        RequestFailure::poison_without_terminal(ledger_error(
+            ContractLocation::DiagnosticSignatures,
+        ))
     } else {
-        signature_request_error(error.code())
+        relayed_signature_request_error(error.code())
     }
 }
 
-fn signature_request_error(code: &'static str) -> RequestFailure {
+/// A signature refusal that relays the ledger's code as a spelling (A2c types the ledger's
+/// codes and removes this bridge).
+fn relayed_signature_request_error(relayed_code: &'static str) -> RequestFailure {
     RequestFailure::request(
-        RuntimeHostError::request(
-            code,
-            "diagnostic_signatures",
+        RuntimeHostError::relayed_request(
+            relayed_code,
+            ContractLocation::DiagnosticSignatures.as_str(),
             RuntimeErrorCode::InvalidRequest,
         ),
         RuntimeReceiptState::Denied,

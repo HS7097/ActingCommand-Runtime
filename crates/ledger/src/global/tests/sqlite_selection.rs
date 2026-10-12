@@ -9,7 +9,7 @@ use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayloadDraft, ApprovalTarget,
     CatalogPayloadDraft, CatalogTransitionEventData, LedgerView, outcome::Category,
 };
-use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
+use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits, RuntimeDatabase};
 
 /// The check-config preview's types: the catalog replay's and the approval decisions.
 const SELECTED: [EventType; 6] = [
@@ -173,7 +173,7 @@ fn stored(sequence: u64) -> i64 {
 fn tamper(root: &TempDir, sql: &str) {
     let database = RuntimeDatabase::open_existing(root.path(), false).expect("fixture database");
     database
-        .connection("tamper selection fixture")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("fixture connection")
         .execute_batch(sql)
         .expect("tamper fixture");
@@ -184,7 +184,7 @@ fn tamper(root: &TempDir, sql: &str) {
 fn flip_event_id_byte(root: &TempDir, sequence: u64) {
     let database = RuntimeDatabase::open_existing(root.path(), false).expect("fixture database");
     let connection = database
-        .connection("tamper selection fixture")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("fixture connection");
     let mut record: Vec<u8> = connection
         .query_row(
@@ -341,7 +341,7 @@ fn selection_without_derived_views_scans_the_same_rows() {
     let database = RuntimeDatabase::open_existing(root.path(), false).expect("fixture database");
     {
         let connection = database
-            .connection("drop derived views")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .expect("fixture connection");
         let objects = connection
             .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")

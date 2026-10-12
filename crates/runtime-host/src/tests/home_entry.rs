@@ -478,7 +478,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     }
     assert!(
         matches!(prepared.run_entry_recovery(&mut UnreachableRecovery),
-        Err(ContainedTaskRunError::Task(error)) if error.code() == "contained_task_home_recovery_package_incompatible")
+        Err(ContainedTaskRunError::Task(error)) if error.code().as_str() == "contained_task_home_recovery_package_incompatible")
     );
     let root = TempDir::new().unwrap();
     let target_path = root.path().join("target.zip");

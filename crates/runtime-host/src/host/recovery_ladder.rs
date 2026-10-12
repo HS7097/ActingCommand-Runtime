@@ -46,6 +46,9 @@ use super::lease::{ClaimGrantSlot, HostClaim, HostClaimAdmission};
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
+use crate::error::spelled;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
     EmulatorInstanceAction, HolderId, InstanceStuckRecovery, IssuedCausationId,
@@ -56,7 +59,7 @@ use actingcommand_contract::{
 };
 use actingcommand_device::DeviceResourceQuiescence;
 
-const LADDER_OPERATION: &str = "run_recovery_ladder";
+const LADDER_OPERATION: HostLocation = HostLocation::RunRecoveryLadder;
 /// Workflow #369-1: how long after a confirmed Start the emulator restart rung waits for a
 /// usable environment.
 const RECOVERY_READINESS_WINDOW: Duration = Duration::from_secs(120);
@@ -214,8 +217,8 @@ pub(super) fn resolve_stuck_recovery(
                 .map(|instance| (instance.instance_id(), *settings))
                 .ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "stuck_recovery_instance_unknown",
-                        "start_runtime_host",
+                        HostCode::StuckRecoveryInstanceUnknown,
+                        HostLocation::StartRuntimeHost,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                     .with_native_detail(format!("instance_alias={alias}"))
@@ -237,7 +240,7 @@ pub(super) fn with_recovery_ladder_staging<T>(
     }
 }
 
-fn ladder_invariant(code: &'static str) -> RuntimeHostError {
+fn ladder_invariant(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, LADDER_OPERATION, RuntimeErrorCode::RuntimeFatal)
 }
 
@@ -299,10 +302,13 @@ impl HostShared {
             ),
         )?;
         let event = terminal(&event);
-        lock(&self.recovery_ladders, "record_preparation_attempt")?
-            .entry(instance_id)
-            .or_default()
-            .preparation = Some(event);
+        lock(
+            &self.recovery_ladders,
+            HostLocation::RecordPreparationAttempt,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .preparation = Some(event);
         // Workflow #369-3 (coordinator ruling P1): the direct-run exemption covers task runs
         // only, which make no preparation of their own. A failed daemon-start or connection
         // preparation (emulator start or restart, resume, self-check) still starts a ladder, as
@@ -321,10 +327,13 @@ impl HostShared {
             .get(&instance_id)
             .copied()
             .unwrap_or_default();
-        let resolved = lock(&self.registered_instances, "read_preparation_instance")?
-            .get(&instance_id)
-            .cloned()
-            .ok_or_else(|| ladder_invariant("recovery_ladder_instance_missing"))?;
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadPreparationInstance,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
         if !settings.enabled || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
         {
             return Ok(event);
@@ -399,13 +408,13 @@ impl HostShared {
                 holder_id,
             },
         )
-        .map_err(|_| ladder_invariant("recovery_ladder_claim_request_invalid"))
+        .map_err(|_| ladder_invariant(HostCode::RecoveryLadderClaimRequestInvalid))
     }
 
     /// The two parts of a ladder's admission that can change while it holds: the scheduling
     /// pause and business capacity. Nothing is recorded.
     fn recovery_gate_open(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
-        let paused = lock(&self.scheduling_pause, "gate_recovery_pause")?
+        let paused = lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
             .deferral(&pending.instance_alias)
             .is_some();
         if paused || self.fatal.is_shutdown_requested() {
@@ -419,7 +428,7 @@ impl HostShared {
     }
 
     fn recovery_admitted(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
-        let paused = lock(&self.scheduling_pause, "gate_recovery_pause")?
+        let paused = lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
             .deferral(&pending.instance_alias)
             .is_some();
         let capacity = if paused || self.fatal.is_shutdown_requested() {
@@ -453,9 +462,12 @@ impl HostShared {
         &self,
         request_id: RequestId,
     ) -> RuntimeHostResult<Option<LadderTrigger>> {
-        let control = lock(&self.contained_runs, "read_recovery_ladder_trigger")?
-            .get(&request_id)
-            .cloned();
+        let control = lock(
+            &self.contained_runs,
+            HostLocation::ReadRecoveryLadderTrigger,
+        )?
+        .get(&request_id)
+        .cloned();
         match control {
             Some(control) => control.ladder_trigger(),
             None => Ok(None),
@@ -491,7 +503,7 @@ impl HostShared {
             None => {
                 let failed = trigger
                     .package
-                    .ok_or_else(|| ladder_invariant("recovery_ladder_package_missing"))?;
+                    .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderPackageMissing))?;
                 match self.configured_return_home(&failed.game, &failed.server)? {
                     Some(binding) => (Some(binding.clone()), Some(failed)),
                     None => (None, None),
@@ -550,9 +562,9 @@ impl HostShared {
             return Ok(false);
         }
         let now_unix_ms = self.clock.sample()?.unix_ms;
-        let ladder_active =
-            lock(&self.scheduler, "read_recovery_ladder_hold")?.ladder_active(pending.instance_id);
-        let until_unix_ms = lock(&self.recovery_ladders, "admit_recovery_ladder")?
+        let ladder_active = lock(&self.scheduler, HostLocation::ReadRecoveryLadderHold)?
+            .ladder_active(pending.instance_id);
+        let until_unix_ms = lock(&self.recovery_ladders, HostLocation::AdmitRecoveryLadder)?
             .get(&pending.instance_id)
             .map_or(0, |window| window.until_unix_ms);
         let suppressed = if ladder_active {
@@ -590,8 +602,10 @@ impl HostShared {
         &self,
         pending: PendingRecoveryLadder,
     ) -> RuntimeHostResult<()> {
-        let connection_id = ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE)
-            .map_err(|error| RuntimeHostError::scheduler("build_ladder_connection", &error))?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::BuildLadderConnection, &error)
+            })?;
         let claim = pending.claim.clone();
         let links = pending.links.clone();
         let instance_alias = pending.instance_alias.clone();
@@ -642,9 +656,12 @@ impl HostShared {
             return Ok(());
         }
         if let Some(trigger) = pending.trigger.preparation {
-            let current = lock(&self.recovery_ladders, "gate_recovery_preparation")?
-                .get(&pending.instance_id)
-                .and_then(|window| window.preparation);
+            let current = lock(
+                &self.recovery_ladders,
+                HostLocation::GateRecoveryPreparation,
+            )?
+            .get(&pending.instance_id)
+            .and_then(|window| window.preparation);
             if current != Some(trigger) {
                 return self.append_recovery_ladder_fact(
                     pending,
@@ -658,14 +675,20 @@ impl HostShared {
         }
         // Workflow #369 §5.3: only a ladder that got the key opens its cool-down window.
         let now_unix_ms = self.clock.sample()?.unix_ms;
-        lock(&self.recovery_ladders, "open_recovery_ladder_window")?
-            .entry(pending.instance_id)
-            .or_default()
-            .until_unix_ms = now_unix_ms.saturating_add(pending.cooldown_ms);
-        let resolved = lock(&self.registered_instances, "read_recovery_ladder_instance")?
-            .get(&pending.instance_id)
-            .cloned()
-            .ok_or_else(|| ladder_invariant("recovery_ladder_instance_missing"))?;
+        lock(
+            &self.recovery_ladders,
+            HostLocation::OpenRecoveryLadderWindow,
+        )?
+        .entry(pending.instance_id)
+        .or_default()
+        .until_unix_ms = now_unix_ms.saturating_add(pending.cooldown_ms);
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadRecoveryLadderInstance,
+        )?
+        .get(&pending.instance_id)
+        .cloned()
+        .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
         // A preparation has no failed task identity. Resolve its recovery binding from the
         // configured startup resource through the same hash/containment admission owner.
         // Each eventual run still admits its own material, so a mutable locator cannot carry
@@ -864,16 +887,16 @@ impl HostShared {
         key: &HostKey,
     ) -> RuntimeHostResult<Option<&'static str>> {
         if self.fatal.is_shutdown_requested() {
-            return Ok(Some("recovery_ladder_shutdown_requested"));
+            return Ok(Some(HostCode::RecoveryLadderShutdownRequested.as_str()));
         }
         if !self.holds_key(key)? {
             return Ok(Some(HostCode::RecoveryLadderKeyLost.as_str()));
         }
         if self.lifecycle_draining()? {
-            return Ok(Some("recovery_ladder_drain_requested"));
+            return Ok(Some(HostCode::RecoveryLadderDrainRequested.as_str()));
         }
         if !self.recovery_gate_open(pending)? {
-            return Ok(Some("recovery_admission_denied"));
+            return Ok(Some(HostCode::RecoveryAdmissionDenied.as_str()));
         }
         Ok(None)
     }
@@ -938,7 +961,7 @@ impl HostShared {
         let binding = pending
             .recovery
             .as_ref()
-            .ok_or_else(|| ladder_invariant("recovery_ladder_recovery_package_missing"))?;
+            .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderRecoveryPackageMissing))?;
         // Workflow #336 L2d (R24): the configured package takes the longest response deadline,
         // as a startup package and a scheduled run do; a bound one keeps the default.
         let request = ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
@@ -996,7 +1019,7 @@ impl HostShared {
             .startup_packages()?
             .get(&pending.instance_id)
             .cloned()
-            .ok_or_else(|| ladder_invariant("recovery_ladder_startup_package_missing"))?;
+            .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderStartupPackageMissing))?;
         // Workflow #369 Q-5 (B1): the entry's ADB probe and the stop run on the key.
         if let Some(failed) = self.ladder_step_renewal(
             key,
@@ -1018,7 +1041,7 @@ impl HostShared {
         let mut startup = self
             .prepare_startup_package(resolved, pending.links.clone(), pending.request_id)
             .map_err(|failure| *failure.error)?
-            .ok_or_else(|| ladder_invariant("recovery_ladder_startup_package_missing"))?;
+            .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderStartupPackageMissing))?;
         startup.recovery_rung = true;
         self.run_recovery_rung_package(&startup, stops, pending, key)
     }
@@ -1064,7 +1087,7 @@ impl HostShared {
         let (capture, input) = prepared.recovery_entry_channels();
         if let Some(reason) = self
             .recovery_entry_unavailable(pending.instance_id, capture, input)?
-            .and_then(recovery_entry_skip)
+            .and_then(|code| recovery_entry_skip(code.as_str()))
         {
             return Ok(RestartEntry::Skip(reason));
         }
@@ -1117,10 +1140,10 @@ impl HostShared {
                 action,
             },
         )
-        .map_err(|_| ladder_invariant("recovery_application_stop_request_invalid"))?;
+        .map_err(|_| ladder_invariant(HostCode::RecoveryApplicationStopRequestInvalid))?;
         let validated = message
             .validate()
-            .map_err(|_| ladder_invariant("recovery_application_stop_request_invalid"))?;
+            .map_err(|_| ladder_invariant(HostCode::RecoveryApplicationStopRequestInvalid))?;
         let links = self
             .events
             .request_links(&validated, Some(pending.instance_id), None, None);
@@ -1182,7 +1205,7 @@ impl HostShared {
         let instance_guard = self
             .instance_guard(pending.instance_id)
             .map_err(|failure| *failure.error)?;
-        let admission = lock(&instance_guard, "lock_instance_admission")?;
+        let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let mut stopped = None;
         for action in [EmulatorInstanceAction::Stop, EmulatorInstanceAction::Start] {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
@@ -1250,7 +1273,7 @@ impl HostShared {
                 if driven.outcome.process_started {
                     return Ok(RungAttempt::Failed {
                         run_id: None,
-                        reason: "recovery_stop_unconfirmed",
+                        reason: HostCode::RecoveryStopUnconfirmed.as_str(),
                     });
                 }
                 stopped = Some(driven.terminal);
@@ -1266,10 +1289,10 @@ impl HostShared {
             if !driven.outcome.running {
                 return Ok(RungAttempt::Failed {
                     run_id: None,
-                    reason: "recovery_environment_not_ready",
+                    reason: HostCode::RecoveryEnvironmentNotReady.as_str(),
                 });
             }
-            let stop = stopped.ok_or_else(|| ladder_invariant("recovery_stop_missing"))?;
+            let stop = stopped.ok_or_else(|| ladder_invariant(HostCode::RecoveryStopMissing))?;
             let (current, preparation) = match self.await_recovery_readiness(
                 pending,
                 key,
@@ -1314,7 +1337,7 @@ impl HostShared {
                 }),
             };
         }
-        Err(ladder_invariant("recovery_start_missing"))
+        Err(ladder_invariant(HostCode::RecoveryStartMissing))
     }
 
     /// Workflow #369-1: after a confirmed Start, waits until Android reports a resumed activity
@@ -1363,13 +1386,13 @@ impl HostShared {
                 prepared = true;
                 let admission = match held.take() {
                     Some(admission) => admission,
-                    None => lock(instance_guard, "lock_instance_admission")?,
+                    None => lock(instance_guard, HostLocation::LockInstanceAdmission)?,
                 };
                 let current = self
                     .resolve_instance(alias)
                     .map_err(|failure| *failure.error)?;
                 if !current.device_self_checked() {
-                    return Ok(Err("recovery_preparation_unconfirmed"));
+                    return Ok(Err(HostCode::RecoveryPreparationUnconfirmed.as_str()));
                 }
                 let (check, preparation, recoverable) = self.prepare_recovery_connection(
                     &current,
@@ -1380,21 +1403,21 @@ impl HostShared {
                 if check.capture.ok && check.touch.ok && check.failure_code.is_none() {
                     return Ok(match preparation {
                         Some(preparation) => Ok((current, preparation)),
-                        None => Err("recovery_preparation_unconfirmed"),
+                        None => Err(HostCode::RecoveryPreparationUnconfirmed.as_str()),
                     });
                 }
                 drop(admission);
                 if !recoverable && !self.recovery_adb_unanswered(pending)? {
-                    return Ok(Err("recovery_environment_not_ready"));
+                    return Ok(Err(HostCode::RecoveryEnvironmentNotReady.as_str()));
                 }
             }
             drop(held.take());
             let wait =
                 RECOVERY_READINESS_BACKOFF[retries.min(RECOVERY_READINESS_BACKOFF.len() - 1)];
             let not_ready = if prepared {
-                "recovery_environment_not_ready"
+                HostCode::RecoveryEnvironmentNotReady.as_str()
             } else {
-                "recovery_android_not_booted"
+                HostCode::RecoveryAndroidNotBooted.as_str()
             };
             if let Some(reason) =
                 self.await_recovery_retry(pending, key, wait, deadline, not_ready)?
@@ -1520,11 +1543,13 @@ impl HostShared {
                 } else {
                     RungAttempt::Failed {
                         run_id: Some(run_id),
-                        reason: "recovery_rung_target_not_reached",
+                        reason: HostCode::RecoveryRungTargetNotReached.as_str(),
                     }
                 }
             }
-            Ok(_) => return Err(ladder_invariant("recovery_rung_result_invalid")),
+            Ok(_) => {
+                return Err(ladder_invariant(HostCode::RecoveryRungResultInvalid));
+            }
             Err(code) => match recovery_entry_skip(code) {
                 Some(reason) if !destructive => RungAttempt::Skipped { reason },
                 _ => RungAttempt::Failed {
@@ -1572,7 +1597,7 @@ impl HostShared {
                 grant,
             }),
             HostClaimAdmission::Granted(_) => Err(RequestFailure::poison_without_terminal(
-                ladder_invariant("recovery_ladder_continuation_granted_early"),
+                ladder_invariant(HostCode::RecoveryLadderContinuationGrantedEarly),
             )),
         }
     }
@@ -1650,31 +1675,37 @@ impl HostShared {
 /// a rung run that a scheduling pause's drain cancelled (`contained_task_paused`, which only the
 /// pause drain sets).
 fn is_hold_interruption(reason: &str) -> bool {
-    matches!(
+    spelled(
         reason,
-        "recovery_ladder_shutdown_requested"
-            | "recovery_ladder_drain_requested"
-            | "recovery_admission_denied"
-            | "contained_task_paused"
-    ) || [
-        HostCode::RecoveryLadderKeyLost.code(),
-        actingcommand_contract::RuntimeErrorCode::LeaseExpired.code(),
-        actingcommand_contract::RuntimeErrorCode::LeaseMissing.code(),
-    ]
-    .into_iter()
-    .any(|code| code.as_str() == reason)
+        &[
+            HostCode::RecoveryLadderShutdownRequested.code(),
+            HostCode::RecoveryLadderDrainRequested.code(),
+            HostCode::RecoveryAdmissionDenied.code(),
+            actingcommand_contract::RuntimeErrorCode::ContainedTaskPaused.code(),
+            HostCode::RecoveryLadderKeyLost.code(),
+            actingcommand_contract::RuntimeErrorCode::LeaseExpired.code(),
+            actingcommand_contract::RuntimeErrorCode::LeaseMissing.code(),
+        ],
+    )
 }
 
 /// The skip a rung package's entry refusal stands for: a known unavailable capture or input
 /// channel, or an ADB baseline that does not answer.
 fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
-    match code {
-        "recovery_capture_unavailable" => Some(RecoveryRungSkipReason::CaptureUnavailable),
-        "recovery_input_unavailable" => Some(RecoveryRungSkipReason::InputUnavailable),
-        "startup_package_adb_not_ready" | "recovery_ladder_adb_not_ready" => {
-            Some(RecoveryRungSkipReason::AdbUnavailable)
-        }
-        _ => None,
+    if spelled(code, &[HostCode::RecoveryCaptureUnavailable.code()]) {
+        Some(RecoveryRungSkipReason::CaptureUnavailable)
+    } else if spelled(code, &[HostCode::RecoveryInputUnavailable.code()]) {
+        Some(RecoveryRungSkipReason::InputUnavailable)
+    } else if spelled(
+        code,
+        &[
+            HostCode::StartupPackageAdbNotReady.code(),
+            HostCode::RecoveryLadderAdbNotReady.code(),
+        ],
+    ) {
+        Some(RecoveryRungSkipReason::AdbUnavailable)
+    } else {
+        None
     }
 }
 
@@ -1685,7 +1716,7 @@ fn recovery_adb_fault(
     error: &actingcommand_device::DeviceError,
 ) -> RuntimeHostError {
     let mut fatal = RuntimeHostError::fatal(
-        "recovery_readiness_adb_unconfirmed",
+        HostCode::RecoveryReadinessAdbUnconfirmed,
         LADDER_OPERATION,
         RuntimeErrorCode::RuntimeFatal,
     )

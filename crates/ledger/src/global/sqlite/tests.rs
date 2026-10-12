@@ -4,6 +4,7 @@
 use super::*;
 use crate::global::{GlobalLedger, Sha256SecretFingerprinter, tests::sqlite_contract::database};
 use actingcommand_contract::*;
+use actingcommand_runtime_database::DatabaseLocation;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -40,7 +41,7 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
     let database = database(root.path());
     let values = [0, 1, i64::MAX as u64, 1_u64 << 63, u64::MAX - 1, u64::MAX];
     let connection = database
-        .connection("encoding specification")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("connection");
     let stored = connection
         .prepare("SELECT column1 FROM (VALUES (?1),(?2),(?3),(?4),(?5),(?6)) ORDER BY column1")
@@ -57,7 +58,9 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
     }
     drop(connection);
     {
-        let mut connection = database.connection("uninitialized Ledger source").unwrap();
+        let mut connection = database
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
+            .unwrap();
         let before = connection.total_changes();
         let transaction = connection.transaction().unwrap();
         assert!(
@@ -87,7 +90,14 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
     let expected = segment
         .query(EventQuery::default())
         .expect("reference facts");
-    assert!(views::installed(&database.connection("derived schema").unwrap()).unwrap());
+    assert!(
+        views::installed(
+            &database
+                .connection(DatabaseLocation::OpenExistingDatabase.location())
+                .unwrap()
+        )
+        .unwrap()
+    );
     for view in LedgerView::ALL {
         for from in values {
             let query = EventQuery {
@@ -111,7 +121,7 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
     segment.close().expect("close segment");
     {
         let connection = database
-            .connection("pre-view schema specification")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .unwrap();
         let objects = connection
             .prepare("SELECT type,name FROM sqlite_schema WHERE name GLOB 'ledger_view_*'")
@@ -134,7 +144,14 @@ fn ordered_u64_round_trips_extremes_and_preserves_sql_order() {
         Arc::clone(&database),
     )
     .expect("reopen");
-    assert!(views::installed(&database.connection("writer schema upgrade").unwrap()).unwrap());
+    assert!(
+        views::installed(
+            &database
+                .connection(DatabaseLocation::OpenExistingDatabase.location())
+                .unwrap()
+        )
+        .unwrap()
+    );
     assert_eq!(
         reopened.query(EventQuery::default()).expect("facts"),
         expected
@@ -212,7 +229,9 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
         assert_eq!(planning_page.through_sequence(), second.sequence());
         assert_eq!(planning_page.planning_events().count(), 0);
         {
-            let mut connection = database.connection("original row specification").unwrap();
+            let mut connection = database
+                .connection(DatabaseLocation::OpenExistingDatabase.location())
+                .unwrap();
             let before = connection.total_changes();
             let transaction = connection.transaction().unwrap();
             let borrowed = database.borrow_transaction(&transaction);
@@ -244,12 +263,14 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
             .subscribe(SubscriptionCursor { after_sequence: 2 })
             .unwrap();
         database
-            .connection("mutate assigned matrix")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .expect("connection")
             .execute_batch(sql)
             .expect("mutate fixture");
         {
-            let mut connection = database.connection("changed original rows").unwrap();
+            let mut connection = database
+                .connection(DatabaseLocation::OpenExistingDatabase.location())
+                .unwrap();
             let transaction = connection.transaction().unwrap();
             let borrowed = database.borrow_transaction(&transaction);
             let baseline_error = read_release_baseline_source(&database, &borrowed)
@@ -340,7 +361,7 @@ fn sqlite_unique_constraints_and_transaction_rollback_fail_closed() {
     let second = ledger.append(draft(2)).expect("second");
     {
         let connection = database
-            .connection("constraint specification")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .expect("connection");
         connection.execute_batch("INSERT INTO ledger_events SELECT * FROM ledger_events WHERE sequence=-9223372036854775807").expect_err("sequence unique");
         connection.execute_batch("UPDATE ledger_events SET event_id=(SELECT event_id FROM ledger_events WHERE sequence=-9223372036854775807) WHERE sequence=-9223372036854775806").expect_err("EventId unique");
@@ -362,7 +383,7 @@ fn sqlite_unique_constraints_and_transaction_rollback_fail_closed() {
     );
     ledger.close().expect_err("fatal writer remains failed");
     database
-        .connection("release fixture trigger")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("connection")
         .execute_batch("DROP TRIGGER reject_ledger_meta")
         .expect("remove assigned trigger");
@@ -486,7 +507,7 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
         let expected = segment.append(input.clone()).expect("reference event");
         assert_eq!(sqlite.append(input).expect("candidate event"), expected);
         let mut connection = database
-            .connection("artifact metadata original row")
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
             .unwrap();
         let transaction = connection.transaction().unwrap();
         verify_transaction_event(
@@ -636,7 +657,7 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
     sqlite.close().expect("close sqlite");
     segment.close().expect("close segment");
     database
-        .connection("artifact order mutation")
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
         .expect("connection")
         .execute(
             "UPDATE ledger_artifacts SET ordinal=?1 WHERE ordinal=?2",

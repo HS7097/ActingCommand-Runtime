@@ -2,8 +2,11 @@
 
 //! Runtime-owned content bindings for external procedure packages.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::RuntimeErrorCode;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_policy::{DispatchIntent, PolicyEvaluation};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -33,9 +36,9 @@ impl ProcedureBinding {
         let operation_id = operation_id.into();
         validate_token(&procedure_ref, "procedure_ref")?;
         validate_token(&operation_id, "operation_id")?;
-        package_digest
-            .validate()
-            .map_err(|_| manifest_fatal("procedure_package_digest_invalid", "package_digest"))?;
+        package_digest.validate().map_err(|_| {
+            field_refusal(SharedCode::ProcedurePackageDigestInvalid, "package_digest")
+        })?;
         for yield_point in &yield_points {
             validate_token(yield_point, "yield_point")?;
         }
@@ -88,15 +91,15 @@ impl ProcedureManifest {
             let procedure_ref = binding.procedure_ref.clone();
             if indexed.insert(procedure_ref, binding).is_some() {
                 return Err(manifest_fatal(
-                    "procedure_manifest_alias_duplicate",
-                    "build_procedure_manifest",
+                    HostCode::ProcedureManifestAliasDuplicate,
+                    HostLocation::BuildProcedureManifest,
                 ));
             }
         }
         if indexed.is_empty() {
             return Err(manifest_fatal(
-                "procedure_manifest_empty",
-                "build_procedure_manifest",
+                HostCode::ProcedureManifestEmpty,
+                HostLocation::BuildProcedureManifest,
             ));
         }
         Ok(Self { bindings: indexed })
@@ -115,21 +118,22 @@ impl ProcedureManifest {
         for intent in &mut bound.dispatch_intents {
             if intent.package_digest.is_some() || intent.procedure_binding_digest.is_some() {
                 return Err(manifest_fatal(
-                    "procedure_intent_already_bound",
-                    "bind_policy_evaluation",
+                    HostCode::ProcedureIntentAlreadyBound,
+                    HostLocation::BindPolicyEvaluation,
                 ));
             }
             let old_decision_id = intent.decision_id.clone();
             let old_reason_chain_id = intent.reason_chain_id.clone();
-            let binding = self.resolve(&intent.procedure_ref, "bind_policy_evaluation")?;
-            binding.validate_descriptor(intent, "bind_policy_evaluation")?;
+            let binding =
+                self.resolve(&intent.procedure_ref, HostLocation::BindPolicyEvaluation)?;
+            binding.validate_descriptor(intent, HostLocation::BindPolicyEvaluation)?;
             let decision_id = bound_decision_id(&old_decision_id, binding.binding_digest())?;
             let reason_chain_id = format!(
                 "reason:{}",
                 decision_id.strip_prefix("decision:").ok_or_else(|| {
                     manifest_fatal(
-                        "procedure_decision_identity_invalid",
-                        "bind_policy_evaluation",
+                        HostCode::ProcedureDecisionIdentityInvalid,
+                        HostLocation::BindPolicyEvaluation,
                     )
                 })?
             );
@@ -145,8 +149,8 @@ impl ProcedureManifest {
                 .is_some()
             {
                 return Err(manifest_fatal(
-                    "procedure_decision_identity_duplicate",
-                    "bind_policy_evaluation",
+                    HostCode::ProcedureDecisionIdentityDuplicate,
+                    HostLocation::BindPolicyEvaluation,
                 ));
             }
         }
@@ -158,8 +162,8 @@ impl ProcedureManifest {
             };
             if &reason_chain.id != old_reason_chain_id {
                 return Err(manifest_fatal(
-                    "procedure_reason_chain_identity_mismatch",
-                    "bind_policy_evaluation",
+                    HostCode::ProcedureReasonChainIdentityMismatch,
+                    HostLocation::BindPolicyEvaluation,
                 ));
             }
             reason_chain.decision_id = decision_id.clone();
@@ -172,8 +176,8 @@ impl ProcedureManifest {
             })
         }) {
             return Err(manifest_fatal(
-                "procedure_reason_chain_missing",
-                "bind_policy_evaluation",
+                HostCode::ProcedureReasonChainMissing,
+                HostLocation::BindPolicyEvaluation,
             ));
         }
         *evaluation = bound;
@@ -183,19 +187,20 @@ impl ProcedureManifest {
     pub(crate) fn validate_intent(
         &self,
         intent: &DispatchIntent,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
+        let operation: Location = operation.into();
         let binding = self.resolve(&intent.procedure_ref, operation)?;
         binding.validate_descriptor(intent, operation)?;
         if intent.package_digest.as_ref() != Some(binding.package_digest()) {
             return Err(manifest_request(
-                "procedure_package_digest_mismatch",
+                HostCode::ProcedurePackageDigestMismatch,
                 operation,
             ));
         }
         if intent.procedure_binding_digest.as_deref() != Some(binding.binding_digest()) {
             return Err(manifest_request(
-                "procedure_binding_digest_mismatch",
+                HostCode::ProcedureBindingDigestMismatch,
                 operation,
             ));
         }
@@ -205,11 +210,12 @@ impl ProcedureManifest {
     fn resolve(
         &self,
         procedure_ref: &str,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<&ProcedureBinding> {
+        let operation: Location = operation.into();
         self.bindings
             .get(procedure_ref)
-            .ok_or_else(|| manifest_request("procedure_manifest_entry_missing", operation))
+            .ok_or_else(|| manifest_request(SharedCode::ProcedureManifestEntryMissing, operation))
     }
 }
 
@@ -217,14 +223,18 @@ impl ProcedureBinding {
     fn validate_descriptor(
         &self,
         intent: &DispatchIntent,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
+        let operation: Location = operation.into();
         if intent.operation_id != self.operation_id {
-            return Err(manifest_request("procedure_operation_mismatch", operation));
+            return Err(manifest_request(
+                HostCode::ProcedureOperationMismatch,
+                operation,
+            ));
         }
         if intent.yield_points != self.yield_points {
             return Err(manifest_request(
-                "procedure_yield_points_mismatch",
+                HostCode::ProcedureYieldPointsMismatch,
                 operation,
             ));
         }
@@ -254,37 +264,55 @@ fn binding_digest(
             yield_points,
         )),
     };
-    let bytes =
-        encoded.map_err(|_| manifest_fatal("procedure_binding_encode_failed", "bind_procedure"))?;
+    let bytes = encoded.map_err(|_| {
+        manifest_fatal(
+            HostCode::ProcedureBindingEncodeFailed,
+            HostLocation::BindProcedure,
+        )
+    })?;
     Ok(format!("{SHA256_PREFIX}{:x}", Sha256::digest(bytes)))
 }
 
 fn bound_decision_id(decision_id: &str, binding_digest: &str) -> RuntimeHostResult<String> {
     let bytes = serde_json::to_vec(&(decision_id, binding_digest)).map_err(|_| {
         manifest_fatal(
-            "procedure_decision_identity_encode_failed",
-            "bind_policy_evaluation",
+            HostCode::ProcedureDecisionIdentityEncodeFailed,
+            HostLocation::BindPolicyEvaluation,
         )
     })?;
     Ok(format!("decision:{:x}", Sha256::digest(bytes)))
 }
 
-fn validate_token(value: &str, field: &'static str) -> RuntimeHostResult<()> {
+/// A binding refusal whose operation names the refused field (`procedure_ref`, `package_digest`,
+/// `operation_id`, `yield_point`): data carried as a location, which A2-P moves into a value under
+/// a registered operation. Until then the field name travels as a relayed spelling.
+fn field_refusal(code: impl Into<Code>, field_operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::relayed_fatal(
+        code.into().as_str(),
+        field_operation,
+        RuntimeErrorCode::RuntimeFatal,
+    )
+}
+
+fn validate_token(value: &str, field_operation: &'static str) -> RuntimeHostResult<()> {
     if value.is_empty()
         || value.len() > MAX_PROCEDURE_TOKEN_BYTES
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
-        return Err(manifest_fatal("procedure_manifest_token_invalid", field));
+        return Err(field_refusal(
+            HostCode::ProcedureManifestTokenInvalid,
+            field_operation,
+        ));
     }
     Ok(())
 }
 
-fn manifest_request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn manifest_request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-fn manifest_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn manifest_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }

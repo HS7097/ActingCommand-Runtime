@@ -485,7 +485,10 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.operation(), "reset");
     assert_eq!(detail.message(), "injected backend failure");
     assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
-    let runtime_error = RuntimeHostError::execution("execute_input_backend", &kernel_error);
+    let runtime_error = RuntimeHostError::execution(
+        crate::codes::HostLocation::ExecuteInputBackend,
+        &kernel_error,
+    );
     assert!(kernel_error.adb_recovery().is_some());
     assert_eq!(
         runtime_error.diagnostics().adb_recovery(),
@@ -501,7 +504,7 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
         .expect_err("missing producer detail");
     assert!(absent.diagnostic_detail().is_none());
     assert!(
-        RuntimeHostError::execution("execute_input_backend", &absent)
+        RuntimeHostError::execution(crate::codes::HostLocation::ExecuteInputBackend, &absent)
             .diagnostic_detail()
             .is_none()
     );

@@ -40,7 +40,8 @@ pub enum ReleaseBaselineMember {
 }
 
 impl ReleaseBaselineMember {
-    fn key(&self) -> String {
+    /// The member's projection entry key (a name such as `generation.<release id>`).
+    fn entry_key(&self) -> String {
         match self {
             Self::Generation { release_id, .. } => format!("generation.{release_id}"),
             Self::Transition(data) => format!("transition.{}", data.transition_id()),
@@ -70,7 +71,7 @@ struct ReleaseSnapshot {
 impl ReleaseSnapshot {
     fn contains(&self, member: &ReleaseBaselineMember) -> bool {
         self.members
-            .binary_search_by_key(&member.key(), ReleaseBaselineMember::key)
+            .binary_search_by_key(&member.entry_key(), ReleaseBaselineMember::entry_key)
             .is_ok_and(|index| self.members[index] == *member)
     }
 
@@ -136,7 +137,10 @@ impl PreparedReleaseState {
             self.store.read_release_baseline(scope)?;
         }
         if self.store.release_fingerprint(scope.sql())? != self.before {
-            return Err(request("release_state_changed", "apply_release_state"));
+            return Err(request(
+                StateCode::ReleaseStateChanged.code(),
+                StateLocation::ApplyReleaseState.location(),
+            ));
         }
         let (key, object) = match &self.change {
             ReleaseChange::Freeze {
@@ -146,20 +150,24 @@ impl PreparedReleaseState {
             } => {
                 if !matches!(event.payload(), EventPayload::State(StatePayload::Migrated(value)) if value.migration() == migration)
                 {
-                    return Err(release_error("release_boundary_fact_mismatch"));
+                    return Err(release_error(StateCode::ReleaseBoundaryFactMismatch.code()));
                 }
                 self.store.require_release_boundary_absent(scope.sql())?;
                 let boundary =
                     actingcommand_ledger::read_release_baseline_source(&self.store.database, scope)
                         .map_err(release_source_error)?
-                        .ok_or_else(|| release_error("release_boundary_source_missing"))?;
+                        .ok_or_else(|| {
+                            release_error(StateCode::ReleaseBoundarySourceMissing.code())
+                        })?;
                 if boundary.sequence() != event.sequence()
                     || boundary.event_id() != event.event_id()
                 {
-                    return Err(release_error("release_boundary_source_mismatch"));
+                    return Err(release_error(
+                        StateCode::ReleaseBoundarySourceMismatch.code(),
+                    ));
                 }
                 if self.store.release_snapshot(scope.sql())? != *snapshot {
-                    return Err(release_error("release_baseline_changed"));
+                    return Err(release_error(StateCode::ReleaseBaselineChanged.code()));
                 }
                 let actual = self.store.migrate_document_in_transaction(
                     scope.sql(),
@@ -169,14 +177,16 @@ impl PreparedReleaseState {
                     payload,
                 )?;
                 if actual != *migration {
-                    return Err(release_error("release_boundary_migration_mismatch"));
+                    return Err(release_error(
+                        StateCode::ReleaseBoundaryMigrationMismatch.code(),
+                    ));
                 }
                 for member in &snapshot.members {
                     let bytes = encode(member)?;
                     self.store.write_projection_in_transaction(
                         scope.sql(),
                         MEMBERS,
-                        &member.key(),
+                        &member.entry_key(),
                         event.sequence(),
                         &bytes,
                         &sha256(&bytes),
@@ -188,10 +198,12 @@ impl PreparedReleaseState {
                 self.store.require_release_ready(scope)?;
                 if !matches!(event.payload(), EventPayload::Release(ReleasePayload::Staged(value)) if value.manifest() == manifest)
                 {
-                    return Err(release_error("release_stage_fact_mismatch"));
+                    return Err(release_error(StateCode::ReleaseStageFactMismatch.code()));
                 }
                 if query_release(scope.sql(), manifest.release_id())?.is_some() {
-                    return Err(release_error("release_generation_identity_conflict"));
+                    return Err(release_error(
+                        StateCode::ReleaseGenerationIdentityConflict.code(),
+                    ));
                 }
                 let bytes = encode(manifest)?;
                 let digest = manifest.manifest_sha256();
@@ -200,9 +212,9 @@ impl PreparedReleaseState {
                     &[manifest.release_id().as_bytes(), digest.as_bytes(), &bytes],
                 );
                 scope.sql().execute("INSERT INTO release_generations (release_id,manifest_json,manifest_sha256,integrity_tag) VALUES (?1,?2,?3,?4)", params![manifest.release_id(), bytes, digest, tag])
-                    .map_err(|_| release_error("release_generation_write_failed"))?;
+                    .map_err(|_| release_error(StateCode::ReleaseGenerationWriteFailed.code()))?;
                 let member = generation_member(manifest);
-                (member.key(), encode(&member)?)
+                (member.entry_key(), encode(&member)?)
             }
             ReleaseChange::Transition { preview, intent } => {
                 self.store.require_release_ready(scope)?;
@@ -210,7 +222,9 @@ impl PreparedReleaseState {
                 if intent.sequence() >= event.sequence()
                     || !matches!(intent.payload(), EventPayload::Release(ReleasePayload::TransitionIntent(value)) if value.transition() == &preview.data)
                 {
-                    return Err(release_error("release_intent_identity_mismatch"));
+                    return Err(release_error(
+                        StateCode::ReleaseIntentIdentityMismatch.code(),
+                    ));
                 }
                 let target = match preview.data.kind() {
                     ReleaseTransitionKind::Activate => {
@@ -223,30 +237,30 @@ impl PreparedReleaseState {
                 actingcommand_ledger::critical::validate_release_transaction_outcome(
                     target, intent, event, true,
                 )
-                .map_err(|_| release_error("release_critical_outcome_mismatch"))?;
+                .map_err(|_| release_error(StateCode::ReleaseCriticalOutcomeMismatch.code()))?;
                 let member = ReleaseBaselineMember::Transition(preview.data.clone());
                 validate_member_fact(&member, event, false)?;
                 self.store
                     .apply_release_transition_metadata(scope.sql(), preview)?;
-                (member.key(), encode(&member)?)
+                (member.entry_key(), encode(&member)?)
             }
             ReleaseChange::Legacy(member) => {
                 let baseline = self
                     .store
                     .read_release_baseline(scope)?
-                    .ok_or_else(|| release_error("release_boundary_missing"))?;
+                    .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
                 if !baseline.contains(member) {
-                    return Err(release_error("release_legacy_member_unknown"));
+                    return Err(release_error(StateCode::ReleaseLegacyMemberUnknown.code()));
                 }
                 validate_member_fact(member, event, true)?;
                 if self
                     .store
-                    .release_source(scope.sql(), &member.key())?
+                    .release_source(scope.sql(), &member.entry_key())?
                     .is_some()
                 {
-                    return Err(release_error("release_source_already_bound"));
+                    return Err(release_error(StateCode::ReleaseSourceAlreadyBound.code()));
                 }
-                (member.key(), encode(member)?)
+                (member.entry_key(), encode(member)?)
             }
         };
         self.store
@@ -274,13 +288,13 @@ impl PreparedReleaseState {
             ReleaseChange::Freeze { payload, .. } => ("boundary".to_owned(), payload.clone()),
             ReleaseChange::Stage(manifest) => {
                 let member = generation_member(manifest);
-                (member.key(), encode(&member)?)
+                (member.entry_key(), encode(&member)?)
             }
             ReleaseChange::Transition { preview, .. } => {
                 let member = ReleaseBaselineMember::Transition(preview.data.clone());
-                (member.key(), encode(&member)?)
+                (member.entry_key(), encode(&member)?)
             }
-            ReleaseChange::Legacy(member) => (member.key(), encode(member)?),
+            ReleaseChange::Legacy(member) => (member.entry_key(), encode(member)?),
         };
         let sequence = self.applied_sequence.load(Ordering::Acquire);
         if sequence != 0
@@ -296,9 +310,10 @@ impl PreparedReleaseState {
                     }
                 }
                 ReleaseChange::Transition { preview, .. } => {
-                    let active = self
-                        .store
-                        .read_active_release_metadata(scope.sql(), "observe_release_state")?;
+                    let active = self.store.read_active_release_metadata(
+                        scope.sql(),
+                        StateLocation::ObserveReleaseState.location(),
+                    )?;
                     if active.as_ref().is_none_or(|active| {
                         active.revision() != preview.data.pointer_revision()
                             || active.manifest().release_id() != preview.data.release_id()
@@ -325,7 +340,9 @@ impl PreparedReleaseState {
 
     fn require_owner(&self, scope: &RuntimeTransaction<'_, '_>) -> RuntimeStateResult<()> {
         if !scope.belongs_to(&self.store.database) {
-            return Err(release_error("state_transaction_owner_mismatch"));
+            return Err(release_error(
+                StateCode::StateTransactionOwnerMismatch.code(),
+            ));
         }
         Ok(())
     }
@@ -339,37 +356,42 @@ impl RuntimeStateStore {
         // Workflow #381 R4b: the whole-chain check runs first, on its own read snapshot, so the
         // shared connection (and with it every Ledger append) is never held for its length.
         let boundary = self.read_release_baseline_snapshot()?;
-        let mut connection = self.connection("prepare_release_boundary")?;
+        let mut connection = self.connection(StateLocation::PrepareReleaseBoundary.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         if self.read_release_baseline(&scope)?.is_some() {
-            let fact = fact.ok_or_else(|| release_error("release_boundary_source_missing"))?;
-            let boundary =
-                boundary.ok_or_else(|| release_error("release_boundary_source_missing"))?;
+            let fact =
+                fact.ok_or_else(|| release_error(StateCode::ReleaseBoundarySourceMissing.code()))?;
+            let boundary = boundary
+                .ok_or_else(|| release_error(StateCode::ReleaseBoundarySourceMissing.code()))?;
             if boundary.sequence() != fact.sequence() || boundary.event_id() != fact.event_id() {
-                return Err(release_error("release_boundary_source_mismatch"));
+                return Err(release_error(
+                    StateCode::ReleaseBoundarySourceMismatch.code(),
+                ));
             }
             verify_fact(&self.database, &scope, fact)?;
             let document = self
                 .read_boundary_document(&transaction)?
-                .ok_or_else(|| release_error("release_boundary_missing"))?;
+                .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
             let expected = boundary_migration(document.payload())?;
             if !matches!(fact.payload(), EventPayload::State(StatePayload::Migrated(value)) if value.migration() == &expected)
             {
-                return Err(release_error("release_boundary_fact_mismatch"));
+                return Err(release_error(StateCode::ReleaseBoundaryFactMismatch.code()));
             }
             let source = self
                 .verify_release_source(&scope, "boundary", document.payload())?
-                .ok_or_else(|| release_error("release_boundary_source_missing"))?;
+                .ok_or_else(|| release_error(StateCode::ReleaseBoundarySourceMissing.code()))?;
             if source.ledger_sequence() != fact.sequence() {
-                return Err(release_error("release_boundary_source_mismatch"));
+                return Err(release_error(
+                    StateCode::ReleaseBoundarySourceMismatch.code(),
+                ));
             }
             return Ok(None);
         }
         if fact.is_some() || boundary.is_some() {
-            return Err(release_error("release_boundary_state_missing"));
+            return Err(release_error(StateCode::ReleaseBoundaryStateMissing.code()));
         }
         self.require_release_boundary_absent(&transaction)?;
         let snapshot = self.release_snapshot(&transaction)?;
@@ -397,26 +419,33 @@ impl RuntimeStateStore {
         manifest: &RuntimeReleaseSet,
         sources: &ReleaseArtifactSources,
     ) -> RuntimeStateResult<Option<PreparedReleaseState>> {
-        manifest
-            .validate()
-            .map_err(|_| request("release_manifest_invalid", "stage_release"))?;
-        let mut connection = self.connection("prepare_release_stage")?;
+        manifest.validate().map_err(|_| {
+            request(
+                StateCode::ReleaseManifestInvalid.code(),
+                StateLocation::StageRelease.location(),
+            )
+        })?;
+        let mut connection = self.connection(StateLocation::PrepareReleaseStage.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         self.require_release_ready(&scope)?;
         let existing = query_release(&transaction, manifest.release_id())?
-            .map(|row| self.validate_release_metadata(row, "prepare_release_stage"))
+            .map(|row| {
+                self.validate_release_metadata(row, StateLocation::PrepareReleaseStage.location())
+            })
             .transpose()?;
         if existing.as_ref().is_some_and(|value| value != manifest) {
-            return Err(release_error("release_generation_identity_conflict"));
+            return Err(release_error(
+                StateCode::ReleaseGenerationIdentityConflict.code(),
+            ));
         }
         let before = self.release_fingerprint(&transaction)?;
         drop(transaction);
         drop(connection);
         self.publish_release_artifacts(manifest, sources)?;
-        self.verify_release_artifacts(manifest, "prepare_release_stage")?;
+        self.verify_release_artifacts(manifest, StateLocation::PrepareReleaseStage.location())?;
         if existing.is_some() {
             return Ok(None);
         }
@@ -433,27 +462,45 @@ impl RuntimeStateStore {
         preview: &ReleaseTransitionPreview,
         intent: &PersistedEvent,
     ) -> RuntimeStateResult<PreparedReleaseState> {
-        preview
-            .data
-            .validate()
-            .map_err(|_| request("release_transition_invalid", "prepare_release_transition"))?;
-        let mut connection = self.connection("prepare_release_transition")?;
+        preview.data.validate().map_err(|_| {
+            request(
+                StateCode::ReleaseTransitionInvalid.code(),
+                StateLocation::PrepareReleaseTransition.location(),
+            )
+        })?;
+        let mut connection = self.connection(StateLocation::PrepareReleaseTransition.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         self.require_release_ready(&scope)?;
-        let manifest = query_release(&transaction, preview.data.release_id())?
-            .ok_or_else(|| request("release_generation_unknown", "prepare_release_transition"))?;
-        let manifest = self.validate_release_metadata(manifest, "prepare_release_transition")?;
-        let active =
-            self.read_active_release_metadata(&transaction, "prepare_release_transition")?;
+        let manifest =
+            query_release(&transaction, preview.data.release_id())?.ok_or_else(|| {
+                request(
+                    StateCode::ReleaseGenerationUnknown.code(),
+                    StateLocation::PrepareReleaseTransition.location(),
+                )
+            })?;
+        let manifest = self.validate_release_metadata(
+            manifest,
+            StateLocation::PrepareReleaseTransition.location(),
+        )?;
+        let active = self.read_active_release_metadata(
+            &transaction,
+            StateLocation::PrepareReleaseTransition.location(),
+        )?;
         let before = self.release_fingerprint(&transaction)?;
         drop(transaction);
         drop(connection);
-        self.verify_release_artifacts(&manifest, "prepare_release_transition")?;
+        self.verify_release_artifacts(
+            &manifest,
+            StateLocation::PrepareReleaseTransition.location(),
+        )?;
         if let Some(active) = active {
-            self.verify_release_artifacts(active.manifest(), "prepare_release_transition")?;
+            self.verify_release_artifacts(
+                active.manifest(),
+                StateLocation::PrepareReleaseTransition.location(),
+            )?;
         }
         Ok(PreparedReleaseState {
             store: Arc::clone(self),
@@ -478,10 +525,10 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<Option<actingcommand_ledger::VerifiedReleaseLedgerSource>> {
         let mut connection = self
             .database
-            .read_snapshot_connection("read_release_baseline_snapshot")?;
+            .read_snapshot_connection(StateLocation::ReadReleaseBaselineSnapshot.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let source = actingcommand_ledger::read_release_baseline_source(
             &self.database,
             &self.database.borrow_transaction(&transaction),
@@ -497,14 +544,14 @@ impl RuntimeStateStore {
     }
 
     pub fn release_baseline_members(&self) -> RuntimeStateResult<Vec<ReleaseBaselineMember>> {
-        let mut connection = self.connection("read_release_baseline")?;
+        let mut connection = self.connection(StateLocation::ReadReleaseBaseline.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         let baseline = self
             .read_release_baseline(&scope)?
-            .ok_or_else(|| release_error("release_boundary_missing"))?;
+            .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
         Ok(baseline
             .members
             .into_iter()
@@ -516,12 +563,13 @@ impl RuntimeStateStore {
         &self,
         release_id: &str,
     ) -> RuntimeStateResult<RuntimeReleaseSet> {
-        let connection = self.connection("read_release_generation")?;
+        let connection = self.connection(StateLocation::ReadReleaseGeneration.location())?;
         let row = query_release(&connection, release_id)?
-            .ok_or_else(|| release_error("release_generation_missing"))?;
-        let manifest = self.validate_release_metadata(row, "read_release_generation")?;
+            .ok_or_else(|| release_error(StateCode::ReleaseGenerationMissing.code()))?;
+        let manifest =
+            self.validate_release_metadata(row, StateLocation::ReadReleaseGeneration.location())?;
         drop(connection);
-        self.verify_release_artifacts(&manifest, "read_release_generation")?;
+        self.verify_release_artifacts(&manifest, StateLocation::ReadReleaseGeneration.location())?;
         Ok(manifest)
     }
 
@@ -530,36 +578,40 @@ impl RuntimeStateStore {
         member: &ReleaseBaselineMember,
         fact: Option<&PersistedEvent>,
     ) -> RuntimeStateResult<Option<PreparedReleaseState>> {
-        let mut connection = self.connection("prepare_release_legacy_member")?;
+        let mut connection =
+            self.connection(StateLocation::PrepareReleaseLegacyMember.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         let baseline = self
             .read_release_baseline(&scope)?
-            .ok_or_else(|| release_error("release_boundary_missing"))?;
+            .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
         if !member.has_fact() || !baseline.contains(member) {
-            return Err(release_error("release_legacy_member_unknown"));
+            return Err(release_error(StateCode::ReleaseLegacyMemberUnknown.code()));
         }
         let object = encode(member)?;
-        let source = self.verify_release_source(&scope, &member.key(), &object)?;
+        let source = self.verify_release_source(&scope, &member.entry_key(), &object)?;
         if let Some(fact) = fact {
             validate_member_fact(member, fact, true)?;
             verify_fact(&self.database, &scope, fact)?;
             if let Some(source) = source {
                 if source.ledger_sequence() != fact.sequence() {
-                    return Err(release_error("release_source_identity_conflict"));
+                    return Err(release_error(
+                        StateCode::ReleaseSourceIdentityConflict.code(),
+                    ));
                 }
             } else {
-                self.bind_release_source(&scope, &member.key(), &object, fact)?;
+                self.bind_release_source(&scope, &member.entry_key(), &object, fact)?;
             }
             transaction.commit().map_err(|error| {
-                release_error("state_transaction_commit_failed").with_detail(error.to_string())
+                release_error(StateCode::StateTransactionCommitFailed.code())
+                    .with_detail(error.to_string())
             })?;
             return Ok(None);
         }
         if source.is_some() {
-            return Err(release_error("release_source_fact_missing"));
+            return Err(release_error(StateCode::ReleaseSourceFactMissing.code()));
         }
         let before = self.release_fingerprint(&transaction)?;
         Ok(Some(PreparedReleaseState {
@@ -571,30 +623,33 @@ impl RuntimeStateStore {
     }
 
     pub fn verify_release_atomic_ready(&self) -> RuntimeStateResult<()> {
-        let mut connection = self.connection("verify_release_atomic_ready")?;
+        let mut connection = self.connection(StateLocation::VerifyReleaseAtomicReady.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         self.require_release_ready(&self.database.borrow_transaction(&transaction))
     }
 
     pub fn verify_release_committed_fact(&self, event: &PersistedEvent) -> RuntimeStateResult<()> {
-        let mut connection = self.connection("verify_release_fact")?;
+        let mut connection = self.connection(StateLocation::VerifyReleaseFact.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         let scope = self.database.borrow_transaction(&transaction);
         verify_fact(&self.database, &scope, event)?;
         let baseline = self
             .read_release_baseline(&scope)?
-            .ok_or_else(|| release_error("release_boundary_missing"))?;
+            .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
         let member = match event.payload() {
             EventPayload::Release(ReleasePayload::Staged(value)) => {
                 let row = query_release(&transaction, value.manifest().release_id())?
-                    .ok_or_else(|| release_error("release_generation_missing"))?;
-                let manifest = self.validate_release_metadata(row, "verify_release_fact")?;
+                    .ok_or_else(|| release_error(StateCode::ReleaseGenerationMissing.code()))?;
+                let manifest = self
+                    .validate_release_metadata(row, StateLocation::VerifyReleaseFact.location())?;
                 if &manifest != value.manifest() {
-                    return Err(release_error("release_source_payload_mismatch"));
+                    return Err(release_error(
+                        StateCode::ReleaseSourcePayloadMismatch.code(),
+                    ));
                 }
                 generation_member(&manifest)
             }
@@ -603,28 +658,35 @@ impl RuntimeStateStore {
             ) => {
                 let row =
                     query_release_transition(&transaction, value.transition().transition_id())?
-                        .ok_or_else(|| release_error("release_transition_missing"))?;
-                ReleaseBaselineMember::Transition(
-                    self.validate_release_transition_row(&row, "verify_release_fact")?,
-                )
+                        .ok_or_else(|| release_error(StateCode::ReleaseTransitionMissing.code()))?;
+                ReleaseBaselineMember::Transition(self.validate_release_transition_row(
+                    &row,
+                    StateLocation::VerifyReleaseFact.location(),
+                )?)
             }
-            _ => return Err(release_error("release_source_payload_mismatch")),
+            _ => {
+                return Err(release_error(
+                    StateCode::ReleaseSourcePayloadMismatch.code(),
+                ));
+            }
         };
         validate_member_fact(&member, event, baseline.contains(&member))?;
         let source = self
-            .verify_release_source(&scope, &member.key(), &encode(&member)?)?
-            .ok_or_else(|| release_error("release_source_unclosed"))?;
+            .verify_release_source(&scope, &member.entry_key(), &encode(&member)?)?
+            .ok_or_else(|| release_error(StateCode::ReleaseSourceUnclosed.code()))?;
         if source.ledger_sequence() != event.sequence() {
-            return Err(release_error("release_source_identity_conflict"));
+            return Err(release_error(
+                StateCode::ReleaseSourceIdentityConflict.code(),
+            ));
         }
         Ok(())
     }
 
     pub(super) fn require_legacy_release_writer(&self) -> RuntimeStateResult<()> {
-        let mut connection = self.connection("authorize_release_write")?;
+        let mut connection = self.connection(StateLocation::AuthorizeReleaseWrite.location())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error("state_transaction_begin_failed"))?;
+            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
         self.require_legacy_release_connection(&self.database.borrow_transaction(&transaction))
     }
 
@@ -636,8 +698,8 @@ impl RuntimeStateStore {
         self.require_release_boundary_absent(connection)?;
         if self.release_boundary_fact_exists(scope)? {
             return Err(request(
-                "release_transaction_owner_required",
-                "authorize_release_write",
+                StateCode::ReleaseTransactionOwnerRequired.code(),
+                StateLocation::AuthorizeReleaseWrite.location(),
             ));
         }
         Ok(())
@@ -658,15 +720,15 @@ impl RuntimeStateStore {
     fn require_release_ready(&self, scope: &RuntimeTransaction<'_, '_>) -> RuntimeStateResult<()> {
         let connection = scope.sql();
         self.read_release_baseline(scope)?
-            .ok_or_else(|| release_error("release_boundary_missing"))?;
+            .ok_or_else(|| release_error(StateCode::ReleaseBoundaryMissing.code()))?;
         let current = self.release_snapshot(connection)?;
         for member in &current.members {
             if member.has_fact()
                 && self
-                    .verify_release_source(scope, &member.key(), &encode(member)?)?
+                    .verify_release_source(scope, &member.entry_key(), &encode(member)?)?
                     .is_none()
             {
-                return Err(release_error("release_source_unclosed"));
+                return Err(release_error(StateCode::ReleaseSourceUnclosed.code()));
             }
         }
         let source_count: i64 = connection
@@ -675,7 +737,7 @@ impl RuntimeStateStore {
                 [SOURCES],
                 |row| row.get(0),
             )
-            .map_err(|_| release_error("release_source_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseSourceQueryFailed.code()))?;
         let expected = current
             .members
             .iter()
@@ -683,7 +745,7 @@ impl RuntimeStateStore {
             .count()
             + 1;
         if source_count != expected as i64 {
-            return Err(release_error("release_source_set_mismatch"));
+            return Err(release_error(StateCode::ReleaseSourceSetMismatch.code()));
         }
         Ok(())
     }
@@ -693,14 +755,18 @@ impl RuntimeStateStore {
         connection: &Connection,
     ) -> RuntimeStateResult<Option<StateDocument>> {
         query_document(connection, RELEASE_BASELINE_STATE_KEY)?
-            .map(|row| self.validate_document_row(row, "read_release_boundary"))
+            .map(|row| {
+                self.validate_document_row(row, StateLocation::ReadReleaseBoundary.location())
+            })
             .transpose()
     }
 
     fn require_release_boundary_absent(&self, connection: &Connection) -> RuntimeStateResult<()> {
-        let count: i64 = connection.query_row("SELECT (SELECT COUNT(*) FROM state_documents WHERE state_key=?1) + (SELECT COUNT(*) FROM state_document_history WHERE state_key=?1) + (SELECT COUNT(*) FROM state_migrations WHERE json_extract(data_json,'$.state_key')=?1) + (SELECT COUNT(*) FROM projection_entries WHERE namespace IN (?2,?3))", params![RELEASE_BASELINE_STATE_KEY, MEMBERS, SOURCES], |row| row.get(0)).map_err(|_| release_error("release_boundary_query_failed"))?;
+        let count: i64 = connection.query_row("SELECT (SELECT COUNT(*) FROM state_documents WHERE state_key=?1) + (SELECT COUNT(*) FROM state_document_history WHERE state_key=?1) + (SELECT COUNT(*) FROM state_migrations WHERE json_extract(data_json,'$.state_key')=?1) + (SELECT COUNT(*) FROM projection_entries WHERE namespace IN (?2,?3))", params![RELEASE_BASELINE_STATE_KEY, MEMBERS, SOURCES], |row| row.get(0)).map_err(|_| release_error(StateCode::ReleaseBoundaryQueryFailed.code()))?;
         if count != 0 {
-            return Err(release_error("release_boundary_already_present"));
+            return Err(release_error(
+                StateCode::ReleaseBoundaryAlreadyPresent.code(),
+            ));
         }
         Ok(())
     }
@@ -720,7 +786,9 @@ impl RuntimeStateStore {
         key: &str,
     ) -> RuntimeStateResult<Option<ProjectionEntry>> {
         query_projection_entry(connection, SOURCES, key)?
-            .map(|row| self.validate_projection_row(row, "read_release_source"))
+            .map(|row| {
+                self.validate_projection_row(row, StateLocation::ReadReleaseSource.location())
+            })
             .transpose()
     }
 
@@ -741,7 +809,9 @@ impl RuntimeStateStore {
         };
         let payload = encode(&source)?;
         if self.release_source(scope.sql(), key)?.is_some() {
-            return Err(release_error("release_source_identity_conflict"));
+            return Err(release_error(
+                StateCode::ReleaseSourceIdentityConflict.code(),
+            ));
         }
         self.write_projection_in_transaction(
             scope.sql(),
@@ -777,22 +847,28 @@ impl RuntimeStateStore {
             || verified.origin().module() != OriginModule::Runtime
             || verified.origin().actor() != EventActor::Runtime
         {
-            return Err(release_error("release_source_fact_mismatch"));
+            return Err(release_error(StateCode::ReleaseSourceFactMismatch.code()));
         }
         if key == "boundary" {
             let expected = boundary_migration(object)?;
             if !matches!(verified.payload(), EventPayload::State(StatePayload::Migrated(value)) if value.migration() == &expected)
             {
-                return Err(release_error("release_boundary_source_mismatch"));
+                return Err(release_error(
+                    StateCode::ReleaseBoundarySourceMismatch.code(),
+                ));
             }
         } else {
             let member: ReleaseBaselineMember = decode(object)?;
             let legacy = query_projection_entry(connection, MEMBERS, key)?
-                .map(|row| self.validate_projection_row(row, "verify_release_source"))
+                .map(|row| {
+                    self.validate_projection_row(row, StateLocation::VerifyReleaseSource.location())
+                })
                 .transpose()?
                 .is_some_and(|entry| entry.payload() == object);
-            if member.key() != key {
-                return Err(release_error("release_source_identity_conflict"));
+            if member.entry_key() != key {
+                return Err(release_error(
+                    StateCode::ReleaseSourceIdentityConflict.code(),
+                ));
             }
             validate_member_payload(&member, verified.payload(), legacy)?;
         }
@@ -800,30 +876,32 @@ impl RuntimeStateStore {
     }
 
     fn release_snapshot(&self, connection: &Connection) -> RuntimeStateResult<ReleaseSnapshot> {
-        let count: i64 = connection.query_row("SELECT (SELECT COUNT(*) FROM release_generations) + (SELECT COUNT(*) FROM release_transitions) + (SELECT COUNT(*) FROM release_pointer_history)", [], |row| row.get(0)).map_err(|_| release_error("release_baseline_query_failed"))?;
+        let count: i64 = connection.query_row("SELECT (SELECT COUNT(*) FROM release_generations) + (SELECT COUNT(*) FROM release_transitions) + (SELECT COUNT(*) FROM release_pointer_history)", [], |row| row.get(0)).map_err(|_| release_error(StateCode::ReleaseBaselineQueryFailed.code()))?;
         if count < 0 || count > MAX_MEMBERS as i64 {
-            return Err(release_error("release_baseline_member_limit"));
+            return Err(release_error(StateCode::ReleaseBaselineMemberLimit.code()));
         }
-        let oversized: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM release_generations WHERE length(manifest_json)>?1) OR EXISTS(SELECT 1 FROM release_transitions WHERE length(data_json)>?2)", params![MAX_STATE_DOCUMENT_BYTES as i64, MAX_PROJECTION_ENTRY_BYTES as i64], |row| row.get(0)).map_err(|_| release_error("release_baseline_query_failed"))?;
+        let oversized: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM release_generations WHERE length(manifest_json)>?1) OR EXISTS(SELECT 1 FROM release_transitions WHERE length(data_json)>?2)", params![MAX_STATE_DOCUMENT_BYTES as i64, MAX_PROJECTION_ENTRY_BYTES as i64], |row| row.get(0)).map_err(|_| release_error(StateCode::ReleaseBaselineQueryFailed.code()))?;
         if oversized {
-            return Err(release_error("release_baseline_member_size_invalid"));
+            return Err(release_error(
+                StateCode::ReleaseBaselineMemberSizeInvalid.code(),
+            ));
         }
         let mut members = Vec::with_capacity(count as usize);
         let mut generations = BTreeMap::new();
-        let mut statement = connection.prepare("SELECT release_id,manifest_json,manifest_sha256,integrity_tag FROM release_generations ORDER BY release_id").map_err(|_| release_error("release_generation_query_failed"))?;
+        let mut statement = connection.prepare("SELECT release_id,manifest_json,manifest_sha256,integrity_tag FROM release_generations ORDER BY release_id").map_err(|_| release_error(StateCode::ReleaseGenerationQueryFailed.code()))?;
         let rows = statement
             .query_map([], map_release_row)
-            .map_err(|_| release_error("release_generation_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseGenerationQueryFailed.code()))?;
         for row in rows {
             let manifest = self.validate_release_metadata(
-                row.map_err(|_| release_error("release_generation_read_failed"))?,
-                "release_baseline",
+                row.map_err(|_| release_error(StateCode::ReleaseGenerationReadFailed.code()))?,
+                StateLocation::ReleaseBaseline.location(),
             )?;
             generations.insert(manifest.release_id().to_owned(), manifest.manifest_sha256());
             members.push(generation_member(&manifest));
         }
         let mut transitions = BTreeMap::new();
-        let mut statement = connection.prepare("SELECT transition_id,data_json,integrity_tag FROM release_transitions ORDER BY transition_id").map_err(|_| release_error("release_transition_query_failed"))?;
+        let mut statement = connection.prepare("SELECT transition_id,data_json,integrity_tag FROM release_transitions ORDER BY transition_id").map_err(|_| release_error(StateCode::ReleaseTransitionQueryFailed.code()))?;
         let rows = statement
             .query_map([], |row| {
                 Ok(TransitionRow {
@@ -832,11 +910,11 @@ impl RuntimeStateStore {
                     integrity_tag: row.get(2)?,
                 })
             })
-            .map_err(|_| release_error("release_transition_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseTransitionQueryFailed.code()))?;
         for row in rows {
             let data = self.validate_release_transition_row(
-                &row.map_err(|_| release_error("release_transition_read_failed"))?,
-                "release_baseline",
+                &row.map_err(|_| release_error(StateCode::ReleaseTransitionReadFailed.code()))?,
+                StateLocation::ReleaseBaseline.location(),
             )?;
             if generations.get(data.release_id()).map(String::as_str)
                 != Some(data.manifest_sha256())
@@ -854,11 +932,13 @@ impl RuntimeStateStore {
                     .insert(data.pointer_revision(), data.clone())
                     .is_some()
             {
-                return Err(release_error("release_transition_history_conflict"));
+                return Err(release_error(
+                    StateCode::ReleaseTransitionHistoryConflict.code(),
+                ));
             }
             members.push(ReleaseBaselineMember::Transition(data));
         }
-        let mut statement = connection.prepare("SELECT revision,release_id,previous_release_id,integrity_tag FROM release_pointer_history ORDER BY revision").map_err(|_| release_error("release_history_query_failed"))?;
+        let mut statement = connection.prepare("SELECT revision,release_id,previous_release_id,integrity_tag FROM release_pointer_history ORDER BY revision").map_err(|_| release_error(StateCode::ReleaseHistoryQueryFailed.code()))?;
         let rows = statement
             .query_map([], |row| {
                 Ok(PointerRow {
@@ -868,17 +948,18 @@ impl RuntimeStateStore {
                     integrity_tag: row.get(3)?,
                 })
             })
-            .map_err(|_| release_error("release_history_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseHistoryQueryFailed.code()))?;
         let mut previous: Option<String> = None;
         let mut active = None;
         let mut next_revision = 1_u64;
         let mut seen = BTreeSet::new();
         for row in rows {
-            let pointer = row.map_err(|_| release_error("release_history_read_failed"))?;
-            self.validate_pointer_row(&pointer, "release_baseline")?;
+            let pointer =
+                row.map_err(|_| release_error(StateCode::ReleaseHistoryReadFailed.code()))?;
+            self.validate_pointer_row(&pointer, StateLocation::ReleaseBaseline.location())?;
             let transition = transitions
                 .remove(&pointer.revision)
-                .ok_or_else(|| release_error("release_history_transition_missing"))?;
+                .ok_or_else(|| release_error(StateCode::ReleaseHistoryTransitionMissing.code()))?;
             if pointer.revision != next_revision
                 || pointer.previous_release_id != previous
                 || pointer.release_id == previous.as_deref().unwrap_or("")
@@ -887,11 +968,13 @@ impl RuntimeStateStore {
                 || (transition.kind() == ReleaseTransitionKind::Rollback
                     && !seen.contains(&pointer.release_id))
             {
-                return Err(release_error("release_pointer_history_conflict"));
+                return Err(release_error(
+                    StateCode::ReleasePointerHistoryConflict.code(),
+                ));
             }
             next_revision = next_revision
                 .checked_add(1)
-                .ok_or_else(|| release_error("release_pointer_revision_overflow"))?;
+                .ok_or_else(|| release_error(StateCode::ReleasePointerRevisionOverflow.code()))?;
             previous = Some(pointer.release_id.clone());
             seen.insert(pointer.release_id.clone());
             let member = ReleaseBaselineMember::Pointer {
@@ -903,11 +986,13 @@ impl RuntimeStateStore {
             members.push(member);
         }
         if !transitions.is_empty() {
-            return Err(release_error("release_transition_pointer_missing"));
+            return Err(release_error(
+                StateCode::ReleaseTransitionPointerMissing.code(),
+            ));
         }
         let current = query_pointer(connection)?
             .map(|pointer| {
-                self.validate_pointer_row(&pointer, "release_baseline")?;
+                self.validate_pointer_row(&pointer, StateLocation::ReleaseBaseline.location())?;
                 Ok::<_, RuntimeStateError>(ReleaseBaselineMember::Pointer {
                     revision: pointer.revision,
                     release_id: pointer.release_id,
@@ -916,11 +1001,13 @@ impl RuntimeStateStore {
             })
             .transpose()?;
         if current != active {
-            return Err(release_error("release_active_history_mismatch"));
+            return Err(release_error(
+                StateCode::ReleaseActiveHistoryMismatch.code(),
+            ));
         }
-        members.sort_by_key(ReleaseBaselineMember::key);
+        members.sort_by_key(ReleaseBaselineMember::entry_key);
         for member in &members {
-            validate_projection_input(MEMBERS, &member.key(), 1, &encode(member)?)?;
+            validate_projection_input(MEMBERS, &member.entry_key(), 1, &encode(member)?)?;
         }
         Ok(ReleaseSnapshot { members, active })
     }
@@ -933,7 +1020,7 @@ impl RuntimeStateStore {
         let Some(document) = self.read_boundary_document(connection)? else {
             self.require_release_boundary_absent(connection)?;
             if self.release_boundary_fact_exists(scope)? {
-                return Err(release_error("release_boundary_state_missing"));
+                return Err(release_error(StateCode::ReleaseBoundaryStateMissing.code()));
             }
             return Ok(None);
         };
@@ -943,9 +1030,9 @@ impl RuntimeStateStore {
                 [RELEASE_BASELINE_STATE_KEY],
                 |row| row.get(0),
             )
-            .map_err(|_| release_error("release_boundary_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseBoundaryQueryFailed.code()))?;
         let history = query_document_revision(connection, RELEASE_BASELINE_STATE_KEY, 1)?
-            .map(|row| self.validate_document_row(row, "release_boundary"))
+            .map(|row| self.validate_document_row(row, StateLocation::ReleaseBoundary.location()))
             .transpose()?;
         if document.schema_version() != TO_SCHEMA
             || document.revision() != 1
@@ -953,40 +1040,48 @@ impl RuntimeStateStore {
             || history_count != 1
             || history.as_ref() != Some(&document)
         {
-            return Err(release_error("release_boundary_history_conflict"));
+            return Err(release_error(
+                StateCode::ReleaseBoundaryHistoryConflict.code(),
+            ));
         }
         let expected = boundary_migration(document.payload())?;
         let migration = query_migration(connection, expected.migration_id())?
-            .ok_or_else(|| release_error("release_boundary_migration_missing"))?;
-        let migrations: i64 = connection.query_row("SELECT COUNT(*) FROM state_migrations WHERE json_extract(data_json,'$.state_key')=?1", [RELEASE_BASELINE_STATE_KEY], |row| row.get(0)).map_err(|_| release_error("release_boundary_query_failed"))?;
+            .ok_or_else(|| release_error(SharedCode::ReleaseBoundaryMigrationMissing.code()))?;
+        let migrations: i64 = connection.query_row("SELECT COUNT(*) FROM state_migrations WHERE json_extract(data_json,'$.state_key')=?1", [RELEASE_BASELINE_STATE_KEY], |row| row.get(0)).map_err(|_| release_error(StateCode::ReleaseBoundaryQueryFailed.code()))?;
         if migrations != 1
             || self
-                .validate_migration_row(&migration, "release_boundary")?
+                .validate_migration_row(&migration, StateLocation::ReleaseBoundary.location())?
                 .data
                 != expected
         {
-            return Err(release_error("release_boundary_migration_conflict"));
+            return Err(release_error(
+                StateCode::ReleaseBoundaryMigrationConflict.code(),
+            ));
         }
         let source = self
             .verify_release_source(scope, "boundary", document.payload())?
-            .ok_or_else(|| release_error("release_boundary_source_missing"))?;
+            .ok_or_else(|| release_error(StateCode::ReleaseBoundarySourceMissing.code()))?;
         let summary: BaselineSummary = decode(document.payload())?;
         if summary.members > MAX_MEMBERS {
-            return Err(release_error("release_baseline_member_limit"));
+            return Err(release_error(StateCode::ReleaseBaselineMemberLimit.code()));
         }
         let entries = self.release_projection_entries(connection, MEMBERS)?;
         if entries.len() != summary.members {
-            return Err(release_error("release_baseline_members_missing"));
+            return Err(release_error(
+                StateCode::ReleaseBaselineMembersMissing.code(),
+            ));
         }
         let mut members = Vec::with_capacity(entries.len());
         let current = self.release_snapshot(connection)?;
         for entry in entries {
             let member: ReleaseBaselineMember = decode(entry.payload())?;
-            if entry.entry_key() != member.key()
+            if entry.entry_key() != member.entry_key()
                 || entry.ledger_sequence() != source.ledger_sequence()
                 || !current.contains(&member)
             {
-                return Err(release_error("release_baseline_member_conflict"));
+                return Err(release_error(
+                    StateCode::ReleaseBaselineMemberConflict.code(),
+                ));
             }
             members.push(member);
         }
@@ -995,7 +1090,9 @@ impl RuntimeStateStore {
             active: summary.active.clone(),
         };
         if snapshot.summary()? != summary {
-            return Err(release_error("release_baseline_digest_mismatch"));
+            return Err(release_error(
+                StateCode::ReleaseBaselineDigestMismatch.code(),
+            ));
         }
         let latest = snapshot
             .members
@@ -1007,7 +1104,9 @@ impl RuntimeStateStore {
             .max_by_key(|(revision, _)| *revision)
             .map(|(_, member)| member.clone());
         if latest != snapshot.active {
-            return Err(release_error("release_baseline_active_mismatch"));
+            return Err(release_error(
+                StateCode::ReleaseBaselineActiveMismatch.code(),
+            ));
         }
         Ok(Some(snapshot))
     }
@@ -1017,14 +1116,16 @@ impl RuntimeStateStore {
         connection: &Connection,
         namespace: &str,
     ) -> RuntimeStateResult<Vec<ProjectionEntry>> {
-        let (count, largest): (i64, i64) = connection.query_row("SELECT COUNT(*),COALESCE(MAX(length(payload)),0) FROM projection_entries WHERE namespace=?1", [namespace], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| release_error("release_projection_query_failed"))?;
+        let (count, largest): (i64, i64) = connection.query_row("SELECT COUNT(*),COALESCE(MAX(length(payload)),0) FROM projection_entries WHERE namespace=?1", [namespace], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|_| release_error(StateCode::ReleaseProjectionQueryFailed.code()))?;
         if count < 0
             || count > (MAX_MEMBERS + 1) as i64
             || largest > MAX_PROJECTION_ENTRY_BYTES as i64
         {
-            return Err(release_error("release_projection_size_invalid"));
+            return Err(release_error(
+                StateCode::ReleaseProjectionSizeInvalid.code(),
+            ));
         }
-        let mut statement = connection.prepare("SELECT namespace,entry_key,ledger_sequence,payload,payload_sha256,integrity_tag FROM projection_entries WHERE namespace=?1 ORDER BY entry_key").map_err(|_| release_error("release_projection_query_failed"))?;
+        let mut statement = connection.prepare("SELECT namespace,entry_key,ledger_sequence,payload,payload_sha256,integrity_tag FROM projection_entries WHERE namespace=?1 ORDER BY entry_key").map_err(|_| release_error(StateCode::ReleaseProjectionQueryFailed.code()))?;
         let rows = statement
             .query_map([namespace], |row| {
                 Ok(ProjectionRow {
@@ -1036,11 +1137,11 @@ impl RuntimeStateStore {
                     integrity_tag: row.get(5)?,
                 })
             })
-            .map_err(|_| release_error("release_projection_query_failed"))?;
+            .map_err(|_| release_error(StateCode::ReleaseProjectionQueryFailed.code()))?;
         rows.map(|row| {
             self.validate_projection_row(
-                row.map_err(|_| release_error("release_projection_read_failed"))?,
-                "release_state",
+                row.map_err(|_| release_error(StateCode::ReleaseProjectionReadFailed.code()))?,
+                StateLocation::ReleaseState.location(),
             )
         })
         .collect()
@@ -1077,7 +1178,7 @@ impl RuntimeStateStore {
             {
                 let manifest = self.release_generation_manifest(release_id)?;
                 if manifest.manifest_sha256() != *manifest_sha256 {
-                    return Err(release_error("release_baseline_changed"));
+                    return Err(release_error(StateCode::ReleaseBaselineChanged.code()));
                 }
             }
         }
@@ -1088,8 +1189,8 @@ impl RuntimeStateStore {
 pub(super) fn reject_release_key(key: &str) -> RuntimeStateResult<()> {
     if key == RELEASE_BASELINE_STATE_KEY {
         return Err(request(
-            "release_state_owner_required",
-            "write_state_document",
+            StateCode::ReleaseStateOwnerRequired.code(),
+            ContractLocation::WriteStateDocument.location(),
         ));
     }
     Ok(())
@@ -1098,8 +1199,8 @@ pub(super) fn reject_release_key(key: &str) -> RuntimeStateResult<()> {
 pub(super) fn reject_release_namespace(namespace: &str) -> RuntimeStateResult<()> {
     if matches!(namespace, MEMBERS | SOURCES) {
         return Err(request(
-            "release_state_owner_required",
-            "write_projection_entry",
+            StateCode::ReleaseStateOwnerRequired.code(),
+            StateLocation::WriteProjectionEntry.location(),
         ));
     }
     Ok(())
@@ -1123,7 +1224,7 @@ fn boundary_migration(payload: &[u8]) -> RuntimeStateResult<StateMigrationData> 
         StateValidationResult::Passed,
         StateRecoveryAction::ImportedLegacy,
     )
-    .map_err(|_| release_error("release_boundary_migration_invalid"))
+    .map_err(|_| release_error(StateCode::ReleaseBoundaryMigrationInvalid.code()))
 }
 
 fn verify_fact(
@@ -1135,7 +1236,7 @@ fn verify_fact(
         || event.origin().module() != OriginModule::Runtime
         || event.origin().actor() != EventActor::Runtime
     {
-        return Err(release_error("release_source_origin_invalid"));
+        return Err(release_error(StateCode::ReleaseSourceOriginInvalid.code()));
     }
     actingcommand_ledger::verify_transaction_event(database, scope, event)
         .map_err(release_source_error)
@@ -1155,7 +1256,7 @@ fn validate_member_payload(
     legacy: bool,
 ) -> RuntimeStateResult<()> {
     if payload.effect_disposition() != Some(actingcommand_contract::EffectDisposition::Performed) {
-        return Err(release_error("release_source_effect_mismatch"));
+        return Err(release_error(StateCode::ReleaseSourceEffectMismatch.code()));
     }
     let matches = match (member, payload) {
         (
@@ -1185,22 +1286,25 @@ fn validate_member_payload(
         _ => false,
     };
     if !matches {
-        return Err(release_error("release_source_payload_mismatch"));
+        return Err(release_error(
+            StateCode::ReleaseSourcePayloadMismatch.code(),
+        ));
     }
     Ok(())
 }
 
 fn encode(value: &impl Serialize) -> RuntimeStateResult<Vec<u8>> {
-    serde_json::to_vec(value).map_err(|_| release_error("release_state_encode_failed"))
+    serde_json::to_vec(value).map_err(|_| release_error(StateCode::ReleaseStateEncodeFailed.code()))
 }
 fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> RuntimeStateResult<T> {
-    serde_json::from_slice(bytes).map_err(|_| release_error("release_state_decode_failed"))
+    serde_json::from_slice(bytes)
+        .map_err(|_| release_error(StateCode::ReleaseStateDecodeFailed.code()))
 }
-fn release_error(code: &'static str) -> RuntimeStateError {
-    fatal(code, "release_state")
+fn release_error(code: Code) -> RuntimeStateError {
+    fatal(code, StateLocation::ReleaseState.location())
 }
 
 fn release_source_error(error: actingcommand_ledger::GlobalLedgerError) -> RuntimeStateError {
-    fatal(error.code(), error.operation())
+    RuntimeStateError::relayed_fatal(error.code(), error.operation())
         .with_detail(format!("{error}; detail={:?}", error.detail()))
 }

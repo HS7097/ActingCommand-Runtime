@@ -10,6 +10,7 @@
 use super::super::GlobalLedgerResult;
 use super::super::projection::EventIndexes;
 use super::{RetentionIndex, material_references, referenced_frames, source};
+use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::LedgerEventRead;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPinReason, CapturePayload, EffectDisposition, EventAction,
@@ -599,8 +600,8 @@ impl RetentionIndex {
         // A local time the system cannot convert refuses this view; the writer goes on.
         .ok_or_else(|| {
             super::super::GlobalLedgerError::request(
-                "artifact_retention_clock_failed",
-                "frame_retention_view",
+                LedgerCode::ArtifactRetentionClockFailed.code(),
+                LedgerLocation::FrameRetentionView.location(),
             )
         })?;
         let view = classified.at(self.through_sequence, now);
@@ -1114,7 +1115,7 @@ impl super::super::GlobalLedger {
         let sender = self
             .sender
             .as_ref()
-            .ok_or_else(|| super::invalid("writer_unavailable"))?;
+            .ok_or_else(|| super::invalid(LedgerCode::WriterUnavailable.code()))?;
         super::super::send_command(
             sender,
             super::super::WriterCommand::FrameRetentionView {
@@ -1122,9 +1123,9 @@ impl super::super::GlobalLedger {
                 switches,
                 response,
             },
-            "frame_retention_view",
+            LedgerLocation::FrameRetentionView.location(),
         )?;
-        super::super::receive_response(receiver, "frame_retention_view")?
+        super::super::receive_response(receiver, LedgerLocation::FrameRetentionView.location())?
     }
 }
 

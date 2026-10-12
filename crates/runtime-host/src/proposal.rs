@@ -2,8 +2,11 @@
 
 //! Pure declaration transformation for Runtime-controlled proposal previews and promotion.
 
+use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::CatalogGeneration;
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     CatalogDeclarationPatch, CatalogProposal, ProposalDocument, ProposalKind,
     ProposalPatchOperation, ProposalPreview, RuntimeErrorCode, TaskTemplateInstantiation,
@@ -34,8 +37,8 @@ impl PreparedProposal {
         match self {
             Self::Ready { preview, sources } => Ok((preview, *sources)),
             Self::NeedsHumanSpecification { .. } => Err(request(
-                "proposal_requires_human_specification",
-                "promote_proposal",
+                HostCode::ProposalRequiresHumanSpecification,
+                ContractLocation::PromoteProposal,
             )),
         }
     }
@@ -46,18 +49,28 @@ pub(crate) fn prepare_proposal(
     sources: &CatalogSources,
     proposal: &CatalogProposal,
 ) -> RuntimeHostResult<PreparedProposal> {
-    proposal
-        .validate()
-        .map_err(|_| request("proposal_invalid", "compile_proposal"))?;
+    proposal.validate().map_err(|_| {
+        request(
+            SharedCode::ProposalInvalid,
+            ContractLocation::CompileProposal,
+        )
+    })?;
     if proposal.base_catalog_hash() != active.catalog_hash()
         || proposal.base_catalog_version() != active.catalog_version()
     {
-        return Err(request("proposal_base_catalog_changed", "compile_proposal"));
+        return Err(request(
+            HostCode::ProposalBaseCatalogChanged,
+            ContractLocation::CompileProposal,
+        ));
     }
     match proposal.proposal() {
         ProposalKind::LanguageExtension { .. } => Ok(PreparedProposal::NeedsHumanSpecification {
-            preview: ProposalPreview::needs_human_specification(proposal)
-                .map_err(|_| fatal("proposal_preview_invalid", "compile_proposal"))?,
+            preview: ProposalPreview::needs_human_specification(proposal).map_err(|_| {
+                fatal(
+                    HostCode::ProposalPreviewInvalid,
+                    ContractLocation::CompileProposal,
+                )
+            })?,
         }),
         ProposalKind::ParameterInstantiation { instantiation } => compile_ready(
             proposal,
@@ -73,11 +86,20 @@ fn compile_ready(
     proposal: &CatalogProposal,
     sources: CatalogSources,
 ) -> RuntimeHostResult<PreparedProposal> {
-    let compiled = compile_catalog(&sources)
-        .map_err(|_| request("proposal_catalog_compile_failed", "compile_proposal"))?;
+    let compiled = compile_catalog(&sources).map_err(|_| {
+        request(
+            HostCode::ProposalCatalogCompileFailed,
+            ContractLocation::CompileProposal,
+        )
+    })?;
     validate_compiled_target(proposal, &compiled)?;
-    let preview = ProposalPreview::ready(proposal, compiled.catalog_hash().to_owned())
-        .map_err(|_| fatal("proposal_preview_invalid", "compile_proposal"))?;
+    let preview =
+        ProposalPreview::ready(proposal, compiled.catalog_hash().to_owned()).map_err(|_| {
+            fatal(
+                HostCode::ProposalPreviewInvalid,
+                ContractLocation::CompileProposal,
+            )
+        })?;
     Ok(PreparedProposal::Ready {
         preview,
         sources: Box::new(sources),
@@ -90,8 +112,8 @@ fn validate_compiled_target(
 ) -> RuntimeHostResult<()> {
     if compiled.summary().catalog_version != proposal.target_catalog_version() {
         return Err(request(
-            "proposal_target_version_mismatch",
-            "compile_proposal",
+            HostCode::ProposalTargetVersionMismatch,
+            ContractLocation::CompileProposal,
         ));
     }
     Ok(())
@@ -108,14 +130,19 @@ fn instantiate_template(
         .tasks
         .get_mut("tasks")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| fatal("proposal_tasks_shape_invalid", "instantiate_template"))?;
+        .ok_or_else(|| {
+            fatal(
+                HostCode::ProposalTasksShapeInvalid,
+                HostLocation::InstantiateTemplate,
+            )
+        })?;
     if tasks
         .iter()
         .any(|task| task.get("id").and_then(Value::as_str) == Some(instantiation.new_task_id()))
     {
         return Err(request(
-            "proposal_task_identity_conflict",
-            "instantiate_template",
+            HostCode::ProposalTaskIdentityConflict,
+            HostLocation::InstantiateTemplate,
         ));
     }
     let mut task = tasks
@@ -124,10 +151,18 @@ fn instantiate_template(
             task.get("id").and_then(Value::as_str) == Some(instantiation.template_task_id())
         })
         .cloned()
-        .ok_or_else(|| request("proposal_template_unknown", "instantiate_template"))?;
-    let object = task
-        .as_object_mut()
-        .ok_or_else(|| fatal("proposal_template_shape_invalid", "instantiate_template"))?;
+        .ok_or_else(|| {
+            request(
+                HostCode::ProposalTemplateUnknown,
+                HostLocation::InstantiateTemplate,
+            )
+        })?;
+    let object = task.as_object_mut().ok_or_else(|| {
+        fatal(
+            HostCode::ProposalTemplateShapeInvalid,
+            HostLocation::InstantiateTemplate,
+        )
+    })?;
     object.insert(
         "id".to_owned(),
         Value::String(instantiation.new_task_id().to_owned()),
@@ -203,7 +238,12 @@ impl ProposalDocuments {
             let catalog = document
                 .get_mut("catalog")
                 .and_then(Value::as_object_mut)
-                .ok_or_else(|| fatal("proposal_catalog_shape_invalid", "instantiate_template"))?;
+                .ok_or_else(|| {
+                    fatal(
+                        HostCode::ProposalCatalogShapeInvalid,
+                        HostLocation::InstantiateTemplate,
+                    )
+                })?;
             catalog.insert("catalog_version".to_owned(), Value::from(version));
         }
         Ok(())
@@ -232,38 +272,53 @@ impl ProposalDocuments {
 }
 
 fn parse_document(source: &CatalogDocumentSource) -> RuntimeHostResult<Value> {
-    serde_json::from_slice(&source.bytes)
-        .map_err(|_| fatal("proposal_base_document_invalid", "compile_proposal"))
+    serde_json::from_slice(&source.bytes).map_err(|_| {
+        fatal(
+            HostCode::ProposalBaseDocumentInvalid,
+            ContractLocation::CompileProposal,
+        )
+    })
 }
 
 fn encode_document(
     source: &CatalogDocumentSource,
     document: Value,
 ) -> RuntimeHostResult<CatalogDocumentSource> {
-    let bytes = serde_json::to_vec(&document)
-        .map_err(|_| fatal("proposal_document_encode_failed", "compile_proposal"))?;
+    let bytes = serde_json::to_vec(&document).map_err(|_| {
+        fatal(
+            HostCode::ProposalDocumentEncodeFailed,
+            ContractLocation::CompileProposal,
+        )
+    })?;
     Ok(CatalogDocumentSource::new(source.source_uri.clone(), bytes))
 }
 
 fn apply_patch(document: &mut Value, patch: &CatalogDeclarationPatch) -> RuntimeHostResult<()> {
     let mut tokens = decode_pointer(patch.path())?;
-    let leaf = tokens
-        .pop()
-        .ok_or_else(|| request("proposal_patch_path_invalid", "apply_proposal_patch"))?;
+    let leaf = tokens.pop().ok_or_else(|| {
+        request(
+            HostCode::ProposalPatchPathInvalid,
+            HostLocation::ApplyProposalPatch,
+        )
+    })?;
     let parent = descend_mut(document, &tokens)?;
     let value = patch
         .value_json()
         .map(|value| {
-            serde_json::from_str::<Value>(value)
-                .map_err(|_| request("proposal_patch_value_invalid", "apply_proposal_patch"))
+            serde_json::from_str::<Value>(value).map_err(|_| {
+                request(
+                    HostCode::ProposalPatchValueInvalid,
+                    HostLocation::ApplyProposalPatch,
+                )
+            })
         })
         .transpose()?;
     match parent {
         Value::Object(object) => apply_object_patch(object, &leaf, patch.operation(), value),
         Value::Array(array) => apply_array_patch(array, &leaf, patch.operation(), value),
         _ => Err(request(
-            "proposal_patch_parent_invalid",
-            "apply_proposal_patch",
+            HostCode::ProposalPatchParentInvalid,
+            HostLocation::ApplyProposalPatch,
         )),
     }
 }
@@ -285,8 +340,8 @@ fn apply_object_patch(
         }
         ProposalPatchOperation::Remove if object.remove(key).is_some() => Ok(()),
         _ => Err(request(
-            "proposal_patch_target_conflict",
-            "apply_proposal_patch",
+            HostCode::ProposalPatchTargetConflict,
+            HostLocation::ApplyProposalPatch,
         )),
     }
 }
@@ -316,14 +371,19 @@ fn apply_array_patch(
             Ok(())
         }
         _ => Err(request(
-            "proposal_patch_target_conflict",
-            "apply_proposal_patch",
+            HostCode::ProposalPatchTargetConflict,
+            HostLocation::ApplyProposalPatch,
         )),
     }
 }
 
 fn required_patch_value(value: Option<Value>) -> RuntimeHostResult<Value> {
-    value.ok_or_else(|| request("proposal_patch_value_missing", "apply_proposal_patch"))
+    value.ok_or_else(|| {
+        request(
+            HostCode::ProposalPatchValueMissing,
+            HostLocation::ApplyProposalPatch,
+        )
+    })
 }
 
 fn descend_mut<'a>(document: &'a mut Value, tokens: &[String]) -> RuntimeHostResult<&'a mut Value> {
@@ -334,7 +394,12 @@ fn descend_mut<'a>(document: &'a mut Value, tokens: &[String]) -> RuntimeHostRes
             Value::Array(array) => array.get_mut(parse_array_index(token)?),
             _ => None,
         }
-        .ok_or_else(|| request("proposal_patch_parent_missing", "apply_proposal_patch"))?;
+        .ok_or_else(|| {
+            request(
+                HostCode::ProposalPatchParentMissing,
+                HostLocation::ApplyProposalPatch,
+            )
+        })?;
     }
     Ok(current)
 }
@@ -345,8 +410,8 @@ fn decode_pointer(path: &str) -> RuntimeHostResult<Vec<String>> {
         .map(|token| {
             if token.is_empty() {
                 return Err(request(
-                    "proposal_patch_path_invalid",
-                    "apply_proposal_patch",
+                    HostCode::ProposalPatchPathInvalid,
+                    HostLocation::ApplyProposalPatch,
                 ));
             }
             let mut decoded = String::with_capacity(token.len());
@@ -361,8 +426,8 @@ fn decode_pointer(path: &str) -> RuntimeHostResult<Vec<String>> {
                     Some('1') => '/',
                     _ => {
                         return Err(request(
-                            "proposal_patch_path_invalid",
-                            "apply_proposal_patch",
+                            HostCode::ProposalPatchPathInvalid,
+                            HostLocation::ApplyProposalPatch,
                         ));
                     }
                 });
@@ -375,19 +440,22 @@ fn decode_pointer(path: &str) -> RuntimeHostResult<Vec<String>> {
 fn parse_array_index(token: &str) -> RuntimeHostResult<usize> {
     if token.is_empty() || (token.len() > 1 && token.starts_with('0')) {
         return Err(request(
-            "proposal_patch_index_invalid",
-            "apply_proposal_patch",
+            HostCode::ProposalPatchIndexInvalid,
+            HostLocation::ApplyProposalPatch,
         ));
     }
-    token
-        .parse::<usize>()
-        .map_err(|_| request("proposal_patch_index_invalid", "apply_proposal_patch"))
+    token.parse::<usize>().map_err(|_| {
+        request(
+            HostCode::ProposalPatchIndexInvalid,
+            HostLocation::ApplyProposalPatch,
+        )
+    })
 }
 
-fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
 }
 
-fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
 }

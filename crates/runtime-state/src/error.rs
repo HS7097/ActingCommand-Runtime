@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::StateCode;
+use actingcommand_contract::outcome::{Code, Location};
 use std::error::Error;
 use std::fmt;
 
@@ -9,6 +11,10 @@ pub enum RuntimeStateErrorClass {
     Fatal,
 }
 
+/// A state failure. Every code and location the state store raises is registered
+/// (`StateCode`, `StateLocation`, shared contract entries); the error keeps their spellings
+/// because a relayed ledger failure keeps the ledger's code, which can be a transaction work
+/// code of the runtime host until slice A2b types those (Workflow #378).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeStateError {
     code: &'static str,
@@ -22,26 +28,40 @@ impl RuntimeStateError {
         self.detail = Some(detail);
         self
     }
-    pub const fn request(code: &'static str, operation: &'static str) -> Self {
+    pub const fn request(code: Code, operation: Location) -> Self {
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             class: RuntimeStateErrorClass::Request,
             detail: None,
         }
     }
 
-    pub const fn fatal(code: &'static str, operation: &'static str) -> Self {
+    pub const fn fatal(code: Code, operation: Location) -> Self {
         Self {
-            code,
-            operation,
+            code: code.as_str(),
+            operation: operation.as_str(),
             class: RuntimeStateErrorClass::Fatal,
             detail: None,
         }
     }
 
-    pub(crate) fn maintenance_sql(operation: &'static str, error: &rusqlite::Error) -> Self {
-        let mut result = Self::fatal("state_snapshot_failed", operation);
+    /// A ledger failure relayed as a fatal state failure: it keeps the ledger error's code and,
+    /// where the state store names none of its own, the ledger's operation.
+    pub(crate) const fn relayed_fatal(
+        relayed_code: &'static str,
+        relayed_operation: &'static str,
+    ) -> Self {
+        Self {
+            code: relayed_code,
+            operation: relayed_operation,
+            class: RuntimeStateErrorClass::Fatal,
+            detail: None,
+        }
+    }
+
+    pub(crate) fn maintenance_sql(operation: Location, error: &rusqlite::Error) -> Self {
+        let mut result = Self::fatal(StateCode::StateSnapshotFailed.code(), operation);
         result.detail = error
             .sqlite_error()
             .map(|error| format!("sqlite={}", error.extended_code));

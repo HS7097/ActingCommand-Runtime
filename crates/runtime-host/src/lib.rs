@@ -10,7 +10,7 @@
 mod agent_dispatcher;
 mod approval;
 mod catalog_plan;
-mod codes;
+pub mod codes;
 mod emulator_control;
 mod error;
 mod events;
@@ -56,6 +56,7 @@ pub use agent_dispatcher::AgentDispatcherConfig;
 pub use catalog_plan::{
     CatalogApprovalPlan, CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
 };
+pub use codes::{HostCode, HostLocation};
 pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;

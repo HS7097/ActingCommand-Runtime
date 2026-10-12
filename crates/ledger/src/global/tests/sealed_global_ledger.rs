@@ -562,7 +562,11 @@ fn read_only_global_ledger_verifies_artifacts_without_mutation() {
         })
         .expect("open missing-artifact snapshot");
     assert_eq!(
-        missing.corrupt_tail().expect("missing artifact tail").code,
+        missing
+            .corrupt_tail()
+            .expect("missing artifact tail")
+            .code
+            .as_str(),
         "artifact_store_verification_failed"
     );
     assert_eq!(tree_bytes(temp.path()), missing_tree);
@@ -579,7 +583,8 @@ fn read_only_global_ledger_verifies_artifacts_without_mutation() {
         tampered
             .corrupt_tail()
             .expect("tampered artifact tail")
-            .code,
+            .code
+            .as_str(),
         "artifact_store_verification_failed"
     );
     assert_eq!(tree_bytes(temp.path()), tampered_tree);
@@ -610,7 +615,8 @@ fn read_only_global_ledger_verifies_artifacts_without_mutation() {
         unsafe_reference
             .corrupt_tail()
             .expect("unsafe reference tail")
-            .code,
+            .code
+            .as_str(),
         "artifact_store_verification_failed"
     );
     assert_eq!(tree_bytes(temp.path()), unsafe_tree);

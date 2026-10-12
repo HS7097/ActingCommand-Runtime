@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::codes::HostCode;
+use crate::codes::HostLocation;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Location;
 
 #[derive(Clone, Copy)]
 pub(super) enum PolicyOutcomeCacheUpdate<'a> {
@@ -14,8 +17,11 @@ pub(super) enum PolicyOutcomeCacheUpdate<'a> {
 impl HostShared {
     pub(super) fn reconcile_pending_policy_settlements(&self) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
-            let _gate = lock(&self.policy_outcome_gate, "reconcile_policy_settlements")?;
-            let mut policy = lock(self.policy()?, "reconcile_policy_settlements")?;
+            let _gate = lock(
+                &self.policy_outcome_gate,
+                HostLocation::ReconcilePolicySettlements,
+            )?;
+            let mut policy = lock(self.policy()?, HostLocation::ReconcilePolicySettlements)?;
             let missing_outcomes = policy
                 .pending_dispatch_outcomes()
                 .into_iter()
@@ -52,7 +58,7 @@ impl HostShared {
                     let completion = self
                         .ledger
                         .reconcile_scheduled_policy_settlement(execution)
-                        .map_err(|_| ledger_error("reconcile_policy_settlements"))?;
+                        .map_err(|_| ledger_error(HostLocation::ReconcilePolicySettlements))?;
                     policy
                         .complete_dispatch(&decision_id, &completion)
                         .map_err(RuntimeHostError::into_fatal)?;
@@ -60,7 +66,7 @@ impl HostShared {
                 if !policy.dispatch_needs_completion(&decision_id)? {
                     lock(
                         &self.policy_dispatch_clocks,
-                        "clear_reconciled_policy_clock",
+                        HostLocation::ClearReconciledPolicyClock,
                     )?
                     .remove(&decision_id);
                     settled = true;
@@ -69,7 +75,7 @@ impl HostShared {
             if settled {
                 *lock(
                     &self.authoritative_policy_outcomes,
-                    "recover_online_policy_outcomes",
+                    HostLocation::RecoverOnlinePolicyOutcomes,
                 )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
             }
             // Reconciled settlements carry their four settlement facts too (Workflow #308
@@ -121,7 +127,7 @@ impl HostShared {
         registered: &BTreeMap<InstanceId, RegisteredInstance>,
         scheduled_procedures: &BTreeSet<String>,
     ) -> RuntimeHostResult<BTreeMap<String, u64>> {
-        const OPERATION: &str = "recover_unreleased_policy_runs";
+        const OPERATION: HostLocation = HostLocation::RecoverUnreleasedPolicyRuns;
         let mut ended_without_release = BTreeMap::new();
         let pending = policy.pending_dispatch_outcomes();
         if pending.is_empty() {
@@ -271,14 +277,14 @@ impl HostShared {
             )
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "policy_run_recovery_identity_invalid",
+                    HostCode::PolicyRunRecoveryIdentityInvalid,
                     OPERATION,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
             let validated = request.validate().map_err(|_| {
                 RuntimeHostError::fatal(
-                    "policy_run_recovery_identity_invalid",
+                    HostCode::PolicyRunRecoveryIdentityInvalid,
                     OPERATION,
                     RuntimeErrorCode::RuntimeFatal,
                 )
@@ -317,7 +323,7 @@ impl HostShared {
                         "policy_settlement",
                         RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
                         "runtime_host",
-                        OPERATION,
+                        OPERATION.as_str(),
                         format!(
                             "code={}",
                             HostCode::PolicySettlementReleaseRecovered.as_str()
@@ -342,7 +348,7 @@ impl HostShared {
         policy: &PolicyHost,
         scheduled_procedures: &BTreeSet<String>,
     ) -> RuntimeHostResult<()> {
-        const OPERATION: &str = "record_open_scheduled_dispatches";
+        const OPERATION: HostLocation = HostLocation::RecordOpenScheduledDispatches;
         let pending = policy.pending_dispatch_outcomes();
         if pending.is_empty() {
             return Ok(());
@@ -379,7 +385,7 @@ impl HostShared {
         &self,
         unsettled: &[UnsettledDispatch],
     ) -> RuntimeHostResult<()> {
-        const OPERATION: &str = "hold_unsettled_dispatches";
+        const OPERATION: HostLocation = HostLocation::HoldUnsettledDispatches;
         if unsettled.is_empty() {
             return Ok(());
         }
@@ -387,7 +393,7 @@ impl HostShared {
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error(OPERATION))?;
-        let reason = HostCode::PolicySettlementDispatchUnsettled.as_str();
+        let reason = HostCode::PolicySettlementDispatchUnsettled.code();
         for dispatch in unsettled {
             let instance_id = self.record_scheduled_dispatch_diagnostic(
                 &dispatch.decision_id,
@@ -398,7 +404,7 @@ impl HostShared {
             )?;
             let alias = lock(
                 &self.registered_instances,
-                "read_unsettled_dispatch_instance",
+                HostLocation::ReadUnsettledDispatchInstance,
             )?
             .get(&instance_id)
             .map(|instance| instance.instance_alias.clone());
@@ -417,9 +423,10 @@ impl HostShared {
         through: u64,
         severity: EventSeverity,
         message: String,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<InstanceId> {
-        const OPERATION: &str = "record_scheduled_dispatch_diagnostic";
+        let operation: Location = operation.into();
+        const OPERATION: HostLocation = HostLocation::RecordScheduledDispatchDiagnostic;
         let intent = policy_dispatch_intent(&self.ledger, decision_id, through, operation)?;
         let links = intent.links();
         let (
@@ -437,7 +444,7 @@ impl HostShared {
         )
         else {
             return Err(policy_admission_fatal(
-                "policy_run_identity_missing",
+                HostCode::PolicyRunIdentityMissing,
                 OPERATION,
             ));
         };
@@ -477,14 +484,14 @@ impl HostShared {
         )
         .ok_or_else(|| {
             RuntimeHostError::fatal(
-                "policy_run_recovery_identity_invalid",
+                HostCode::PolicyRunRecoveryIdentityInvalid,
                 OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         let validated = request.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "policy_run_recovery_identity_invalid",
+                HostCode::PolicyRunRecoveryIdentityInvalid,
                 OPERATION,
                 RuntimeErrorCode::RuntimeFatal,
             )
@@ -508,7 +515,7 @@ impl HostShared {
                     "policy_settlement",
                     RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
                     "runtime_host",
-                    operation,
+                    operation.as_str(),
                     message,
                     Sensitivity::Internal,
                 ),
@@ -531,7 +538,7 @@ impl HostShared {
         let through = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("select_policy_settlements"))?;
+            .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
         let dispatch_intents = self
             .ledger
             .query(EventQuery {
@@ -539,9 +546,9 @@ impl HostShared {
                 event_type: Some(EventType::PolicyDispatchIntent),
                 ..EventQuery::default()
             })
-            .map_err(|_| ledger_error("select_policy_settlements"))?;
-        let leases = lock(&self.scheduler, "select_policy_settlements")?.active_tokens();
-        let runs = lock(&self.contained_runs, "select_policy_settlements")?;
+            .map_err(|_| ledger_error(HostLocation::SelectPolicySettlements))?;
+        let leases = lock(&self.scheduler, HostLocation::SelectPolicySettlements)?.active_tokens();
+        let runs = lock(&self.contained_runs, HostLocation::SelectPolicySettlements)?;
         let mut eligible = Vec::new();
         for decision_id in pending {
             let intents = dispatch_intents
@@ -556,8 +563,8 @@ impl HostShared {
                 .collect::<Vec<_>>();
             let [intent] = intents.as_slice() else {
                 return Err(policy_admission_fatal(
-                    "policy_dispatch_intent_not_unique",
-                    "select_policy_settlements",
+                    HostCode::PolicyDispatchIntentNotUnique,
+                    HostLocation::SelectPolicySettlements,
                 ));
             };
             let links = intent.links();
@@ -569,8 +576,8 @@ impl HostShared {
                 || links.correlation_id().is_none()
             {
                 return Err(policy_admission_fatal(
-                    "policy_run_identity_missing",
-                    "select_policy_settlements",
+                    HostCode::PolicyRunIdentityMissing,
+                    HostLocation::SelectPolicySettlements,
                 ));
             }
             // The contained request is minted after admission. Its existing owner
@@ -598,7 +605,7 @@ impl HostShared {
                 },
                 through,
                 2,
-                "select_policy_settlements",
+                HostLocation::SelectPolicySettlements,
                 |event| {
                     event.event_type() == EventType::LeaseGranted
                         && event.links().instance_id() == links.instance_id()
@@ -613,15 +620,15 @@ impl HostShared {
                 [grant] => grant,
                 _ => {
                     return Err(policy_admission_fatal(
-                        "policy_run_lease_fact_not_unique",
-                        "select_policy_settlements",
+                        HostCode::PolicyRunLeaseFactNotUnique,
+                        HostLocation::SelectPolicySettlements,
                     ));
                 }
             };
             let Some(lease_id) = grant.links().lease_id() else {
                 return Err(policy_admission_fatal(
-                    "policy_run_identity_missing",
-                    "select_policy_settlements",
+                    HostCode::PolicyRunIdentityMissing,
+                    HostLocation::SelectPolicySettlements,
                 ));
             };
             if leases.iter().any(|token| token.lease_id() == *lease_id) {
@@ -639,7 +646,7 @@ impl HostShared {
                 },
                 through,
                 2,
-                "select_policy_settlements",
+                HostLocation::SelectPolicySettlements,
                 |event| {
                     event.event_type() == EventType::LeaseReleased
                         && event.links().instance_id() == links.instance_id()
@@ -653,8 +660,8 @@ impl HostShared {
             .len();
             if releases > 1 {
                 return Err(policy_admission_fatal(
-                    "policy_run_release_fact_not_unique",
-                    "select_policy_settlements",
+                    HostCode::PolicyRunReleaseFactNotUnique,
+                    HostLocation::SelectPolicySettlements,
                 ));
             }
             let mut terminals = 0;
@@ -674,7 +681,7 @@ impl HostShared {
                     },
                     through,
                     2 - terminals,
-                    "select_policy_settlements",
+                    HostLocation::SelectPolicySettlements,
                     |event| {
                         matches!(
                             event.event_type(),
@@ -693,8 +700,8 @@ impl HostShared {
             }
             if terminals > 1 {
                 return Err(policy_admission_fatal(
-                    "policy_run_terminal_not_unique",
-                    "select_policy_settlements",
+                    HostCode::PolicyRunTerminalNotUnique,
+                    HostLocation::SelectPolicySettlements,
                 ));
             }
             if terminals == 0 {
@@ -710,7 +717,7 @@ impl HostShared {
                         },
                         through,
                         1,
-                        "select_policy_settlements",
+                        HostLocation::SelectPolicySettlements,
                         |event| scheduled_admission_release_matches(event, intent, lease_id),
                     )?
                     .is_empty()
@@ -734,18 +741,21 @@ impl HostShared {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
-        let _gate = lock(&self.policy_outcome_gate, "complete_scheduled_policy_run")?;
+        let _gate = lock(
+            &self.policy_outcome_gate,
+            HostLocation::CompleteScheduledPolicyRun,
+        )?;
         receipt.validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "policy_run_receipt_invalid",
-                "complete_scheduled_policy_run",
+                HostCode::PolicyRunReceiptInvalid,
+                HostLocation::CompleteScheduledPolicyRun,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         let terminal = receipt.terminal().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "policy_run_receipt_terminal_missing",
-                "complete_scheduled_policy_run",
+                HostCode::PolicyRunReceiptTerminalMissing,
+                HostLocation::CompleteScheduledPolicyRun,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -757,8 +767,8 @@ impl HostShared {
         }) = receipt.result()
         else {
             return Err(RuntimeHostError::fatal(
-                "policy_run_receipt_result_invalid",
-                "complete_scheduled_policy_run",
+                HostCode::PolicyRunReceiptResultInvalid,
+                HostLocation::CompleteScheduledPolicyRun,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -769,8 +779,8 @@ impl HostShared {
             || *outcome != TaskOutcome::Success
         {
             return Err(RuntimeHostError::fatal(
-                "policy_run_receipt_identity_mismatch",
-                "complete_scheduled_policy_run",
+                HostCode::PolicyRunReceiptIdentityMismatch,
+                HostLocation::CompleteScheduledPolicyRun,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -783,7 +793,10 @@ impl HostShared {
         )?;
         let execution_input = PolicyExecutionInput::Succeeded;
         let replayed = {
-            let policy = lock(self.policy()?, "replay_scheduled_policy_completion")?;
+            let policy = lock(
+                self.policy()?,
+                HostLocation::ReplayScheduledPolicyCompletion,
+            )?;
             policy
                 .replay_execution(context.decision_id(), &execution_input)?
                 .is_some()
@@ -808,19 +821,19 @@ impl HostShared {
                 let settlement_position = self
                     .ledger
                     .latest_sequence()
-                    .map_err(|_| ledger_error("read_policy_recompute_position"))?;
+                    .map_err(|_| ledger_error(HostLocation::ReadPolicyRecomputePosition))?;
                 if settlement_position < projection.ledger_position() {
                     return Err(RuntimeHostError::fatal(
-                        "policy_recompute_position_regressed",
-                        "complete_scheduled_policy_run",
+                        HostCode::PolicyRecomputePositionRegressed,
+                        HostLocation::CompleteScheduledPolicyRun,
                         RuntimeErrorCode::RuntimeFatal,
                     ));
                 }
                 SchedulingOutcomeProjection::new(settlement_position, projection.outcome().clone())
                     .map_err(|_| {
                         RuntimeHostError::fatal(
-                            "policy_recompute_projection_invalid",
-                            "complete_scheduled_policy_run",
+                            HostCode::PolicyRecomputeProjectionInvalid,
+                            HostLocation::CompleteScheduledPolicyRun,
                             RuntimeErrorCode::RuntimeFatal,
                         )
                     })
@@ -837,7 +850,7 @@ impl HostShared {
         completed_replay: bool,
     ) -> RuntimeHostResult<Option<SchedulingOutcomeProjection>> {
         let expected_keys = {
-            let policy = lock(self.policy()?, "read_policy_outcome_keys")?;
+            let policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
             if completed_replay {
                 policy.referenced_outcome_keys_for_completed_run(context)?
             } else {
@@ -862,8 +875,8 @@ impl HostShared {
         )
         .map_err(|_| {
             RuntimeHostError::fatal(
-                "policy_outcome_identity_invalid",
-                "read_scheduled_policy_outcome",
+                HostCode::PolicyOutcomeIdentityInvalid,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -886,18 +899,18 @@ impl HostShared {
                 terminal.sequence,
                 2,
             )
-            .map_err(|_| ledger_error("read_policy_outcome_terminal"))?;
+            .map_err(|_| ledger_error(HostLocation::ReadPolicyOutcomeTerminal))?;
         let [terminal_event] = terminal_events.as_slice() else {
             return Err(RuntimeHostError::fatal(
-                "policy_outcome_terminal_not_unique",
-                "read_scheduled_policy_outcome",
+                HostCode::PolicyOutcomeTerminalNotUnique,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
         let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal_event.payload() else {
             return Err(RuntimeHostError::fatal(
-                "policy_outcome_terminal_invalid",
-                "read_scheduled_policy_outcome",
+                HostCode::PolicyOutcomeTerminalInvalid,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -909,8 +922,8 @@ impl HostShared {
             }
         ) {
             return Err(RuntimeHostError::fatal(
-                "policy_run_terminal_disposition_missing",
-                "read_scheduled_policy_outcome",
+                HostCode::PolicyRunTerminalDispositionMissing,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -929,11 +942,11 @@ impl HostShared {
         let ledger_position = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("read_policy_outcome_position"))?;
+            .map_err(|_| ledger_error(HostLocation::ReadPolicyOutcomePosition))?;
         if ledger_position < terminal.sequence {
             return Err(RuntimeHostError::request(
-                "outcome_projection_not_ready",
-                "read_scheduled_policy_outcome",
+                SharedCode::OutcomeProjectionNotReady,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeUnavailable,
             ));
         }
@@ -941,14 +954,14 @@ impl HostShared {
             .ledger
             .project_scheduling_outcomes(identity.clone(), ledger_position)
             .map_err(|error| {
-                if error.code() == "outcome_projection_not_ready" {
+                if error.code() == SharedCode::OutcomeProjectionNotReady.as_str() {
                     RuntimeHostError::request(
-                        "outcome_projection_not_ready",
-                        "read_scheduled_policy_outcome",
+                        SharedCode::OutcomeProjectionNotReady,
+                        HostLocation::ReadScheduledPolicyOutcome,
                         RuntimeErrorCode::RuntimeUnavailable,
                     )
                 } else {
-                    ledger_error("project_policy_outcome")
+                    ledger_error(HostLocation::ProjectPolicyOutcome)
                 }
             })?;
         if projection.ledger_position() < terminal.sequence
@@ -956,8 +969,8 @@ impl HostShared {
             || !expected_keys.contains(projection.outcome().disposition().outcome_key())
         {
             return Err(RuntimeHostError::fatal(
-                "policy_outcome_projection_mismatch",
-                "read_scheduled_policy_outcome",
+                HostCode::PolicyOutcomeProjectionMismatch,
+                HostLocation::ReadScheduledPolicyOutcome,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -970,7 +983,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let mut outcomes = lock(
             &self.authoritative_policy_outcomes,
-            "update_policy_scheduling_outcome",
+            HostLocation::UpdatePolicySchedulingOutcome,
         )?;
         match update {
             #[cfg(test)]
@@ -1047,7 +1060,7 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let _gate = lock(
             &self.policy_outcome_gate,
-            "complete_scheduled_policy_failure",
+            HostLocation::CompleteScheduledPolicyFailure,
         )?;
         if !matches!(
             failure.state,
@@ -1056,8 +1069,8 @@ impl HostShared {
                 | RuntimeReceiptState::Cancelled
         ) {
             return Err(RuntimeHostError::fatal(
-                "policy_run_failure_state_invalid",
-                "complete_scheduled_policy_failure",
+                HostCode::PolicyRunFailureStateInvalid,
+                HostLocation::CompleteScheduledPolicyFailure,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1089,19 +1102,20 @@ impl HostShared {
                     lease_id: Some(context.lease_token().lease_id()),
                     ..EventQuery::default()
                 })
-                .map_err(|_| ledger_error("validate_policy_run_release"))
+                .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunRelease))
         };
         let existing = release_query()?;
         if existing.is_empty() {
             let request = context.request().validate().map_err(|_| {
                 RuntimeHostError::fatal(
-                    "policy_run_request_invalid",
-                    "release_failed_policy_run",
+                    HostCode::PolicyRunRequestInvalid,
+                    HostLocation::ReleaseFailedPolicyRun,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
-            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
-                .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::BuildPolicyConnection, &error)
+            })?;
             // Workflow #369 H-1 (review M-1): this release follows a failure before the run's
             // terminal or a poisoned cleanup, so it never hands the key to a ladder.
             self.cleanup_scheduled_failure_with_run_links(
@@ -1114,8 +1128,8 @@ impl HostShared {
         }
         if release_query()?.len() != 1 {
             return Err(RuntimeHostError::fatal(
-                "policy_run_release_missing",
-                "complete_scheduled_policy_failure",
+                HostCode::PolicyRunReleaseMissing,
+                HostLocation::CompleteScheduledPolicyFailure,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1136,7 +1150,7 @@ impl HostShared {
                 lease_id: Some(context.lease_token().lease_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| ledger_error("validate_policy_run_failure"))?;
+            .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunFailure))?;
         let task_terminals = task_terminals
             .iter()
             .filter(|event| {
@@ -1160,8 +1174,8 @@ impl HostShared {
             [task_failure] if task_failure.event_type() == EventType::TaskFailed => *task_failure,
             _ => {
                 return Err(RuntimeHostError::fatal(
-                    "policy_run_failure_terminal_conflict",
-                    "complete_scheduled_policy_failure",
+                    HostCode::PolicyRunFailureTerminalConflict,
+                    HostLocation::CompleteScheduledPolicyFailure,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -1171,16 +1185,16 @@ impl HostShared {
             EventSeverity::Fatal => PolicyFailureClass::Severe,
             EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
                 return Err(RuntimeHostError::fatal(
-                    "policy_run_failure_severity_ambiguous",
-                    "complete_scheduled_policy_failure",
+                    HostCode::PolicyRunFailureSeverityAmbiguous,
+                    HostLocation::CompleteScheduledPolicyFailure,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
         };
         let EventPayload::Task(TaskPayload::Semantic(payload)) = task_failure.payload() else {
             return Err(RuntimeHostError::fatal(
-                "policy_run_failure_terminal_invalid",
-                "complete_scheduled_policy_failure",
+                HostCode::PolicyRunFailureTerminalInvalid,
+                HostLocation::CompleteScheduledPolicyFailure,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -1191,8 +1205,8 @@ impl HostShared {
         } = payload.fact()
         else {
             return Err(RuntimeHostError::fatal(
-                "policy_run_failure_terminal_invalid",
-                "complete_scheduled_policy_failure",
+                HostCode::PolicyRunFailureTerminalInvalid,
+                HostLocation::CompleteScheduledPolicyFailure,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -1201,8 +1215,8 @@ impl HostShared {
                 || terminal.event_id != *task_failure.event_id()
         }) {
             return Err(RuntimeHostError::fatal(
-                "policy_run_failure_terminal_mismatch",
-                "complete_scheduled_policy_failure",
+                HostCode::PolicyRunFailureTerminalMismatch,
+                HostLocation::CompleteScheduledPolicyFailure,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1223,7 +1237,7 @@ impl HostShared {
         let through_sequence = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("validate_policy_run_terminal"))?;
+            .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunTerminal))?;
         let mut terminal_events = Vec::new();
         for event_type in [
             EventType::TaskCompleted,
@@ -1250,14 +1264,14 @@ impl HostShared {
                         through_sequence,
                         remaining,
                     )
-                    .map_err(|_| ledger_error("validate_policy_run_terminal"))?,
+                    .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunTerminal))?,
             );
         }
         terminal_events.sort_by_key(PersistedEvent::sequence);
         let [terminal_event] = terminal_events.as_slice() else {
             return Err(RuntimeHostError::fatal(
-                "policy_run_receipt_terminal_mismatch",
-                "validate_scheduled_policy_terminal",
+                HostCode::PolicyRunReceiptTerminalMismatch,
+                HostLocation::ValidateScheduledPolicyTerminal,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
@@ -1281,8 +1295,8 @@ impl HostShared {
             || terminal_event.links().correlation_id() != Some(&context.correlation_id())
         {
             return Err(RuntimeHostError::fatal(
-                "policy_run_receipt_terminal_mismatch",
-                "validate_scheduled_policy_terminal",
+                HostCode::PolicyRunReceiptTerminalMismatch,
+                HostLocation::ValidateScheduledPolicyTerminal,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1295,11 +1309,11 @@ impl HostShared {
                 lease_id: Some(context.lease_token().lease_id()),
                 ..EventQuery::default()
             })
-            .map_err(|_| ledger_error("validate_policy_run_release"))?;
+            .map_err(|_| ledger_error(HostLocation::ValidatePolicyRunRelease))?;
         if release_events.len() != 1 {
             return Err(RuntimeHostError::fatal(
-                "policy_run_release_missing",
-                "validate_scheduled_policy_terminal",
+                HostCode::PolicyRunReleaseMissing,
+                HostLocation::ValidateScheduledPolicyTerminal,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1329,7 +1343,10 @@ impl HostShared {
         context: Option<&PolicyRunContext>,
         cache_update: PolicyOutcomeCacheUpdate<'_>,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
-        let _gate = lock(&self.policy_outcome_gate, "record_policy_dispatch_outcome")?;
+        let _gate = lock(
+            &self.policy_outcome_gate,
+            crate::codes::HostLocation::RecordPolicyDispatchOutcome,
+        )?;
         self.record_policy_dispatch_outcome_under_gate(decision_id, input, context, cache_update)
     }
 
@@ -1345,15 +1362,15 @@ impl HostShared {
                 && context.decision_id() != decision_id
             {
                 return Err(RuntimeHostError::fatal(
-                    "policy_run_decision_mismatch",
-                    "record_policy_dispatch_outcome",
+                    HostCode::PolicyRunDecisionMismatch,
+                    HostLocation::RecordPolicyDispatchOutcome,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
-            let replay = lock(self.policy()?, "replay_policy_dispatch_outcome")?
+            let replay = lock(self.policy()?, HostLocation::ReplayPolicyDispatchOutcome)?
                 .replay_execution(decision_id, input)?;
             if let Some(existing) = replay {
-                let mut policy = lock(self.policy()?, "finish_replayed_policy_outcome")?;
+                let mut policy = lock(self.policy()?, HostLocation::FinishReplayedPolicyOutcome)?;
                 self.finish_policy_dispatch_outcome(&mut policy, &existing, context, cache_update)?;
                 let settlement = policy
                     .latest_settlement(&existing.task_id, &existing.instance_id)?
@@ -1363,31 +1380,34 @@ impl HostShared {
                 return Ok(existing);
             }
             if let Some(context) = context {
-                lock(self.policy()?, "validate_policy_run_context")?
+                lock(self.policy()?, HostLocation::ValidatePolicyRunContext)?
                     .validate_run_context(context)?;
             }
             let (instance_id, admitted_at_unix_ms) = {
-                let policy = lock(self.policy()?, "read_policy_dispatch_instance")?;
+                let policy = lock(self.policy()?, HostLocation::ReadPolicyDispatchInstance)?;
                 (
                     policy.execution_instance_id(decision_id)?.to_owned(),
                     policy.admitted_at(decision_id)?,
                 )
             };
             let sample = self.runtime_clock_sample()?;
-            let clock = lock(&self.policy_dispatch_clocks, "read_policy_dispatch_start")?
-                .get(decision_id)
-                .copied()
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "policy_dispatch_clock_missing",
-                        "record_policy_dispatch_outcome",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
+            let clock = lock(
+                &self.policy_dispatch_clocks,
+                HostLocation::ReadPolicyDispatchStart,
+            )?
+            .get(decision_id)
+            .copied()
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::PolicyDispatchClockMissing,
+                    HostLocation::RecordPolicyDispatchOutcome,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
             if clock.admitted_at_unix_ms != admitted_at_unix_ms {
                 return Err(RuntimeHostError::fatal(
-                    "policy_dispatch_clock_identity_conflict",
-                    "record_policy_dispatch_outcome",
+                    HostCode::PolicyDispatchClockIdentityConflict,
+                    HostLocation::RecordPolicyDispatchOutcome,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
@@ -1399,21 +1419,21 @@ impl HostShared {
             }
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "policy_dispatch_clock_regressed",
-                    "record_policy_dispatch_outcome",
+                    HostCode::PolicyDispatchClockRegressed,
+                    HostLocation::RecordPolicyDispatchOutcome,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
             let observed_at_unix_ms =
                 admitted_at_unix_ms.checked_add(runtime_ms).ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "policy_execution_time_overflow",
-                        "record_policy_dispatch_outcome",
+                        HostCode::PolicyExecutionTimeOverflow,
+                        HostLocation::RecordPolicyDispatchOutcome,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
-            let mut policy = lock(self.policy()?, "record_policy_dispatch_outcome")?;
+            let mut policy = lock(self.policy()?, HostLocation::RecordPolicyDispatchOutcome)?;
             let data = match policy.prepare_execution(
                 decision_id,
                 observed_at_unix_ms,
@@ -1499,7 +1519,7 @@ impl HostShared {
                     },
                     u64::MAX,
                     2,
-                    "read_policy_dispatch_completion",
+                    HostLocation::ReadPolicyDispatchCompletion,
                     completes_decision,
                 )?,
                 None => self
@@ -1508,7 +1528,7 @@ impl HostShared {
                         event_type: Some(EventType::PolicyDispatchCompleted),
                         ..EventQuery::default()
                     })
-                    .map_err(|_| ledger_error("read_policy_dispatch_completion"))?
+                    .map_err(|_| ledger_error(HostLocation::ReadPolicyDispatchCompletion))?
                     .into_iter()
                     .filter(|event| completes_decision(event))
                     .collect::<Vec<_>>(),
@@ -1538,8 +1558,8 @@ impl HostShared {
                 }
                 _ => {
                     return Err(policy_admission_fatal(
-                        "policy_dispatch_completion_not_unique",
-                        "complete_policy_dispatch_outcome",
+                        HostCode::PolicyDispatchCompletionNotUnique,
+                        HostLocation::CompletePolicyDispatchOutcome,
                     ));
                 }
             };
@@ -1552,7 +1572,11 @@ impl HostShared {
         #[cfg(test)]
         self.wait_policy_outcome_transition_test_hook()?;
         self.apply_policy_outcome_cache_update(cache_update)?;
-        lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
+        lock(
+            &self.policy_dispatch_clocks,
+            HostLocation::ClearPolicyDispatchStart,
+        )?
+        .remove(decision_id);
         Ok(())
     }
 
@@ -1587,8 +1611,8 @@ impl HostShared {
     ) -> RuntimeHostResult<EventLinksDraft> {
         let request = context.request().validate().map_err(|_| {
             RuntimeHostError::fatal(
-                "policy_run_request_invalid",
-                "build_policy_run_event_links",
+                HostCode::PolicyRunRequestInvalid,
+                HostLocation::BuildPolicyRunEventLinks,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -1609,7 +1633,7 @@ impl HostShared {
     fn wait_policy_outcome_transition_test_hook(&self) -> RuntimeHostResult<()> {
         let hook = lock(
             &self.policy_outcome_transition_test_hook,
-            "read_policy_outcome_transition_test_hook",
+            crate::codes::test_spellings::TestLocation::ReadPolicyOutcomeTransitionTestHook,
         )?
         .take();
         if let Some(hook) = hook {
@@ -1645,16 +1669,16 @@ pub(super) struct UnsettledDispatch {
 /// ledger raises as non-terminal). Every other failure, among them a ledger that cannot be read
 /// or written, stays fatal.
 const PER_RUN_SETTLEMENT_REFUSALS: [&str; 10] = [
-    "policy_run_identity_missing",
-    "policy_run_lease_fact_not_unique",
-    "policy_run_release_fact_not_unique",
-    "policy_run_failure_severity_ambiguous",
-    "policy_run_terminal_invalid",
-    "policy_run_terminal_conflict",
-    "policy_run_task_request_not_unique",
-    "policy_execution_clock_regressed",
-    "policy_execution_recovery_conflict",
-    "policy_execution_recovery_outcome_conflict",
+    HostCode::PolicyRunIdentityMissing.as_str(),
+    HostCode::PolicyRunLeaseFactNotUnique.as_str(),
+    HostCode::PolicyRunReleaseFactNotUnique.as_str(),
+    HostCode::PolicyRunFailureSeverityAmbiguous.as_str(),
+    HostCode::PolicyRunTerminalInvalid.as_str(),
+    HostCode::PolicyRunTerminalConflict.as_str(),
+    HostCode::PolicyRunTaskRequestNotUnique.as_str(),
+    HostCode::PolicyExecutionClockRegressed.as_str(),
+    HostCode::PolicyExecutionRecoveryConflict.as_str(),
+    HostCode::PolicyExecutionRecoveryOutcomeConflict.as_str(),
 ];
 
 fn per_run_settlement_refusal(error: &RuntimeHostError) -> bool {
@@ -1666,10 +1690,15 @@ fn per_run_settlement_refusal(error: &RuntimeHostError) -> bool {
 /// other ledger failure is `ledger_failure`.
 fn settlement_refusal_or_ledger_error(
     error: &actingcommand_ledger::GlobalLedgerError,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostError {
+    let operation: Location = operation.into();
     if error.is_scheduled_settlement_refusal() {
-        RuntimeHostError::fatal(error.code(), operation, RuntimeErrorCode::LedgerFailure)
+        RuntimeHostError::relayed_fatal(
+            error.code(),
+            operation.as_str(),
+            RuntimeErrorCode::LedgerFailure,
+        )
     } else {
         ledger_error(operation)
     }
@@ -1695,7 +1724,9 @@ pub(super) fn reconcile_policy_dispatches(
                 });
                 continue;
             }
-            Err(_) => return Err(ledger_error("reconcile_policy_dispatches")),
+            Err(_) => {
+                return Err(ledger_error(HostLocation::ReconcilePolicyDispatches));
+            }
         };
         policy.complete_dispatch(&decision_id, &completion)?;
     }
@@ -1708,13 +1739,13 @@ pub(super) fn reconcile_policy_dispatches(
     // rf2), never the whole ledger; the original predicates still select the events.
     let through = ledger
         .latest_sequence()
-        .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+        .map_err(|_| ledger_error(HostLocation::ReconcilePolicyDispatches))?;
     for dispatch in pending {
         let intent = policy_dispatch_intent(
             ledger,
             &dispatch.data.decision_id,
             through,
-            "reconcile_policy_dispatches",
+            HostLocation::ReconcilePolicyDispatches,
         )?;
         let lease_granted = !linked_policy_run_events(
             ledger,
@@ -1729,7 +1760,7 @@ pub(super) fn reconcile_policy_dispatches(
             },
             through,
             1,
-            "reconcile_policy_dispatches",
+            HostLocation::ReconcilePolicyDispatches,
             |event| {
                 event.sequence() > intent.sequence()
                     && event.event_type() == EventType::LeaseGranted
@@ -1755,7 +1786,7 @@ pub(super) fn reconcile_policy_dispatches(
         let draft = events.sanitize(draft)?;
         ledger
             .append(draft)
-            .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+            .map_err(|_| ledger_error(HostLocation::ReconcilePolicyDispatches))?;
     }
     policy.refresh_dispatches(ledger)
 }
@@ -1783,14 +1814,14 @@ fn reconcile_scheduled_policy_outcomes_for(
     // rf2), never the whole ledger; the original predicates still select the events.
     let through = ledger
         .latest_sequence()
-        .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
+        .map_err(|_| ledger_error(HostLocation::ReconcilePolicyOutcomes))?;
     for decision_id in pending {
         let settled = (|| -> RuntimeHostResult<()> {
             let intent = &policy_dispatch_intent(
                 ledger,
                 &decision_id,
                 through,
-                "reconcile_policy_outcomes",
+                HostLocation::ReconcilePolicyOutcomes,
             )?;
             let (
                 Some(instance_id),
@@ -1807,8 +1838,8 @@ fn reconcile_scheduled_policy_outcomes_for(
             )
             else {
                 return Err(policy_admission_fatal(
-                    "policy_run_identity_missing",
-                    "reconcile_policy_outcomes",
+                    HostCode::PolicyRunIdentityMissing,
+                    HostLocation::ReconcilePolicyOutcomes,
                 ));
             };
             let lease_grants = linked_policy_run_events(
@@ -1825,7 +1856,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 },
                 through,
                 2,
-                "reconcile_policy_outcomes",
+                HostLocation::ReconcilePolicyOutcomes,
                 |event| {
                     event.event_type() == EventType::LeaseGranted
                         && event.links().instance_id() == Some(instance_id)
@@ -1837,14 +1868,14 @@ fn reconcile_scheduled_policy_outcomes_for(
             )?;
             let [lease_granted] = lease_grants.as_slice() else {
                 return Err(policy_admission_fatal(
-                    "policy_run_lease_fact_not_unique",
-                    "reconcile_policy_outcomes",
+                    HostCode::PolicyRunLeaseFactNotUnique,
+                    HostLocation::ReconcilePolicyOutcomes,
                 ));
             };
             let Some(lease_id) = lease_granted.links().lease_id() else {
                 return Err(policy_admission_fatal(
-                    "policy_run_identity_missing",
-                    "reconcile_policy_outcomes",
+                    HostCode::PolicyRunIdentityMissing,
+                    HostLocation::ReconcilePolicyOutcomes,
                 ));
             };
             let mut terminals = Vec::new();
@@ -1869,7 +1900,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     },
                     through,
                     2 - terminals.len(),
-                    "reconcile_policy_outcomes",
+                    HostLocation::ReconcilePolicyOutcomes,
                     |event| {
                         matches!(
                             event.event_type(),
@@ -1906,7 +1937,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 },
                 through,
                 2,
-                "reconcile_policy_outcomes",
+                HostLocation::ReconcilePolicyOutcomes,
                 |event| {
                     run_lease_release_matches(
                         event,
@@ -1923,8 +1954,8 @@ fn reconcile_scheduled_policy_outcomes_for(
                 [release] => Some(release.timestamp_unix_ms()),
                 _ => {
                     return Err(policy_admission_fatal(
-                        "policy_run_release_fact_not_unique",
-                        "reconcile_policy_outcomes",
+                        HostCode::PolicyRunReleaseFactNotUnique,
+                        HostLocation::ReconcilePolicyOutcomes,
                     ));
                 }
             };
@@ -1951,16 +1982,16 @@ fn reconcile_scheduled_policy_outcomes_for(
                         EventSeverity::Fatal => PolicyFailureClass::Severe,
                         EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
                             return Err(policy_admission_fatal(
-                                "policy_run_failure_severity_ambiguous",
-                                "reconcile_policy_outcomes",
+                                HostCode::PolicyRunFailureSeverityAmbiguous,
+                                HostLocation::ReconcilePolicyOutcomes,
                             ));
                         }
                     };
                     let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload()
                     else {
                         return Err(policy_admission_fatal(
-                            "policy_run_terminal_invalid",
-                            "reconcile_policy_outcomes",
+                            HostCode::PolicyRunTerminalInvalid,
+                            HostLocation::ReconcilePolicyOutcomes,
                         ));
                     };
                     let TaskSemanticFact::TerminalCommitted {
@@ -1970,8 +2001,8 @@ fn reconcile_scheduled_policy_outcomes_for(
                     } = payload.fact()
                     else {
                         return Err(policy_admission_fatal(
-                            "policy_run_terminal_invalid",
-                            "reconcile_policy_outcomes",
+                            HostCode::PolicyRunTerminalInvalid,
+                            HostLocation::ReconcilePolicyOutcomes,
                         ));
                     };
                     let runtime_ms =
@@ -1995,8 +2026,8 @@ fn reconcile_scheduled_policy_outcomes_for(
                 ),
                 _ => {
                     return Err(policy_admission_fatal(
-                        "policy_run_terminal_conflict",
-                        "reconcile_policy_outcomes",
+                        HostCode::PolicyRunTerminalConflict,
+                        HostLocation::ReconcilePolicyOutcomes,
                     ));
                 }
             };
@@ -2010,8 +2041,8 @@ fn reconcile_scheduled_policy_outcomes_for(
                 PolicyExecutionPreparation::New(data) => data,
                 PolicyExecutionPreparation::Replay(_) => {
                     return Err(policy_admission_fatal(
-                        "policy_execution_recovery_conflict",
-                        "reconcile_policy_outcomes",
+                        HostCode::PolicyExecutionRecoveryConflict,
+                        HostLocation::ReconcilePolicyOutcomes,
                     ));
                 }
             };
@@ -2020,8 +2051,8 @@ fn reconcile_scheduled_policy_outcomes_for(
             let runtime_exceeded = policy.runtime_budget_exceeded(&decision_id, runtime_ms)?;
             if !policy_recovery_outcome_matches(&data.outcome, &input, runtime_exceeded) {
                 return Err(policy_admission_fatal(
-                    "policy_execution_recovery_outcome_conflict",
-                    "reconcile_policy_outcomes",
+                    HostCode::PolicyExecutionRecoveryOutcomeConflict,
+                    HostLocation::ReconcilePolicyOutcomes,
                 ));
             }
             #[cfg(test)]
@@ -2030,14 +2061,17 @@ fn reconcile_scheduled_policy_outcomes_for(
                 .is_some_and(|start| start.refuse_run_for_test.as_ref() == Some(run_id))
             {
                 return Err(policy_admission_fatal(
-                    "policy_execution_recovery_outcome_conflict",
-                    "reconcile_policy_outcomes",
+                    crate::codes::HostCode::PolicyExecutionRecoveryOutcomeConflict,
+                    crate::codes::HostLocation::ReconcilePolicyOutcomes,
                 ));
             }
             let completion = ledger
                 .reconcile_scheduled_policy_settlement(data.clone())
                 .map_err(|error| {
-                    settlement_refusal_or_ledger_error(&error, "reconcile_policy_outcomes")
+                    settlement_refusal_or_ledger_error(
+                        &error,
+                        HostLocation::ReconcilePolicyOutcomes,
+                    )
                 })?;
             policy
                 .commit_execution(&data)
@@ -2090,9 +2124,10 @@ fn linked_policy_run_events(
     query: EventQuery,
     through: u64,
     cap: usize,
-    operation: &'static str,
+    operation: impl Into<Location>,
     mut keep: impl FnMut(&PersistedEvent) -> bool,
 ) -> RuntimeHostResult<Vec<PersistedEvent>> {
+    let operation: Location = operation.into();
     const LINKED_PAGE_EVENTS: usize = 2;
     let mut selected = Vec::new();
     let mut after = 0;
@@ -2126,8 +2161,9 @@ pub(super) fn policy_dispatch_intent(
     ledger: &GlobalLedger,
     decision_id: &str,
     through: u64,
-    operation: &'static str,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<PersistedEvent> {
+    let operation: Location = operation.into();
     let mut intents = linked_policy_run_events(
         ledger,
         EventQuery {
@@ -2149,7 +2185,7 @@ pub(super) fn policy_dispatch_intent(
     match (intents.pop(), intents.is_empty()) {
         (Some(intent), true) => Ok(intent),
         _ => Err(policy_admission_fatal(
-            "policy_dispatch_intent_missing",
+            HostCode::PolicyDispatchIntentMissing,
             operation,
         )),
     }
@@ -2179,7 +2215,7 @@ fn policy_run_effect_started(
             },
             through,
             1,
-            "select_policy_settlements",
+            HostLocation::SelectPolicySettlements,
             |event| {
                 event.links().task_id() == links.task_id()
                     && event.links().run_id() == links.run_id()
@@ -2209,7 +2245,7 @@ pub(super) fn recover_authoritative_policy_outcomes(
     completed.sort_by_key(|run| run.completion_sequence);
     let ledger_position = ledger
         .latest_sequence()
-        .map_err(|_| ledger_error("recover_policy_outcome_position"))?;
+        .map_err(|_| ledger_error(HostLocation::RecoverPolicyOutcomePosition))?;
     let mut outcomes = BTreeMap::new();
     for run in completed {
         let key = (run.catalog_task_id.clone(), run.instance_alias.clone());
@@ -2219,14 +2255,14 @@ pub(super) fn recover_authoritative_policy_outcomes(
         }
         let terminal = recover_scheduled_terminal(ledger, &run)?.ok_or_else(|| {
             policy_admission_fatal(
-                "policy_run_terminal_missing",
-                "recover_policy_scheduling_outcomes",
+                HostCode::PolicyRunTerminalMissing,
+                HostLocation::RecoverPolicySchedulingOutcomes,
             )
         })?;
         let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload() else {
             return Err(policy_admission_fatal(
-                "policy_run_terminal_invalid",
-                "recover_policy_scheduling_outcomes",
+                HostCode::PolicyRunTerminalInvalid,
+                HostLocation::RecoverPolicySchedulingOutcomes,
             ));
         };
         let TaskSemanticFact::TerminalCommitted {
@@ -2237,8 +2273,8 @@ pub(super) fn recover_authoritative_policy_outcomes(
         } = payload.fact()
         else {
             return Err(policy_admission_fatal(
-                "policy_run_terminal_disposition_missing",
-                "recover_policy_scheduling_outcomes",
+                HostCode::PolicyRunTerminalDispositionMissing,
+                HostLocation::RecoverPolicySchedulingOutcomes,
             ));
         };
         validate_completed_run_admission_request(ledger, &run, terminal.sequence())?;
@@ -2250,8 +2286,8 @@ pub(super) fn recover_authoritative_policy_outcomes(
             run.run_id,
             *terminal.links().request_id().ok_or_else(|| {
                 policy_admission_fatal(
-                    "policy_run_identity_missing",
-                    "recover_policy_scheduling_outcomes",
+                    HostCode::PolicyRunIdentityMissing,
+                    HostLocation::RecoverPolicySchedulingOutcomes,
                 )
             })?,
             run.correlation_id,
@@ -2262,13 +2298,13 @@ pub(super) fn recover_authoritative_policy_outcomes(
         )
         .map_err(|_| {
             policy_admission_fatal(
-                "policy_outcome_identity_invalid",
-                "recover_policy_scheduling_outcomes",
+                HostCode::PolicyOutcomeIdentityInvalid,
+                HostLocation::RecoverPolicySchedulingOutcomes,
             )
         })?;
         let projected = ledger
             .project_scheduling_outcomes(identity, ledger_position)
-            .map_err(|_| ledger_error("recover_policy_scheduling_outcomes"))?;
+            .map_err(|_| ledger_error(HostLocation::RecoverPolicySchedulingOutcomes))?;
         insert_authoritative_policy_outcome(&mut outcomes, projected.outcome().clone())?;
     }
     Ok(outcomes)
@@ -2321,17 +2357,17 @@ pub(super) fn validate_policy_run_admission_request(
             through_sequence,
             2,
         )
-        .map_err(|_| ledger_error("validate_policy_scheduling_admission"))?;
+        .map_err(|_| ledger_error(HostLocation::ValidatePolicySchedulingAdmission))?;
     let [admission] = admissions.as_slice() else {
         return Err(policy_admission_fatal(
-            "policy_run_admission_conflict",
-            "recover_policy_scheduling_outcomes",
+            HostCode::PolicyRunAdmissionConflict,
+            HostLocation::RecoverPolicySchedulingOutcomes,
         ));
     };
     let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = admission.payload() else {
         return Err(policy_admission_fatal(
-            "policy_run_admission_invalid",
-            "recover_policy_scheduling_outcomes",
+            HostCode::PolicyRunAdmissionInvalid,
+            HostLocation::RecoverPolicySchedulingOutcomes,
         ));
     };
     if admission.links().request_id() != Some(&admission_request_id)
@@ -2340,8 +2376,8 @@ pub(super) fn validate_policy_run_admission_request(
         || payload.instance_id() != instance_alias
     {
         return Err(policy_admission_fatal(
-            "policy_run_admission_conflict",
-            "recover_policy_scheduling_outcomes",
+            HostCode::PolicyRunAdmissionConflict,
+            HostLocation::RecoverPolicySchedulingOutcomes,
         ));
     }
     Ok(())
@@ -2391,7 +2427,7 @@ fn recover_scheduled_terminal(
                     through_sequence,
                     2,
                 )
-                .map_err(|_| ledger_error("recover_policy_scheduling_terminal"))?,
+                .map_err(|_| ledger_error(HostLocation::RecoverPolicySchedulingTerminal))?,
         );
     }
     terminals.sort_by_key(PersistedEvent::sequence);
@@ -2399,8 +2435,8 @@ fn recover_scheduled_terminal(
         [] => Ok(None),
         [terminal] => Ok(Some(terminal.clone())),
         _ => Err(policy_admission_fatal(
-            "policy_run_terminal_conflict",
-            "recover_policy_scheduling_outcomes",
+            HostCode::PolicyRunTerminalConflict,
+            HostLocation::RecoverPolicySchedulingOutcomes,
         )),
     }
 }
@@ -2423,14 +2459,14 @@ pub(crate) fn insert_authoritative_policy_outcome(
         }
         if existing.identity().terminal_sequence() >= outcome.identity().terminal_sequence() {
             return Err(policy_admission_fatal(
-                "policy_outcome_replay_order_conflict",
-                "commit_policy_scheduling_outcome",
+                HostCode::PolicyOutcomeReplayOrderConflict,
+                HostLocation::CommitPolicySchedulingOutcome,
             ));
         }
     } else if outcomes.len() >= MAX_AUTHORITATIVE_POLICY_OUTCOMES {
         return Err(policy_admission_fatal(
-            "policy_scheduling_outcome_capacity_exceeded",
-            "commit_policy_scheduling_outcome",
+            HostCode::PolicySchedulingOutcomeCapacityExceeded,
+            HostLocation::CommitPolicySchedulingOutcome,
         ));
     }
     outcomes.insert(key, outcome);
@@ -2471,7 +2507,7 @@ fn recovered_scheduled_task_runtime_ms(
         run_query(EventType::LabRequest),
         through,
         2,
-        "reconcile_policy_outcomes",
+        HostLocation::ReconcilePolicyOutcomes,
         |event| event.event_type() == EventType::LabRequest && same_run(event),
     )?;
     if requests.is_empty() {
@@ -2480,7 +2516,7 @@ fn recovered_scheduled_task_runtime_ms(
             run_query(EventType::CommandReceived),
             through,
             2,
-            "reconcile_policy_outcomes",
+            HostLocation::ReconcilePolicyOutcomes,
             |event| {
                 event.event_type() == EventType::CommandReceived
                     && event.origin().source() == EventSource::Scheduler
@@ -2491,8 +2527,8 @@ fn recovered_scheduled_task_runtime_ms(
     }
     let [request] = requests.as_slice() else {
         return Err(policy_admission_fatal(
-            "policy_run_task_request_not_unique",
-            "reconcile_policy_outcomes",
+            HostCode::PolicyRunTaskRequestNotUnique,
+            HostLocation::ReconcilePolicyOutcomes,
         ));
     };
     terminal
@@ -2500,8 +2536,8 @@ fn recovered_scheduled_task_runtime_ms(
         .checked_sub(request.timestamp_unix_ms())
         .ok_or_else(|| {
             policy_admission_fatal(
-                "policy_execution_clock_regressed",
-                "reconcile_policy_outcomes",
+                HostCode::PolicyExecutionClockRegressed,
+                HostLocation::ReconcilePolicyOutcomes,
             )
         })
 }
@@ -2553,7 +2589,7 @@ fn lease_transfers_from(
         },
         through,
         cap,
-        "reconcile_policy_outcomes",
+        HostLocation::ReconcilePolicyOutcomes,
         |event| {
             matches!(
                 event.payload(),
@@ -2609,8 +2645,8 @@ fn run_lease_release_matches(
 /// failure.
 fn policy_settlement_missing() -> RuntimeHostError {
     policy_admission_fatal(
-        "policy_settlement_missing",
-        "record_policy_settlement_facts",
+        HostCode::PolicySettlementMissing,
+        HostLocation::RecordPolicySettlementFacts,
     )
 }
 

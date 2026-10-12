@@ -153,6 +153,7 @@ dependencies = [
 name = "actingcommand-host-metrics"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "windows-sys",
 ]
 
@@ -281,6 +282,7 @@ dependencies = [
 name = "actingcommand-recognition"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "image",
  "imageproc",
 ]
@@ -335,6 +337,7 @@ dependencies = [
 name = "actingcommand-runtime-database"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "rusqlite",
  "serde",
  "serde_json",

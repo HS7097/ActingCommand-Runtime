@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     IdentifierIssuer, InstanceId, OWNER_JOURNAL_LIMIT, OwnerEpoch, OwnerResourceDisposition,
     RuntimeErrorCode,
@@ -112,8 +115,8 @@ fn release_exited_owner(
         }
     };
     let mut refused = RuntimeHostError::fatal(
-        "owner_resource_unconfirmed",
-        "acquire_owner_file",
+        HostCode::OwnerResourceUnconfirmed,
+        HostLocation::AcquireOwnerFile,
         RuntimeErrorCode::OwnerConflict,
     );
     refused.lifecycle.owner_probe = Some(probe);
@@ -150,12 +153,16 @@ impl OwnerGuard {
             .open(path)
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "owner_file_open_failed",
-                    "open_owner_file",
+                    HostCode::OwnerFileOpenFailed,
+                    HostLocation::OpenOwnerFile,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
-        try_lock_owner_file(&file, "owner_conflict", "acquire_owner_file")?;
+        try_lock_owner_file(
+            &file,
+            RuntimeErrorCode::OwnerConflict,
+            HostLocation::AcquireOwnerFile,
+        )?;
         recover_compaction(state_root, &mut file)?;
         let journal = read_owner_journal(&mut file)?;
         let previous = journal.last().cloned();
@@ -164,8 +171,8 @@ impl OwnerGuard {
             .mint_owner_epoch()
             .map_err(|_| {
                 RuntimeHostError::fatal(
-                    "owner_epoch_issue_failed",
-                    "acquire_owner_file",
+                    HostCode::OwnerEpochIssueFailed,
+                    HostLocation::AcquireOwnerFile,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?
@@ -182,8 +189,8 @@ impl OwnerGuard {
             .checked_add(1)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "owner_revision_overflow",
-                    "acquire_owner_file",
+                    HostCode::OwnerRevisionOverflow,
+                    HostLocation::AcquireOwnerFile,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -236,13 +243,13 @@ impl OwnerGuard {
         let mut record = self.record.clone();
         record.revision = record.revision.checked_add(1).ok_or_else(|| {
             RuntimeHostError::fatal(
-                "owner_revision_overflow",
-                "update_owner_file",
+                HostCode::OwnerRevisionOverflow,
+                HostLocation::UpdateOwnerFile,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         record.active_instances = active_instances;
-        self.append_in_epoch(&record, "update_owner_file")?;
+        self.append_in_epoch(&record, HostLocation::UpdateOwnerFile)?;
         self.record = record;
         Ok(())
     }
@@ -254,8 +261,8 @@ impl OwnerGuard {
         self.journal_gate()?;
         if self.retained_unconfirmed {
             return Err(RuntimeHostError::fatal(
-                "owner_resource_unconfirmed",
-                "update_owner_resource_disposition",
+                HostCode::OwnerResourceUnconfirmed,
+                HostLocation::UpdateOwnerResourceDisposition,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -265,13 +272,13 @@ impl OwnerGuard {
         let mut record = self.record.clone();
         record.revision = record.revision.checked_add(1).ok_or_else(|| {
             RuntimeHostError::fatal(
-                "owner_revision_overflow",
-                "update_owner_resource_disposition",
+                HostCode::OwnerRevisionOverflow,
+                HostLocation::UpdateOwnerResourceDisposition,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
         record.resource_disposition = Some(disposition);
-        self.append_in_epoch(&record, "update_owner_resource_disposition")?;
+        self.append_in_epoch(&record, HostLocation::UpdateOwnerResourceDisposition)?;
         self.record = record;
         Ok(())
     }
@@ -282,8 +289,8 @@ impl OwnerGuard {
         }
         let file = self.file.take().ok_or_else(|| {
             RuntimeHostError::fatal(
-                "owner_file_missing",
-                "retain_unconfirmed_owner_file",
+                HostCode::OwnerFileMissing,
+                HostLocation::RetainUnconfirmedOwnerFile,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
@@ -294,8 +301,8 @@ impl OwnerGuard {
             let mut record = self.record.clone();
             record.revision = record.revision.checked_add(1).ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "owner_revision_overflow",
-                    "update_owner_resource_disposition",
+                    HostCode::OwnerRevisionOverflow,
+                    HostLocation::UpdateOwnerResourceDisposition,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -330,16 +337,16 @@ impl OwnerGuard {
             self.journal_gate()?;
             if self.retained_unconfirmed {
                 return Err(RuntimeHostError::fatal(
-                    "owner_resource_unconfirmed",
-                    "close_owner_file",
+                    HostCode::OwnerResourceUnconfirmed,
+                    HostLocation::CloseOwnerFile,
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
             let mut record = self.record.clone();
             record.revision = record.revision.checked_add(1).ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "owner_revision_overflow",
-                    "close_owner_file",
+                    HostCode::OwnerRevisionOverflow,
+                    HostLocation::CloseOwnerFile,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
@@ -347,15 +354,17 @@ impl OwnerGuard {
             record.active_instances.clear();
             record.closed_at_unix_ms = Some(closed_at_unix_ms);
             record.resource_disposition = Some(OwnerResourceDisposition::None);
-            append_record(self.file_mut("close_owner_file")?, &record)?;
+            append_record(self.file_mut(HostLocation::CloseOwnerFile)?, &record)?;
             self.record = record;
-            self.file_mut("close_owner_file")?.unlock().map_err(|_| {
-                RuntimeHostError::fatal(
-                    "owner_unlock_failed",
-                    "close_owner_file",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
+            self.file_mut(HostLocation::CloseOwnerFile)?
+                .unlock()
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        HostCode::OwnerUnlockFailed,
+                        HostLocation::CloseOwnerFile,
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
             self.closed = true;
             Ok(())
         })();
@@ -381,7 +390,7 @@ impl OwnerGuard {
     fn append_in_epoch(
         &mut self,
         record: &OwnerRecord,
-        operation: &'static str,
+        operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
         let encoded = encode_record(record)?;
         if !self.retained_unconfirmed
@@ -398,24 +407,25 @@ impl OwnerGuard {
     /// the journal in place; S4 removes the side file. Only an S3 failure is cached: the
     /// journal may then be half written, and the next start completes it (R2-R4).
     fn compact(&mut self) -> RuntimeHostResult<()> {
-        const OPERATION: &str = "compact_owner_file";
-        let fatal = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+        const OPERATION: ContractLocation = ContractLocation::CompactOwnerFile;
+        let fatal =
+            |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| fatal("owner_file_missing"))?;
+            .ok_or_else(|| fatal(HostCode::OwnerFileMissing.code()))?;
         let Some(compaction) =
             RuntimeOwnerJournal::compaction_locked(file).map_err(owner_journal_error)?
         else {
             return Ok(());
         };
         if stage_side_file(&self.side_path, compaction.side_file()).is_err() {
-            let error = fatal("owner_compaction_stage_failed");
+            let error = fatal(HostCode::OwnerCompactionStageFailed.code());
             return Err(match std::fs::remove_file(&self.side_path) {
                 Err(cleanup) if cleanup.kind() != std::io::ErrorKind::NotFound => error
                     .with_related_failure(
                         "side_file_cleanup",
-                        &fatal("owner_compaction_cleanup_failed"),
+                        &fatal(HostCode::OwnerCompactionCleanupFailed.code()),
                     ),
                 _ => error,
             });
@@ -426,17 +436,18 @@ impl OwnerGuard {
             .and_then(|()| file.set_len(compaction.image().len() as u64))
             .and_then(|()| file.sync_all());
         if rewritten.is_err() {
-            let error = fatal("owner_compaction_rewrite_failed");
+            let error = fatal(HostCode::OwnerCompactionRewriteFailed.code());
             self.journal_failure = Some(error.clone());
             return Err(error);
         }
         self.uncompacted_bytes = compaction.kept_bytes();
         std::fs::remove_file(&self.side_path)
             .and_then(|()| sync_directory(side_directory(&self.side_path)))
-            .map_err(|_| fatal("owner_compaction_cleanup_failed"))
+            .map_err(|_| fatal(HostCode::OwnerCompactionCleanupFailed.code()))
     }
 
-    fn file_mut(&mut self, operation: &'static str) -> RuntimeHostResult<&mut File> {
+    fn file_mut(&mut self, operation: impl Into<Location>) -> RuntimeHostResult<&mut File> {
+        let operation: Location = operation.into();
         if let Some(Err(error)) = &self.retention_result {
             return Err(error.clone());
         }
@@ -445,7 +456,7 @@ impl OwnerGuard {
             .or(self.retained_file.as_deref_mut())
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "owner_file_missing",
+                    HostCode::OwnerFileMissing,
                     operation,
                     RuntimeErrorCode::RuntimeFatal,
                 )
@@ -470,8 +481,9 @@ pub(crate) fn unlock_retained_owner(
     state_root: &Path,
     confirmed: bool,
 ) -> RuntimeHostResult<OwnerUnlock> {
-    const OPERATION: &str = "unlock_owner_file";
-    let refused = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::InvalidRequest);
+    const OPERATION: HostLocation = HostLocation::UnlockOwnerFile;
+    let refused =
+        |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::InvalidRequest);
     // Not created here: a state root without an owner journal has nothing to unlock.
     let mut file = match OpenOptions::new()
         .read(true)
@@ -480,17 +492,17 @@ pub(crate) fn unlock_retained_owner(
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(refused("owner_unlock_not_required"));
+            return Err(refused(HostCode::OwnerUnlockNotRequired.code()));
         }
         Err(_) => {
             return Err(RuntimeHostError::fatal(
-                "owner_file_open_failed",
-                "open_owner_file",
+                HostCode::OwnerFileOpenFailed,
+                HostLocation::OpenOwnerFile,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
     };
-    try_lock_owner_file(&file, "owner_unlock_daemon_active", OPERATION)?;
+    try_lock_owner_file(&file, HostCode::OwnerUnlockDaemonActive, OPERATION)?;
     recover_compaction(state_root, &mut file)?;
     let Some((mut record, previous_resource_disposition)) =
         read_last_record(&mut file)?.and_then(|record| match record.resource_disposition {
@@ -501,14 +513,14 @@ pub(crate) fn unlock_retained_owner(
             _ => None,
         })
     else {
-        return Err(refused("owner_unlock_not_required"));
+        return Err(refused(HostCode::OwnerUnlockNotRequired.code()));
     };
     if !confirmed {
-        return Err(refused("owner_unlock_confirmation_missing"));
+        return Err(refused(HostCode::OwnerUnlockConfirmationMissing.code()));
     }
     record.revision = record.revision.checked_add(1).ok_or_else(|| {
         RuntimeHostError::fatal(
-            "owner_revision_overflow",
+            HostCode::OwnerRevisionOverflow,
             OPERATION,
             RuntimeErrorCode::RuntimeFatal,
         )
@@ -547,8 +559,9 @@ fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal>
 /// compaction a crash interrupted, then removes its side file. Like the incomplete-tail
 /// recovery it writes no event.
 fn recover_compaction(state_root: &Path, file: &mut File) -> RuntimeHostResult<()> {
-    const OPERATION: &str = "recover_owner_compaction";
-    let fatal = |code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+    const OPERATION: ContractLocation = ContractLocation::RecoverOwnerCompaction;
+    let fatal =
+        |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
     let side_path = state_root.join(OWNER_COMPACTION_FILE_NAME);
     let mut side = Vec::new();
     match File::open(&side_path).and_then(|side_file| {
@@ -558,15 +571,15 @@ fn recover_compaction(state_root: &Path, file: &mut File) -> RuntimeHostResult<(
     }) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(fatal("owner_compaction_side_read_failed")),
+        Err(_) => return Err(fatal(HostCode::OwnerCompactionSideReadFailed.code())),
     }
     if side.len() as u64 > OWNER_JOURNAL_LIMIT + OWNER_COMPACTION_SEAL_ALLOWANCE {
-        return Err(fatal("owner_compaction_unrecoverable"));
+        return Err(fatal(SharedCode::OwnerCompactionUnrecoverable.code()));
     }
     RuntimeOwnerJournal::recover_compaction_locked(file, &side).map_err(owner_journal_error)?;
     std::fs::remove_file(&side_path)
         .and_then(|()| sync_directory(side_directory(&side_path)))
-        .map_err(|_| fatal("owner_compaction_cleanup_failed"))
+        .map_err(|_| fatal(HostCode::OwnerCompactionCleanupFailed.code()))
 }
 
 fn side_directory(side_path: &Path) -> &Path {
@@ -605,15 +618,17 @@ fn read_last_record(file: &mut File) -> RuntimeHostResult<Option<OwnerRecord>> {
 
 fn try_lock_owner_file(
     file: &File,
-    conflict: &'static str,
-    operation: &'static str,
+    conflict: impl Into<Code>,
+    operation: impl Into<Location>,
 ) -> RuntimeHostResult<()> {
+    let conflict: Code = conflict.into();
+    let operation: Location = operation.into();
     file.try_lock().map_err(|error| match error {
         std::fs::TryLockError::WouldBlock => {
             RuntimeHostError::fatal(conflict, operation, RuntimeErrorCode::OwnerConflict)
         }
         std::fs::TryLockError::Error(_) => RuntimeHostError::fatal(
-            "owner_lock_failed",
+            HostCode::OwnerLockFailed,
             operation,
             RuntimeErrorCode::RuntimeFatal,
         ),
@@ -627,8 +642,8 @@ fn append_record(file: &mut File, record: &OwnerRecord) -> RuntimeHostResult<()>
 fn encode_record(record: &OwnerRecord) -> RuntimeHostResult<Vec<u8>> {
     let mut encoded = serde_json::to_vec(record).map_err(|_| {
         RuntimeHostError::fatal(
-            "owner_record_encode_failed",
-            "write_owner_file",
+            HostCode::OwnerRecordEncodeFailed,
+            HostLocation::WriteOwnerFile,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
@@ -639,22 +654,22 @@ fn encode_record(record: &OwnerRecord) -> RuntimeHostResult<Vec<u8>> {
 fn write_record(file: &mut File, encoded: &[u8]) -> RuntimeHostResult<()> {
     file.seek(SeekFrom::End(0)).map_err(|_| {
         RuntimeHostError::fatal(
-            "owner_seek_failed",
-            "write_owner_file",
+            SharedCode::OwnerSeekFailed,
+            HostLocation::WriteOwnerFile,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
     file.write_all(encoded).map_err(|_| {
         RuntimeHostError::fatal(
-            "owner_write_failed",
-            "write_owner_file",
+            HostCode::OwnerWriteFailed,
+            HostLocation::WriteOwnerFile,
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;
     file.sync_data().map_err(|_| {
         RuntimeHostError::fatal(
-            "owner_sync_failed",
-            "write_owner_file",
+            HostCode::OwnerSyncFailed,
+            HostLocation::WriteOwnerFile,
             RuntimeErrorCode::RuntimeFatal,
         )
     })
@@ -722,7 +737,7 @@ mod tests {
             .expect("update same retained owner");
         let record = read_last_record(
             first_guard
-                .file_mut("read_retained_owner")
+                .file_mut(crate::codes::test_spellings::TestLocation::ReadRetainedOwner)
                 .expect("same handle"),
         )
         .expect("persisted retained owner")
@@ -814,9 +829,13 @@ mod tests {
                 last_disposition: OwnerResourceDisposition::Unconfirmed,
             })
         );
-        let record = read_last_record(released.file_mut("read_released_owner").expect("handle"))
-            .expect("persisted released owner")
-            .expect("owner record");
+        let record = read_last_record(
+            released
+                .file_mut(crate::codes::test_spellings::TestLocation::ReadReleasedOwner)
+                .expect("handle"),
+        )
+        .expect("persisted released owner")
+        .expect("owner record");
         assert_eq!(record.revision, 2);
         assert_eq!(record.owner_epoch, owner_epoch);
         assert!(record.active);
@@ -846,10 +865,14 @@ mod tests {
             )
         };
         let own_revision = |guard: &mut OwnerGuard| {
-            read_last_record(guard.file_mut("read_own_start").expect("same handle"))
-                .expect("persisted start")
-                .expect("owner record")
-                .revision
+            read_last_record(
+                guard
+                    .file_mut(crate::codes::test_spellings::TestLocation::ReadOwnStart)
+                    .expect("same handle"),
+            )
+            .expect("persisted start")
+            .expect("owner record")
+            .revision
         };
 
         // Without the marker: a journal ending in a formal close reads as before.

@@ -197,23 +197,23 @@ impl TestClient {
                         "Closed"
                     };
                     return Err(RuntimeHostError::request(
-                        "test_receipt_missing",
-                        "read_test_receipt",
+                        crate::codes::test_spellings::TestCode::TestReceiptMissing,
+                        crate::codes::test_spellings::TestLocation::ReadTestReceipt,
                         RuntimeErrorCode::ProtocolInvalid,
                     ));
                 }
             };
             let receipt = serde_json::from_slice::<RuntimeReceipt>(&frame).map_err(|_| {
                 RuntimeHostError::request(
-                    "test_receipt_invalid",
-                    "read_test_receipt",
+                    crate::codes::test_spellings::TestCode::TestReceiptInvalid,
+                    crate::codes::test_spellings::TestLocation::ReadTestReceipt,
                     RuntimeErrorCode::ProtocolInvalid,
                 )
             })?;
             receipt.validate().map_err(|_| {
                 RuntimeHostError::request(
-                    "test_receipt_invalid",
-                    "read_test_receipt",
+                    crate::codes::test_spellings::TestCode::TestReceiptInvalid,
+                    crate::codes::test_spellings::TestLocation::ReadTestReceipt,
                     RuntimeErrorCode::ProtocolInvalid,
                 )
             })?;

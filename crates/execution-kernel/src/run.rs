@@ -2,33 +2,36 @@
 
 //! Pure run coordination and successor suggestion decisions.
 
+use crate::ContainedTaskCode;
+use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{TaskPhase, TaskPhaseEvidence};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunDecisionError {
-    code: &'static str,
+    code: Code,
     message: String,
 }
 
 impl RunDecisionError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "run_decision_invalid",
+            code: ExecutionKernelCode::RunDecisionInvalid.code(),
             message: message.into(),
         }
     }
 
     fn invalid_transition(message: impl Into<String>) -> Self {
         Self {
-            code: "run_transition_invalid",
+            code: ExecutionKernelCode::RunTransitionInvalid.code(),
             message: message.into(),
         }
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
@@ -151,7 +154,7 @@ pub enum RunFailureStage {
 pub struct RunFailureObservation {
     operation_id: String,
     attempt: u32,
-    reason: String,
+    reason: ContainedTaskCode,
     after_page: Option<String>,
     stage: RunFailureStage,
 }
@@ -160,7 +163,7 @@ impl RunFailureObservation {
     pub fn new(
         operation_id: impl Into<String>,
         attempt: u32,
-        reason: impl Into<String>,
+        reason: impl Into<ContainedTaskCode>,
         after_page: Option<String>,
         stage: RunFailureStage,
     ) -> Result<Self, RunDecisionError> {
@@ -181,7 +184,7 @@ impl RunFailureObservation {
                 "run failure attempt must be greater than zero",
             ));
         }
-        if observation.reason.trim().is_empty() {
+        if observation.reason.as_str().trim().is_empty() {
             return Err(RunDecisionError::invalid(
                 "run failure reason must not be empty",
             ));
@@ -197,8 +200,8 @@ impl RunFailureObservation {
         self.attempt
     }
 
-    pub fn reason(&self) -> &str {
-        &self.reason
+    pub const fn reason(&self) -> ContainedTaskCode {
+        self.reason
     }
 
     pub fn after_page(&self) -> Option<&str> {
@@ -213,7 +216,8 @@ impl RunFailureObservation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunRecoveryTrigger {
     pub operation_id: String,
-    pub reason: String,
+    #[serde(serialize_with = "code_spelling")]
+    pub reason: ContainedTaskCode,
     pub after_page: Option<String>,
     pub attempts: u32,
     pub recovery_task_id: String,
@@ -222,7 +226,8 @@ pub struct RunRecoveryTrigger {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunFailure {
     pub operation_id: String,
-    pub reason: String,
+    #[serde(serialize_with = "code_spelling")]
+    pub reason: ContainedTaskCode,
     pub after_page: Option<String>,
     pub attempts: u32,
 }
@@ -392,7 +397,8 @@ pub enum RunPauseReason {
 pub struct RunPause {
     pub reason: RunPauseReason,
     pub operation_id: Option<String>,
-    pub failure_reason: Option<String>,
+    #[serde(serialize_with = "optional_code_spelling")]
+    pub failure_reason: Option<ContainedTaskCode>,
     pub completed_task_retries: u32,
     pub max_task_retries: u32,
     pub completed_steps: u32,
@@ -410,7 +416,8 @@ pub struct RunSuccessorSuggestion {
     pub kind: RunSuccessorKind,
     pub task_id: String,
     pub source_operation_id: String,
-    pub failure_reason: String,
+    #[serde(serialize_with = "code_spelling")]
+    pub failure_reason: ContainedTaskCode,
     pub after_page: Option<String>,
     pub requested_task_retry: u32,
     pub max_task_retries: u32,
@@ -730,6 +737,25 @@ pub fn select_run_operation<'a>(
         })
 }
 
+/// A failure code in serialized output as its spelling.
+fn code_spelling<S: Serializer>(
+    code: &ContainedTaskCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(code.as_str())
+}
+
+/// An optional failure code in serialized output as its spelling, or `null`.
+fn optional_code_spelling<S: Serializer>(
+    code: &Option<ContainedTaskCode>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match code {
+        Some(code) => serializer.serialize_some(code.as_str()),
+        None => serializer.serialize_none(),
+    }
+}
+
 pub fn canonical_page_anchor(game: &str, page_id: &str) -> String {
     let prefix = format!("{game}/");
     page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
@@ -899,7 +925,7 @@ mod tests {
             .expect("page");
 
         let error = machine.next_directive(&[]).expect_err("ambiguous terminal");
-        assert_eq!(error.code(), "run_decision_invalid");
+        assert_eq!(error.code().as_str(), "run_decision_invalid");
         assert!(error.message().contains("ambiguously matches"));
     }
 
@@ -994,7 +1020,7 @@ mod tests {
             .operation_succeeded("another_operation", Some("terminal".to_string()))
             .expect_err("mismatch");
 
-        assert_eq!(error.code(), "run_transition_invalid");
+        assert_eq!(error.code().as_str(), "run_transition_invalid");
     }
 
     fn candidate(id: &str, from_page: &str) -> RunOperationCandidate {
@@ -1019,7 +1045,7 @@ mod tests {
         RunFailureObservation::new(
             "open_terminal",
             attempt,
-            "page_confirmation_failed",
+            ExecutionKernelCode::PageConfirmationFailed.code(),
             Some("home".to_string()),
             stage,
         )
@@ -1045,7 +1071,7 @@ mod tests {
     fn recovery_trigger() -> RunRecoveryTrigger {
         RunRecoveryTrigger {
             operation_id: "open_terminal".to_string(),
-            reason: "page_confirmation_failed".to_string(),
+            reason: ExecutionKernelCode::PageConfirmationFailed.code().into(),
             after_page: Some("home".to_string()),
             attempts: 3,
             recovery_task_id: "return_home".to_string(),

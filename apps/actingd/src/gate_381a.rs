@@ -19,7 +19,7 @@ fn gate_the_fatal_line_of_a_held_start_stopped_by_a_latched_failure_names_the_ca
     let installer = start.release(root.path());
     start.reached(PreparationCheckpoint::Preparing);
     start.go_on(PreparationTestAction::LatchLedgerFailure {
-        operation: "append_runtime_event",
+        operation: actingcommand_runtime_host::HostLocation::AppendRuntimeEvent.location(),
     });
     let stopped = start.finish().err().expect("the held start stops");
     drop(installer);

@@ -36,6 +36,7 @@ use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 
 /// Which host-scheduled package a run is: the typed admission codes and the failure record
 /// category depend on it.
@@ -48,10 +49,10 @@ pub(super) enum HostPackageRun {
 }
 
 impl HostPackageRun {
-    pub(super) const fn adb_not_ready_code(self) -> &'static str {
+    pub(super) const fn adb_not_ready_code(self) -> HostCode {
         match self {
-            Self::StartupPackage => "startup_package_adb_not_ready",
-            Self::ReturnHome => "recovery_ladder_adb_not_ready",
+            Self::StartupPackage => HostCode::StartupPackageAdbNotReady,
+            Self::ReturnHome => HostCode::RecoveryLadderAdbNotReady,
         }
     }
 
@@ -96,16 +97,16 @@ pub(super) fn resolve_startup_packages(
             .find(|instance| instance.instance_alias == *alias)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    "startup_package_instance_unknown",
-                    "start_runtime_host",
+                    HostCode::StartupPackageInstanceUnknown,
+                    HostLocation::StartRuntimeHost,
                     RuntimeErrorCode::RuntimeFatal,
                 )
                 .with_native_detail(format!("instance_alias={alias}"))
             })?;
         if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
             return Err(RuntimeHostError::fatal(
-                "startup_package_requires_physical_instance",
-                "start_runtime_host",
+                HostCode::StartupPackageRequiresPhysicalInstance,
+                HostLocation::StartRuntimeHost,
                 RuntimeErrorCode::RuntimeFatal,
             )
             .with_native_detail(format!("instance_alias={alias}")));
@@ -151,11 +152,11 @@ impl HostShared {
         let connection_id =
             ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    "build_startup_package_connection",
+                    HostLocation::BuildStartupPackageConnection,
                     &error,
                 ))
             })?;
-        let queued = lock(&self.scheduler, "read_queued_startup_claims")?
+        let queued = lock(&self.scheduler, HostLocation::ReadQueuedStartupClaims)?
             .queued_of_kind(resolved.instance_id(), ClaimKind::StartupPackage);
         for request_id in queued {
             self.cancel_host_claim(resolved.instance_id(), request_id, connection_id)
@@ -182,8 +183,8 @@ impl HostShared {
         )
         .map_err(|_| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "startup_package_claim_request_invalid",
-                "schedule_startup_package",
+                HostCode::StartupPackageClaimRequestInvalid,
+                HostLocation::ScheduleStartupPackage,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;

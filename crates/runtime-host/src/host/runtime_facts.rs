@@ -9,7 +9,10 @@
 
 use super::facts::BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX;
 use super::*;
+use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::PolicySettlement;
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, BackendOpenReport, DeviceSelfCheck,
     DeviceSelfCheckCapture, DeviceSelfCheckEntry, DeviceSelfCheckFailure, DeviceSelfCheckStatus,
@@ -167,8 +170,8 @@ pub(super) fn validate_settlement_fact_keys(
             task_settlement_fact_key(&task.id, suffix).len() > MAX_RUNTIME_FACT_KEY_BYTES
         }) {
             return Err(RuntimeHostError::request(
-                "task_id_too_long_for_facts",
-                "activate_policy_catalog",
+                HostCode::TaskIdTooLongForFacts,
+                HostLocation::ActivatePolicyCatalog,
                 RuntimeErrorCode::InvalidRequest,
             )
             .with_native_detail(format!(
@@ -184,8 +187,8 @@ pub(super) fn validate_settlement_fact_keys(
             settlement_outcome_key(outcome_key).len() > actingcommand_policy::MAX_ID_BYTES
         }) {
             return Err(RuntimeHostError::request(
-                "outcome_key_too_long_for_settlement",
-                "activate_policy_catalog",
+                HostCode::OutcomeKeyTooLongForSettlement,
+                HostLocation::ActivatePolicyCatalog,
                 RuntimeErrorCode::InvalidRequest,
             )
             .with_native_detail(format!(
@@ -240,19 +243,22 @@ impl HostShared {
         links: &EventLinksDraft,
         report: &BackendOpenReport,
     ) -> RuntimeHostResult<()> {
-        lock(&self.recovery_ladders, "supersede_preparation_attempt")?
-            .entry(instance_id)
-            .or_default()
-            .preparation = None;
+        lock(
+            &self.recovery_ladders,
+            HostLocation::SupersedePreparationAttempt,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .preparation = None;
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
-            "record_backend_selfcheck_facts",
+            HostLocation::RecordBackendSelfcheckFacts,
         )?;
         let checked_at_unix_ms = self.clock.sample()?.unix_ms;
         let overflow = || {
             RuntimeHostError::fatal(
-                "backend_selfcheck_fact_overflow",
-                "record_backend_selfcheck_facts",
+                HostCode::BackendSelfcheckFactOverflow,
+                HostLocation::RecordBackendSelfcheckFacts,
                 RuntimeErrorCode::RuntimeFatal,
             )
         };
@@ -284,12 +290,16 @@ impl HostShared {
         let scope = RuntimeFactScope::Instance { instance_id };
         let result: RuntimeHostResult<()> = (|| {
             let (instance_alias, self_checked) = self.selfcheck_instance(instance_id)?;
-            let _gate = lock(&self.fact_write_gate, "record_backend_selfcheck_facts")?;
+            let _gate = lock(
+                &self.fact_write_gate,
+                HostLocation::RecordBackendSelfcheckFacts,
+            )?;
             for (suffix, value) in values {
                 let key = format!("{BACKEND_SELFCHECK_PREFIX}{entry}.{suffix}");
-                let stored_at_unix_ms = lock(&self.runtime_facts, "read_backend_selfcheck_fact")?
-                    .get(&scope, &key)
-                    .map(|record| record.observed_at_unix_ms);
+                let stored_at_unix_ms =
+                    lock(&self.runtime_facts, HostLocation::ReadBackendSelfcheckFact)?
+                        .get(&scope, &key)
+                        .map(|record| record.observed_at_unix_ms);
                 let observed_at_unix_ms = match stored_at_unix_ms {
                     Some(stored) => stored
                         .checked_add(1)
@@ -349,16 +359,19 @@ impl HostShared {
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<()> {
-        lock(&self.recovery_ladders, "invalidate_preparation_attempt")?
-            .entry(instance_id)
-            .or_default()
-            .preparation = None;
+        lock(
+            &self.recovery_ladders,
+            HostLocation::InvalidatePreparationAttempt,
+        )?
+        .entry(instance_id)
+        .or_default()
+        .preparation = None;
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
-            "invalidate_backend_selfcheck_facts",
+            HostLocation::InvalidateBackendSelfcheckFacts,
         )?;
         let scope = RuntimeFactScope::Instance { instance_id };
-        let keys = lock(&self.runtime_facts, "read_backend_selfcheck_facts")?
+        let keys = lock(&self.runtime_facts, HostLocation::ReadBackendSelfcheckFacts)?
             .records()
             .filter(|record| {
                 record.scope == scope && record.key.starts_with(BACKEND_SELFCHECK_PREFIX)
@@ -391,7 +404,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let _availability = lock(
             &self.backend_selfcheck_availability_gate,
-            "withhold_policy_instance_availability",
+            HostLocation::WithholdPolicyInstanceAvailability,
         )?;
         let result: RuntimeHostResult<()> = (|| {
             let Some((instance_alias, _)) = self.gated_policy_instance(instance_id)? else {
@@ -473,7 +486,7 @@ impl HostShared {
         if !self_checked {
             return Ok(None);
         }
-        let seed_available = lock(&self.policy_inputs, "read_gated_policy_instance")?
+        let seed_available = lock(&self.policy_inputs, HostLocation::ReadGatedPolicyInstance)?
             .as_ref()
             .and_then(|inputs| {
                 inputs
@@ -489,9 +502,12 @@ impl HostShared {
         &self,
         instance_alias: &str,
     ) -> RuntimeHostResult<(Option<FactRecord>, Option<bool>)> {
-        let _gate = lock(&self.fact_write_gate, "read_policy_instance_availability")?;
+        let _gate = lock(
+            &self.fact_write_gate,
+            HostLocation::ReadPolicyInstanceAvailability,
+        )?;
         self.synchronize_fact_store_under_gate()?;
-        let active = lock(&self.facts, "read_policy_instance_availability")?
+        let active = lock(&self.facts, HostLocation::ReadPolicyInstanceAvailability)?
             .active_record(
                 &FactScope::Instance {
                     instance_id: instance_alias.to_owned(),
@@ -512,7 +528,10 @@ impl HostShared {
     /// `failed`, and `nemu`, or both `input` and `capture`, hold `passed`.
     fn backend_selfcheck_passed(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
         let scope = RuntimeFactScope::Instance { instance_id };
-        let store = lock(&self.runtime_facts, "read_backend_selfcheck_status")?;
+        let store = lock(
+            &self.runtime_facts,
+            HostLocation::ReadBackendSelfcheckStatus,
+        )?;
         let status = |entry: &str| {
             store
                 .get(
@@ -535,9 +554,9 @@ impl HostShared {
         instance_id: InstanceId,
         capture: bool,
         input: bool,
-    ) -> RuntimeHostResult<Option<&'static str>> {
+    ) -> RuntimeHostResult<Option<HostCode>> {
         let scope = RuntimeFactScope::Instance { instance_id };
-        let store = lock(&self.runtime_facts, "read_recovery_entry_channels")?;
+        let store = lock(&self.runtime_facts, HostLocation::ReadRecoveryEntryChannels)?;
         let failed = |entry| {
             store
                 .get(
@@ -547,9 +566,9 @@ impl HostShared {
                 .is_some_and(|record| record.value == FactValue::String("failed".to_owned()))
         };
         Ok(if capture && (failed("capture") || failed("nemu")) {
-            Some("recovery_capture_unavailable")
+            Some(HostCode::RecoveryCaptureUnavailable)
         } else if input && (failed("input") || failed("nemu")) {
-            Some("recovery_input_unavailable")
+            Some(HostCode::RecoveryInputUnavailable)
         } else {
             None
         })
@@ -560,7 +579,7 @@ impl HostShared {
     fn selfcheck_instance(&self, instance_id: InstanceId) -> RuntimeHostResult<(String, bool)> {
         lock(
             &self.registered_instances,
-            "read_backend_selfcheck_instance",
+            HostLocation::ReadBackendSelfcheckInstance,
         )?
         .get(&instance_id)
         .map(|instance| {
@@ -571,8 +590,8 @@ impl HostShared {
         })
         .ok_or_else(|| {
             RuntimeHostError::fatal(
-                "backend_selfcheck_instance_unregistered",
-                "record_backend_selfcheck_facts",
+                HostCode::BackendSelfcheckInstanceUnregistered,
+                HostLocation::RecordBackendSelfcheckFacts,
                 RuntimeErrorCode::RuntimeFatal,
             )
         })
@@ -596,7 +615,7 @@ impl HostShared {
         record: RuntimeFactRecord,
     ) -> RuntimeHostResult<(RuntimeFactChange, Option<EventId>)> {
         let result = (|| {
-            let _gate = lock(&self.fact_write_gate, "record_runtime_fact")?;
+            let _gate = lock(&self.fact_write_gate, HostLocation::RecordRuntimeFact)?;
             self.record_runtime_fact_and_event_under_gate(record)
         })();
         if let Err(error) = &result
@@ -622,7 +641,7 @@ impl HostShared {
         record: RuntimeFactRecord,
     ) -> RuntimeHostResult<(RuntimeFactChange, Option<EventId>)> {
         let precheck = {
-            let store = lock(&self.runtime_facts, "record_runtime_fact")?;
+            let store = lock(&self.runtime_facts, HostLocation::RecordRuntimeFact)?;
             precheck_runtime_fact(&store, &record)?
         };
         if let Some(unchanged) = precheck {
@@ -637,9 +656,9 @@ impl HostShared {
             links,
             RuntimePayloadDraft::fact_recorded(record.clone(), AuditInput::new()),
         )?;
-        let change = lock(&self.runtime_facts, "record_runtime_fact")?
+        let change = lock(&self.runtime_facts, HostLocation::RecordRuntimeFact)?
             .record(record)
-            .map_err(|error| runtime_fact_desync(&error, "record_runtime_fact"))?;
+            .map_err(|error| runtime_fact_desync(&error, HostLocation::RecordRuntimeFact))?;
         self.runtime_facts_dirty.store(true, Ordering::Release);
         self.synchronize_fact_store_under_gate()?;
         Ok((change, Some(*event.event_id())))
@@ -656,7 +675,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let scope = RuntimeFactScope::Instance { instance_id };
         let value = FactValue::String(value.to_owned());
-        let unchanged = lock(&self.runtime_facts, "read_instance_string_fact")?
+        let unchanged = lock(&self.runtime_facts, HostLocation::ReadInstanceStringFact)?
             .get(&scope, key)
             .is_some_and(|record| record.value == value);
         if unchanged {
@@ -672,7 +691,7 @@ impl HostShared {
             ttl_ms: None,
         }) {
             Ok(_) => Ok(()),
-            Err(error) if error.code() == "runtime_fact_stale" => Ok(()),
+            Err(error) if error.code() == HostCode::RuntimeFactStale.as_str() => Ok(()),
             Err(error) => Err(error),
         }
     }
@@ -691,8 +710,8 @@ impl HostShared {
                 .settlement_instance_id(&settlement.instance_alias)?
                 .ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "policy_settlement_instance_unknown",
-                        "record_policy_settlement_facts",
+                        HostCode::PolicySettlementInstanceUnknown,
+                        HostLocation::RecordPolicySettlementFacts,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
@@ -718,7 +737,8 @@ impl HostShared {
     /// nothing; a pair of an instance no longer registered has no instance scope and is left
     /// as the ledger holds it.
     pub(super) fn record_policy_settlement_facts_on_start(&self) -> RuntimeHostResult<()> {
-        let settlements = lock(self.policy()?, "read_policy_settlements")?.latest_settlements()?;
+        let settlements =
+            lock(self.policy()?, HostLocation::ReadPolicySettlements)?.latest_settlements()?;
         for settlement in &settlements {
             if self
                 .settlement_instance_id(&settlement.instance_alias)?
@@ -737,7 +757,7 @@ impl HostShared {
     ) -> RuntimeHostResult<Option<InstanceId>> {
         Ok(lock(
             &self.registered_instances,
-            "resolve_policy_settlement_instance",
+            HostLocation::ResolvePolicySettlementInstance,
         )?
         .values()
         .find(|instance| instance.instance_alias == instance_alias)
@@ -752,8 +772,8 @@ impl HostShared {
         let integer = |value: u64| {
             i64::try_from(value).map(FactValue::Integer).map_err(|_| {
                 RuntimeHostError::fatal(
-                    "policy_settlement_fact_overflow",
-                    "record_policy_settlement_facts",
+                    HostCode::PolicySettlementFactOverflow,
+                    HostLocation::RecordPolicySettlementFacts,
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })
@@ -803,14 +823,14 @@ impl HostShared {
         reason: RuntimeFactInvalidationReason,
     ) -> RuntimeHostResult<RuntimeFactInvalidation> {
         let result: RuntimeHostResult<RuntimeFactInvalidation> = (|| {
-            let _gate = lock(&self.fact_write_gate, "invalidate_runtime_fact")?;
-            if lock(&self.runtime_facts, "invalidate_runtime_fact")?
+            let _gate = lock(&self.fact_write_gate, HostLocation::InvalidateRuntimeFact)?;
+            if lock(&self.runtime_facts, HostLocation::InvalidateRuntimeFact)?
                 .get(scope, key)
                 .is_none()
             {
                 return Err(runtime_fact_rejection(
                     &RuntimeFactError::Missing,
-                    "invalidate_runtime_fact",
+                    HostLocation::InvalidateRuntimeFact,
                 ));
             }
             let at_unix_ms = self.clock.sample()?.unix_ms;
@@ -822,8 +842,8 @@ impl HostShared {
             };
             invalidation.validate().map_err(|error| {
                 RuntimeHostError::request(
-                    error.code().as_str(),
-                    "invalidate_runtime_fact",
+                    error.code(),
+                    HostLocation::InvalidateRuntimeFact,
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
@@ -836,9 +856,11 @@ impl HostShared {
                 links,
                 RuntimePayloadDraft::fact_invalidated(invalidation, AuditInput::new()),
             )?;
-            let invalidation = lock(&self.runtime_facts, "invalidate_runtime_fact")?
+            let invalidation = lock(&self.runtime_facts, HostLocation::InvalidateRuntimeFact)?
                 .invalidate(scope, key, reason, at_unix_ms)
-                .map_err(|error| runtime_fact_desync(&error, "invalidate_runtime_fact"))?;
+                .map_err(|error| {
+                    runtime_fact_desync(&error, HostLocation::InvalidateRuntimeFact)
+                })?;
             self.runtime_facts_dirty.store(true, Ordering::Release);
             self.synchronize_fact_store_under_gate()?;
             Ok(invalidation)
@@ -853,14 +875,16 @@ impl HostShared {
 
     /// Seals the live store at the ledger's latest sequence. Writes nothing.
     pub(super) fn runtime_fact_snapshot(&self) -> RuntimeHostResult<RuntimeFactSnapshot> {
-        let _gate = lock(&self.fact_write_gate, "read_runtime_fact_snapshot")?;
+        let _gate = lock(&self.fact_write_gate, HostLocation::ReadRuntimeFactSnapshot)?;
         let ledger_position = self
             .ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("read_runtime_fact_position"))?;
+            .map_err(|_| ledger_error(HostLocation::ReadRuntimeFactPosition))?;
         let taken_at_unix_ms = self.clock.sample()?.unix_ms;
-        Ok(lock(&self.runtime_facts, "read_runtime_fact_snapshot")?
-            .snapshot(ledger_position, taken_at_unix_ms))
+        Ok(
+            lock(&self.runtime_facts, HostLocation::ReadRuntimeFactSnapshot)?
+                .snapshot(ledger_position, taken_at_unix_ms),
+        )
     }
 
     /// Seals the store when it changed since the last seal (Workflow #308 5d-1): the records
@@ -870,16 +894,19 @@ impl HostShared {
     /// failure is fatal. A never-changed store appends nothing.
     pub(super) fn append_runtime_fact_snapshot_if_dirty(&self) -> RuntimeHostResult<bool> {
         let result: RuntimeHostResult<bool> = (|| {
-            let _gate = lock(&self.fact_write_gate, "append_runtime_fact_snapshot")?;
+            let _gate = lock(
+                &self.fact_write_gate,
+                HostLocation::AppendRuntimeFactSnapshot,
+            )?;
             if !self.runtime_facts_dirty.load(Ordering::Acquire) {
                 return Ok(false);
             }
             let ledger_position = self
                 .ledger
                 .latest_sequence()
-                .map_err(|_| ledger_error("read_runtime_fact_position"))?;
+                .map_err(|_| ledger_error(HostLocation::ReadRuntimeFactPosition))?;
             let taken_at_unix_ms = self.clock.sample()?.unix_ms;
-            let sealed = lock(&self.runtime_facts, "append_runtime_fact_snapshot")?
+            let sealed = lock(&self.runtime_facts, HostLocation::AppendRuntimeFactSnapshot)?
                 .snapshot(ledger_position, taken_at_unix_ms);
             let parts = split_runtime_fact_snapshot(sealed)?;
             // The typed size and position codes surface here as fatal host errors; sanitization
@@ -887,8 +914,8 @@ impl HostShared {
             for part in &parts {
                 part.validate_for_append().map_err(|error| {
                     RuntimeHostError::fatal(
-                        error.code().as_str(),
-                        "append_runtime_fact_snapshot",
+                        error.code(),
+                        HostLocation::AppendRuntimeFactSnapshot,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
@@ -922,12 +949,15 @@ impl HostShared {
         match scope {
             RuntimeFactScope::Runtime => Ok(links),
             RuntimeFactScope::Instance { instance_id } => {
-                if !lock(&self.registered_instances, "bind_runtime_fact_scope")?
-                    .contains_key(instance_id)
+                if !lock(
+                    &self.registered_instances,
+                    HostLocation::BindRuntimeFactScope,
+                )?
+                .contains_key(instance_id)
                 {
                     return Err(RuntimeHostError::request(
-                        "runtime_fact_instance_unknown",
-                        "bind_runtime_fact_scope",
+                        HostCode::RuntimeFactInstanceUnknown,
+                        HostLocation::BindRuntimeFactScope,
                         RuntimeErrorCode::InstanceUnknown,
                     ));
                 }
@@ -946,10 +976,10 @@ impl HostShared {
 fn split_runtime_fact_snapshot(
     sealed: RuntimeFactSnapshot,
 ) -> RuntimeHostResult<Vec<RuntimeFactSnapshot>> {
-    let fatal = |code| {
+    let fatal = |code: Code| {
         RuntimeHostError::fatal(
             code,
-            "append_runtime_fact_snapshot",
+            HostLocation::AppendRuntimeFactSnapshot,
             RuntimeErrorCode::RuntimeFatal,
         )
     };
@@ -961,14 +991,14 @@ fn split_runtime_fact_snapshot(
     };
     // The widest part numbers, so the real envelope is never larger than the one measured.
     let envelope_bytes = serde_json::to_vec(&envelope)
-        .map_err(|_| fatal("invalid_runtime_fact_snapshot"))?
+        .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.code()))?
         .len();
     let mut groups = Vec::new();
     let mut current = Vec::new();
     let mut current_bytes = envelope_bytes;
     for record in sealed.records {
         let record_bytes = serde_json::to_vec(&record)
-            .map_err(|_| fatal("invalid_runtime_fact_snapshot"))?
+            .map_err(|_| fatal(SharedCode::InvalidRuntimeFactSnapshot.code()))?
             .len();
         // Every record after the first in a part adds one separating comma.
         if !current.is_empty() && current_bytes + 1 + record_bytes > MAX_RUNTIME_FACT_SNAPSHOT_BYTES
@@ -983,7 +1013,7 @@ fn split_runtime_fact_snapshot(
         groups.push(current);
     }
     let parts = u16::try_from(groups.len())
-        .map_err(|_| fatal("runtime_fact_snapshot_payload_too_large"))?;
+        .map_err(|_| fatal(SharedCode::RuntimeFactSnapshotPayloadTooLarge.code()))?;
     envelope.parts = parts;
     Ok(groups
         .into_iter()
@@ -1034,7 +1064,7 @@ impl SnapshotEventsNewestFirst<'_> {
                         self.upper,
                         RUNTIME_FACT_SNAPSHOT_PAGE_EVENTS,
                     )
-                    .map_err(|_| ledger_error("recover_runtime_facts"))?;
+                    .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
                 let exhausted = page.len() < RUNTIME_FACT_SNAPSHOT_PAGE_EVENTS;
                 if let Some(last) = page.last() {
                     after = last.sequence();
@@ -1061,10 +1091,7 @@ impl SnapshotEventsNewestFirst<'_> {
         snapshot.validate().map_err(|error| {
             runtime_fact_replay_failed(
                 sequence,
-                &RuntimeFactError::Invalid {
-                    code: error.code().as_str(),
-                }
-                .to_string(),
+                &RuntimeFactError::Invalid { code: error.code() }.to_string(),
             )
         })?;
         self.floor = if snapshot.part > 1 {
@@ -1095,7 +1122,7 @@ pub(super) fn recover_runtime_fact_store(
         ledger,
         upper: ledger
             .latest_sequence()
-            .map_err(|_| ledger_error("recover_runtime_facts"))?,
+            .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?,
         window: RUNTIME_FACT_SNAPSHOT_SEARCH_WINDOW,
         floor: 0,
         buffered: Vec::new(),
@@ -1121,7 +1148,7 @@ pub(super) fn recover_runtime_fact_store(
         let draft = events.sanitize(draft)?;
         ledger
             .append(draft)
-            .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))?;
+            .map_err(|_| ledger_error(HostLocation::AppendRuntimeLifecycleObserved))?;
     }
     let mut from_sequence = 1;
     if let Some(set) = &search.set {
@@ -1148,7 +1175,7 @@ pub(super) fn recover_runtime_fact_store(
             origin_module: Some(OriginModule::RuntimeFacts),
             ..EventQuery::default()
         })
-        .map_err(|_| ledger_error("recover_runtime_facts"))?;
+        .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
     for event in &appended {
         let sequence = event.sequence();
         match event.payload() {
@@ -1237,7 +1264,7 @@ fn append_takeover_invalidations(
             let draft = events.sanitize(draft)?;
             ledger
                 .append(draft)
-                .map_err(|_| ledger_error("append_runtime_fact_invalidated"))?;
+                .map_err(|_| ledger_error(HostLocation::AppendRuntimeFactInvalidated))?;
         }
         let mut dropped = store.invalidate_instance(
             *instance_id,
@@ -1263,8 +1290,8 @@ fn append_takeover_invalidations(
         dropped.sort_by(|left, right| left.key.cmp(&right.key));
         if dropped.iter().map(|entry| &entry.key).ne(keys.iter()) {
             return Err(RuntimeHostError::fatal(
-                "runtime_fact_store_desync",
-                "invalidate_runtime_facts_on_takeover",
+                HostCode::RuntimeFactStoreDesync,
+                HostLocation::InvalidateRuntimeFactsOnTakeover,
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -1281,10 +1308,8 @@ fn precheck_runtime_fact(
 ) -> RuntimeHostResult<Option<RuntimeFactChange>> {
     record.validate().map_err(|error| {
         runtime_fact_rejection(
-            &RuntimeFactError::Invalid {
-                code: error.code().as_str(),
-            },
-            "record_runtime_fact",
+            &RuntimeFactError::Invalid { code: error.code() },
+            HostLocation::RecordRuntimeFact,
         )
     })?;
     match store.get(&record.scope, &record.key) {
@@ -1294,7 +1319,7 @@ fn precheck_runtime_fact(
                 &RuntimeFactError::Stale {
                     existing_observed_at_unix_ms: existing.observed_at_unix_ms,
                 },
-                "record_runtime_fact",
+                HostLocation::RecordRuntimeFact,
             ))
         }
         Some(_) => Ok(None),
@@ -1302,23 +1327,26 @@ fn precheck_runtime_fact(
             &RuntimeFactError::CapacityExceeded {
                 limit: MAX_RUNTIME_FACTS,
             },
-            "record_runtime_fact",
+            HostLocation::RecordRuntimeFact,
         )),
         None => Ok(None),
     }
 }
 
-const fn runtime_fact_code(error: &RuntimeFactError) -> &'static str {
+const fn runtime_fact_code(error: &RuntimeFactError) -> Code {
     match error {
-        RuntimeFactError::Invalid { code } => code,
-        RuntimeFactError::Stale { .. } => "runtime_fact_stale",
-        RuntimeFactError::CapacityExceeded { .. } => "runtime_fact_capacity_exceeded",
-        RuntimeFactError::Missing => "runtime_fact_missing",
+        RuntimeFactError::Invalid { code } => *code,
+        RuntimeFactError::Stale { .. } => HostCode::RuntimeFactStale.code(),
+        RuntimeFactError::CapacityExceeded { .. } => HostCode::RuntimeFactCapacityExceeded.code(),
+        RuntimeFactError::Missing => HostCode::RuntimeFactMissing.code(),
     }
 }
 
 /// A store rule refused the change before anything was appended.
-fn runtime_fact_rejection(error: &RuntimeFactError, operation: &'static str) -> RuntimeHostError {
+fn runtime_fact_rejection(
+    error: &RuntimeFactError,
+    operation: impl Into<Location>,
+) -> RuntimeHostError {
     RuntimeHostError::request(
         runtime_fact_code(error),
         operation,
@@ -1328,9 +1356,12 @@ fn runtime_fact_rejection(error: &RuntimeFactError, operation: &'static str) -> 
 }
 
 /// The store refused a change that was already appended: memory and ledger disagree.
-fn runtime_fact_desync(error: &RuntimeFactError, operation: &'static str) -> RuntimeHostError {
+fn runtime_fact_desync(
+    error: &RuntimeFactError,
+    operation: impl Into<Location>,
+) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "runtime_fact_store_desync",
+        HostCode::RuntimeFactStoreDesync,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
@@ -1340,8 +1371,8 @@ fn runtime_fact_desync(error: &RuntimeFactError, operation: &'static str) -> Run
 /// Our own ledger holds a runtime-facts event the store refuses to replay.
 fn runtime_fact_replay_failed(sequence: u64, detail: &str) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        "runtime_fact_replay_failed",
-        "recover_runtime_facts",
+        SharedCode::RuntimeFactReplayFailed,
+        HostLocation::RecoverRuntimeFacts,
         RuntimeErrorCode::RuntimeFatal,
     )
     .with_native_detail(format!("sequence {sequence}: {detail}"))

@@ -48,10 +48,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         })
         .map_err(|error| {
             (
-                ErrorCode::Host {
-                    host_code: error.code(),
-                },
-                error.operation(),
+                ErrorCode::Registered(error.code()),
+                error.operation().as_str(),
                 error.detail().map(str::to_owned),
             )
         }),

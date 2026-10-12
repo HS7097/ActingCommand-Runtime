@@ -7,6 +7,7 @@
 //! `capture.dedup_window`. A real formal SQLite root with its State tables and its
 //! ArtifactStore in the same directory.
 
+use crate::codes::LedgerLocation;
 use crate::global::tests::sealed_global_ledger::GlobalLedgerSink;
 use crate::global::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, FrameRetentionClass, FrameRetentionSwitches,
@@ -357,10 +358,11 @@ fn finish_failed(ledger: &GlobalLedger, permit: Box<ArtifactEvictionPermit>) {
             ))),
             response,
         },
-        "finish_failed_fixture",
+        LedgerLocation::FinishArtifactEviction.location(),
     )
     .expect("finish command");
-    let finished = receive_response(receiver, "finish_failed_fixture").expect("finish reply");
+    let finished = receive_response(receiver, LedgerLocation::FinishArtifactEviction.location())
+        .expect("finish reply");
     assert_eq!(
         finished
             .expect_err("a failed outcome stops the writer")

@@ -180,7 +180,7 @@ fn open_read_only_reports_last_segment_dangling_tail_at_last_complete_newline() 
     assert_eq!(tree_bytes(&root), before);
     assert_eq!(snapshot.events(), &[event]);
     let tail = snapshot.corrupt_tail().expect("corrupt tail");
-    assert_eq!(tail.code, "corrupt_segment");
+    assert_eq!(tail.code.as_str(), "corrupt_segment");
     assert_eq!(tail.segment_index, 1);
     assert_eq!(tail.byte_offset, byte_offset);
     assert_eq!(tail.dangling_byte_count, suffix.len() as u64);
@@ -209,7 +209,7 @@ fn open_read_only_reports_complete_corruption_with_readable_prefix() {
     assert_eq!(tree_bytes(&root), before);
     assert_eq!(snapshot.events(), &[event]);
     let tail = snapshot.corrupt_tail().expect("corrupt tail");
-    assert_eq!(tail.code, "corrupt_segment");
+    assert_eq!(tail.code.as_str(), "corrupt_segment");
     assert_eq!(tail.segment_index, 1);
     assert_eq!(tail.byte_offset, byte_offset);
     assert_eq!(tail.dangling_byte_count, suffix.len() as u64);
@@ -274,7 +274,7 @@ fn open_read_only_stops_on_non_final_tail_before_later_segments() {
     assert_eq!(snapshot.latest_sequence(), events[0].sequence());
     assert_eq!(snapshot.listed_through_segment(), Some(3));
     let tail = snapshot.corrupt_tail().expect("corrupt tail");
-    assert_eq!(tail.code, "corrupt_segment");
+    assert_eq!(tail.code.as_str(), "corrupt_segment");
     assert_eq!(tail.segment_index, 1);
     assert_eq!(tail.byte_offset, first_len);
     assert_eq!(tail.dangling_byte_count, suffix.len() as u64);

@@ -4035,6 +4035,9 @@
     }
   },
   "domains": {
+    "consecutive_unchanged_": [
+      "contract"
+    ],
     "foreign_": [
       "contract"
     ],
@@ -4049,6 +4052,9 @@
       "ledger-forensics",
       "runtime-client",
       "runtime-host"
+    ],
+    "max_steps_": [
+      "contract"
     ],
     "proposal_report_": [
       "runtime-host"
@@ -4562,6 +4568,9 @@
     "confirm_": [
       "ledger"
     ],
+    "confirm_deferred_": [
+      "runtime-host"
+    ],
     "confirmed_": [
       "runtime-host"
     ],
@@ -4747,6 +4756,9 @@
       "ledger",
       "ledger-forensics",
       "runtime-host"
+    ],
+    "digest_": [
+      "execution-kernel"
     ],
     "direct_": [
       "contract",
@@ -4985,6 +4997,9 @@
     "finalize_": [
       "runtime-host"
     ],
+    "find_": [
+      "runtime-host"
+    ],
     "fingerprinter_": [
       "contract"
     ],
@@ -5091,6 +5106,9 @@
       "runtime-database",
       "runtime-host"
     ],
+    "heavy_": [
+      "policy"
+    ],
     "highest_": [
       "actinglab"
     ],
@@ -5105,6 +5123,12 @@
       "actingctl",
       "actingd",
       "runtime-host"
+    ],
+    "host_budget_": [
+      "policy"
+    ],
+    "host_capacity_": [
+      "policy"
     ],
     "hsv_": [
       "pack-containment"
@@ -5164,6 +5188,9 @@
       "ledger",
       "runtime-database",
       "runtime-host"
+    ],
+    "inspect_state_": [
+      "runtime-state"
     ],
     "install_": [
       "actingctl",
@@ -5795,6 +5822,9 @@
       "actinglab",
       "device"
     ],
+    "probe_adb_": [
+      "runtime-host"
+    ],
     "procedure_": [
       "actingd",
       "contract",
@@ -6114,11 +6144,15 @@
       "runtime-host",
       "runtime-state"
     ],
+    "rollback_evidence_": [
+      "artifact-store"
+    ],
     "root_": [
       "device"
     ],
     "rotation_": [
-      "contract"
+      "contract",
+      "device"
     ],
     "run_": [
       "actingctl",
@@ -6611,6 +6645,9 @@
       "policy",
       "runtime-host"
     ],
+    "unload_": [
+      "runtime-host"
+    ],
     "unlock_": [
       "actingd",
       "ledger",
@@ -6638,7 +6675,8 @@
       "runtime-host"
     ],
     "upgrade_": [
-      "ledger"
+      "ledger",
+      "runtime-host"
     ],
     "upstream_": [
       "actinglab"

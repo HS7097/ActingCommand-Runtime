@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::{HostCode, HostLocation};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Code;
 
 impl HostShared {
     pub(super) fn export_evidence(
@@ -8,14 +11,14 @@ impl HostShared {
         validated: &ValidatedRuntimeRequest<'_>,
         request: &RuntimeEvidenceExportRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut debug_runs = lock(&self.debug_runs, "lock_runtime_debug_runs")?;
+        let mut debug_runs = lock(&self.debug_runs, HostLocation::LockRuntimeDebugRuns)?;
         let context = debug_runs
             .get_mut(&validated.correlation_id())
             .ok_or_else(|| {
                 RequestFailure::request(
                     RuntimeHostError::request(
-                        "runtime_debug_context_missing",
-                        "export_evidence",
+                        HostCode::RuntimeDebugContextMissing,
+                        ContractLocation::ExportEvidence,
                         RuntimeErrorCode::EvidenceExportFailed,
                     ),
                     RuntimeReceiptState::Denied,
@@ -36,8 +39,8 @@ impl HostShared {
             }
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "runtime_evidence_export_conflict",
-                    "export_evidence",
+                    HostCode::RuntimeEvidenceExportConflict,
+                    ContractLocation::ExportEvidence,
                     RuntimeErrorCode::EvidenceExportFailed,
                 ),
                 RuntimeReceiptState::Denied,
@@ -50,8 +53,8 @@ impl HostShared {
         {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
-                    "runtime_task_outcome_conflict",
-                    "export_evidence",
+                    HostCode::RuntimeTaskOutcomeConflict,
+                    ContractLocation::ExportEvidence,
                     RuntimeErrorCode::EvidenceExportFailed,
                 ),
                 RuntimeReceiptState::Denied,
@@ -89,7 +92,9 @@ impl HostShared {
                 },
                 actingcommand_contract::ProjectionProfile::Forensic,
             )
-            .map_err(|_| RequestFailure::poison(ledger_error("project_evidence_events"), None))?;
+            .map_err(|_| {
+                RequestFailure::poison(ledger_error(HostLocation::ProjectEvidenceEvents), None)
+            })?;
         let terminal_receipt = events
             .iter()
             .rev()
@@ -100,8 +105,8 @@ impl HostShared {
             .cloned()
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "runtime_task_terminal_missing",
-                    "export_evidence",
+                    HostCode::RuntimeTaskTerminalMissing,
+                    ContractLocation::ExportEvidence,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
@@ -183,15 +188,15 @@ impl HostShared {
             )?
             .ok_or_else(|| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "evidence_export_terminal_missing",
-                    "export_evidence",
+                    HostCode::EvidenceExportTerminalMissing,
+                    ContractLocation::ExportEvidence,
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
         let output_path = receipt.output_path().to_str().ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "evidence_output_path_invalid",
-                "export_evidence",
+                HostCode::EvidenceOutputPathInvalid,
+                ContractLocation::ExportEvidence,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -216,8 +221,8 @@ impl HostShared {
         )
         .map_err(|error| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                error.code().as_str(),
-                "export_evidence",
+                error.code(),
+                ContractLocation::ExportEvidence,
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
@@ -250,9 +255,9 @@ impl HostShared {
         let [event] = summaries.as_slice() else {
             return Err(RequestFailure::request(
                 evidence_request_error(if summaries.is_empty() {
-                    "evidence_capture_summary_missing"
+                    SharedCode::EvidenceCaptureSummaryMissing
                 } else {
-                    "evidence_capture_summary_duplicate"
+                    SharedCode::EvidenceCaptureSummaryDuplicate
                 }),
                 RuntimeReceiptState::Failed,
                 None,
@@ -260,7 +265,7 @@ impl HostShared {
         };
         if event.sequence == 0 || event.sequence >= terminal_sequence {
             return Err(RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_not_ready"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryNotReady),
                 RuntimeReceiptState::Failed,
                 None,
             ));
@@ -272,14 +277,14 @@ impl HostShared {
             || event.origin.actor() != EventActor::Runtime
         {
             return Err(RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_conflict"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryConflict),
                 RuntimeReceiptState::Failed,
                 None,
             ));
         }
         let ProjectionPayload::Full(payload) = &event.payload else {
             return Err(RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_invalid"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                 RuntimeReceiptState::Failed,
                 None,
             ));
@@ -287,7 +292,7 @@ impl HostShared {
         let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref()
         else {
             return Err(RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_invalid"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                 RuntimeReceiptState::Failed,
                 None,
             ));
@@ -295,7 +300,7 @@ impl HostShared {
         let record = payload.summary();
         record.validate().map_err(|_| {
             RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_invalid"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                 RuntimeReceiptState::Failed,
                 None,
             )
@@ -306,7 +311,7 @@ impl HostShared {
             if projected.correlation_id != Some(correlation_id) || projected.run_id != Some(run_id)
             {
                 return Err(RequestFailure::request(
-                    evidence_request_error("evidence_capture_identity_mismatch"),
+                    evidence_request_error(HostCode::EvidenceCaptureIdentityMismatch),
                     RuntimeReceiptState::Failed,
                     None,
                 ));
@@ -316,7 +321,7 @@ impl HostShared {
                 .verify_recovery_reference(projected)
                 .map_err(|error| {
                     RequestFailure::request(
-                        evidence_request_error(error.code()),
+                        relayed_evidence_request_error(error.code()),
                         RuntimeReceiptState::Failed,
                         None,
                     )
@@ -324,7 +329,7 @@ impl HostShared {
             frames.push(PersistedFrameEvidence {
                 frame_index: usize::try_from(declared.frame_index()).map_err(|_| {
                     RequestFailure::request(
-                        evidence_request_error("evidence_capture_summary_invalid"),
+                        evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                         RuntimeReceiptState::Failed,
                         None,
                     )
@@ -343,7 +348,7 @@ impl HostShared {
                     .transpose()
                     .map_err(|_| {
                         RequestFailure::request(
-                            evidence_request_error("evidence_capture_summary_invalid"),
+                            evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                             RuntimeReceiptState::Failed,
                             None,
                         )
@@ -355,14 +360,16 @@ impl HostShared {
                             .find(|frame| frame.frame_index == frame_index)
                             .ok_or_else(|| {
                                 RequestFailure::request(
-                                    evidence_request_error("evidence_capture_summary_invalid"),
+                                    evidence_request_error(
+                                        SharedCode::EvidenceCaptureSummaryInvalid,
+                                    ),
                                     RuntimeReceiptState::Failed,
                                     None,
                                 )
                             })?;
                         if frame.artifact.project(true) != *projected {
                             return Err(RequestFailure::request(
-                                evidence_request_error("evidence_capture_summary_conflict"),
+                                evidence_request_error(SharedCode::EvidenceCaptureSummaryConflict),
                                 RuntimeReceiptState::Failed,
                                 None,
                             ));
@@ -372,7 +379,7 @@ impl HostShared {
                     (_, None) => None,
                     (None, Some(_)) => {
                         return Err(RequestFailure::request(
-                            evidence_request_error("evidence_capture_summary_invalid"),
+                            evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                             RuntimeReceiptState::Failed,
                             None,
                         ));
@@ -397,21 +404,21 @@ impl HostShared {
         )
         .map_err(|_| {
             RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_invalid"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                 RuntimeReceiptState::Failed,
                 None,
             )
         })?;
         let rebuilt = capture_summary_record(&summary).map_err(|_| {
             RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_invalid"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryInvalid),
                 RuntimeReceiptState::Failed,
                 None,
             )
         })?;
         if summary.evidence_completeness != record.evidence_completeness() || &rebuilt != record {
             return Err(RequestFailure::request(
-                evidence_request_error("evidence_capture_summary_conflict"),
+                evidence_request_error(SharedCode::EvidenceCaptureSummaryConflict),
                 RuntimeReceiptState::Failed,
                 None,
             ));
@@ -434,7 +441,9 @@ impl HostShared {
                 actingcommand_contract::ProjectionProfile::Forensic,
             )
             .map(|events| events.last().map(terminal_from_projected))
-            .map_err(|_| RequestFailure::poison(ledger_error("query_evidence_terminal"), None))
+            .map_err(|_| {
+                RequestFailure::poison(ledger_error(HostLocation::QueryEvidenceTerminal), None)
+            })
     }
 }
 
@@ -462,7 +471,7 @@ fn runtime_evidence_documents(
     }))
     .map_err(|error| {
         RequestFailure::request(
-            evidence_request_error(error.code()),
+            relayed_evidence_request_error(error.code()),
             RuntimeReceiptState::Failed,
             Some(terminal_from_projected(terminal_receipt)),
         )
@@ -475,7 +484,7 @@ fn runtime_evidence_documents(
     }))
     .map_err(|error| {
         RequestFailure::request(
-            evidence_request_error(error.code()),
+            relayed_evidence_request_error(error.code()),
             RuntimeReceiptState::Failed,
             Some(terminal_from_projected(terminal_receipt)),
         )
@@ -487,7 +496,7 @@ fn runtime_evidence_documents(
     )
     .map_err(|error| {
         RequestFailure::request(
-            evidence_request_error(error.code()),
+            relayed_evidence_request_error(error.code()),
             RuntimeReceiptState::Failed,
             Some(terminal_from_projected(terminal_receipt)),
         )
@@ -515,10 +524,20 @@ fn task_outcome_payload(outcome: TaskOutcome) -> TaskPayloadDraft {
     }
 }
 
-fn evidence_request_error(code: &'static str) -> RuntimeHostError {
+/// An evidence refusal that relays the artifact store's code as a spelling (A2c types the
+/// store's codes and removes this bridge).
+fn relayed_evidence_request_error(relayed_code: &'static str) -> RuntimeHostError {
+    RuntimeHostError::relayed_request(
+        relayed_code,
+        HostLocation::ExportRuntimeEvidence.as_str(),
+        RuntimeErrorCode::EvidenceExportFailed,
+    )
+}
+
+fn evidence_request_error(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::request(
         code,
-        "export_runtime_evidence",
+        HostLocation::ExportRuntimeEvidence,
         RuntimeErrorCode::EvidenceExportFailed,
     )
 }
