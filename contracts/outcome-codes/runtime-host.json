@@ -15843,6 +15843,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
     },
+    "hand_off_to_claim": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand off to claim."
+    },
     "hand_off_to_ladder": {
       "owner": "runtime-host",
       "layer": "host",
@@ -16675,6 +16683,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: prepare application resources."
     },
+    "prepare_claim_hand_off": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: prepare claim hand off."
+    },
     "prepare_cleanup_transfer": {
       "owner": "runtime-host",
       "layer": "host",
@@ -17378,6 +17394,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read due monitors."
+    },
+    "read_emulator_control_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read emulator control claim ttl."
     },
     "read_execution_close_result": {
       "owner": "runtime-host",

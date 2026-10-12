@@ -2872,10 +2872,9 @@ impl RuntimeHost {
         Ok((claim, result))
     }
 
-    /// Workflow #369 H-6: the tail of an emulator `start` / `restart` without the provider
-    /// (the test fakes have no emulator control): under the instance's admission guard the
-    /// startup package's scheduling intent is recorded and its claim queued, then the guard is
-    /// let go and the queue pumped, exactly as `drive_emulator_control` does.
+    /// A startup package's claim without the emulator control (Workflow #369 S6b): its
+    /// scheduling intent is recorded and the claim queued (`schedule_startup_package`, the path
+    /// of a start that hands it no key); on a free instance it is granted at once.
     #[cfg(test)]
     pub(crate) fn schedule_startup_package_for_test(
         &self,
@@ -2900,18 +2899,11 @@ impl RuntimeHost {
             .mint_request_id()
             .map_err(|_| runtime_identifier_error())?
             .transport();
-        let instance_guard = shared
-            .instance_guard(instance_id)
-            .map_err(|failure| *failure.error)?;
-        let admission = lock(
-            &instance_guard,
-            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
-        )?;
         let pending = shared
             .prepare_startup_package(&resolved, links, control_request_id)
             .map_err(|failure| *failure.error)?;
         shared
-            .schedule_startup_under_guard(instance_id, pending, admission)
+            .schedule_startup_package(pending)
             .map_err(|failure| *failure.error)
     }
 

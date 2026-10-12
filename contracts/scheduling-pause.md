@@ -45,11 +45,19 @@ is `CandidateEligibility::Deferred` with reason code `dispatch_paused_global` /
 `dispatch_paused_instance` and no next wake time, so a paused cycle emits no dispatch intent
 for it.
 
-The gate covers policy dispatch only. Client requests (`task-run`, leases, observation) and the
-startup package are not gated (the startup package until Workflow #369 S6b). A stuck-recovery
-ladder is admitted only while its instance is not paused; a pause that arrives while a ladder
-holds the instance ends the ladder at its next step (`recovery_admission_denied`), and its one
-release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
+The gate covers policy dispatch and, in the instance's one queue (Workflow #369 Q-3 (4)), its
+routine claims. Client and operator requests (`task-run`, leases, observation, emulator control,
+resume and self-check) are not gated. Since Workflow #369 S6b (H-4, M6) the startup package's
+claim is a gated routine claim: an emulator `start` / `restart` under a pause of its instance or
+the global pause (a restored pause included) still drives the emulator, but its startup claim
+waits queued and the control's key is released, so no startup run happens until the resume;
+the resume's reconnect claim is granted first, and its release hands the key to the startup
+claim. A `stop`, or a `start` / `restart` whose preparation fails, made meanwhile cancels the
+queued startup claim, so the resume runs none; a reconnect whose preparation fails and admits a
+ladder hands the key to that ladder first. A gated claim does not refuse the pause's hand-back
+(step (c)). A stuck-recovery ladder is admitted only while its instance is not paused; a pause
+that arrives while a ladder holds the instance ends the ladder at its next step
+(`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
 ## Global pause
 

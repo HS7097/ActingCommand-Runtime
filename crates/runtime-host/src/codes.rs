@@ -1348,6 +1348,8 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #369 S6b.
+        HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
         HashFactSnapshot => "hash_fact_snapshot",
         HashPolicyFactSnapshot => "hash_policy_fact_snapshot",
@@ -1453,6 +1455,8 @@ actingcommand_contract::outcome_locations! {
         PostHostClaim => "post_host_claim",
         PrepareAgentDispatcher => "prepare_agent_dispatcher",
         PrepareApplicationResources => "prepare_application_resources",
+        // Workflow #369 S6b.
+        PrepareClaimHandOff => "prepare_claim_hand_off",
         PrepareCleanupTransfer => "prepare_cleanup_transfer",
         PrepareHostClaim => "prepare_host_claim",
         PrepareIdlePreemption => "prepare_idle_preemption",
@@ -1541,6 +1545,8 @@ actingcommand_contract::outcome_locations! {
         ReadDeviceSessionGate => "read_device_session_gate",
         ReadDispatchProcedureRef => "read_dispatch_procedure_ref",
         ReadDueMonitors => "read_due_monitors",
+        // Workflow #369 S6b.
+        ReadEmulatorControlClaimTtl => "read_emulator_control_claim_ttl",
         ReadExecutionCloseResult => "read_execution_close_result",
         ReadFactSnapshot => "read_fact_snapshot",
         ReadFactSource => "read_fact_source",

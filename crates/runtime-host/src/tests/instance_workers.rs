@@ -3,16 +3,17 @@
 //! Workflow #369 S2+S3b (model-369-queue v3.1 §7 row 4): the per-instance workers, a failed
 //! policy run's hand-off to its ladder, the ladder's one continuous hold, and the startup
 //! claim. The ladder's emulator-restart rung runs only on a fake given emulator control and a
-//! discovery binding (`bind_fake_emulator`, review C-2); elsewhere it is skipped. An emulator
-//! start's startup claim is driven through the control's own tail
-//! (`schedule_startup_package_for_test`).
+//! discovery binding (`bind_fake_emulator`, review C-2); elsewhere it is skipped. A startup
+//! claim on its own is queued without the control (`schedule_startup_package_for_test`).
+//! Workflow #369 S6b (§7 row 7): an operator emulator control on that fake, as a holder of the
+//! instance's key, and its hand-off to the startup claim or a ladder.
 
 use super::*;
 use crate::host::ContainedTaskCheckpointPoint as LapsePoint;
 use actingcommand_contract::{
-    InstallTransitionAction, InstallTransitionPhase, LeasePayload, RecoveryLadderOutcome,
-    RecoveryRung, RecoveryRungOutcome, RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload,
-    SchedulingPauseScope, StartupPackageDisposition,
+    DiagnosticCode, InstallTransitionAction, InstallTransitionPhase, LeasePayload,
+    RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome, RequestId, RuntimeLifecyclePhase,
+    RuntimePayload, SchedulerPayload, SchedulingPauseScope, StartupPackageDisposition,
 };
 use actingcommand_scheduler::ClaimKind;
 
@@ -1052,14 +1053,7 @@ fn startup_host_with(
     deadline_ms: u64,
     configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
 ) -> RuntimeHost {
-    let package = neutral_contained_task_package(true);
-    let package_path = root.path().join("startup-package.zip");
-    fs::write(&package_path, &package).expect("write startup package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
-    let startup =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .and_then(|request| request.with_response_deadline_ms(deadline_ms))
-            .expect("startup package request");
+    let startup = startup_package_request(root, deadline_ms);
     let mut startup_packages = BTreeMap::new();
     let mut entries = Vec::new();
     for (alias, state) in aliases {
@@ -1086,35 +1080,154 @@ fn completed_runs(events: &[PersistedEvent]) -> Vec<RunId> {
         .collect()
 }
 
-/// Workflow #369 H-6: an emulator start's startup claim is queued under the control's admission
-/// guard and granted by the pump when the guard is let go, so no dispatch can see the instance
-/// free in between; the startup run runs on the claim's key, with no lease of its own, and its
-/// release ends the hold.
-#[test]
-fn a_start_queues_its_startup_claim_under_the_guard_and_runs_it_on_the_claims_key() {
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
-    let host = startup_host(&root, &[(STARTUP_ALIAS, Arc::clone(&state))], 60_000);
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("schedule startup package"),
-        StartupPackageDisposition::Scheduled
-    );
-    // The key leaves the scheduler before its `lease.released` is recorded, so the wait also
-    // waits for that record.
-    wait_until("the startup run and its release", || {
-        let events = all_events(&host);
-        completed_runs(&events).len() == 1
-            && count(&events, EventType::LeaseReleased) == 1
-            && host
-                .instance_claims_for_test(STARTUP_ALIAS)
-                .expect("claims")
-                .0
-                .is_none()
+/// The neutral startup package, written under `root`, with `deadline_ms`.
+fn startup_package_request(root: &TempDir, deadline_ms: u64) -> ContainedTaskRequest {
+    let package = neutral_contained_task_package(true);
+    let package_path = root.path().join("startup-package.zip");
+    fs::write(&package_path, &package).expect("write startup package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+        .and_then(|request| request.with_response_deadline_ms(deadline_ms))
+        .expect("startup package request")
+}
+
+/// Workflow #369 S6b: a started host whose one physical instance `STARTUP_ALIAS` (`instance`)
+/// is discovery-bound to the fake emulator (`bind_fake_emulator`), with opens that pass a
+/// preparation's self-check, and, when `with_startup` is set, the neutral startup package.
+fn emulator_instance_host(
+    root: &TempDir,
+    state: &Arc<FakeState>,
+    instance: InstanceId,
+    with_startup: bool,
+) -> RuntimeHost {
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    state.observed_open.store(true, Ordering::Release);
+    let mut startup_packages = BTreeMap::new();
+    if with_startup {
+        startup_packages.insert(
+            STARTUP_ALIAS.to_owned(),
+            startup_package_request(root, 60_000),
+        );
+    }
+    let host = RuntimeHost::start(
+        config(root).with_startup_packages(startup_packages),
+        Arc::new(FakeProvider::one(
+            STARTUP_ALIAS,
+            instance,
+            Arc::clone(state),
+        )),
+    )
+    .expect("runtime host with the fake emulator");
+    bind_fake_emulator(&host, STARTUP_ALIAS, instance, state);
+    host
+}
+
+/// A request of `operation` from the CLI, as `actingctl` sends it.
+fn cli_request(operation: RuntimeOperation) -> RuntimeRequest {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        operation,
+    )
+    .expect("cli request")
+}
+
+/// `actingctl emulator <action>` on `STARTUP_ALIAS`: the request and its receipt.
+fn control_emulator(
+    host: &RuntimeHost,
+    action: actingcommand_contract::EmulatorInstanceAction,
+    connection: u64,
+) -> (RuntimeRequest, RuntimeReceipt) {
+    let request = cli_request(RuntimeOperation::ControlEmulatorInstance {
+        instance_alias: STARTUP_ALIAS.to_owned(),
+        action,
     });
-    let events = all_events(&host);
-    let scheduled = phases(&events)
+    let receipt = host
+        .process_request_for_test(&request, ConnectionId::new(connection).expect("connection"))
+        .expect("emulator control receipt");
+    (request, receipt)
+}
+
+/// `actingctl resume` of `STARTUP_ALIAS`: the request and its receipt.
+fn resume_instance(host: &RuntimeHost, connection: u64) -> (RuntimeRequest, RuntimeReceipt) {
+    let request = cli_request(RuntimeOperation::ResumeScheduling {
+        scope: SchedulingPauseScope::Instance {
+            instance_alias: STARTUP_ALIAS.to_owned(),
+        },
+        expected: None,
+    });
+    let receipt = host
+        .process_request_for_test(&request, ConnectionId::new(connection).expect("connection"))
+        .expect("resume receipt");
+    (request, receipt)
+}
+
+/// The emulator control's result: its startup package disposition.
+fn controlled_startup(receipt: &RuntimeReceipt) -> StartupPackageDisposition {
+    match receipt.result() {
+        Some(RuntimeResult::EmulatorInstanceControlled {
+            startup_package, ..
+        }) => *startup_package,
+        _ => panic!("an emulator control result: {receipt:?}"),
+    }
+}
+
+/// The events recorded under `request_id`.
+fn of_request(events: &[PersistedEvent], request_id: RequestId) -> Vec<&PersistedEvent> {
+    events
+        .iter()
+        .filter(|event| event.links().request_id() == Some(&request_id))
+        .collect()
+}
+
+/// The one event of `event_type` among `events`.
+fn only_one<'a>(events: &[&'a PersistedEvent], event_type: EventType) -> &'a PersistedEvent {
+    let matching = events
+        .iter()
+        .filter(|event| event.event_type() == event_type)
+        .collect::<Vec<_>>();
+    let [event] = matching.as_slice() else {
+        panic!("one {event_type:?}: {matching:#?}");
+    };
+    event
+}
+
+/// The `lease.transferred` that took the lease `from`.
+fn transfer_from(events: &[PersistedEvent], from: LeaseId) -> &PersistedEvent {
+    events
+        .iter()
+        .find(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Lease(LeasePayload::Transferred(transfer))
+                    if transfer.from_lease_id() == from
+            )
+        })
+        .expect("the transfer of the lease")
+}
+
+/// The request id of the claim a `lease.transferred` granted.
+fn transferred_to(event: &PersistedEvent) -> RequestId {
+    match event.payload() {
+        EventPayload::Lease(LeasePayload::Transferred(transfer)) => transfer.queued_request_id(),
+        _ => panic!("a lease transfer: {event:?}"),
+    }
+}
+
+/// The request of the startup claim of the latest `startup_package_scheduled`, found through its
+/// causation id.
+fn startup_claim_request(events: &[PersistedEvent]) -> RequestId {
+    let scheduled = phases(events)
         .into_iter()
+        .rev()
         .find(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. }))
         .map(|(event, _)| event)
         .expect("startup_package_scheduled");
@@ -1122,114 +1235,537 @@ fn a_start_queues_its_startup_claim_under_the_guard_and_runs_it_on_the_claims_ke
         .links()
         .causation_id()
         .expect("scheduling causation");
-    let claim_request = *events
+    *events
         .iter()
+        .rev()
         .find(|event| {
             event.event_type() == EventType::LeaseRequested
                 && event.links().causation_id() == Some(&causation)
         })
         .and_then(|event| event.links().request_id())
-        .expect("the startup claim's request");
-    let claim = events
-        .iter()
-        .filter(|event| event.links().request_id() == Some(&claim_request))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        claim
-            .iter()
-            .map(|event| event.event_type())
-            .collect::<Vec<_>>(),
-        vec![
-            EventType::LeaseRequested,
-            EventType::SchedulerQueued,
-            EventType::SchedulerAdmitted,
-            EventType::LeaseTransitionIntent,
-            EventType::LeaseGranted,
-        ]
-    );
-    assert!(
-        claim
-            .iter()
-            .all(|event| event.sequence() > scheduled.sequence())
-    );
-    let EventPayload::Scheduler(SchedulerPayload::Queued(queued)) = claim[1].payload() else {
-        panic!("queued payload");
-    };
-    assert_eq!(queued.priority(), LeasePriority::High);
-    assert_eq!(queued.deadline_monotonic_ms(), u64::MAX);
-    // Nothing else was granted the instance, and the run took no lease of its own.
-    assert_eq!(count(&events, EventType::LeaseGranted), 1);
-    assert_eq!(count(&events, EventType::LeaseRequested), 1);
-    let [startup_run] = completed_runs(&events)[..] else {
-        panic!("one startup run");
-    };
-    let releases = events
-        .iter()
-        .filter(|event| {
-            event.event_type() == EventType::LeaseReleased
-                && event.links().run_id() == Some(&startup_run)
-        })
-        .count();
-    assert_eq!(releases, 1);
-    assert_eq!(
-        count(&events, EventType::LeaseReleased),
-        1,
-        "the run's release ends the claim's hold"
-    );
-    assert!(host.fatal_error().expect("runtime health").is_none());
-    host.close().expect("close host");
+        .expect("the startup claim's request")
 }
 
-/// Workflow #369 H-6: until S6b the startup claim is not gated, so a start under a scheduling
-/// pause still runs its startup package (`scheduling-pause.md`, "not gated"); the pause stays.
-#[test]
-fn a_start_under_a_pause_still_runs_its_startup_package() {
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
-    let host = startup_host(&root, &[(STARTUP_ALIAS, Arc::clone(&state))], 60_000);
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let pause = RuntimeRequest::new(
-        ids.mint_request_id().expect("request id"),
-        ids.mint_correlation_id().expect("correlation id"),
-        None,
-        EventActor::Cli,
-        EventSource::Cli,
-        unix_ms_now().expect("wall clock"),
-        RuntimeOperation::PauseScheduling {
-            scope: SchedulingPauseScope::Instance {
-                instance_alias: STARTUP_ALIAS.to_owned(),
-            },
-            pause_reason: actingcommand_contract::SchedulingPauseReason::new(
-                "s2_start_under_pause",
-            )
-            .expect("pause reason"),
-            drain_timeout_ms: 1_000,
-        },
-    )
-    .expect("pause request");
-    assert_eq!(
-        host.process_request_for_test(&pause, ConnectionId::new(73).expect("connection"))
-            .expect("pause receipt")
-            .state(),
-        RuntimeReceiptState::Completed
-    );
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("schedule startup package"),
-        StartupPackageDisposition::Scheduled
-    );
-    wait_until("the startup run under the pause", || {
-        completed_runs(&all_events(&host)).len() == 1
+/// The startup run completed and its key's release is recorded: nothing holds the instance.
+fn wait_for_startup_run(host: &RuntimeHost) {
+    wait_until("the startup run and its release", || {
+        completed_runs(&all_events(host)).len() == 1
             && host
                 .instance_claims_for_test(STARTUP_ALIAS)
                 .expect("claims")
                 .0
                 .is_none()
     });
-    let (_, paused) = host.scheduling_pauses_for_test().expect("pauses");
-    assert!(paused.contains_key(STARTUP_ALIAS), "the pause stays");
+}
+
+/// Workflow #369 S6b (model-369-queue v3.1 §7 row 7; H-4, M6): an emulator start hands its key
+/// to the startup package's claim on its release. The claim gets the key by one transfer from the
+/// control's own lease, with no grant of its own, so the instance is never free between the
+/// start and the startup run, and no dispatch can come between; the startup run runs on the
+/// claim's key, and its release ends the hold.
+#[test]
+fn a_start_hands_its_key_to_the_startup_claim_with_no_dispatch_between() {
+    use actingcommand_contract::EmulatorInstanceAction::Start;
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    let (start, receipt) = control_emulator(&host, Start, 81);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        controlled_startup(&receipt),
+        StartupPackageDisposition::Scheduled
+    );
+    wait_for_startup_run(&host);
+    let events = all_events(&host);
+    let control = of_request(&events, start.request_id());
+    let received = only_one(&control, EventType::CommandReceived).sequence();
+    let control_grant = only_one(&control, EventType::LeaseGranted);
+    let control_lease = *control_grant
+        .links()
+        .lease_id()
+        .expect("the control's lease");
+    // The control's key went to the startup claim in one transfer, then the control released.
+    let transferred = transfer_from(&events, control_lease);
+    let claim_request = startup_claim_request(&events);
+    assert_eq!(transferred_to(transferred), claim_request);
+    // The claim's own records up to its grant (W-5, H-1): visible, then granted by the
+    // transfer, with no `lease.granted` of its own.
+    let claim = of_request(&events, claim_request);
+    assert_eq!(
+        claim
+            .iter()
+            .take(4)
+            .map(|event| event.event_type())
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    assert_eq!(claim[3].sequence(), transferred.sequence());
+    assert!(
+        !claim
+            .iter()
+            .any(|event| event.event_type() == EventType::LeaseGranted)
+    );
+    let EventPayload::Scheduler(SchedulerPayload::Queued(queued)) = claim[1].payload() else {
+        panic!("queued payload");
+    };
+    assert_eq!(queued.priority(), LeasePriority::High);
+    assert_eq!(queued.deadline_monotonic_ms(), u64::MAX);
+    let control_release = only_one(&control, EventType::LeaseReleased);
+    assert_eq!(control_release.links().lease_id(), Some(&control_lease));
+    assert!(control_release.sequence() > transferred.sequence());
+    // From the start on, one grant (the control's) and two releases: the control's after its
+    // transfer, and the startup run's under its run links.
+    let since_start = events
+        .iter()
+        .filter(|event| event.sequence() > received)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(count(&since_start, EventType::LeaseGranted), 1);
+    assert_eq!(count(&since_start, EventType::LeaseReleased), 2);
+    let [startup_run] = completed_runs(&events)[..] else {
+        panic!("one startup run");
+    };
+    let run_release = since_start
+        .iter()
+        .find(|event| {
+            event.event_type() == EventType::LeaseReleased
+                && event.links().run_id() == Some(&startup_run)
+        })
+        .expect("the startup run's release");
+    assert!(run_release.sequence() > transferred.sequence());
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
+}
+
+/// Workflow #369 S6b (§7 row 7; H-4, M6, §5.1): a start under a restored scheduling pause leaves
+/// no startup run until the resume. The startup claim waits as a gated routine entry while the
+/// control's key is released; the resume's release then hands the key to it and the startup
+/// run completes.
+#[test]
+fn a_start_under_a_restored_pause_leaves_no_startup_run_until_resume() {
+    use actingcommand_contract::EmulatorInstanceAction::Start;
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let host = emulator_instance_host(&root, &state, instance, true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 82).state(),
+        RuntimeReceiptState::Completed
+    );
+    host.close().expect("close the paused host");
+    let host = emulator_instance_host(&root, &state, instance, true);
+    let (_, paused) = host.scheduling_pauses_for_test().expect("pauses");
+    assert!(paused.contains_key(STARTUP_ALIAS), "the pause is restored");
+
+    let (_, receipt) = control_emulator(&host, Start, 83);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        controlled_startup(&receipt),
+        StartupPackageDisposition::Scheduled
+    );
+    // The control released its key; the startup claim waits, held back by the pause, also
+    // after a sweep tick.
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage])
+    );
+    let held = all_events(&host);
+    assert_eq!(count(&held, EventType::TaskRequested), 0, "no startup run");
+    assert!(completed_runs(&held).is_empty());
+
+    let (_, resumed) = resume_instance(&host, 84);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    wait_for_startup_run(&host);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Workflow #369 S6b (§7 row 7; M-3, W-3): pause, then restart: the startup claim waits gated.
+/// The resume's reconnect claim is granted first, ahead of it, and prepares on its key; the
+/// reconnect's release then hands the key to the startup claim, and the startup run follows.
+#[test]
+fn after_a_restart_under_a_pause_the_resume_reconnects_first_then_the_startup_run_follows() {
+    use actingcommand_contract::EmulatorInstanceAction::Restart;
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 85).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (_, restarted) = control_emulator(&host, Restart, 86);
+    assert_eq!(
+        restarted.state(),
+        RuntimeReceiptState::Completed,
+        "{restarted:?}"
+    );
+    assert_eq!(
+        controlled_startup(&restarted),
+        StartupPackageDisposition::Scheduled
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated"
+    );
+
+    let (resume, resumed) = resume_instance(&host, 87);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    wait_for_startup_run(&host);
+    let events = all_events(&host);
+    let reconnect = events
+        .iter()
+        .filter(|event| event.links().correlation_id() == Some(&resume.correlation_id()))
+        .collect::<Vec<_>>();
+    let reconnect_grant = only_one(&reconnect, EventType::LeaseGranted);
+    let reconnect_lease = *reconnect_grant
+        .links()
+        .lease_id()
+        .expect("the reconnect claim's lease");
+    let prepared = reconnect
+        .iter()
+        .find(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Runtime(RuntimePayload::LifecycleObserved(value))
+                    if matches!(
+                        value.phase(),
+                        RuntimeLifecyclePhase::InstancePreparationFinished { .. }
+                    )
+            )
+        })
+        .expect("the reconnect's preparation");
+    let transferred = transfer_from(&events, reconnect_lease);
+    assert_eq!(transferred_to(transferred), startup_claim_request(&events));
+    assert!(reconnect_grant.sequence() < prepared.sequence());
+    assert!(
+        prepared.sequence() < transferred.sequence(),
+        "the reconnect runs before the startup claim gets the key"
+    );
+    let first_task = events
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskRequested)
+        .expect("the startup run");
+    assert!(first_task.sequence() > transferred.sequence());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Workflow #369 S6b (§7 row 7; H-2, Q-2a): an emulator start of a stopped (pending) instance
+/// is granted its claim and completes: no `instance_not_running`, no Error record.
+#[test]
+fn a_start_of_a_stopped_instance_is_granted_its_claim_without_an_error_record() {
+    use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), false);
+    let (_, stopped) = control_emulator(&host, Stop, 88);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    assert_eq!(state.emulator.bound_port(), None, "the instance is pending");
+    let (start, receipt) = control_emulator(&host, Start, 89);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert!(receipt.error_projection().is_none());
+    let events = all_events(&host);
+    let control = of_request(&events, start.request_id());
+    let received = only_one(&control, EventType::CommandReceived).sequence();
+    let granted = only_one(&control, EventType::LeaseGranted);
+    let validated = only_one(&control, EventType::CommandValidated);
+    assert!(granted.sequence() < validated.sequence());
+    let since_start = events
+        .iter()
+        .filter(|event| event.sequence() > received)
+        .collect::<Vec<_>>();
+    assert!(
+        since_start.iter().all(|event| !matches!(
+            event.severity(),
+            EventSeverity::Error | EventSeverity::Fatal
+        )),
+        "no Error record: {since_start:#?}"
+    );
+    assert!(
+        since_start
+            .iter()
+            .copied()
+            .filter_map(failure_message)
+            .all(|message| !message.contains("instance_not_running")),
+        "no instance_not_running"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Workflow #369 S6b (§7 row 7; H-1, P1): an emulator start whose connection preparation fails
+/// in a way the preparation rule calls recoverable hands its key to the ladder that failure
+/// admits: the ladder claim waits for the key, and the control's release transfers the key to
+/// it, so the ladder holds the instance from the control's end on.
+#[test]
+fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
+    use actingcommand_contract::EmulatorInstanceAction::Start;
+    use actingcommand_device::{
+        DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResourceQuiescence,
+    };
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), false);
+    *state.input_open_error.lock().expect("input open error") = Some(
+        DeviceError::transient("fixture input handshake failed")
+            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
+            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
+    );
+    let (start, receipt) = control_emulator(&host, Start, 90);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "a failed preparation does not fail the start: {receipt:?}"
+    );
+    assert_eq!(
+        controlled_startup(&receipt),
+        StartupPackageDisposition::None
+    );
+    wait_until("the ladder's start", || {
+        phases(&all_events(&host))
+            .iter()
+            .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+    });
+    let events = all_events(&host);
+    let (started, trigger) = phases(&events)
+        .into_iter()
+        .find_map(|(event, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, .. } => Some((event, trigger)),
+            _ => None,
+        })
+        .expect("recovery_ladder_started");
+    assert_eq!(
+        trigger.stage,
+        actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation
+    );
+    let control = of_request(&events, start.request_id());
+    let control_lease = *only_one(&control, EventType::LeaseGranted)
+        .links()
+        .lease_id()
+        .expect("the control's lease");
+    let transferred = transfer_from(&events, control_lease);
+    let ladder_request = *started.links().request_id().expect("the ladder's request");
+    assert_eq!(transferred_to(transferred), ladder_request);
+    let ladder = of_request(&events, ladder_request);
+    let requested = only_one(&ladder, EventType::LeaseRequested);
+    let queued = only_one(&ladder, EventType::SchedulerQueued);
+    assert!(requested.sequence() < transferred.sequence());
+    assert!(queued.sequence() < transferred.sequence());
+    assert!(
+        !ladder
+            .iter()
+            .any(|event| event.event_type() == EventType::LeaseGranted),
+        "the ladder is granted by the transfer"
+    );
+    let control_release = only_one(&control, EventType::LeaseReleased);
+    assert!(control_release.sequence() > transferred.sequence());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host during the climb");
+}
+
+/// Coordinator ruling on review #716 (item 1): an emulator control whose hold hands no startup
+/// claim over cancels the instance's queued startup claim, since a startup run against a stopped
+/// emulator is meaningless. Under a pause, a start leaves its startup claim queued; a stop then
+/// cancels it (`scheduler.denied lease.queue_cancelled`), so the resume runs no startup package.
+#[test]
+fn a_stop_under_a_pause_cancels_the_queued_startup_claim_so_the_resume_runs_none() {
+    use actingcommand_contract::EmulatorInstanceAction::{Start, Stop};
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 91).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (_, started) = control_emulator(&host, Start, 92);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        controlled_startup(&started),
+        StartupPackageDisposition::Scheduled
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated"
+    );
+    let startup_claim = startup_claim_request(&all_events(&host));
+
+    let (_, stopped) = control_emulator(&host, Stop, 93);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![]),
+        "the stop cancelled the startup claim"
+    );
+    let (_, resumed) = resume_instance(&host, 94);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![])
+    );
+    let events = all_events(&host);
+    let claim = of_request(&events, startup_claim);
+    let cancelled = only_one(&claim, EventType::SchedulerDenied);
+    assert!(matches!(
+        cancelled.payload(),
+        EventPayload::Scheduler(SchedulerPayload::Denied(payload))
+            if payload.diagnostic_code() == DiagnosticCode::LeaseQueueCancelled
+    ));
+    assert!(
+        claim.iter().all(|event| !matches!(
+            event.event_type(),
+            EventType::LeaseGranted | EventType::LeaseTransferred
+        )),
+        "the startup claim never gets the key"
+    );
+    assert_eq!(
+        count(&events, EventType::TaskRequested),
+        0,
+        "no startup run"
+    );
+    assert!(completed_runs(&events).is_empty());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// Workflow #369 H-1, P1 (coordinator ruling on review #716, item 2): a resume whose reconnect
+/// preparation fails in a way the preparation rule calls recoverable hands its key straight to
+/// the ladder that failure admits, ahead of the startup claim a start under the pause left
+/// queued: the reconnect's lease goes to the ladder in one transfer, with no grant of its own.
+#[test]
+fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_startup_claim() {
+    use actingcommand_contract::EmulatorInstanceAction::Start;
+    use actingcommand_device::{
+        DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResourceQuiescence,
+    };
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = emulator_instance_host(&root, &state, instance_id(), true);
+    assert_eq!(
+        pause_instance(&host, STARTUP_ALIAS, 95).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (_, started) = control_emulator(&host, Start, 96);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        controlled_startup(&started),
+        StartupPackageDisposition::Scheduled
+    );
+    assert_eq!(
+        host.instance_claims_for_test(STARTUP_ALIAS)
+            .expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated"
+    );
+    let startup_claim = startup_claim_request(&all_events(&host));
+    *state.input_open_error.lock().expect("input open error") = Some(
+        DeviceError::transient("fixture input handshake failed")
+            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
+            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
+    );
+
+    let (resume, resumed) = resume_instance(&host, 97);
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "a failed reconnect does not fail the resume: {resumed:?}"
+    );
+    wait_until("the ladder's start", || {
+        phases(&all_events(&host))
+            .iter()
+            .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+    });
+    let events = all_events(&host);
+    let ladder_request = phases(&events)
+        .into_iter()
+        .find_map(|(event, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { .. } => {
+                Some(*event.links().request_id().expect("the ladder's request"))
+            }
+            _ => None,
+        })
+        .expect("recovery_ladder_started");
+    let reconnect = events
+        .iter()
+        .filter(|event| event.links().correlation_id() == Some(&resume.correlation_id()))
+        .collect::<Vec<_>>();
+    let reconnect_lease = *only_one(&reconnect, EventType::LeaseGranted)
+        .links()
+        .lease_id()
+        .expect("the reconnect claim's lease");
+    let transferred = transfer_from(&events, reconnect_lease);
+    assert_eq!(
+        transferred_to(transferred),
+        ladder_request,
+        "the reconnect's key goes to the ladder"
+    );
+    assert_ne!(transferred_to(transferred), startup_claim);
+    let ladder = of_request(&events, ladder_request);
+    assert!(only_one(&ladder, EventType::LeaseRequested).sequence() < transferred.sequence());
+    assert!(only_one(&ladder, EventType::SchedulerQueued).sequence() < transferred.sequence());
+    assert!(
+        !ladder
+            .iter()
+            .any(|event| event.event_type() == EventType::LeaseGranted),
+        "the ladder is granted by the transfer"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host during the climb");
 }
 
 /// Workflow #369 H-1 (review M-1): a failed startup run is an ordinary lease end: it starts no
