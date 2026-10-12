@@ -9,11 +9,11 @@ actingcommand_contract::outcome_codes! {
     /// (`contracts/color-digest.md`). A [`crate::color_digest::ColorDigestError`] carries one,
     /// and its `Display` text starts with the code's spelling.
     pub enum ColorDigestErrorCode {
-        AlgorithmUnknown => "color_digest_algorithm_unknown": error,
-        GridInvalid => "color_digest_grid_invalid": error,
-        RegionInvalid => "color_digest_region_invalid": error,
-        CellsInvalid => "color_digest_cells_invalid": error,
-        ExcludeCellsInvalid => "color_digest_exclude_cells_invalid": error,
-        GridMismatch => "color_digest_grid_mismatch": error,
+        AlgorithmUnknown => "color_digest_algorithm_unknown": error / declaration_error,
+        GridInvalid => "color_digest_grid_invalid": error / declaration_error,
+        RegionInvalid => "color_digest_region_invalid": error / declaration_error,
+        CellsInvalid => "color_digest_cells_invalid": error / declaration_error,
+        ExcludeCellsInvalid => "color_digest_exclude_cells_invalid": error / declaration_error,
+        GridMismatch => "color_digest_grid_mismatch": error / declaration_error,
     }
 }
