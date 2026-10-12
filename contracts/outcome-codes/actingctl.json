@@ -1328,6 +1328,38 @@
       "description": "The watchdog's process probe failed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "lab_tool_option_disabled": {
+      "category": "error",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "lab_option": "required",
+        "mcp_blocker": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve was called for a Lab option tool whose option is not installed: a tool that tools/list did not list, or one whose option was switched off after the session listed it (each call checks the options again). No actinglab child process starts. lab_option names the option; mcp_blocker is installer_lab_option.",
+      "common_causes": "The Lab option was not ticked in the installer, or was removed while an agent session was open.",
+      "handling": "Tick the option on the installer's Lab page. The tool list changes from the next MCP session."
+    },
+    "mcp_tier_retired": {
+      "category": "warning",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve was started with the retired --tier argument. MCP has no tiers from #389 U-3 on: the server starts as usual with every general tool and the tools of the installed Lab options, and reports this once on stderr and in the tools/list warnings.",
+      "common_causes": "A harness configuration written before #389 U-3.",
+      "handling": "Remove --tier from the harness configuration; actingctl mcp-config prints the current form."
     }
   }
 }

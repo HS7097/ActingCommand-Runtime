@@ -422,6 +422,251 @@
       "description": "A policy dispatch selected for a task on an instance (task_id, alias) serves a clock occurrence (occurrence_unix_ms) from before the activity window it was selected in opened (window_start_unix_ms); for a daily-limited task it uses the new day's budget for an earlier slot. first_run is true when the pair had no earlier dispatch; next_occurrence_unix_ms is the next clock occurrence, so a reader can tell whether the run still served this occurrence. Recorded once, at the first cycle that selects the pair for that occurrence, as a goal_missed planning signal whose signal_id is signal:clock_slot:owed:<sha256 of task, alias and occurrence>.",
       "common_causes": "The slot fell while the activity window was closed or the Runtime was not running; a gate held the slot back the day before; a catalog was activated with new task ids outside the window.",
       "handling": "Nothing to repair for a single owed run. Owed runs every morning together with refusals of the day's own slot mean that the slot's daily budget is displaced: gate the slot with its own timeline window or move it to the window start."
+    },
+    "channel_binding_missing": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, a connection that has not bound a channel with BindChannel sent a request other than the handshake (Health, BindChannel). The request is refused before the gate: the refusal is only in the receipt and nothing is written to the ledger. operation names the refused request kind. Until U-6 an unbound connection is bound from the source of its first request's envelope instead (contracts/runtime-interface.md, Channel binding).",
+      "common_causes": "A client built before #389 U-2, which never sends BindChannel; a client that skipped the handshake.",
+      "handling": "Use the Tools and the console of the same release as the Runtime: every current frontend binds its channel when it opens a connection."
+    },
+    "channel_binding_exists": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "channel": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A connection sent BindChannel a second time. The connection keeps the channel it bound first, which channel names.",
+      "common_causes": "A client defect: the handshake ran twice on one connection.",
+      "handling": "Report the client defect. A client that needs another channel opens another connection."
+    },
+    "channel_request_refused": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "channel": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, the gate does not take this request kind on this channel: an option-one (authoring) or option-two (debugging) kind on a counter (cli, mcp, ui), a general instruction on the Lab channel, or an external approval on any channel. operation names the request kind and channel the connection's channel. A refused write, and a refused read that would have written a record, is copied by the ledger's request boundary (#383 G14) as command.rejected; a refused pure query is only in the receipt.",
+      "common_causes": "A script sends a Lab operation through actingctl, MCP or the console; actinglab sends a pause, a monitor setting, a fact, a shutdown request or an upgrade-state request; any frontend sends an approval request, while approvals live in the configuration.",
+      "handling": "Send general requests through actingctl, MCP or the console and Lab operations through actinglab; write approvals into the configuration."
+    },
+    "lab_module_not_installed": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, the Lab channel sent a request other than the handshake while neither Lab option is installed (lab_module_authoring and lab_module_debugging both absent or false in the configuration the Runtime started with). The whole Lab channel is closed, general reads included. operation names the refused request kind.",
+      "common_causes": "The installation was set up or upgraded without a Lab option; an actinglab.exe copied back by hand.",
+      "handling": "Tick a Lab option on the installer's Lab page, or pass acsetup --lab; the Runtime reads the options at its next start."
+    },
+    "lab_module_option_disabled": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "lab_option": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, the Lab channel sent a request kind of a Lab option that is not installed while the other option is; lab_option names the missing option (authoring or debugging) and operation the request kind. The Lab channel stays open for the installed option.",
+      "common_causes": "Only one of the two Lab options was ticked in the installer.",
+      "handling": "Tick the other option on the installer's Lab page, or pass acsetup --lab; it takes effect at the next start."
+    },
+    "upgrade_state_entered": {
+      "category": "success",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "UpgradeState enter succeeded (#389 U-4): the Runtime closed admission, drained, recorded its scheduling pause, accepted its own close while the requesting connection was still open, and closes with the upgrade-state marker on its owner-journal close record.",
+      "common_causes": "acsetup entered the upgrade state before it replaces or restarts the Runtime.",
+      "handling": "Nothing to repair. The installer goes on; if it fails after this point, the watchdog, when its task is registered, starts the selected generation again once the installer has released install\\writer.lock."
+    },
+    "upgrade_state_cancelled": {
+      "category": "success",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "UpgradeState cancel took effect while the transition was still draining: admission reopened, the transition is recorded as aborted and the Runtime keeps running.",
+      "common_causes": "An interrupted installer run again, or a person or a script withdrew the upgrade.",
+      "handling": "Nothing to repair."
+    },
+    "upgrade_state_released": {
+      "category": "success",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "UpgradeState leave succeeded: the Runtime that acsetup started with --install-held prepared its provider, restored the pause recorded by the transition and opened admission.",
+      "common_causes": "acsetup released the Runtime it started held, after it checked the process id and the request id.",
+      "handling": "Nothing to repair."
+    },
+    "upgrade_state_requester_disconnected": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The connection that sent UpgradeState enter closed before the Runtime accepted its own close. The Runtime handles it as cancel: admission reopens, the transition is recorded as aborted with this code as its failure_code, and the Runtime keeps running. No request receives this code as its reply.",
+      "common_causes": "The installer process ended or was killed while the Runtime was draining.",
+      "handling": "Run the installer again; the Runtime is unchanged and running."
+    },
+    "upgrade_state_aborted": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The reply to an UpgradeState enter that was still waiting for the drain when an UpgradeState cancel withdrew the transition. The Runtime keeps running.",
+      "common_causes": "A second installer run or a script sent cancel during the drain.",
+      "handling": "Nothing to repair; enter the upgrade state again when the upgrade should go on."
+    },
+    "pack_registry_loaded": {
+      "category": "success",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "LoadPack succeeded (#389 U-3): the package, structurally admitted from its location, is in the Runtime's in-memory loaded-pack table, either restored from the start table or as a new or replacing binding. The change lasts until the Runtime restarts.",
+      "common_causes": "A Lab debugging session loaded a package.",
+      "handling": "Nothing to repair."
+    },
+    "pack_registry_unloaded": {
+      "category": "success",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "UnloadPack completed (#389 U-3): the package left the in-memory loaded-pack table. Runs that used it were stopped through the same path as a run stop (scheduled runs, startup and ladder packages, prerequisite layers, and manual runs of the same package_id), its admitted but unstarted dispatches were withdrawn and its queued startup-package claims dropped. The result lists the stopped runs by request id and the withdrawn dispatches, and marks the runs still stopping when the wait ended. The change lasts until the Runtime restarts.",
+      "common_causes": "A Lab debugging session unloaded a package.",
+      "handling": "Nothing to repair. A restart loads the configuration's packages again."
+    },
+    "pack_registry_entry_unknown": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "LoadPack restoring a start-table entry, or UnloadPack, named a package that is neither in the effective loaded-pack table nor in the configuration; the table is unchanged.",
+      "common_causes": "A mistyped package id; a package that the configuration does not bind.",
+      "handling": "Use a package id that the configuration binds or that a LoadPack in this Runtime epoch loaded."
+    },
+    "pack_registry_entry_invalid": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "LoadPack replacing a start-table entry gave another run mode than the entry it replaces (scheduled_execution present on one side only, or another mode); the table is unchanged.",
+      "common_causes": "The replacing binding left out or changed scheduled_execution.",
+      "handling": "Give the replacing binding the entry's run mode. To change a run mode, change the configuration and restart the Runtime."
+    },
+    "pack_registry_not_loaded": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "instance_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "One of the Runtime's own requesters met a package that is not loaded: a policy candidate is deferred (before SR-11's pack_schedule_closed), a startup package or a ladder rung that needs it is skipped, a fact reader's dispatch is deferred, or a queued startup-package claim is dropped by an unload.",
+      "common_causes": "The package was unloaded with UnloadPack in this Runtime epoch.",
+      "handling": "Load the package again with LoadPack, or restart the Runtime to return to the configuration's packages."
+    },
+    "pack_registry_dispatch_withdrawn": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "request_id": "optional",
+        "instance_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An unload withdrew a dispatch of the package that was admitted but had not started; recorded in the evaluation record and the reason chain.",
+      "common_causes": "The package was unloaded while one of its dispatches waited to start.",
+      "handling": "Nothing to repair."
     }
   }
 }

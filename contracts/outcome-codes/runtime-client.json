@@ -2704,6 +2704,37 @@
       "description": "A runtime client call failed: test observation elapsed overflow.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "client_channel_unsupported": {
+      "category": "warning",
+      "owner": "runtime-client",
+      "layer": "client",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime closed the connection on BindChannel without a receipt: an actingd built before #389 U-2. The client reconnected once, checked the owner epoch and goes on without a channel; it sends no BindChannel on later reconnects. Reported once per client process, on stderr or in the MCP warnings.",
+      "common_causes": "Root Tools newer than the actingd of the selected slot, for example after a slot rollback.",
+      "handling": "Nothing to repair. Each such client process leaves one connection failure in that actingd's ledger; Tools and Runtime of one release bind their channels."
+    },
+    "client_channel_refused": {
+      "category": "error",
+      "owner": "runtime-client",
+      "layer": "client",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "channel": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, the runtime client's own check for a Lab-only session (resource authoring, runtime debug) refused a client whose channel is not lab; channel names the client's channel.",
+      "common_causes": "A program other than actinglab opened a Lab session through the runtime client library.",
+      "handling": "Open Lab sessions from actinglab."
     }
   },
   "locations": {

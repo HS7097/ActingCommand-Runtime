@@ -217,6 +217,11 @@ actingcommand_contract::outcome_codes! {
         TestObservationRecorderLockPoisoned => "test_observation_recorder_lock_poisoned": error,
         TestObservationSequenceOverflow => "test_observation_sequence_overflow": error,
         TestObservationElapsedOverflow => "test_observation_elapsed_overflow": error,
+        // ---- #389 U-0 registrations (pending): `client_channel_unsupported` is emitted from U-2,
+        // `client_channel_refused` from U-6 (contracts/runtime-interface.md, "Outcome codes").
+        ClientChannelUnsupported => "client_channel_unsupported": warning,
+        ClientChannelRefused => "client_channel_refused": error,
+        // ---- end of #389 U-0 registrations
     }
 }
 

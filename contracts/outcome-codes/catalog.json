@@ -6732,6 +6732,30 @@
     ],
     "writer_": [
       "ledger"
+    ],
+    "channel_": [
+      "runtime-host"
+    ],
+    "lab_module_": [
+      "runtime-host"
+    ],
+    "upgrade_state_": [
+      "runtime-host"
+    ],
+    "pack_registry_": [
+      "runtime-host"
+    ],
+    "client_channel_": [
+      "runtime-client"
+    ],
+    "lab_tool_": [
+      "actingctl"
+    ],
+    "mcp_tier_": [
+      "actingctl"
+    ],
+    "lab_command_": [
+      "actinglab"
     ]
   },
   "fragments": {
