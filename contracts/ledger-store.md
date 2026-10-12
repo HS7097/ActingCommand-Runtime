@@ -234,19 +234,24 @@ Every import and scope close carries a `basis`: `proven`, or `unproven` with one
 of three reasons. A prior owner without a native proof is still imported and
 closed, once per owner epoch and once per scope, through the same append path,
 links rule and startup barrier. `legacy_journal`: the owner's journal epoch
-contains a record older than the v2 schema. `process_exit_only`: a consistent v2
-epoch ends in a normal exit record and never recorded ConfirmedClosed.
-`proof_missing`: no journal epoch for the owner, or one whose records support no
-positive close (a block that ends active, reuses an epoch, contradicts its own
-identity or follows ConfirmedClosed with later resource use). An epoch whose last
-record still declares InUse or Unconfirmed is left open; a block the native
+contains a record older than the v2 schema. `process_exit_only` (released by
+process exit): a consistent v2 epoch that never recorded ConfirmedClosed and
+either ends in a normal exit record or whose last record still declares InUse or
+Unconfirmed. An epoch of the second kind reaches this startup step only after the
+OwnerGuard released it because its process had exited
+(`contracts/actingd-unlock-owner.md`, "When startup releases the owner itself"),
+which is recorded as the lifecycle observation
+`prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
+`last_disposition`). So the start after a crash imports the crashed epoch with
+this reason and closes every scope it left open (Workflow #394 EPOCH-CLOSE;
+#332 Q5, Alice's choice (a) of 09-30). `proof_missing`: no journal epoch for
+the owner, or one whose records support no positive close (a block that ends
+active with None or ConfirmedClosed, reuses an epoch, contradicts its own
+identity or follows ConfirmedClosed with later resource use). A block the native
 reader could not have produced fails startup as `prior_epoch_unproven_unclassified`.
-Such an epoch reaches this startup step when the OwnerGuard released it because
-its process had exited (`contracts/actingd-unlock-owner.md`, "When startup
-releases the owner itself"). That release is recorded as the lifecycle
-observation `prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
-`last_disposition`); it is not close evidence, the epoch stays open here, and it
-authorises nothing on the device side.
+The release observation itself is not close evidence and authorises nothing on
+the device side; the unproven import and scope closes of the same start serve
+retention only.
 The unproven import seals the observation instead of a suffix: no positive close,
 the block identity when one exists and the complete-read bounds, which a later
 startup must still support. Facts sealed before `basis` existed read as proven.
