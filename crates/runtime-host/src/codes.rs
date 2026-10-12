@@ -283,8 +283,12 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskEffectInvalid => "contained_task_effect_invalid": error,
         ContainedTaskFinalizingStateInvalid => "contained_task_finalizing_state_invalid": error,
         ContainedTaskFrameIdentityMissing => "contained_task_frame_identity_missing": error,
-        ContainedTaskGeometryAspectMismatch => "contained_task_geometry_aspect_mismatch": error,
         ContainedTaskGeometryBudgetUnavailable => "contained_task_geometry_budget_unavailable": error,
+        /// Error. Workflow #392 DA-A: a contained task's frame and the logical display it was
+        /// captured from have different aspect ratios, so the run is refused before any input.
+        /// The frame's own aspect ratio is never checked. Replaces
+        /// `contained_task_geometry_aspect_mismatch`.
+        ContainedTaskGeometryFrameDisplayMismatch => "contained_task_geometry_frame_display_mismatch": error,
         ContainedTaskGeometryFrameExtentInvalid => "contained_task_geometry_frame_extent_invalid": error,
         ContainedTaskGeometryFrameUnavailable => "contained_task_geometry_frame_unavailable": error,
         ContainedTaskGeometryInputPrerequisiteMissing => "contained_task_geometry_input_prerequisite_missing": error,

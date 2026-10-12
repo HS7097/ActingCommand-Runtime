@@ -3793,6 +3793,42 @@ fn b3_fact_publication_reaches_the_store_through_one_gated_entry() {
     );
 }
 
+/// Workflow #392 DA-A, test DA-A-T3 (model 392 v1.1, section 8.1): `display.aspect` is recorded
+/// only and has no reader. Its key is spelled once, by the constant of its one writer in
+/// `crates/runtime-host/src/host/facts.rs`, and the constant is named only where it is defined and
+/// where the writer builds the record. Any other mention of the spelling or of the constant in a
+/// production source under `apps`, `crates`, `providers` or `tools` is a reader.
+#[test]
+fn da_a_t3_display_aspect_has_no_reader() {
+    const WRITER: &str = "crates/runtime-host/src/host/facts.rs";
+    const SPELLING: &str = "\"display.aspect\"";
+    const CONSTANT: &str = "DISPLAY_ASPECT_FACT_KEY";
+    let identifier =
+        |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let root = workspace_root();
+    let mut mentions = BTreeMap::new();
+    for (path, source) in production_sources(&root, &["apps", "crates", "providers", "tools"]) {
+        let bytes = source.as_bytes();
+        let spelled = source.matches(SPELLING).count();
+        let named = source
+            .match_indices(CONSTANT)
+            .filter(|(start, _)| {
+                !identifier(start.checked_sub(1).and_then(|before| bytes.get(before)))
+                    && !identifier(bytes.get(start + CONSTANT.len()))
+            })
+            .count();
+        if spelled + named > 0 {
+            mentions.insert(path, (spelled, named));
+        }
+    }
+    assert_eq!(
+        mentions,
+        BTreeMap::from([(WRITER.to_owned(), (1, 2))]),
+        "display.aspect must be spelled once and named only by its definition and its one writer \
+         ((spelling count, constant count) per production source)"
+    );
+}
+
 #[test]
 fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {
     let root = workspace_root();
