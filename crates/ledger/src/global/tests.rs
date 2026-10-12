@@ -15,7 +15,7 @@ use actingcommand_contract::{
     PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload,
     ProjectionProfile, SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeIdentity,
     SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome, TaskPayloadDraft,
-    TaskSemanticFact,
+    TaskSemanticFact, outcome::Outcome,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -26,6 +26,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+/// A registered code that `is_severe_policy_failure` does not list: a recoverable failure.
+const RECOVERABLE_FAILURE_CODE: &str = "capture_failed";
+/// A registered code that `is_severe_policy_failure` lists: a severe failure.
+const SEVERE_FAILURE_CODE: &str = "execution_kernel_closed";
 
 fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
     GlobalLedgerConfig::new(temp.path(), owner_id)
@@ -349,7 +354,6 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         reason_chain_id: "reason:recovery-fixture".to_owned(),
         reasons: vec![PolicyReasonRecord {
             code: "scheduled".to_owned(),
-            detail: "deterministic recovery fixture".to_owned(),
         }],
         catalog_hash: format!("sha256:{}", "3".repeat(64)),
         catalog_version: 1,
@@ -390,11 +394,14 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         observed_at_unix_ms: 1_752_147_200_400,
         outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 50 },
     };
+    // Ledger revision 3 (Workflow #378 A3): the class of a failed run is read from its terminal's
+    // outcome code (`is_severe_policy_failure`), so the fixture names a registered recoverable
+    // code and a registered severe one.
     let policy_failure = |class, runtime_ms| PolicyFailureRecord {
         error_code: if class == PolicyFailureClass::Recoverable {
-            "capture_transient"
+            RECOVERABLE_FAILURE_CODE
         } else {
-            "capture_fatal"
+            SEVERE_FAILURE_CODE
         }
         .to_owned(),
         reported_success: false,
@@ -521,10 +528,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
-                    failure_code: None,
+                    outcome: None,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -543,10 +550,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
-                    failure_code: None,
+                    outcome: None,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
                             "mapped-result",
@@ -571,10 +578,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_other_request_links,
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
-                    failure_code: None,
+                    outcome: None,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
                             "mapped-result",
@@ -599,10 +606,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     final_page: None,
                     executed_steps: Some(0),
-                    failure_code: Some("capture_transient".to_owned()),
+                    outcome: Some(Outcome::relayed(RECOVERABLE_FAILURE_CODE)),
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -621,10 +628,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     final_page: None,
                     executed_steps: Some(0),
-                    failure_code: Some("capture_fatal".to_owned()),
+                    outcome: Some(Outcome::relayed(SEVERE_FAILURE_CODE)),
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -632,9 +639,11 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             )
             .into(),
         ),
+        // Ledger revision 3: a stored severity is the record's category; only a debug record
+        // breaks that rule, so the ambiguous terminal is a debug one.
         task_failed_legacy: sanitize(
             1_752_147_200_400,
-            EventSeverity::Error,
+            EventSeverity::Debug,
             EventOrigin::new(
                 EventSource::Runtime,
                 OriginModule::Runtime,
@@ -643,10 +652,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             task_terminal_links.clone(),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     final_page: None,
                     executed_steps: Some(0),
-                    failure_code: Some("capture_legacy".to_owned()),
+                    outcome: Some(Outcome::relayed(RECOVERABLE_FAILURE_CODE)),
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -979,7 +988,7 @@ fn recovery_execution_data(
         task_id: payload.task_id().to_owned(),
         instance_id: payload.instance_id().to_owned(),
         observed_at_unix_ms: payload.observed_at_unix_ms(),
-        outcome: payload.outcome().clone(),
+        outcome: payload.policy_result().clone(),
     }
 }
 
@@ -1146,7 +1155,12 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
         &recoverable_drafts.recovered_warning_execution,
     );
     assert_recovered_execution_chain(&recovered, &recoverable_drafts);
-    assert_eq!(recovered.severity(), EventSeverity::Warning);
+    // Ledger revision 3: an execution record carries no outcome; its severity is its event
+    // type's category, whatever the policy's class.
+    assert_eq!(
+        recovered.severity(),
+        EventSeverity::from_category(EventType::PolicyExecutionRecorded.category())
+    );
     recoverable.close().expect("close recoverable ledger");
 
     let severe_root = TempDir::new().expect("severe temp");
@@ -1167,7 +1181,10 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
         .expect("recover severe execution");
     let recovered = recovered_execution_fact(&severe, &severe_drafts.recovered_fatal_execution);
     assert_recovered_execution_chain(&recovered, &severe_drafts);
-    assert_eq!(recovered.severity(), EventSeverity::Error);
+    assert_eq!(
+        recovered.severity(),
+        EventSeverity::from_category(EventType::PolicyExecutionRecorded.category())
+    );
     severe.close().expect("close severe ledger");
 
     let interrupted_root = TempDir::new().expect("interrupted temp");

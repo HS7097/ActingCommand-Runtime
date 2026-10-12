@@ -4,7 +4,7 @@ use crate::codes::{StoreCode, StoreLocation};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    ArtifactFailureCause, ArtifactFailureRecord, ArtifactFailureStage, ArtifactId,
+    ArtifactFailureCause, ArtifactFailureDraft, ArtifactFailureStage, ArtifactId,
     LifecycleNativeDetail, MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES,
 };
 use std::error::Error;
@@ -228,22 +228,35 @@ impl ArtifactStoreError {
         self
     }
 
+    /// This failure as one cause of a recorded artifact failure (ledger revision 3, Workflow #378
+    /// A3): its registered code and location. A relayed spelling the catalog does not list is
+    /// never dropped: the cause is the store's `artifact_publish_failed` at `store_artifact`, and
+    /// the unlisted spellings lead its native text.
     fn primary_cause(&self) -> ArtifactFailureCause {
-        let (text, truncated) = bounded_text(&self.detail, 1024);
+        let (code, operation, text) =
+            match Code::relayed(self.code).zip(Location::relayed(self.operation)) {
+                Some((code, operation)) => (code, operation, self.detail.clone()),
+                None => (
+                    StoreCode::ArtifactPublishFailed.code(),
+                    StoreLocation::StoreArtifact.location(),
+                    format!("{} during {}: {}", self.code, self.operation, self.detail),
+                ),
+            };
+        let (text, truncated) = bounded_text(&text, 1024);
         ArtifactFailureCause {
-            code: self.code.to_owned(),
-            operation: self.operation.to_owned(),
+            code,
+            operation,
             native_detail: LifecycleNativeDetail::new(text, truncated),
             raw_os_error: self.raw_os_error,
         }
     }
 
-    pub(crate) fn failure_record(
+    pub(crate) fn failure_draft(
         &self,
         artifact_id: ArtifactId,
         stage: ArtifactFailureStage,
-    ) -> ArtifactFailureRecord {
-        ArtifactFailureRecord {
+    ) -> ArtifactFailureDraft {
+        ArtifactFailureDraft {
             artifact_id,
             stage,
             primary: self.primary_cause(),

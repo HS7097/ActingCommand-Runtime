@@ -754,7 +754,7 @@ pub(super) fn scheduling_projection_rejects_a_second_same_run_terminal_with_anot
         .project_scheduling_outcomes(expected.clone(), terminal.sequence())
         .expect("single mapped terminal projects");
     assert_eq!(
-        projected.outcome().disposition().outcome_key(),
+        projected.scheduling_result().disposition().outcome_key(),
         "mapped-result"
     );
     let stale = ledger

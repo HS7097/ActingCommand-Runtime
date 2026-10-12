@@ -107,7 +107,7 @@ impl actingcommand_artifact_store::ArtifactCapacityAdmission for GlobalLedgerSin
             decided_at_monotonic_ms: 0,
             requested_bytes: bytes,
             target_volume: Some("fixture-volume".to_owned()),
-            outcome,
+            admission_result: outcome,
             reason,
             fact: Some(fact.clone()),
         })
@@ -430,15 +430,30 @@ fn required_global_ledger_failure_preserves_referenced_archive_without_success()
         .collect::<Vec<_>>();
     assert_eq!(failures.len(), 3);
     assert!(failures.iter().all(|event| event.artifacts().is_empty()));
+    // Ledger revision 3 (Workflow #378 A3): the failed step is the payload's outcome, its native
+    // text the outcome's `caused_by` foreign link.
     let failure = failures
         .last()
         .unwrap()
         .payload()
-        .artifact_failure()
+        .outcome()
         .expect("native failure");
-    assert_eq!(failure.primary.code, error.code());
-    assert_eq!(failure.primary.operation, error.operation());
-    assert_eq!(failure.primary.native_detail.text(), error.detail());
+    assert_eq!(failure.code().as_str(), error.code());
+    assert_eq!(
+        failure
+            .value("operation")
+            .and_then(serde_json::Value::as_str),
+        Some(error.operation())
+    );
+    let native = &failure.causes()[0];
+    assert!(*native.relation() == actingcommand_contract::outcome::CauseRelation::CausedBy);
+    assert_eq!(
+        native
+            .outcome()
+            .value("raw_text")
+            .and_then(serde_json::Value::as_str),
+        Some(error.detail())
+    );
     ledger.close().expect("close ledger");
     let snapshot = GlobalLedger::open_read_only(
         GlobalLedgerReadOnlyConfig::new(temp.path().join("ledger")),

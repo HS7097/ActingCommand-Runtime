@@ -350,6 +350,64 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
     }
 }
 
+/// Workflow #378 A3 (model section 8.1; ORD section 10): ledger revision 3 is SQLite format 2,
+/// and a database holding a format-1 ledger is refused with `ledger_format_unsupported` (fatal)
+/// before anything of it is read or written; there is no compatibility path.
+#[test]
+fn a_format_1_ledger_is_refused_and_a_new_ledger_is_format_2() {
+    let format = |database: &RuntimeDatabase| -> i64 {
+        database
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
+            .expect("connection")
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("user_version")
+    };
+    let mark_format_1 = |database: &RuntimeDatabase| {
+        database
+            .connection(DatabaseLocation::OpenExistingDatabase.location())
+            .expect("connection")
+            .execute_batch("PRAGMA user_version=1")
+            .expect("mark the database format 1");
+    };
+    let assert_refused = |error: GlobalLedgerError, what: &str| {
+        assert_eq!(error.code(), "ledger_format_unsupported", "{what}: {error}");
+        assert!(error.is_fatal(), "{what}");
+    };
+
+    let formal_root = TempDir::new().expect("formal root");
+    let formal = database(formal_root.path());
+    initialize_formal_empty(&*formal).expect("initialize a formal ledger");
+    assert_eq!(format(&*formal), 2);
+    assert!(has_schema(&*formal).expect("format 2 schema"));
+    mark_format_1(&*formal);
+    assert_refused(
+        has_schema(&*formal).err().expect("format 1 schema refused"),
+        "schema",
+    );
+
+    let root = TempDir::new().expect("root");
+    let database = database(root.path());
+    let ledger =
+        GlobalLedger::open_sqlite_candidate(config(root.path(), "format"), Arc::clone(&database))
+            .expect("writer");
+    ledger.append(draft(1)).expect("first");
+    ledger.close().expect("close");
+    mark_format_1(&*database);
+    assert_refused(
+        GlobalLedger::open_sqlite_candidate(config(root.path(), "format"), Arc::clone(&database))
+            .err()
+            .expect("format 1 open refused"),
+        "open",
+    );
+    assert_refused(
+        read_snapshot(&*database, None)
+            .err()
+            .expect("format 1 read refused"),
+        "read",
+    );
+    assert_eq!(format(&*database), 1, "the refusal writes nothing");
+}
+
 #[test]
 fn sqlite_unique_constraints_and_transaction_rollback_fail_closed() {
     let root = TempDir::new().expect("root");

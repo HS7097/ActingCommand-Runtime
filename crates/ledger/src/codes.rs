@@ -109,6 +109,10 @@ actingcommand_contract::outcome_codes! {
         LedgerCandidateNotProduction => "ledger_candidate_not_production": error,
         LedgerDatabaseRootMismatch => "ledger_database_root_mismatch": error,
         LedgerFormatMarkerMismatch => "ledger_format_marker_mismatch": error,
+        /// Fatal. The database holds a format-1 ledger (written by v0.11, ledger revision 2);
+        /// ledger revision 3 refuses it before anything else is read or written (Workflow #378
+        /// A3, no compatibility path).
+        LedgerFormatUnsupported => "ledger_format_unsupported": fatal,
         LedgerIndexMismatch => "ledger_index_mismatch": error,
         LedgerInitializationConflict => "ledger_initialization_conflict": error,
         LedgerInsertIncomplete => "ledger_insert_incomplete": error,

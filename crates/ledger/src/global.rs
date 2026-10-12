@@ -967,7 +967,7 @@ enum WriterCommand {
     FinishArtifactEviction {
         permit: Box<ArtifactEvictionPermit>,
         disposition: actingcommand_contract::ArtifactEvictionDisposition,
-        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        outcome: Option<actingcommand_contract::outcome::Outcome>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
     AppendTransaction {
@@ -2315,10 +2315,10 @@ fn writer_loop<S: LedgerStore>(
             WriterCommand::FinishArtifactEviction {
                 permit,
                 disposition,
-                io,
+                outcome,
                 response,
             } => {
-                let result = store.finish_artifact_eviction(*permit, disposition, io);
+                let result = store.finish_artifact_eviction(*permit, disposition, outcome);
                 let result = match result {
                     Ok(event) => {
                         deliver_live_event(&mut subscribers, &event);
