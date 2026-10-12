@@ -423,6 +423,21 @@
       "common_causes": "The slot fell while the activity window was closed or the Runtime was not running; a gate held the slot back the day before; a catalog was activated with new task ids outside the window.",
       "handling": "Nothing to repair for a single owed run. Owed runs every morning together with refusals of the day's own slot mean that the slot's daily budget is displaced: gate the slot with its own timeline window or move it to the window start."
     },
+    "install_preparation_instance_unavailable": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. Until slice A2 turns it into a caused_by link, the self-check's failure is carried as the token cause=<code>, for example input_backend_open_failed. When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
+      "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
+      "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
+    },
     "action_id_issue_failed": {
       "category": "error",
       "owner": "runtime-host",
@@ -4930,7 +4945,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports install preparation selfcheck failed.",
+      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1). When some prepared instance passed, the start goes on instead and each failed instance is recorded as install_preparation_instance_unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

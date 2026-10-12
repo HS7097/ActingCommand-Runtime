@@ -135,6 +135,15 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info,
+        // INST-1 (Workflow #390) begin
+        /// Warning. An install start went on although this instance's daemon-start
+        /// preparation self-check failed, because another instance passed (INST-1, FCM D-01).
+        /// The instance stays unavailable until a later self-check passes. One lifecycle
+        /// record per instance at stage `install_release` (keys `instance_id`); until A2 makes
+        /// it a `caused_by` link, the self-check's failure travels as the token
+        /// `cause=<code>`.
+        InstallPreparationInstanceUnavailable => "install_preparation_instance_unavailable": warning,
+        // INST-1 (Workflow #390) end
         ActionIdIssueFailed => "action_id_issue_failed": error,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error,
         AgentContextInvalid => "agent_context_invalid": error,
@@ -486,6 +495,9 @@ actingcommand_contract::outcome_codes! {
         InstallOwnerStopping => "install_owner_stopping": error,
         InstallPauseScopeMismatch => "install_pause_scope_mismatch": error,
         InstallPreparationNotAuthorized => "install_preparation_not_authorized": error,
+        /// Error. An install start whose daemon-start preparation self-checks all failed (at
+        /// least one ran and none passed) ends under this code during `install_transition`
+        /// (INST-1, Workflow #390); a start where some instance passed goes on.
         InstallPreparationSelfcheckFailed => "install_preparation_selfcheck_failed": error,
         InstallPreviousDrainUnverified => "install_previous_drain_unverified": error,
         InstallPreviousOwnerInvalid => "install_previous_owner_invalid": error,
