@@ -159,7 +159,7 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskPostAdmissionOcrTargetOutOfBounds => "contained_task_post_admission_ocr_target_out_of_bounds": error / declaration_error,
         ContainedTaskPostAdmissionOcrTruthMissing => "contained_task_post_admission_ocr_truth_missing": error / declaration_error,
         ContainedTaskPostAdmissionOcrTruthInvalid => "contained_task_post_admission_ocr_truth_invalid": error / declaration_error,
-        ContainedTaskPostAdmissionOcrTruthMismatch => "contained_task_post_admission_ocr_truth_mismatch": error / pack_logic_mismatch,
+        ContainedTaskPostAdmissionOcrTruthMismatch => "contained_task_post_admission_ocr_truth_mismatch": error / declaration_error,
         ContainedTaskPostAdmissionOcrLimitExceeded => "contained_task_post_admission_ocr_limit_exceeded": error / budget_or_permission,
         ContainedTaskPostAdmissionOcrCandidateWorkExceeded => "contained_task_post_admission_ocr_candidate_work_exceeded": error / budget_or_permission,
         ContainedTaskPostAdmissionOcrObservationMissing => "contained_task_post_admission_ocr_observation_missing": error / none,

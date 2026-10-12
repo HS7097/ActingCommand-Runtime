@@ -10,9 +10,12 @@ run is admitted only if it is certain to end before the start.
 **Status.** This document is written ahead of its code (documentation slice SR-0). Slice SR-4a
 implements the blackout and quiet checks of the policy, the recovery ladder, the startup
 package, the instance monitor and the emulator autostart; slice SR-4b implements the safety
-net that stops runs at a blackout start. Until SR-4a lands, timeline `maintenance` events have
-no Runtime consumer and the configuration has no `scheduling.blackout` section: a catalog
-generator must not rely on blackouts before check-config reports their keys ("Configuration").
+net that stops runs at a blackout start. SR-1 parses every `scheduling.blackout.*` key from
+v0.12.0 on ([v0.12.0 register](v012-register.md) §5), so check-config lists them before
+anything reads them; they take effect only from SR-4a. Until SR-4a lands, timeline
+`maintenance` events and host blackouts have no Runtime consumer: a catalog generator must not
+rely on blackouts before check-config reports the `scheduling_blackout` subsystem that only
+SR-4a adds ("Configuration").
 
 ## Blackouts
 
@@ -190,9 +193,13 @@ window (`policy-suspension.md`). Blackouts around a reset keep any run from cros
 The defaults live in the defaults file `distribution/windows/actingd.defaults.json` of the
 configuration mechanism (Workflow #387) and arrive with the code that parses the keys (slice
 SR-1 parses every `scheduling.blackout.*` key in v0.12.0). check-config lists each key with its
-effective value and source in `config_manifest.parameters`; a catalog generator detects blackout
-support by their presence and refuses to emit maintenance blackouts without it. A key the key
-table marks settable can also be changed while the Runtime runs (Workflow #387,
+effective value and source in `config_manifest.parameters` from SR-1 on, but the keys take effect
+only from SR-4a, so their presence says nothing about blackout support. SR-4a adds the subsystem
+`scheduling_blackout` to `config_manifest.subsystems` (`enabled` true; the reason carries the
+number of host blackout entries) in the same PR as the checks. A catalog generator detects
+blackout support by that subsystem entry and refuses to emit maintenance blackouts without it,
+because an older Runtime would ignore them silently. A key the key table marks settable can
+also be changed while the Runtime runs (Workflow #387,
 `ConfigureSettings`); the others are read-only there and change through the configuration file
 and a restart.
 

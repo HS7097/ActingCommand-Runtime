@@ -29,10 +29,14 @@ semantic core, query, projection and subscription behavior.
   [ledger-observer.md §9](ledger-observer.md#9-write-failure-retry-dump-fatal-ao-1).
 - **One queue, categories, batch sync** (replaces "Durability classes"; AO-2): one capture queue
   in capture order. A record's category is *decision* (today's durable) or *observation* (today's
-  observational), fixed by its type as today, except that `artifact.verified` becomes decision
-  (business reads it, X6). A batch with a decision record commits with FULL sync, otherwise
-  NORMAL. A tagged record commits on arrival, alone if needed, with FULL sync. Watermarks and
-  spilling: [ledger-observer.md §7](ledger-observer.md#7-capture-queue-and-watermarks-ao-2).
+  observational), fixed by its type as today, with the exceptions of the gate table
+  ([ledger-observer.md §4](ledger-observer.md#4-silent-gates-g1g16), which decides where the two
+  differ): `artifact.verified` becomes decision (business reads it, X6; G9); instance-scoped
+  `runtime.fact_recorded` / `runtime.fact_invalidated` become decision, except the instance's
+  self-check records, which stay observation (G3); `task.step_*`, `task.effect_*` and
+  `task.entry_preflight` become observation (G7, Appendix A.8 M10). A batch with a decision
+  record commits with FULL sync, otherwise NORMAL. A tagged record commits on arrival, alone if
+  needed, with FULL sync. Watermarks and spilling: [ledger-observer.md §7](ledger-observer.md#7-capture-queue-and-watermarks-ao-2).
 - **Capture instead of deferred append; the close drain** (replaces "Deferred append"; AO-2,
   AO-4): business captures and never waits; the ledger assigns sequences in capture order. At
   close, business stops, the close record is captured last, the flush thread drains the dump and
@@ -115,8 +119,11 @@ observations, not event identity or portable equality inputs.
 ## Durability classes (Workflow #191 I)
 
 > **Superseded by Workflow #383 AO-2**: "One queue, categories, batch sync" above. The table of
-> observational types below stays the category table, except `artifact.verified`, which becomes
-> a decision record.
+> observational types below stays the category table, with the exceptions of
+> [ledger-observer.md §4](ledger-observer.md#4-silent-gates-g1g16): `artifact.verified` becomes a
+> decision record (G9); instance-scoped runtime facts other than the instance's self-check
+> records become decision records (G3); `task.step_*`, `task.effect_*` and `task.entry_preflight`
+> become observation records (G7).
 
 Every append has a durability class fixed by the Ledger from its payload: durable
 or observational. Callers cannot choose it; a joint `append_transaction` is always

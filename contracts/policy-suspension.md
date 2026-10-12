@@ -335,9 +335,12 @@ no record shape changes.
 actingd starts (in the background), when the package is loaded (Workflow #389 LoadPack), and
 when the evaluation finds a task of the package due while it is suspended, at most once per
 package per minimum interval (a configuration key that Workflow #383 AO-0 registers, default
-60 s). No restart is needed. A package that cannot be measured at a check stays suspended and is
-checked again. After a lift the next preparation tries the package once; the same refusal under
-the same content hash and build suspends it again, so nothing loops. There is no manual lift.
+60 s). No restart is needed. A package that cannot be measured at a check (removed, being
+replaced, unreadable) stays suspended, reports the warning `lift_check_hash_unmeasured`
+(`package_id`; M-PKG D18; spelling proposed here, registered by PKG-S3 with the lift check) and
+is checked again. After a lift the next preparation tries the package once; the same refusal
+under the same content hash and build suspends it again, so nothing loops. There is no manual
+lift.
 
 **Notices.** All are registered codes, never sentences:
 
@@ -408,8 +411,8 @@ back to a v0.11 build fails at its start.
   still counts the occurrence as served.
 
 **The rerun.** An owed pair (`condition_reruns`: (task, instance) → `{failure_code, count,
-expires_at}`) is an input of the evaluation like the immediate rerun above: the pair is treated
-as triggered and past its cooldown with the reason `policy_rerun_owed`, and with
+expires_at_unix_ms}`) is an input of the evaluation like the immediate rerun above: the pair is
+treated as triggered and past its cooldown with the reason `policy_rerun_owed`, and with
 `scheduling.rerun.promote` (default true) it ranks ahead of the instance's other candidates.
 Feedback stop, placement, blackouts, activity windows and budgets still apply. It is an ordinary
 policy dispatch in the instance's one queue (`policy_dispatch` claim); a held instance defers it
@@ -421,7 +424,7 @@ A stage change wakes the evaluation (`ResourcesChanged`); a blackout's end wakes
 deferral's wake time. While performance pacing is observe-only the stage is always S0 and the
 rerun is let through at once.
 
-**Limits.** An owed rerun not served by `expires_at` expires with `policy_rerun_expired`
+**Limits.** An owed rerun not served by `expires_at_unix_ms` expires with `policy_rerun_expired`
 (warning); the run's `Failed` terminal then appears in the snapshot and counts as an ordinary
 failure, and the missed round is not carried into the next day. A pair that ends by a condition
 more than `scheduling.rerun.max_per_occurrence` times (default 2) in one occurrence settles that
@@ -431,11 +434,13 @@ run as an ordinary recoverable failure, without `condition`, and records
 **After a restart.** Before ledger slices AO-5 and AO-6 the owed reruns are rebuilt from the
 execution records, as the failure streaks are. From AO-6 on they load from the pair's latest
 `policy.control_state_recorded` value record, whose `condition_reruns` holds `{failure_code,
-count, expires_at}` as the settlement wrote them; the `condition` member of execution records is
-then read only by replay. Value records are committed as they arrive. After a start that found a
-gap in the ledger, an owed rerun of an entry-cost task counts as not owed; any other pair keeps
-its last committed value. `actingd suspended` gains the list `reruns` (an addition, derived from
-the execution records) with the owed, waiting and expired reruns.
+count, expires_at_unix_ms}` as the settlement wrote them; the `condition` member of execution
+records is then read only by replay. Value records are committed as they arrive. After a start
+that found a gap in the ledger, an owed rerun of an entry-cost task counts as not owed; any other
+pair keeps its last committed value. `actingd suspended` gains the list `reruns` (an addition)
+with the owed, waiting and expired reruns. It is read from the loaded rerun state, that is from
+the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b depends on AO-5
+and AO-6, so no build with SR-2b derives the list from the execution records.
 
 None of these codes triggers the recovery ladder.
 

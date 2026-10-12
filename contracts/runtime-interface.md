@@ -681,7 +681,9 @@ it is meant for (`RuntimeShutdownTarget`, as in `InstallTransition`;
 
 ### Refusals
 
-Today's codes with today's meaning; U-4 registers them with the changed paths:
+Today's codes with today's meaning. All are already registered under runtime-host (the
+`install_*` codes and `drain_timeout` by #378 A2b, `release_timeout` and `held_timeout` before
+it, `upgrade_state_aborted` by U-0); U-4 changes only their paths and texts:
 
 | Code | When |
 |---|---|
@@ -695,11 +697,11 @@ Today's codes with today's meaning; U-4 registers them with the changed paths:
 | `upgrade_state_aborted` | the reply to an `enter` still draining when a `cancel` withdrew it |
 | `release_timeout`, `held_timeout` | the release or the held start timed out; the start ends |
 
-`install_identity_required` retires: there is no identity card. The domains for the
-reused `install_*` codes are U-4's: narrow prefixes `install_owner_`, `install_ticket_`,
-`install_abort_`, `install_release_` for runtime-host, `drain_` (already
-runtime-host's), and a decision for `install_transition_`, which runtime-client's
-`install_transition_receipt_unconfirmed` also uses.
+`install_identity_required` retires: there is no identity card. No domain is left to
+decide: `install_` is already shared by six owners (actingctl, actingd, artifact-store,
+contract, runtime-client and runtime-host), so runtime-client's
+`install_transition_receipt_unconfirmed` keeps its place beside the host's codes;
+`drain_`, `held_` and `upgrade_state_` are runtime-host's, and `release_` is shared.
 
 ### The installer when refused or unanswered (Fail Loud)
 
@@ -930,8 +932,8 @@ them.
 
 **Registered by the slices that change the path**:
 
-- U-4: the upgrade-state refusals of section Upgrade state, Refusals, with their
-  domains.
+- U-4: the paths and texts of the upgrade-state refusals of section Upgrade state,
+  Refusals; the codes and their domains are already registered.
 - U-3: `lab_tool_unavailable` (registered by #378 A2a) changes its path: option tools
   now appear by option.
 

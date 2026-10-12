@@ -428,7 +428,7 @@ instances is booked once.
 | readings (D2 reality keys) | `resource.*`, `inventory.*` | instance | *R*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 | 44 (6 + 15 + 23: the distinct `fact_key` readings of the three resource repositories at `d41137c0`, `6dd529a1`, `dfb3729`) |
 | pack schedule | `session.pack.schedule` | instance, server, game | ≤ 3 (one per scope used) | SR-11 | ≤ 9 |
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
-| instance performance baseline | `health.perf_baseline.<signal>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
+| instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 

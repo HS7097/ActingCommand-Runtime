@@ -147,6 +147,7 @@ of ledger revision 3 (SH-1); the closed definitions stay the only classification
 | `ledger.health_observed` (probe findings) | `ledger` | Health; Errors by severity |
 | `ledger.dump_imported` | `ledger` | Health |
 | `policy.control_state_recorded` (decision-memory value records) | `policy` | Changes |
+| `policy.activity_state_recorded` (activity-state value records) | `policy` | Changes |
 | `agent.wake_obligation_recorded` (wake-obligation value records) | `agent` | Changes |
 | `policy.fact_refresh_transition` (fact-refresh transitions) | `policy` | Changes |
 | `perf.pacing_changed`, `perf.dispatch_share_changed`, `perf.run_hold` | `performance` | Health (by family) |

@@ -1934,7 +1934,7 @@
     },
     "contained_task_post_admission_ocr_truth_mismatch": {
       "category": "error",
-      "ladder_class": "pack_logic_mismatch",
+      "ladder_class": "declaration_error",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,

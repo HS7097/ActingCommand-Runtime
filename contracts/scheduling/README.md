@@ -525,6 +525,12 @@ rules are decided, and so which code a deferred candidate carries, is in
 stay out of the ledger; a person sees the reason in the instance's not-running row of the status
 and of MCP (slice SR-6b).
 
+Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
+but has not started is withdrawn when its task package is unloaded, and its decision record and
+reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, optional
+`request_id`, `instance_id`; Workflow #389 U-3, [`runtime-interface.md`](../runtime-interface.md),
+"Unloading a package in use"). It is not a deferral, so it has no place in the order above.
+
 **Status.** Written ahead of its code (documentation slice SR-0); until SR-6a lands, `why` still
 prints `none` for a decision without a reason. A reason counts as registered when its spelling
 is an active code of the outcome catalog; the evaluator's existing reason spellings are

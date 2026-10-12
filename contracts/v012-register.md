@@ -20,9 +20,12 @@ owner slice is in v0.12.0 and brings its own shape says so. A writer that arrive
 a shape that v0.12.0 already reads.
 
 **Rules every shape below follows.** No member carries a task-package content digest (option 丙;
-the package identity is `package_id`, recorded as `package_label`). No reader accepts an older
-ledger or configuration (no old-version compatibility). Field and type names are fixed here unless
-a row says "reserved", in which case the named slice may rename it before SH-1 merges.
+the package identity is `package_id`, recorded as `package_label`). No reader accepts a ledger or
+configuration written before v0.12.0 (no old-version compatibility); every 0.12 build reads what
+earlier 0.12 builds wrote on the same root, which is why this register exists
+([ledger-observer.md](ledger-observer.md), "Later rulings applied", item 2). Field and type
+names are fixed here unless a row says "reserved", in which case the named slice may rename it
+before SH-1 merges.
 
 ## 1 New and changed persisted ledger shapes (ledger revision 3)
 
@@ -36,13 +39,14 @@ a row says "reserved", in which case the named slice may rename it before SH-1 m
 | L4 | record envelope `capture` | new optional envelope member of every stored event | SH-1 | AO-2 (`capture_seq`, `captured_at_unix_ms`), AO-3 (`source`) | `{capture_seq, captured_at_unix_ms, source? {source: instance_facts \| runtime_facts \| decision_memory \| fact_refresh_transitions, lineage, revision}}`; `timestamp` = capture time |
 | L5 | `runtime.lifecycle_observed` phase `tagged_state_loaded` | new phase | SH-1 | AO-6 | `{stores: [{source, previous_lineage?, previous_revision?, lineage, loaded_count}]}`; the base record of a new lineage |
 | L6 | `runtime.lifecycle_observed` phase `tagged_state_enabled` | new phase | SH-1 | AO-5 / AO-6 | no members |
-| L7 | `policy.control_state_recorded` | new event type, family `policy`, action `policy.control_state` (new), info; tagged | SH-1 | AO-4 | one dispatch pair's complete decision memory: `{instance_id, task_id (or the reserved D2 recognition identity), daily_counts, window_counts, active_window?, failure_streak? {error_code (failure identity v2), class, count, escalation_streak, disposition, retry_at_unix_ms?, decision_id}, retry_round?, dispatch_clock?, condition_reruns? {failure_code, count, expires_at_unix_ms}}`; `paused_on` is rebuilt from `error_code` and never stored |
+| L7 | `policy.control_state_recorded` | new event type, family `policy`, action `policy.control_state` (new), info; tagged | SH-1 | AO-4 | one dispatch pair's complete decision memory: `{instance_id, task_id (or the reserved D2 recognition identity), daily_counts, window_counts, window_runtime_ms, active_window?, failure_streak? {error_code (failure identity v2), class, count, escalation_streak, disposition, retry_at_unix_ms?, decision_id}, retry_round?, dispatch_clock?, condition_reruns? {failure_code, count, expires_at_unix_ms}}`; `active_window` = the `window_id` of the task's activity profile that `window_counts` and `window_runtime_ms` count in; `window_runtime_ms` = the runtime the task has reserved or used in that window (`PolicyControlState.task_runtime`, `policy_control.rs:87`); `paused_on` is rebuilt from `error_code` and never stored; the activity profile's own state is L14 |
 | L8 | `agent.wake_obligation_recorded` | new event type, family `agent`, action `agent.wake`, info; tagged | SH-1 | AO-4 | one wake obligation (`AgentWakeRecord` at AO-4's head) |
 | L9 | `policy.dispatch_intent`, `task.selection_evaluated`: `input_fact_revisions` | new optional member | SH-1 | AO-3 | `{instance_facts {lineage, revision}, runtime_facts {lineage, revision}}`; readers accept either it or `input_ledger_position` (still non-zero when present); AO-4 stops writing the old member (ORD §3.5 item 11) |
 | L10 | `runtime.fact_snapshot` sealed by the ledger | existing type, origin module `global-ledger` | — | AO-8 (T2) | the core stops writing it (AO-4) |
 | L11 | `ledger_index` table | new table in `runtime-state.sqlite` | AO-2 | AO-2 | [ledger-observer.md §11.1](ledger-observer.md#111-the-index-table-ledger_index) |
 | L12 | ledger dump file | file format, `dump_version` 1 | AO-1 | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
-| L13 | view lists | Health gains `ledger.gap_recorded`, `ledger.health_observed`, `ledger.dump_imported`; Changes gains `policy.control_state_recorded`, `policy.fact_refresh_transition`, `agent.wake_obligation_recorded` | SH-1 (view schema upgrade, `views.rs:40-43`) | — | the new `perf.*` types join Health through their family |
+| L13 | view lists | Health gains `ledger.gap_recorded`, `ledger.health_observed`, `ledger.dump_imported`; Changes gains `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition`, `agent.wake_obligation_recorded` | SH-1 (view schema upgrade, `views.rs:40-43`) | — | the new `perf.*` types join Health through their family |
+| L14 | `policy.activity_state_recorded` | new event type, family `policy`, action `policy.control_state`, info; tagged | SH-1 | AO-4 | one (instance, activity profile)'s complete activity state, index key `activity_memory/<instance>/<activity profile>`: `{instance_id, profile_id, local_day, daily_count, window_id, window_count, window_runtime_ms, next_eligible_unix_ms?}` = today's `activity_daily`, `activity_window`, `activity_runtime` and `next_activity_eligible` (`policy_control.rs:88-91`); without it a restart after AO-6 would reset the activity budgets and the activity interval |
 
 ### 1.2 Fact refresh (#384, D2M §5.3 A-5, N3)
 
@@ -110,6 +114,7 @@ not registered by AO-0.
 | A3 | instruction lines `session.instructions` | reserved instance fact key, one per scope, `record_list` | GOAL-1 | GOAL-1 (7b) | rows `{kind, task_id?, target?, value, channel, set_at_unix_ms, expires_at_unix_ms?, basis_artifact?}`; `kind` covers a task weight, a special goal and the one-shot `run_once` of MCP-17; the frozen `session.resource_targets` stays the special-goal section (Alice 10-10 17:0x); GOAL-M fixes the rows |
 | A4 | `policy.dispatch_intent`: `priority_locked` | reserved optional member | SH-1 | RT335-S4 | only if S4 cannot take the lock from an existing record |
 | A5 | `config.catalog` | runtime fact key (runtime scope, re-observed under `config.`) | MCP-9a | MCP-9a | `{catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id?, approval_disposition?, previous_catalog_id?, previous_catalog_version?}`; the configuration generation is `config.selection` (R6); the watchdog block is read client-side; a bound package path that is missing or unreadable is reported as one overview line computed at read time (coordinator 10-12) |
+| A6 | `actingctl packs --instance` ↔ `ac_packs` rows | read output of a general read (no persisted record and no runtime-client shape: it reads the configuration facts before U-3 and the loaded pack registry after it) | MCP-11 | MCP-11 | the instance's bound standard pack and, per package, `{package_id, path, role}` with `role` ∈ routine, maintenance, prerequisite, startup, recognition maintenance (token spellings reserved for MCP-11); no digest (M-PKG §5.5); a shared-table path (DB-1) and a residency column (MEM-3) come later |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -151,7 +156,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 
 | Key | Store | Tagged | Writer slice |
 |---|---|---|---|
-| `health.perf_baseline.<signal>` (per instance, per backend in use) | instance | yes (every instance key) | P-m |
+| `health.perf_baseline.<signal>.<backend>` (per instance, one per backend in use) | instance | yes (every instance key) | P-m |
 | `session.pack.schedule` (one per scope) | instance | yes | SR-11 |
 | `session.feature.<feature_key>` | instance | yes | SR-5a |
 | `session.instructions` (reserved, one per scope) | instance | yes | GOAL-1 |
@@ -216,9 +221,10 @@ when it takes effect.
 | per instance: `recognition_package`, `start_emulator` | 2 per instance |
 | **total** | **about 223 + 4 per instance** (three instances ≈ 235; five ≈ 243) |
 
-The total stays under 256 for up to eight instances (255 rows), with little room left; a ninth instance passes it. D1b writes the reading
-side so that `config.parameters` may be split into one `config.parameters.<section>` fact per
-section (M387 §5.9); the first slice whose keys would pass 256 rows splits it in its own PR.
+The total stays under 256 for up to eight instances (255 rows), with little room left; a ninth
+instance passes it. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
+becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
+from D1b on, and each section fact holds at most 256 rows.
 
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 

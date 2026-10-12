@@ -17,9 +17,15 @@ the same PR that changes the code.
    text below computes, pins or compares a task-package content digest. The ledger event hash
    chain, download SHA-256 checks of release assets and the screenshot self-check stay.
 2. *No old-version compatibility* (Alice 10-11). The v0.12.0 ledger is a new ledger (revision 3).
-   Nothing here reads a ledger, a state root or a configuration written by an older build. What
-   must hold is that a build reads back exactly what it writes itself. LEDG §11 "旧账本照旧可读" and
-   the test rows AO6-n and AO9-d ("an older release's state root opens") are void.
+   Nothing here reads a ledger, a state root or a configuration written before v0.12.0. What
+   must hold is that a build reads back exactly what it writes itself, and, within the 0.12
+   series, what an earlier 0.12 build wrote on the same state root: a 0.12.x deploy swaps the
+   programs on the same root and keeps the ledger (Workflow `rd-1010/plan-v012/order-v012.md`
+   R4, §3.6), and every 0.12 shape is registered once in the [v0.12.0 register](v012-register.md)
+   (R5). That is one ledger format, not old-version compatibility, which means reading a ledger
+   written before v0.12.0; the one-time seeding of §11.6 reads such a same-series ledger. LEDG §11
+   "旧账本照旧可读" and the test rows AO6-n and AO9-d ("an older release's state root opens") are
+   void.
 3. *No integration branch* (Workflow `rd-1010/plan-v012/order-v012.md` §10). Slices merge to
    `main` in stack order. `main` may be unable to start actingd between slices only when the
    stage is registered in REG-0 (`ci/known-unbootable.toml`).
@@ -37,9 +43,10 @@ shape, every removal, every configuration key and its slice) and the capacity le
     facts for the whole host, shared by every instance, refused (never evicted) when full;
   - the *scheduler workbench*: the runtime fact store (`RuntimeFactStore`, at most 16 384 records)
     plus the scheduler's decision memory: the dispatch clock, the per-dispatch-pair
-    `PolicyControlState` (daily and window counts, failure streaks and pauses, retry rounds,
-    condition reruns), the settlement idempotency cache (memory only, never tagged) and the agent
-    wake obligations.
+    `PolicyControlState` (daily and window counts, window runtime, failure streaks and pauses,
+    retry rounds, condition reruns), the per-(instance, activity profile) activity state (daily
+    and window counts, window runtime, next eligible time), the settlement idempotency cache
+    (memory only, never tagged) and the agent wake obligations.
 - **The ledger observes.** It is the only authoritative record for every reader outside the
   Runtime, and the authoritative history inside it; the live state belongs to the two stores
   (Alice 10-09, rule 12). It writes only what has taken effect; an intent is a separate record
@@ -190,7 +197,7 @@ durable class (FULL sync, may be tagged); *observation* records are today's obse
 | G2 | instance store entry `InstanceFactStore::apply` (`host/facts.rs:196-374`, `:86-167`) | `fact.published` / `fact.invalidated` with (lineage, revision), publisher, scope; add/subtract changes carry the value after the change | decision | AO-3 |
 | G3 | workbench entry (`runtime_facts.rs:586-646`, `:799-853`, `:237-345`; install transition `installation.rs:245-344`) | `runtime.fact_recorded` / `runtime.fact_invalidated` with revision, `host.install_transition` included (its receipt waits for the commit) | decision; instance-scoped self-check records observation | AO-3, AO-4 |
 | G4 | scheduling queue and leases (`lease.rs` grant/transfer/release/expiry/renewal; queue admit/deny; hand-off) | `scheduler.queued/admitted/denied`, hand-off, `lease.transition_intent` and results | decision | AO-4 |
-| G5 | policy decisions (`PolicyHost` evaluation, refusals, clock-slot fates; dispatch intent and result `policy_dispatch.rs:1416`, `:1471`; value records §11.3) | non-intent `policy.*`, `policy.dispatch_intent` and result, `policy.control_state_recorded`, `policy.fact_refresh_transition` | decision | AO-4 |
+| G5 | policy decisions (`PolicyHost` evaluation, refusals, clock-slot fates; dispatch intent and result `policy_dispatch.rs:1416`, `:1471`; value records §11.3) | non-intent `policy.*`, `policy.dispatch_intent` and result, `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition` | decision | AO-4 |
 | G6 | input and application (`input.rs:182-195` inside the gate; intents `:172`/`:197`; application `:500`/`:510`) | `input.intent` → `input.committed/failed` and their invalidations; `application.intent` → result | decision, never waited on | AO-4 |
 | G7 | task trace (kernel `record(trace)` via host `contained_task.rs:919`, `:3254`, `:1891`; terminal `:7069`) | `task.*` semantics, recognition, evidence; `task.terminal_intent` and terminal | decision: the terminal family, `task.selection_evaluated`, `task.requested`, `task.started`; observation: the rest (Appendix A.8, M10) | AO-4 |
 | G8 | capture and recognition pipeline (`observation.rs`, `online_observation.rs`, `monitor_control.rs`, `lab_operation.rs`, `saved_artifact_ocr.rs`) | `capture.*`, `recognition.*`, `monitor.*` | observation | AO-4 |
@@ -504,14 +511,15 @@ CREATE TABLE ledger_index (
 
 | `role` | `key` | Row life |
 |---|---|---|
-| `state` | the tagged key: `<source>/<scope>/<fact key>` for the stores, `input_boundary/<instance>/committed` and `/failed` for the input boundaries, `decision_memory/<instance>/<task>` for a dispatch pair, `wake/<obligation id>` for a wake obligation | overwritten by the key's latest record; "tagged" = has a `state` row |
+| `state` | the tagged key: `<source>/<scope>/<fact key>` for the stores, `input_boundary/<instance>/committed` and `/failed` for the input boundaries, `decision_memory/<instance>/<task>` for a dispatch pair, `activity_memory/<instance>/<activity profile>` for an activity state, `wake/<obligation id>` for a wake obligation | overwritten by the key's latest record; "tagged" = has a `state` row |
 | `open` | an intent's event id | added when the intent commits, deleted when its result commits (same transaction); read by X1 |
 | `request` | a write request id | ring of the latest `request_index_records` rows; read by X3 |
 | `lifecycle` | `last_start`, `last_close`, `last_fatal` | overwritten; read by X2 |
 
 - Only `state` rows load into business memory; the other roles serve the exception reads.
 - Rows are bounded: instance store ≤ 256 active facts plus tombstones; workbench ≤ 16 384 and only
-  whitelisted keys; decision memory one per dispatch pair; requests bounded by configuration.
+  whitelisted keys; decision memory one per dispatch pair and one per (instance, activity
+  profile); requests bounded by configuration.
 - The index is internal; outside readers read records and views. A mirror of the table lives in
   the ledger's memory (§14.1).
 
@@ -521,7 +529,7 @@ CREATE TABLE ledger_index (
 |---|---|---|
 | instance store | every key: active facts (`session.*`, resources, inventory, `health.perf_baseline.*`, feature locks, pack schedules, instruction lines), the per-instance input boundaries, and any identity table stored there | `fact.published` / `fact.invalidated`; the latest `input.committed` and the latest `input.failed` per instance (two boundaries, `fact_store.rs` `InputInvalidationBoundaries`) |
 | workbench | `ledger_observer.tag.workbench_patterns` (§15) | `runtime.fact_recorded` / `runtime.fact_invalidated` only |
-| decision memory | one record per dispatch pair (catalog task or the reserved identity of a D2 recognition package R_I) | `policy.control_state_recorded` |
+| decision memory | one record per dispatch pair (catalog task or the reserved identity of a D2 recognition package R_I); one record per (instance, activity profile) | `policy.control_state_recorded`; `policy.activity_state_recorded` |
 | agent wake obligations | one per obligation; sessions are not kept | `agent.wake_obligation_recorded` |
 
 - Never tagged: queue, holders, claims, leases, running runs, the recovery ladder window (one
@@ -541,10 +549,18 @@ CREATE TABLE ledger_index (
   recognition, never from a constant in a package (D2 Q-D2).
 - The decision memory gets value records (AO-4): every change of a dispatch pair's state emits one
   `policy.control_state_recorded` through G5 with the pair's complete state: daily counts with
-  their day key, window counts, active window, failure streak (`error_code` = the failure
-  identity, format v2, Workflow #336 / M-PKG §3.4, and `paused_on` rebuilt from it — no package
-  digest is stored), retry round, dispatch clock, and `condition_reruns`
-  `{failure_code, count, expires_at_unix_ms}`.
+  their day key, window counts and the window's runtime (today's `task_runtime`) with the active
+  window they count in (the `window_id` of the task's activity profile), failure streak
+  (`error_code` = the failure identity, format v2, Workflow #336 / M-PKG §3.4, and `paused_on`
+  rebuilt from it — no package digest is stored), retry round, dispatch clock, and
+  `condition_reruns` `{failure_code, count, expires_at_unix_ms}`.
+- Every change of an (instance, activity profile)'s activity state emits one
+  `policy.activity_state_recorded` through G5 with its complete state: the daily count with its
+  day key, the window count and the window's runtime with their `window_id`, and
+  `next_eligible_unix_ms` (today's `activity_daily`, `activity_window`, `activity_runtime` and
+  `next_activity_eligible`, `policy_control.rs:88-91`). Together the two records hold the whole
+  `PolicyControlState`, so a restart after AO-6 keeps runtime budgets and activity intervals
+  (register L7, L14).
 - Wake obligations get `agent.wake_obligation_recorded` (one `AgentWakeRecord` as of AO-4).
 - Derived on load for the instance store: `latest_observed` = the latest record's observation
   time; tombstones = keys whose latest record is an invalidation (≤ key limit; after a tombstone
@@ -631,14 +647,18 @@ time L that D2 needs (D2 A-7) is the end of step 7.
 6. through G16: `runtime.started` / `runtime.takeover`, `runtime.instance_bound`;
 7. load the stores and the decision memory from step 3, open new lineages; through G16 the base
    record: `runtime.lifecycle_observed` phase `tagged_state_loaded`
-   `{previous_lineage, previous_revision, lineage, loaded_counts}` per store (previous revision =
-   the highest committed revision of that source in the index);
+   `{stores: [{source, previous_lineage?, previous_revision?, lineage, loaded_count}]}`, one entry
+   per store (register L5; previous revision = the highest committed revision of that source in
+   the index; both previous members are absent on a new state root);
 8. seeded (§11.6): the batch of value records, then `tagged_state_enabled`; new state root: only
    the marker; emptied `condition_reruns` pairs (§11.4): one value record each;
 9. X1 recovery results, through `capture`;
 10. one flush barrier: the records of steps 2–9 are committed; then business opens.
 
-- Nothing is written before step 6 except the import of step 2 and the gap of step 5.
+- Nothing is written before step 6 except the import of step 2, the gap of step 5, actingd's
+  provider-assembly observations (`provider.startup_observed`, G10, captured from step 1;
+  Appendix A.8 M2) and the ledger's own records that start triggers (the prior-epoch imports and
+  scope closes and the startup eviction recovery; A.8 M3).
   Reconciliations that today append before `runtime.started` (`reconcile_policy_dispatches`,
   `host.rs:1475`) move to step 9 (AO-6), so a new lineage's first change follows its base record.
 - Every G16 record goes through `capture`, so facts with `invalidate_on: [runtime.takeover]` are
