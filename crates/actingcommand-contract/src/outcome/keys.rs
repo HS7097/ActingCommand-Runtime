@@ -332,4 +332,19 @@ outcome_keys! {
     android_started: boolean,
     adb_port_present: boolean,
     device_process_present: vocab(device_process_presence),
+    // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
+    duplicate_count: integer,
+    dump_sealed: boolean,
+    dump_sha256: hash,
+    dump_version: integer,
+    gap_start_unix_ms: unix_ms,
+    gap_end_unix_ms: unix_ms,
+    ledger_source: vocab(ledger_source),
+    source_lineage: id,
+    source_revision: integer,
+    expected_revision: integer,
+    segment_edge: vocab(segment_edge),
+    buffer_bytes: integer,
+    source_counts: records(ledger_source, count),
+    // Workflow #383 AO-0. End.
 }

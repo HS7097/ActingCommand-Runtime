@@ -1396,6 +1396,62 @@
     "device_process_present": {
       "type": "vocab:device_process_presence",
       "description": "Whether a vendor device process of the emulator instance was still running when the Stop's process listing last looked."
+    },
+    "duplicate_count": {
+      "type": "integer",
+      "description": "Records skipped because their event id was already in the ledger."
+    },
+    "dump_sealed": {
+      "type": "boolean",
+      "description": "Whether a ledger dump ended with its trailer line."
+    },
+    "dump_sha256": {
+      "type": "hash",
+      "description": "The SHA-256 over all record lines of a ledger dump."
+    },
+    "dump_version": {
+      "type": "integer",
+      "description": "The format version a ledger dump's header declares."
+    },
+    "gap_start_unix_ms": {
+      "type": "unix_ms",
+      "description": "The start of the time range a ledger gap record covers, in Unix milliseconds."
+    },
+    "gap_end_unix_ms": {
+      "type": "unix_ms",
+      "description": "The end of the time range a ledger gap record covers, in Unix milliseconds."
+    },
+    "ledger_source": {
+      "type": "vocab:ledger_source",
+      "description": "A revisioned source whose changes the ledger records."
+    },
+    "source_lineage": {
+      "type": "id",
+      "description": "The lineage of a revisioned source: a fresh identity per process start."
+    },
+    "source_revision": {
+      "type": "integer",
+      "description": "A revisioned source's revision: +1 per accepted change within one lineage."
+    },
+    "expected_revision": {
+      "type": "integer",
+      "description": "The revision expected next, or recorded on the ledger's side."
+    },
+    "segment_edge": {
+      "type": "vocab:segment_edge",
+      "description": "Whether a reported stretch of a condition started or ended."
+    },
+    "buffer_bytes": {
+      "type": "integer",
+      "description": "Bytes held in, or spilled from, the ledger's capture queue."
+    },
+    "source_counts": {
+      "type": "records",
+      "fields": {
+        "ledger_source": "required",
+        "count": "required"
+      },
+      "description": "Counts per revisioned source, one record each."
     }
   },
   "vocabularies": {
@@ -4030,6 +4086,36 @@
         },
         "unknown": {
           "description": "No listing answered: it failed, passed its bound or never ran."
+        }
+      }
+    },
+    "ledger_source": {
+      "description": "A revisioned source whose changes the ledger records (Workflow #383).",
+      "review": "pending",
+      "tokens": {
+        "instance_facts": {
+          "description": "The instance fact store."
+        },
+        "runtime_facts": {
+          "description": "The scheduler workbench's runtime fact store."
+        },
+        "decision_memory": {
+          "description": "The scheduler's decision memory."
+        },
+        "fact_refresh_transitions": {
+          "description": "The fact-refresh transition recorder."
+        }
+      }
+    },
+    "segment_edge": {
+      "description": "The edge of a reported stretch of a condition.",
+      "review": "pending",
+      "tokens": {
+        "started": {
+          "description": "The condition started."
+        },
+        "ended": {
+          "description": "The condition ended."
         }
       }
     }
