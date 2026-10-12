@@ -10,7 +10,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "No candidate projection: the recognition pack declares no fixed_slots candidate layout with the requested ID.",
+      "description": "No candidate projection: the recognition pack declares no candidate layout with the requested ID.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
