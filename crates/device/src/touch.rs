@@ -4,9 +4,10 @@ use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rota
 use crate::{
     Adb, AdbBoundsAction, AdbBoundsCoordinate, AdbConfig, AdbInputBoundsContext,
     AdbInputConnectGeometry, DeviceCloseAuthority, DeviceError, DeviceErrorCategory,
-    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceResourceCloseOutcome,
-    DeviceResourceQuiescence, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
-    MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig, PreparedSegmentedSwipePlan,
+    DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceLocation,
+    DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
+    HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend,
+    MinitouchConfig, PreparedSegmentedSwipePlan,
 };
 use actingcommand_contract::FencedWrite;
 use std::time::{Duration, Instant};
@@ -1141,8 +1142,8 @@ impl AdbShellInputBackend {
                 error,
                 DeviceErrorCategory::Native,
                 "adb.ensure_device.get_state",
-                "ensure_device",
-                "ensure_device",
+                DeviceLocation::EnsureDevice,
+                DeviceLocation::EnsureDevice.as_str(),
                 DeviceErrorDiagnosticMessage::AdbShellInputDeviceStateUnavailable,
             )
         })?;
@@ -1151,8 +1152,8 @@ impl AdbShellInputBackend {
                 error,
                 DeviceErrorCategory::Protocol,
                 "adb.input.bounds_validate",
-                "screen_size",
-                "bounds_validate",
+                DeviceLocation::ScreenSize,
+                DeviceLocation::BoundsValidate.as_str(),
                 DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
             )
         })?;
@@ -1161,8 +1162,8 @@ impl AdbShellInputBackend {
                 error.input_parameter_failure(),
                 DeviceErrorCategory::Protocol,
                 "adb.input.bounds_validate",
-                "bounds_conversion",
-                "bounds_validate",
+                DeviceLocation::BoundsConversion,
+                DeviceLocation::BoundsValidate.as_str(),
                 DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
             )
         })?;
@@ -1171,7 +1172,7 @@ impl AdbShellInputBackend {
                 error,
                 DeviceErrorCategory::Protocol,
                 "adb.input.rotation.resolve",
-                "device_rotation",
+                DeviceLocation::DeviceRotation,
                 "rotation_resolve",
                 DeviceErrorDiagnosticMessage::AdbShellInputRotationUnavailable,
             )
@@ -1279,7 +1280,7 @@ fn adb_shell_input_connect_error(
     error: DeviceError,
     category: DeviceErrorCategory,
     stage: &'static str,
-    child_operation: &'static str,
+    child_operation: DeviceLocation,
     operation: &'static str,
     diagnostic_message: DeviceErrorDiagnosticMessage,
 ) -> DeviceError {
