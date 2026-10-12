@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CleanupCauseDraft, CleanupCauseSeverity, DiagnosticDetailDraft, EventId, InstanceId,
     LifecycleCauseDraft, LifecycleFailurePhase, LifecycleNativeDetail, OwnerResourceDisposition,
@@ -119,8 +121,8 @@ pub(crate) fn resource_dispositions(
 
 #[derive(Clone)]
 pub struct ExecutionKernelError {
-    code: &'static str,
-    secondary_code: Option<&'static str>,
+    code: Code,
+    secondary_code: Option<Code>,
     device_severity: Option<DeviceErrorSeverity>,
     lifecycle: Box<ExecutionFailureContext>,
     closed_sessions: Vec<(InstanceId, ExecutionKernelError)>,
@@ -330,9 +332,9 @@ impl ExecutionKernelError {
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
         self.lifecycle.adb_recovery()
     }
-    pub(crate) fn fatal(code: &'static str) -> Self {
+    pub(crate) fn fatal(code: impl Into<Code>) -> Self {
         Self {
-            code,
+            code: code.into(),
             secondary_code: None,
             device_severity: None,
             lifecycle: Box::default(),
@@ -343,11 +345,15 @@ impl ExecutionKernelError {
         }
     }
 
-    pub(crate) fn device(code: &'static str, error: &DeviceError) -> Self {
-        Self::device_with_scope(code, error, ResourceDispositionScope::OperationResources)
+    pub(crate) fn device(code: impl Into<Code>, error: &DeviceError) -> Self {
+        Self::device_with_scope(
+            code.into(),
+            error,
+            ResourceDispositionScope::OperationResources,
+        )
     }
 
-    pub(crate) fn device_acquisition(code: &'static str, error: &DeviceError) -> Self {
+    pub(crate) fn device_acquisition(code: impl Into<Code>, error: &DeviceError) -> Self {
         let mut result = Self::device(code, error);
         for resource in &mut result.lifecycle.resources {
             resource.disposition.scope = ResourceDispositionScope::OperationResources;
@@ -355,34 +361,38 @@ impl ExecutionKernelError {
         result
     }
 
-    pub(crate) fn device_close(code: &'static str, error: &DeviceError) -> Self {
-        Self::device_with_scope(code, error, ResourceDispositionScope::SessionBackends)
+    pub(crate) fn device_close(code: impl Into<Code>, error: &DeviceError) -> Self {
+        Self::device_with_scope(
+            code.into(),
+            error,
+            ResourceDispositionScope::SessionBackends,
+        )
     }
 
     fn device_with_scope(
-        code: &'static str,
+        code: Code,
         error: &DeviceError,
         default_scope: ResourceDispositionScope,
     ) -> Self {
         let code = match error.frame_memory_failure() {
             Some(actingcommand_device::FrameMemoryFailure::Capacity) => {
-                "frame_workspace_unavailable"
+                SharedCode::FrameWorkspaceUnavailable.code()
             }
             Some(actingcommand_device::FrameMemoryFailure::Owner) => {
-                "frame_memory_owner_missing_or_mismatched"
+                SharedCode::FrameMemoryOwnerMissingOrMismatched.code()
             }
             Some(actingcommand_device::FrameMemoryFailure::Accounting) => {
-                "frame_memory_accounting_invalid"
+                SharedCode::FrameMemoryAccountingInvalid.code()
             }
             Some(actingcommand_device::FrameMemoryFailure::BudgetSource) => {
-                "frame_memory_budget_source_failed"
+                SharedCode::FrameMemoryBudgetSourceFailed.code()
             }
-            None if code.starts_with("capture_backend_")
+            None if code.as_str().starts_with("capture_backend_")
                 && error.diagnostic().is_some_and(|diagnostic| {
                     diagnostic.category() == actingcommand_device::DeviceErrorCategory::FrameLayout
                 }) =>
             {
-                "capture_frame_invalid"
+                SharedCode::CaptureFrameInvalid.code()
             }
             None => code,
         };
@@ -403,7 +413,7 @@ impl ExecutionKernelError {
                         }
                     },
                     cause.backend,
-                    code,
+                    code.as_str(),
                     cleanup_severity(cause.severity),
                 )
                 .with_native_detail(LifecycleNativeDetail::new(
@@ -419,7 +429,7 @@ impl ExecutionKernelError {
                 cause: LifecycleCauseDraft::new(
                     LifecycleFailurePhase::ResourceClose,
                     cause.backend(),
-                    code,
+                    code.as_str(),
                     cleanup_severity(cause.severity()),
                 )
                 .with_native_detail(LifecycleNativeDetail::new(
@@ -513,7 +523,7 @@ impl ExecutionKernelError {
             && !(secondary.lifecycle.close_recording && primary.code == secondary.code)
         {
             primary.lifecycle.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
-                secondary.code,
+                secondary.code.as_str(),
                 if secondary.is_fatal() {
                     CleanupCauseSeverity::Fatal
                 } else {
@@ -564,7 +574,7 @@ impl ExecutionKernelError {
             cause: LifecycleCauseDraft::new(
                 LifecycleFailurePhase::Retirement,
                 "execution_kernel",
-                secondary.code,
+                secondary.code.as_str(),
                 if secondary.is_fatal() {
                     CleanupCauseSeverity::Fatal
                 } else {
@@ -610,11 +620,11 @@ impl ExecutionKernelError {
         self
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
-    pub const fn secondary_code(&self) -> Option<&'static str> {
+    pub const fn secondary_code(&self) -> Option<Code> {
         self.secondary_code
     }
 
@@ -712,8 +722,8 @@ impl fmt::Debug for ExecutionKernelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ExecutionKernelError")
-            .field("code", &self.code)
-            .field("secondary_code", &self.secondary_code)
+            .field("code", &self.code.as_str())
+            .field("secondary_code", &self.secondary_code.map(Code::as_str))
             .field("device_severity", &self.device_severity)
             .finish()
     }

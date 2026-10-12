@@ -1651,6 +1651,7 @@ mod tests {
         const SOURCES: &[(&str, &str)] = &[
             ("lib.rs", include_str!("lib.rs")),
             ("canonical.rs", include_str!("canonical.rs")),
+            ("codes.rs", include_str!("codes.rs")),
             ("evaluator.rs", include_str!("evaluator.rs")),
             ("facts.rs", include_str!("facts.rs")),
             ("schema.rs", include_str!("schema.rs")),

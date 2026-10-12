@@ -6,6 +6,7 @@
 //! storage authority. Callers supply a validator and an event sink so critical intent can become
 //! durable before the canonical resource tree changes.
 
+use crate::codes::ResourceToolingCode;
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -127,7 +128,7 @@ impl AuthoringDraft {
         non_empty("record_id", provenance.record_id.clone())?;
         if files.is_empty() {
             return Err(authoring_error(
-                "authoring_draft_empty",
+                ResourceToolingCode::AuthoringDraftEmpty,
                 "authoring draft must contain at least one file",
             ));
         }
@@ -136,7 +137,7 @@ impl AuthoringDraft {
         for file in &files {
             if !paths.insert(file.relative_path.clone()) {
                 return Err(authoring_error(
-                    "authoring_path_conflict",
+                    ResourceToolingCode::AuthoringPathConflict,
                     format!(
                         "authoring draft contains duplicate path {}",
                         file.relative_path.display()
@@ -147,7 +148,7 @@ impl AuthoringDraft {
                 && !file.relative_path.starts_with(&replace_scope)
             {
                 return Err(authoring_error(
-                    "authoring_scope_escape",
+                    ResourceToolingCode::AuthoringScopeEscape,
                     format!(
                         "replace file {} is outside replace scope {}",
                         file.relative_path.display(),
@@ -206,14 +207,14 @@ impl AuthoringValidationReport {
     pub fn new(checks: Vec<String>, package_sha256: impl Into<String>) -> LabResult<Self> {
         if checks.is_empty() || checks.iter().any(|check| check.trim().is_empty()) {
             return Err(authoring_error(
-                "authoring_validation_empty",
+                ResourceToolingCode::AuthoringValidationEmpty,
                 "authoring validation must report at least one named check",
             ));
         }
         let package_sha256 = package_sha256.into();
         if !is_lower_hex_sha256(&package_sha256) {
             return Err(authoring_error(
-                "authoring_validation_package_hash_invalid",
+                ResourceToolingCode::AuthoringValidationPackageHashInvalid,
                 "authoring validation must report a lowercase SHA-256 package hash",
             ));
         }
@@ -332,7 +333,7 @@ impl AuthoringRecoveryContext {
             || !is_lower_hex_sha256(&context.candidate_tree_sha256)
         {
             return Err(authoring_error(
-                "authoring_recovery_context_invalid",
+                ResourceToolingCode::AuthoringRecoveryContextInvalid,
                 "authoring recovery context contains an invalid identity or digest",
             ));
         }
@@ -402,7 +403,7 @@ pub fn publish_authoring_draft(
 ) -> LabResult<AuthoringReceipt> {
     let mut recovery = |_context: &AuthoringRecoveryContext| {
         Err(authoring_error(
-            "authoring_recovery_oracle_required",
+            ResourceToolingCode::AuthoringRecoveryOracleRequired,
             "an interrupted candidate swap requires a durable recovery oracle",
         ))
     };
@@ -424,13 +425,13 @@ pub fn publish_authoring_draft_with_recovery(
 pub fn materialize_authoring_draft(target_root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
     let parent = target_root.parent().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_parent",
+            ResourceToolingCode::AuthoringTargetHasNoParent,
             "materialization target must have a parent directory",
         )
     })?;
     fs::create_dir_all(parent).map_err(|error| {
         io_error(
-            "authoring_target_parent_create_failed",
+            ResourceToolingCode::AuthoringTargetParentCreateFailed,
             "create materialization target parent",
             parent,
             error,
@@ -440,7 +441,7 @@ pub fn materialize_authoring_draft(target_root: &Path, draft: &AuthoringDraft) -
     if !target_root.exists() {
         fs::create_dir(&target_root).map_err(|error| {
             io_error(
-                "authoring_target_create_failed",
+                ResourceToolingCode::AuthoringTargetCreateFailed,
                 "create materialization target",
                 &target_root,
                 error,
@@ -468,13 +469,13 @@ fn publish_authoring_draft_inner(
     let target_root = resolve_publish_target(&request.target_root)?;
     let parent = target_root.parent().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_parent",
+            ResourceToolingCode::AuthoringTargetHasNoParent,
             "publish target must have a parent directory",
         )
     })?;
     let target_name = target_root.file_name().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_name",
+            ResourceToolingCode::AuthoringTargetHasNoName,
             "publish target must have a final path component",
         )
     })?;
@@ -504,7 +505,7 @@ fn publish_authoring_draft_inner(
         recover_transaction(&target_root, &journal_path, recovery)?;
         if !target_root.is_dir() {
             return Err(authoring_error(
-                "authoring_target_not_directory",
+                ResourceToolingCode::AuthoringTargetNotDirectory,
                 "publish target is not a directory after transaction recovery",
             ));
         }
@@ -536,7 +537,7 @@ fn publish_authoring_draft_inner(
         let prepared = (|| {
             if target_root.join(&draft.replace_scope).exists() && !request.force {
                 return Err(authoring_error(
-                    "record_promote_target_exists",
+                    ResourceToolingCode::RecordPromoteTargetExists,
                     format!(
                         "publish target scope already exists: {}",
                         draft.replace_scope.display()
@@ -567,7 +568,7 @@ fn publish_authoring_draft_inner(
 
         if let Err(error) = fs::rename(&target_root, &backup_root) {
             let original = io_error(
-                "authoring_backup_rename_failed",
+                ResourceToolingCode::AuthoringBackupRenameFailed,
                 "move current resource tree to backup",
                 &target_root,
                 error,
@@ -592,7 +593,7 @@ fn publish_authoring_draft_inner(
         if fault == Some(FaultPoint::AfterOldTreeMoved) {
             restore_old_tree(&target_root, &stage_root, &backup_root, &journal_path)?;
             return Err(authoring_error(
-                "authoring_injected_rename_failure",
+                ResourceToolingCode::AuthoringInjectedRenameFailure,
                 "injected failure after moving the old resource tree",
             ));
         }
@@ -600,7 +601,7 @@ fn publish_authoring_draft_inner(
         if let Err(error) = fs::rename(&stage_root, &target_root) {
             restore_old_tree(&target_root, &stage_root, &backup_root, &journal_path)?;
             return Err(io_error(
-                "authoring_candidate_rename_failed",
+                ResourceToolingCode::AuthoringCandidateRenameFailed,
                 "move validated candidate into place",
                 &target_root,
                 error,
@@ -620,7 +621,7 @@ fn publish_authoring_draft_inner(
         if let Err(error) = events.append(&event(AuthoringEventKind::Promoted, None)) {
             restore_old_tree(&target_root, &stage_root, &backup_root, &journal_path)?;
             return Err(authoring_error(
-                "authoring_outcome_not_durable",
+                ResourceToolingCode::AuthoringOutcomeNotDurable,
                 format!("promoted outcome could not be made durable: {error}"),
             ));
         }
@@ -632,13 +633,13 @@ fn publish_authoring_draft_inner(
                 .and_then(|()| remove_file_if_exists(&journal_path));
             return Err(match cleanup {
                 Ok(()) => authoring_error(
-                    "authoring_commit_cleanup_failed",
+                    ResourceToolingCode::AuthoringCommitCleanupFailed,
                     format!(
                         "resource tree was promoted and recorded, but commit journal update failed: {error}"
                     ),
                 ),
                 Err(cleanup_error) => authoring_error(
-                    "authoring_commit_cleanup_failed",
+                    ResourceToolingCode::AuthoringCommitCleanupFailed,
                     format!(
                         "resource tree was promoted and recorded, journal update failed ({error}), and cleanup failed ({cleanup_error})"
                     ),
@@ -649,7 +650,7 @@ fn publish_authoring_draft_inner(
             remove_tree_if_exists(&backup_root).and_then(|()| remove_file_if_exists(&journal_path))
         {
             return Err(authoring_error(
-                "authoring_commit_cleanup_failed",
+                ResourceToolingCode::AuthoringCommitCleanupFailed,
                 format!(
                     "resource tree was promoted and recorded, but post-commit cleanup failed: {cleanup}"
                 ),
@@ -676,7 +677,7 @@ fn publish_authoring_draft_inner(
             let failed = event(AuthoringEventKind::PromoteFailed, Some(error.code.clone()));
             if let Err(event_error) = events.append(&failed) {
                 return Err(authoring_error(
-                    "authoring_failure_not_durable",
+                    ResourceToolingCode::AuthoringFailureNotDurable,
                     format!(
                         "resource publish failed ({error}); failure event also failed ({event_error})"
                     ),
@@ -696,7 +697,7 @@ fn apply_draft(candidate_root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
         }
         let parent = destination.parent().ok_or_else(|| {
             authoring_error(
-                "authoring_destination_has_no_parent",
+                ResourceToolingCode::AuthoringDestinationHasNoParent,
                 format!(
                     "authoring destination has no parent: {}",
                     destination.display()
@@ -705,7 +706,7 @@ fn apply_draft(candidate_root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
         })?;
         fs::create_dir_all(parent).map_err(|error| {
             io_error(
-                "authoring_create_directory_failed",
+                ResourceToolingCode::AuthoringCreateDirectoryFailed,
                 "create candidate directory",
                 parent,
                 error,
@@ -732,7 +733,7 @@ fn reject_materialization_symlinks(root: &Path, draft: &AuthoringDraft) -> LabRe
             }
             let metadata = fs::symlink_metadata(&current).map_err(|error| {
                 io_error(
-                    "authoring_metadata_failed",
+                    ResourceToolingCode::AuthoringMetadataFailed,
                     "inspect materialization path",
                     &current,
                     error,
@@ -740,7 +741,7 @@ fn reject_materialization_symlinks(root: &Path, draft: &AuthoringDraft) -> LabRe
             })?;
             if metadata.file_type().is_symlink() {
                 return Err(authoring_error(
-                    "authoring_symlink_rejected",
+                    ResourceToolingCode::AuthoringSymlinkRejected,
                     format!("resource authoring rejects symlink {}", current.display()),
                 ));
             }
@@ -752,7 +753,7 @@ fn reject_materialization_symlinks(root: &Path, draft: &AuthoringDraft) -> LabRe
 fn copy_tree(source: &Path, destination: &Path) -> LabResult<()> {
     fs::create_dir(destination).map_err(|error| {
         io_error(
-            "authoring_stage_create_failed",
+            ResourceToolingCode::AuthoringStageCreateFailed,
             "create staging root",
             destination,
             error,
@@ -765,7 +766,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
     let mut entries = fs::read_dir(source)
         .map_err(|error| {
             io_error(
-                "authoring_tree_read_failed",
+                ResourceToolingCode::AuthoringTreeReadFailed,
                 "read resource tree",
                 source,
                 error,
@@ -774,7 +775,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             io_error(
-                "authoring_tree_read_failed",
+                ResourceToolingCode::AuthoringTreeReadFailed,
                 "read resource tree entry",
                 source,
                 error,
@@ -786,7 +787,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
         let destination_path = destination.join(entry.file_name());
         let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
             io_error(
-                "authoring_metadata_failed",
+                ResourceToolingCode::AuthoringMetadataFailed,
                 "inspect resource tree entry",
                 &source_path,
                 error,
@@ -794,7 +795,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
         })?;
         if metadata.file_type().is_symlink() {
             return Err(authoring_error(
-                "authoring_symlink_rejected",
+                ResourceToolingCode::AuthoringSymlinkRejected,
                 format!(
                     "resource authoring rejects symlink {}",
                     source_path.display()
@@ -804,7 +805,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
         if metadata.is_dir() {
             fs::create_dir(&destination_path).map_err(|error| {
                 io_error(
-                    "authoring_stage_create_failed",
+                    ResourceToolingCode::AuthoringStageCreateFailed,
                     "create staging directory",
                     &destination_path,
                     error,
@@ -816,7 +817,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
             write_new_file(&destination_path, &bytes)?;
         } else {
             return Err(authoring_error(
-                "authoring_special_file_rejected",
+                ResourceToolingCode::AuthoringSpecialFileRejected,
                 format!(
                     "resource authoring rejects special file {}",
                     source_path.display()
@@ -830,7 +831,7 @@ fn copy_tree_contents(source: &Path, destination: &Path) -> LabResult<()> {
 fn read_source_file(path: &Path) -> LabResult<Vec<u8>> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         io_error(
-            "authoring_source_metadata_failed",
+            ResourceToolingCode::AuthoringSourceMetadataFailed,
             "inspect authoring source",
             path,
             error,
@@ -838,13 +839,13 @@ fn read_source_file(path: &Path) -> LabResult<Vec<u8>> {
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(authoring_error(
-            "authoring_source_not_regular_file",
+            ResourceToolingCode::AuthoringSourceNotRegularFile,
             format!("authoring source is not a regular file: {}", path.display()),
         ));
     }
     fs::read(path).map_err(|error| {
         io_error(
-            "authoring_source_read_failed",
+            ResourceToolingCode::AuthoringSourceReadFailed,
             "read authoring source",
             path,
             error,
@@ -859,7 +860,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> LabResult<()> {
         .open(path)
         .map_err(|error| {
             io_error(
-                "authoring_file_create_failed",
+                ResourceToolingCode::AuthoringFileCreateFailed,
                 "create candidate file",
                 path,
                 error,
@@ -867,7 +868,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> LabResult<()> {
         })?;
     file.write_all(bytes).map_err(|error| {
         io_error(
-            "authoring_file_write_failed",
+            ResourceToolingCode::AuthoringFileWriteFailed,
             "write candidate file",
             path,
             error,
@@ -875,7 +876,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> LabResult<()> {
     })?;
     file.sync_all().map_err(|error| {
         io_error(
-            "authoring_file_sync_failed",
+            ResourceToolingCode::AuthoringFileSyncFailed,
             "sync candidate file",
             path,
             error,
@@ -907,7 +908,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
     let mut entries = fs::read_dir(current)
         .map_err(|error| {
             io_error(
-                "authoring_hash_read_failed",
+                ResourceToolingCode::AuthoringHashReadFailed,
                 "read candidate tree for hashing",
                 current,
                 error,
@@ -916,7 +917,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             io_error(
-                "authoring_hash_read_failed",
+                ResourceToolingCode::AuthoringHashReadFailed,
                 "read candidate entry for hashing",
                 current,
                 error,
@@ -927,7 +928,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path).map_err(|error| {
             io_error(
-                "authoring_hash_metadata_failed",
+                ResourceToolingCode::AuthoringHashMetadataFailed,
                 "inspect candidate entry for hashing",
                 &path,
                 error,
@@ -935,7 +936,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
         })?;
         if metadata.file_type().is_symlink() {
             return Err(authoring_error(
-                "authoring_symlink_rejected",
+                ResourceToolingCode::AuthoringSymlinkRejected,
                 format!("candidate tree contains symlink {}", path.display()),
             ));
         }
@@ -944,7 +945,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
         } else if metadata.is_file() {
             let bytes = fs::read(&path).map_err(|error| {
                 io_error(
-                    "authoring_hash_read_failed",
+                    ResourceToolingCode::AuthoringHashReadFailed,
                     "read candidate file for hashing",
                     &path,
                     error,
@@ -952,7 +953,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
             })?;
             let relative = path.strip_prefix(root).map_err(|_| {
                 authoring_error(
-                    "authoring_hash_scope_error",
+                    ResourceToolingCode::AuthoringHashScopeError,
                     "candidate file escaped candidate root",
                 )
             })?;
@@ -1004,7 +1005,7 @@ fn recover_transaction(
     }
     let bytes = fs::read(journal_path).map_err(|error| {
         io_error(
-            "authoring_journal_read_failed",
+            ResourceToolingCode::AuthoringJournalReadFailed,
             "read authoring transaction journal",
             journal_path,
             error,
@@ -1013,7 +1014,7 @@ fn recover_transaction(
     let journal = parse_journal(&bytes)?;
     if !matches!(journal.schema_version, 1 | 2) {
         return Err(authoring_error(
-            "authoring_journal_schema_unsupported",
+            ResourceToolingCode::AuthoringJournalSchemaUnsupported,
             format!(
                 "unsupported authoring transaction journal schema {}",
                 journal.schema_version
@@ -1024,7 +1025,7 @@ fn recover_transaction(
     validate_single_component(&journal.backup_name, "journal backup_name")?;
     let parent = target_root.parent().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_parent",
+            ResourceToolingCode::AuthoringTargetHasNoParent,
             "publish target must have a parent directory",
         )
     })?;
@@ -1036,7 +1037,7 @@ fn recover_transaction(
             if !target_root.exists() && backup_root.exists() {
                 fs::rename(&backup_root, target_root).map_err(|error| {
                     io_error(
-                        "authoring_recovery_restore_failed",
+                        ResourceToolingCode::AuthoringRecoveryRestoreFailed,
                         "restore prepared transaction backup",
                         target_root,
                         error,
@@ -1044,7 +1045,7 @@ fn recover_transaction(
                 })?;
             } else if backup_root.exists() {
                 return Err(authoring_error(
-                    "authoring_recovery_ambiguous",
+                    ResourceToolingCode::AuthoringRecoveryAmbiguous,
                     "prepared transaction has both target and backup trees",
                 ));
             }
@@ -1061,14 +1062,14 @@ fn recover_transaction(
         TransactionPhase::CandidateMoved => {
             if !target_root.is_dir() {
                 return Err(authoring_error(
-                    "authoring_recovery_candidate_missing",
+                    ResourceToolingCode::AuthoringRecoveryCandidateMissing,
                     "interrupted authoring transaction has no candidate tree",
                 ));
             }
             let context = journal.recovery_context()?;
             let canonical_target = fs::canonicalize(target_root).map_err(|error| {
                 io_error(
-                    "authoring_recovery_target_canonicalize_failed",
+                    ResourceToolingCode::AuthoringRecoveryTargetCanonicalizeFailed,
                     "canonicalize interrupted authoring target",
                     target_root,
                     error,
@@ -1076,14 +1077,14 @@ fn recover_transaction(
             })?;
             if context.target_fingerprint != path_fingerprint(&canonical_target) {
                 return Err(authoring_error(
-                    "authoring_recovery_target_mismatch",
+                    ResourceToolingCode::AuthoringRecoveryTargetMismatch,
                     "interrupted authoring journal does not belong to this target tree",
                 ));
             }
             let observed_hash = hash_file_manifest(&hash_tree(target_root)?);
             if observed_hash != context.candidate_tree_sha256 {
                 return Err(authoring_error(
-                    "authoring_recovery_candidate_mismatch",
+                    ResourceToolingCode::AuthoringRecoveryCandidateMismatch,
                     "interrupted authoring candidate does not match its durable journal digest",
                 ));
             }
@@ -1101,7 +1102,7 @@ fn recover_transaction(
         TransactionPhase::Committed => {
             if !target_root.is_dir() {
                 return Err(authoring_error(
-                    "authoring_committed_target_missing",
+                    ResourceToolingCode::AuthoringCommittedTargetMissing,
                     "committed authoring transaction has no target tree",
                 ));
             }
@@ -1117,7 +1118,7 @@ impl TransactionJournal {
         let required = |name: &'static str, value: &Option<String>| {
             value.clone().ok_or_else(|| {
                 authoring_error(
-                    "authoring_journal_identity_missing",
+                    ResourceToolingCode::AuthoringJournalIdentityMissing,
                     format!("authoring transaction journal is missing {name}"),
                 )
             })
@@ -1131,7 +1132,7 @@ impl TransactionJournal {
         )
         .map_err(|_| {
             authoring_error(
-                "authoring_journal_identity_invalid",
+                ResourceToolingCode::AuthoringJournalIdentityInvalid,
                 "authoring transaction journal contains an invalid identity or digest",
             )
         })
@@ -1148,14 +1149,14 @@ fn is_lower_hex_sha256(value: &str) -> bool {
 fn parse_journal(bytes: &[u8]) -> LabResult<TransactionJournal> {
     if bytes.is_empty() {
         return Err(authoring_error(
-            "authoring_journal_corrupt",
+            ResourceToolingCode::AuthoringJournalCorrupt,
             "authoring transaction journal is empty",
         ));
     }
     if !bytes.contains(&b'\n') {
         return serde_json::from_slice(bytes).map_err(|error| {
             authoring_error(
-                "authoring_journal_corrupt",
+                ResourceToolingCode::AuthoringJournalCorrupt,
                 format!("authoring transaction journal is invalid: {error}"),
             )
         });
@@ -1176,13 +1177,13 @@ fn parse_journal(bytes: &[u8]) -> LabResult<TransactionJournal> {
                 continue;
             }
             return Err(authoring_error(
-                "authoring_journal_corrupt",
+                ResourceToolingCode::AuthoringJournalCorrupt,
                 "authoring transaction journal contains a blank record",
             ));
         }
         let record: TransactionJournal = serde_json::from_slice(line).map_err(|error| {
             authoring_error(
-                "authoring_journal_corrupt",
+                ResourceToolingCode::AuthoringJournalCorrupt,
                 format!("authoring transaction journal record is invalid: {error}"),
             )
         })?;
@@ -1193,7 +1194,7 @@ fn parse_journal(bytes: &[u8]) -> LabResult<TransactionJournal> {
     }
     records.pop().ok_or_else(|| {
         authoring_error(
-            "authoring_journal_corrupt",
+            ResourceToolingCode::AuthoringJournalCorrupt,
             "authoring transaction journal has no complete record",
         )
     })
@@ -1230,7 +1231,7 @@ fn validate_journal_transition(
         Ok(())
     } else {
         Err(authoring_error(
-            "authoring_journal_transition_invalid",
+            ResourceToolingCode::AuthoringJournalTransitionInvalid,
             "authoring transaction journal history is inconsistent",
         ))
     }
@@ -1244,14 +1245,14 @@ fn restore_old_tree(
 ) -> LabResult<()> {
     if !backup_root.is_dir() {
         return Err(authoring_error(
-            "authoring_rollback_backup_missing",
+            ResourceToolingCode::AuthoringRollbackBackupMissing,
             "cannot roll back authoring transaction because the backup tree is missing",
         ));
     }
     remove_tree_if_exists(target_root)?;
     fs::rename(backup_root, target_root).map_err(|error| {
         io_error(
-            "authoring_rollback_restore_failed",
+            ResourceToolingCode::AuthoringRollbackRestoreFailed,
             "restore previous resource tree",
             target_root,
             error,
@@ -1269,7 +1270,7 @@ fn cleanup_pre_commit_failure(
     match remove_tree_if_exists(stage_root).and_then(|()| remove_file_if_exists(journal_path)) {
         Ok(()) => original,
         Err(cleanup) => authoring_error(
-            "authoring_cleanup_failed",
+            ResourceToolingCode::AuthoringCleanupFailed,
             format!("authoring failed ({original}) and staging cleanup failed ({cleanup})"),
         ),
     }
@@ -1285,7 +1286,7 @@ fn rollback_failure(
     match restore_old_tree(target_root, stage_root, backup_root, journal_path) {
         Ok(()) => original,
         Err(rollback) => authoring_error(
-            "authoring_rollback_failed",
+            ResourceToolingCode::AuthoringRollbackFailed,
             format!("authoring failed ({original}) and rollback failed ({rollback})"),
         ),
     }
@@ -1299,7 +1300,7 @@ fn create_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
         .open(path)
         .map_err(|error| {
             io_error(
-                "authoring_transaction_conflict",
+                ResourceToolingCode::AuthoringTransactionConflict,
                 "create authoring transaction journal",
                 path,
                 error,
@@ -1307,7 +1308,7 @@ fn create_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
         })?;
     file.write_all(&bytes).map_err(|error| {
         io_error(
-            "authoring_journal_write_failed",
+            ResourceToolingCode::AuthoringJournalWriteFailed,
             "write authoring transaction journal",
             path,
             error,
@@ -1315,7 +1316,7 @@ fn create_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
     })?;
     file.sync_all().map_err(|error| {
         io_error(
-            "authoring_journal_sync_failed",
+            ResourceToolingCode::AuthoringJournalSyncFailed,
             "sync authoring transaction journal",
             path,
             error,
@@ -1330,7 +1331,7 @@ fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
         .open(path)
         .map_err(|error| {
             io_error(
-                "authoring_journal_open_failed",
+                ResourceToolingCode::AuthoringJournalOpenFailed,
                 "open authoring transaction journal",
                 path,
                 error,
@@ -1338,7 +1339,7 @@ fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
         })?;
     file.write_all(&bytes).map_err(|error| {
         io_error(
-            "authoring_journal_write_failed",
+            ResourceToolingCode::AuthoringJournalWriteFailed,
             "write authoring transaction journal",
             path,
             error,
@@ -1346,7 +1347,7 @@ fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
     })?;
     file.sync_all().map_err(|error| {
         io_error(
-            "authoring_journal_sync_failed",
+            ResourceToolingCode::AuthoringJournalSyncFailed,
             "sync authoring transaction journal",
             path,
             error,
@@ -1357,7 +1358,7 @@ fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
 fn journal_record_bytes(journal: &TransactionJournal) -> LabResult<Vec<u8>> {
     let mut bytes = serde_json::to_vec(journal).map_err(|error| {
         authoring_error(
-            "authoring_journal_serialize_failed",
+            ResourceToolingCode::AuthoringJournalSerializeFailed,
             format!("failed to serialize authoring transaction journal: {error}"),
         )
     })?;
@@ -1371,13 +1372,13 @@ fn remove_tree_if_exists(path: &Path) -> LabResult<()> {
     }
     if !path.is_dir() {
         return Err(authoring_error(
-            "authoring_tree_type_mismatch",
+            ResourceToolingCode::AuthoringTreeTypeMismatch,
             format!("expected directory at {}", path.display()),
         ));
     }
     fs::remove_dir_all(path).map_err(|error| {
         io_error(
-            "authoring_tree_remove_failed",
+            ResourceToolingCode::AuthoringTreeRemoveFailed,
             "remove authoring tree",
             path,
             error,
@@ -1391,13 +1392,13 @@ fn remove_file_if_exists(path: &Path) -> LabResult<()> {
     }
     if !path.is_file() {
         return Err(authoring_error(
-            "authoring_journal_type_mismatch",
+            ResourceToolingCode::AuthoringJournalTypeMismatch,
             format!("expected regular file at {}", path.display()),
         ));
     }
     fs::remove_file(path).map_err(|error| {
         io_error(
-            "authoring_journal_remove_failed",
+            ResourceToolingCode::AuthoringJournalRemoveFailed,
             "remove authoring transaction journal",
             path,
             error,
@@ -1408,19 +1409,19 @@ fn remove_file_if_exists(path: &Path) -> LabResult<()> {
 fn resolve_publish_target(path: &Path) -> LabResult<PathBuf> {
     let name = path.file_name().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_name",
+            ResourceToolingCode::AuthoringTargetHasNoName,
             "publish target must have a final path component",
         )
     })?;
     let parent = path.parent().ok_or_else(|| {
         authoring_error(
-            "authoring_target_has_no_parent",
+            ResourceToolingCode::AuthoringTargetHasNoParent,
             "publish target must have a parent directory",
         )
     })?;
     let canonical_parent = fs::canonicalize(parent).map_err(|error| {
         io_error(
-            "authoring_target_unavailable",
+            ResourceToolingCode::AuthoringTargetUnavailable,
             "resolve publish target parent",
             parent,
             error,
@@ -1428,7 +1429,7 @@ fn resolve_publish_target(path: &Path) -> LabResult<PathBuf> {
     })?;
     if !canonical_parent.is_dir() {
         return Err(authoring_error(
-            "authoring_target_not_directory",
+            ResourceToolingCode::AuthoringTargetNotDirectory,
             format!(
                 "publish target parent is not a directory: {}",
                 parent.display()
@@ -1439,7 +1440,7 @@ fn resolve_publish_target(path: &Path) -> LabResult<PathBuf> {
     if target.exists() {
         let metadata = fs::symlink_metadata(&target).map_err(|error| {
             io_error(
-                "authoring_target_unavailable",
+                ResourceToolingCode::AuthoringTargetUnavailable,
                 "inspect publish target",
                 &target,
                 error,
@@ -1447,13 +1448,13 @@ fn resolve_publish_target(path: &Path) -> LabResult<PathBuf> {
         })?;
         if metadata.file_type().is_symlink() {
             return Err(authoring_error(
-                "authoring_target_symlink_rejected",
+                ResourceToolingCode::AuthoringTargetSymlinkRejected,
                 format!("publish target must not be a symlink: {}", path.display()),
             ));
         }
         if !metadata.is_dir() {
             return Err(authoring_error(
-                "authoring_target_not_directory",
+                ResourceToolingCode::AuthoringTargetNotDirectory,
                 format!("publish target is not a directory: {}", path.display()),
             ));
         }
@@ -1469,7 +1470,7 @@ fn validate_relative_path(path: &Path, label: &str) -> LabResult<()> {
             .any(|component| !matches!(component, Component::Normal(_)))
     {
         return Err(authoring_error(
-            "authoring_path_invalid",
+            ResourceToolingCode::AuthoringPathInvalid,
             format!("{label} must be a non-empty normalized relative path"),
         ));
     }
@@ -1481,7 +1482,7 @@ fn validate_single_component(value: &str, label: &str) -> LabResult<()> {
     validate_relative_path(path, label)?;
     if path.components().count() != 1 {
         return Err(authoring_error(
-            "authoring_journal_path_invalid",
+            ResourceToolingCode::AuthoringJournalPathInvalid,
             format!("{label} must contain exactly one path component"),
         ));
     }
@@ -1491,7 +1492,7 @@ fn validate_single_component(value: &str, label: &str) -> LabResult<()> {
 fn non_empty(label: &str, value: String) -> LabResult<String> {
     if value.trim().is_empty() {
         Err(authoring_error(
-            "authoring_field_empty",
+            ResourceToolingCode::AuthoringFieldEmpty,
             format!("{label} must not be empty"),
         ))
     } else {
@@ -1534,11 +1535,16 @@ fn hex_sha256(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn authoring_error(code: &str, message: impl Into<String>) -> LabError {
-    LabError::safety_blocked(code, message, &["resource_authoring"])
+fn authoring_error(code: ResourceToolingCode, message: impl Into<String>) -> LabError {
+    LabError::safety_blocked(code.as_str(), message, &["resource_authoring"])
 }
 
-fn io_error(code: &str, action: &str, path: &Path, error: std::io::Error) -> LabError {
+fn io_error(
+    code: ResourceToolingCode,
+    action: &str,
+    path: &Path,
+    error: std::io::Error,
+) -> LabError {
     authoring_error(
         code,
         format!("failed to {action} at {}: {error}", path.display()),
@@ -1714,9 +1720,10 @@ mod tests {
         fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
         fs::write(temp.path().join("frame.png"), b"png").expect("source");
         let mut validator = |_candidate: &Path, _draft: &AuthoringDraft| {
-            Err(authoring_error(
+            Err(LabError::safety_blocked(
                 "authoring_validation_failed",
                 "injected validation failure",
+                &["resource_authoring"],
             ))
         };
         let mut sink = |_event: &AuthoringEvent| Ok(());
@@ -1771,9 +1778,10 @@ mod tests {
         let mut validator = validator();
         let mut sink = |event: &AuthoringEvent| {
             if event.kind == AuthoringEventKind::Promoted {
-                Err(authoring_error(
+                Err(LabError::safety_blocked(
                     "ledger_unavailable",
                     "injected ledger failure",
+                    &["resource_authoring"],
                 ))
             } else {
                 Ok(())

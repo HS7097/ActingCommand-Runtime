@@ -10,6 +10,8 @@
 //! changed cells per thousand make the frames different. Frames of different sizes are
 //! different. The digest mean and the template correlation are reported for display only.
 
+use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::outcome::Code;
 use actingcommand_recognition::color_digest::{self, ColorDigest, ColorDigestGrid};
 use actingcommand_recognition::{MatchMetric, Rect, Scene};
 
@@ -42,7 +44,7 @@ impl FailureFrameVerdict {
 pub struct FailureFrameComparison {
     pub verdict: FailureFrameVerdict,
     /// `size_changed` or `digest_cells_changed` for different frames; `None` when similar.
-    pub reason: Option<&'static str>,
+    pub reason: Option<Code>,
     /// Changed cells per thousand cells; `None` when the sizes differ.
     pub changed_cells_milli: Option<u32>,
     /// The `color_digest.v1` mean distance of the two digests, for display only.
@@ -52,19 +54,19 @@ pub struct FailureFrameComparison {
 /// Frames that could not be compared; `reason()` is `png_invalid`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailureFrameCompareError {
-    reason: &'static str,
+    reason: Code,
     message: String,
 }
 
 impl FailureFrameCompareError {
     fn png_invalid(message: impl Into<String>) -> Self {
         Self {
-            reason: "png_invalid",
+            reason: ExecutionKernelCode::PngInvalid.code(),
             message: message.into(),
         }
     }
 
-    pub const fn reason(&self) -> &'static str {
+    pub const fn reason(&self) -> Code {
         self.reason
     }
 
@@ -91,7 +93,7 @@ pub fn compare_failure_frames(
     if (previous.width(), previous.height()) != (current.width(), current.height()) {
         return Ok(FailureFrameComparison {
             verdict: FailureFrameVerdict::Different,
-            reason: Some("size_changed"),
+            reason: Some(ExecutionKernelCode::SizeChanged.code()),
             changed_cells_milli: None,
             digest_mean_milli: None,
         });
@@ -122,7 +124,7 @@ pub fn compare_failure_frames(
         } else {
             FailureFrameVerdict::Similar
         },
-        reason: different.then_some("digest_cells_changed"),
+        reason: different.then_some(ExecutionKernelCode::DigestCellsChanged.code()),
         changed_cells_milli: Some(changed_cells_milli),
         digest_mean_milli: Some(mean.mean_milli),
     })

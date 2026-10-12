@@ -1,0 +1,83 @@
+{
+  "owner": "recognition-pack",
+  "codes": {
+    "candidate_layout_unknown": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: the recognition pack declares no fixed_slots candidate layout with the requested ID.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_feature_failed": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: a feature's target could not be evaluated or measured; the recognition error travels as the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_feature_provider_missing": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: a feature's target needs an OCR or NN provider the evaluator was built without.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_samples_unavailable": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: the frames given do not match the layout's required sample frames.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_sample_geometry_changed": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: a sample frame's geometry differs within the transaction.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_sample_record_failed": {
+      "category": "error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No candidate projection: recording a candidate sample evaluation failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

@@ -562,7 +562,7 @@ impl HostShared {
                 project_strategic_report(loaded.compiled(), report, &facts, &resources).map_err(
                     |error| {
                         RuntimeHostError::request(
-                            error.code(),
+                            error.code().as_str(),
                             "prepare_strategic_report",
                             RuntimeErrorCode::InvalidRequest,
                         )

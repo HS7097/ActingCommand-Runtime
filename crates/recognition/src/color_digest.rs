@@ -21,28 +21,8 @@ pub const MAX_QUANTIZED_LEVEL: u8 = 31;
 const CHANNELS: usize = 3;
 const HEX_DIGITS_PER_CELL: usize = 2 * CHANNELS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorDigestErrorCode {
-    AlgorithmUnknown,
-    GridInvalid,
-    RegionInvalid,
-    CellsInvalid,
-    ExcludeCellsInvalid,
-    GridMismatch,
-}
-
-impl ColorDigestErrorCode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AlgorithmUnknown => "color_digest_algorithm_unknown",
-            Self::GridInvalid => "color_digest_grid_invalid",
-            Self::RegionInvalid => "color_digest_region_invalid",
-            Self::CellsInvalid => "color_digest_cells_invalid",
-            Self::ExcludeCellsInvalid => "color_digest_exclude_cells_invalid",
-            Self::GridMismatch => "color_digest_grid_mismatch",
-        }
-    }
-}
+// The registered refusal codes live in `src/codes.rs`.
+pub use crate::codes::ColorDigestErrorCode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColorDigestError {

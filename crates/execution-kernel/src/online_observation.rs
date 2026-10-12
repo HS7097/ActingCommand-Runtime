@@ -2,9 +2,12 @@
 
 //! One contained, read-only observation over the existing recognition owners.
 
+use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{
     DriveSemanticInput, ExternalExpectedSha256, ExternallyVerifiedBundle, drive_rect_center,
 };
+use actingcommand_contract::codes::{ContractLocation, PageProjectionCode};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::page_projection::{
     self as projection, ActionKey, ElementInput, ElementResolution, ElementRole, FieldInput,
     FrameIdentity, Geometry, MissingTarget, NotEvaluatedReason, PageProjection, Privacy,
@@ -21,8 +24,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub struct OnlineObservationError {
-    code: &'static str,
-    stage: &'static str,
+    code: Code,
+    stage: Location,
     cause: String,
     ppocr_diagnostics: PpocrDiagnostics,
 }
@@ -32,7 +35,7 @@ impl std::fmt::Debug for OnlineObservationError {
     }
 }
 impl OnlineObservationError {
-    fn new(code: &'static str, stage: &'static str, cause: impl ToString) -> Self {
+    fn new(code: Code, stage: Location, cause: impl ToString) -> Self {
         Self {
             code,
             stage,
@@ -40,10 +43,10 @@ impl OnlineObservationError {
             ppocr_diagnostics: Vec::new(),
         }
     }
-    pub fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
-    pub fn stage(&self) -> &'static str {
+    pub const fn stage(&self) -> Location {
         self.stage
     }
     pub fn cause(&self) -> &str {
@@ -102,8 +105,8 @@ impl PreparedPageObservation {
         )
         .map_err(|error| {
             OnlineObservationError::new(
-                "observation_containment_failed",
-                "admit_contained_observation",
+                ExecutionKernelCode::ObservationContainmentFailed.code(),
+                ContractLocation::AdmitContainedObservation.location(),
                 error,
             )
         })?;
@@ -121,8 +124,8 @@ impl PreparedPageObservation {
             ExternallyVerifiedBundle::load_observation(instance, bytes, expected, provider)
                 .map_err(|error| {
                     OnlineObservationError::new(
-                        "observation_containment_failed",
-                        "admit_contained_observation",
+                        ExecutionKernelCode::ObservationContainmentFailed.code(),
+                        ContractLocation::AdmitContainedObservation.location(),
                         error,
                     )
                 })?;
@@ -136,8 +139,8 @@ impl PreparedPageObservation {
         let loaded = bundle.loaded_bundle();
         let invalid = |cause: &str| {
             OnlineObservationError::new(
-                "observation_resources_invalid",
-                "load_observation_resources",
+                ExecutionKernelCode::ObservationResourcesInvalid.code(),
+                ExecutionKernelLocation::LoadObservationResources.location(),
                 cause,
             )
         };
@@ -257,8 +260,8 @@ impl PreparedPageObservation {
         let detector = loaded.detector().expect("admitted detector");
         let scene = Scene::from_png(png).map_err(|error| {
             OnlineObservationError::new(
-                "observation_frame_invalid",
-                "decode_observation_frame",
+                ExecutionKernelCode::ObservationFrameInvalid.code(),
+                ExecutionKernelLocation::DecodeObservationFrame.location(),
                 error,
             )
         })?;
@@ -341,7 +344,7 @@ impl PreparedPageObservation {
                     result.remove("completed_targets");
                 }
             }
-            let row = json!({"kind":"page_evaluation", "stage":"evaluate_page", "outcome":summary, "target_evaluation_count":values.len()});
+            let row = json!({"kind":"page_evaluation", "stage":ExecutionKernelLocation::EvaluatePage.as_str(), "outcome":summary, "target_evaluation_count":values.len()});
             private_facts.push(row.clone(), 0).map_err(|error| {
                 fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
             })?;
@@ -349,7 +352,7 @@ impl PreparedPageObservation {
                 fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
             })?;
             for (index, value) in values.iter().enumerate() {
-                let row = json!({"kind":"target_evaluation", "stage":"evaluate_page_target", "page_id":page.page_id, "page_index":page.index,
+                let row = json!({"kind":"target_evaluation", "stage":ExecutionKernelLocation::EvaluatePageTarget.as_str(), "page_id":page.page_id, "page_index":page.index,
                     "evaluation_index":actual.len() - values.len() + index, "target":value});
                 private_facts.push(row.clone(), 1).map_err(|error| {
                     fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
@@ -378,9 +381,9 @@ impl PreparedPageObservation {
                 }
                 let attempted = values.len() + usize::from(error.failed_target.is_some());
                 for (role, group, index, target) in declared.into_iter().skip(attempted) {
-                    let row = json!({"kind":"target_not_evaluated", "stage":"evaluate_page_target", "page_id":page.page_id,
+                    let row = json!({"kind":PageProjectionCode::TargetNotEvaluated.as_str(), "stage":ExecutionKernelLocation::EvaluatePageTarget.as_str(), "page_id":page.page_id,
                         "page_index":page.index, "target_id":target, "role":role, "group_index":group, "target_index":index,
-                        "state":"not_evaluated", "reason":"earlier_target_failed"});
+                        "state":"not_evaluated", "reason":ExecutionKernelCode::EarlierTargetFailed.as_str()});
                     private_facts.push(row.clone(), 0).map_err(|error| {
                         fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
                     })?;
@@ -391,7 +394,7 @@ impl PreparedPageObservation {
             }
         }
         if let Some(error) = batch_error {
-            let row = json!({"kind":"page_batch_failure", "stage":"evaluate_pages", "cause":error.cause, "unexecuted":error.unexecuted});
+            let row = json!({"kind":"page_batch_failure", "stage":ExecutionKernelLocation::EvaluatePages.as_str(), "cause":error.cause, "unexecuted":error.unexecuted});
             private_facts.push(row.clone(), 0).map_err(|error| {
                 fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
             })?;
@@ -445,7 +448,7 @@ impl PreparedPageObservation {
                         target_index: 0,
                         evaluation: value,
                     };
-                    let row = json!({"kind":"explicit_target", "stage":"evaluate_requested_target", "target":evaluated});
+                    let row = json!({"kind":"explicit_target", "stage":ExecutionKernelLocation::EvaluateRequestedTarget.as_str(), "target":evaluated});
                     private_facts.push(row.clone(), 1).map_err(|error| {
                         fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
                     })?;
@@ -457,7 +460,7 @@ impl PreparedPageObservation {
                 Err(error) => {
                     ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned());
                     complete = false;
-                    let row = json!({"kind":"target_failure", "stage":"evaluate_requested_target", "target_id":target, "cause":error});
+                    let row = json!({"kind":"target_failure", "stage":ExecutionKernelLocation::EvaluateRequestedTarget.as_str(), "target_id":target, "cause":error});
                     private_facts.push(row.clone(), 0).map_err(|error| {
                         fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
                     })?;
@@ -502,7 +505,7 @@ impl PreparedPageObservation {
                     }
                     Err(error) => {
                         complete = false;
-                        let row = json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
+                        let row = json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
                         (row.clone(), row)
                     }
                 };
@@ -658,8 +661,8 @@ impl PreparedPageObservation {
         )
         .map_err(|error| {
             OnlineObservationError::new(
-                "observation_projection_failed",
-                "project_observation",
+                ExecutionKernelCode::ObservationProjectionFailed.code(),
+                ExecutionKernelLocation::ProjectObservation.location(),
                 error,
             )
             .with_ppocr_diagnostics(ppocr_diagnostics.clone())
@@ -676,7 +679,11 @@ impl PreparedPageObservation {
 }
 
 fn fact_error(error: impl ToString) -> OnlineObservationError {
-    OnlineObservationError::new("observation_fact_failed", "encode_observation_fact", error)
+    OnlineObservationError::new(
+        ExecutionKernelCode::ObservationFactFailed.code(),
+        ExecutionKernelLocation::EncodeObservationFact.location(),
+        error,
+    )
 }
 fn role_name(role: PageTargetRole) -> &'static str {
     match role {

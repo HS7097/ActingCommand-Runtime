@@ -2,6 +2,8 @@
 
 //! Pure environment-result validation and marker-resolution decisions.
 
+use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::codes::RuntimeErrorCode;
 use actingcommand_contract::{
     EnvDetected, EnvResolved, FactContent, FactResolution, FactUnknownReason, FactValue,
     InstanceFactSnapshot,
@@ -37,18 +39,18 @@ pub enum EnvironmentStateErrorKind {
 impl EnvironmentStateErrorKind {
     pub fn reason(self) -> &'static str {
         match self {
-            Self::SchemaMismatch => "schema_mismatch",
-            Self::InstanceMismatch => "instance_mismatch",
-            Self::ScopeMismatch => "scope_mismatch",
-            Self::DetectorMismatch => "detector_mismatch",
-            Self::ResourceHashChanged => "resource_hash_changed",
-            Self::MissingKey => "missing_key",
+            Self::SchemaMismatch => ExecutionKernelCode::SchemaMismatch.as_str(),
+            Self::InstanceMismatch => RuntimeErrorCode::InstanceMismatch.as_str(),
+            Self::ScopeMismatch => ExecutionKernelCode::ScopeMismatch.as_str(),
+            Self::DetectorMismatch => ExecutionKernelCode::DetectorMismatch.as_str(),
+            Self::ResourceHashChanged => ExecutionKernelCode::ResourceHashChanged.as_str(),
+            Self::MissingKey => ExecutionKernelCode::MissingKey.as_str(),
             Self::LowConfidence => "low_confidence",
             Self::Expired => "expired",
-            Self::UnsafeValue => "unsafe_value",
-            Self::UnallowedValue => "unallowed_value",
-            Self::InvalidPointer => "invalid_pointer",
-            Self::UndeclaredKey => "undeclared_key",
+            Self::UnsafeValue => ExecutionKernelCode::UnsafeValue.as_str(),
+            Self::UnallowedValue => ExecutionKernelCode::UnallowedValue.as_str(),
+            Self::InvalidPointer => ExecutionKernelCode::InvalidPointer.as_str(),
+            Self::UndeclaredKey => ExecutionKernelCode::UndeclaredKey.as_str(),
         }
     }
 }

@@ -421,10 +421,10 @@ pub(super) fn observation_admission_error(
 }
 pub(super) fn observation_kernel_error(error: OnlineObservationError) -> RuntimeHostError {
     RuntimeHostError::request(
-        error.code(),
-        error.stage(),
+        error.code().as_str(),
+        error.stage().as_str(),
         if matches!(
-            error.stage(),
+            error.stage().as_str(),
             "admit_contained_observation" | "load_observation_resources"
         ) {
             RuntimeErrorCode::InvalidRequest

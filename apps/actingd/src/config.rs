@@ -890,7 +890,7 @@ pub(super) fn validate_resource_packages(
         };
         let loader_refused = |error: actingcommand_execution_kernel::ContainedTaskError| {
             invalid(
-                error.code(),
+                error.code().as_str(),
                 error
                     .detail()
                     .map_or_else(|| error.to_string(), str::to_owned),

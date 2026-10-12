@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 mod canonical;
+mod codes;
 mod evaluator;
 mod facts;
 mod schema;
@@ -31,6 +32,7 @@ mod schema;
 pub use canonical::{
     CanonicalValue, MAX_DOCUMENT_BYTES, canonical_bytes, canonical_sha256, parse_canonical_json,
 };
+pub use codes::SelectionPolicyCode;
 pub use evaluator::{
     CandidateStatus, CandidateVerdict, CollectedCandidate, CollectedVerdict, DecisionReason,
     GateOutcome, GateResult, KnownInput, SelectionDecision, SelectionOutcome, TermOutcome,

@@ -3,12 +3,14 @@
 //! Pure strategic-report projection into existing scheduling declarations.
 
 use crate::canonical::canonical_serialized;
+use crate::codes::PolicyCode;
 use crate::evaluator::scope_matches_instance;
 use crate::{
     ActivityProfile, CompiledCatalog, EvaluationFacts, EvaluationResources, FactValue, GoalTarget,
     InstanceSnapshot, LoadProfile, MetricRef, PredicateSpec, ScopeSelector, TaskSpec,
 };
 use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
+use actingcommand_contract::outcome::{Code, CodeStr};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,40 +29,40 @@ const RATE_PERIOD_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrategyError {
-    code: &'static str,
+    code: Code,
     message: String,
 }
 
 impl StrategyError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
-            code: "strategy_report_invalid",
+            code: PolicyCode::StrategyReportInvalid.code(),
             message: message.into(),
         }
     }
 
     fn mismatch(message: impl Into<String>) -> Self {
         Self {
-            code: "strategy_catalog_mismatch",
+            code: PolicyCode::StrategyCatalogMismatch.code(),
             message: message.into(),
         }
     }
 
     fn ambiguous(message: impl Into<String>) -> Self {
         Self {
-            code: "strategy_template_ambiguous",
+            code: PolicyCode::StrategyTemplateAmbiguous.code(),
             message: message.into(),
         }
     }
 
     fn overflow(message: impl Into<String>) -> Self {
         Self {
-            code: "strategy_numeric_overflow",
+            code: PolicyCode::StrategyNumericOverflow.code(),
             message: message.into(),
         }
     }
 
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> Code {
         self.code
     }
 
@@ -430,7 +432,7 @@ pub struct StrategicPlanningLaneEntry {
     pub goal_id: String,
     pub instance_id: String,
     pub fact_snapshot_id: String,
-    pub reason: String,
+    pub reason: CodeStr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -579,7 +581,7 @@ pub fn project_strategic_report(
                 goal_id: goal.goal_id.clone(),
                 instance_id: assessment.instance_id.clone(),
                 fact_snapshot_id: assessment.fact_snapshot_id.clone(),
-                reason: planning_reason(disposition).to_owned(),
+                reason: CodeStr::from(planning_reason(disposition).code()),
             });
         }
         let signature = decision_signature(report, goal, assessment, &calculated, template)?;
@@ -1491,12 +1493,12 @@ fn cohort_priority_order(left: &CohortProjection, right: &CohortProjection) -> s
         .then_with(|| left.cohort_id.cmp(&right.cohort_id))
 }
 
-fn planning_reason(disposition: PlanningDisposition) -> &'static str {
+fn planning_reason(disposition: PlanningDisposition) -> PolicyCode {
     match disposition {
-        PlanningDisposition::ExecutionContinues => "execution_continues",
-        PlanningDisposition::NeedsPlanning => "no_conditional_template_matched",
-        PlanningDisposition::NeedsDetection => "pinned_observation_missing",
-        PlanningDisposition::Blocked => "instance_unavailable",
+        PlanningDisposition::ExecutionContinues => PolicyCode::ExecutionContinues,
+        PlanningDisposition::NeedsPlanning => PolicyCode::NoConditionalTemplateMatched,
+        PlanningDisposition::NeedsDetection => PolicyCode::PinnedObservationMissing,
+        PlanningDisposition::Blocked => PolicyCode::InstanceUnavailable,
     }
 }
 
@@ -1912,7 +1914,8 @@ mod tests {
         assert_eq!(
             project_strategic_report(&catalog, &mismatch, &facts, &resources)
                 .expect_err("reported current is only an equality check")
-                .code(),
+                .code()
+                .as_str(),
             "strategy_report_invalid"
         );
         let mut rate_claim = report.clone();
@@ -1921,7 +1924,8 @@ mod tests {
         assert_eq!(
             project_strategic_report(&catalog, &rate_claim, &facts, &resources)
                 .expect_err("a fact metric has no catalog rate")
-                .code(),
+                .code()
+                .as_str(),
             "strategy_report_invalid"
         );
 
@@ -2016,7 +2020,8 @@ mod tests {
                 report.as_of_unix_ms(),
             )
             .expect_err("pool conversion must be checked")
-            .code(),
+            .code()
+            .as_str(),
             "strategy_numeric_overflow"
         );
 
@@ -2235,7 +2240,8 @@ mod tests {
         assert_eq!(
             catalog_production_rate(&overflow_catalog, &metric, instance)
                 .expect_err("production sum must be checked")
-                .code(),
+                .code()
+                .as_str(),
             "strategy_numeric_overflow"
         );
     }
@@ -2372,7 +2378,7 @@ mod tests {
             },
         )
         .expect_err("cross-game report must fail");
-        assert_eq!(error.code(), "strategy_report_invalid");
+        assert_eq!(error.code().as_str(), "strategy_report_invalid");
     }
 
     #[test]
@@ -2390,7 +2396,11 @@ mod tests {
         encoded["assessments"][0]["current_projection"] = serde_json::json!(51);
         let changed: StrategicReport = serde_json::from_value(encoded).expect("typed report");
         assert_eq!(
-            changed.validate().expect_err("identity mismatch").code(),
+            changed
+                .validate()
+                .expect_err("identity mismatch")
+                .code()
+                .as_str(),
             "strategy_report_invalid"
         );
     }

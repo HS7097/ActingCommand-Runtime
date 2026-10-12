@@ -385,7 +385,7 @@ fn compare_frame_files(
             FrameComparison::Similar
         }
         Ok(_) => FrameComparison::Different,
-        Err(error) => FrameComparison::Unavailable(error.reason()),
+        Err(error) => FrameComparison::Unavailable(error.reason().as_str()),
     }
 }
 

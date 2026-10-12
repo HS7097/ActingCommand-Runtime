@@ -22,6 +22,7 @@ use std::sync::Arc;
 mod candidate_consensus;
 mod candidate_identity;
 mod candidate_layout;
+mod codes;
 mod target_consensus;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 
@@ -31,6 +32,8 @@ pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
     CandidateIdentityTemplate, normalize_name,
 };
+
+pub use codes::RecognitionPackCode;
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
@@ -3912,7 +3915,8 @@ mod tests {
                 .scene_context(&scene)
                 .project_candidates("choices")
                 .unwrap_err()
-                .code(),
+                .code()
+                .as_str(),
             "candidate_samples_unavailable"
         );
     }

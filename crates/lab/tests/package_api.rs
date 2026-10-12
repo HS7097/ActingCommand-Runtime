@@ -304,7 +304,7 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
             } else {
                 "contained_task_control_invalid"
             };
-            assert_eq!(result.err().expect("rejected bound").code(), code);
+            assert_eq!(result.err().expect("rejected bound").code().as_str(), code);
         }
     }
 

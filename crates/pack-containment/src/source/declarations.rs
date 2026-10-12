@@ -5,6 +5,7 @@ use actingcommand_contract::candidate_projection::{
     CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
     validate_candidate_feature_name, validate_candidate_layout_id,
 };
+use actingcommand_contract::codes::{SharedCode, TaskflowCode};
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestAlgorithm, ColorDigestGrid, MAX_GRID_AXIS,
@@ -1392,7 +1393,7 @@ impl Declaration<'_> {
         };
         CliError::new(
             actingcommand_contract::LabErrorClass::UsageValidation,
-            "resource_declaration_invalid",
+            SharedCode::ResourceDeclarationInvalid.as_str(),
             format!(
                 "resource declaration {} field {} is not consumable: {reason:?}",
                 issue.declaration_file, issue.field_path,
@@ -2314,15 +2315,21 @@ impl Declaration<'_> {
                 serde_json::from_value(reading.clone())
                     .map_err(|_| self.error(&pointer, ResourceDeclarationReason::InvalidValue))?;
             if let Err(reason) = declaration.validate() {
-                let path: &[&str] = match reason.as_str() {
-                    "resource_reading_id_invalid" => &["id"],
-                    "resource_reading_fact_key_invalid" => &["fact_key"],
-                    "resource_reading_page_id_invalid" => &["page_id"],
-                    "resource_reading_target_id_invalid" => &["target_id"],
-                    "resource_reading_value_max_invalid" => &["value", "max"],
-                    "resource_reading_value_min_invalid" => &["value", "min"],
-                    "resource_reading_minimum_confidence_invalid" => &["minimum_confidence_milli"],
-                    "resource_reading_valid_for_invalid" => &["valid_for_ms"],
+                let refused = TaskflowCode::ALL
+                    .iter()
+                    .copied()
+                    .find(|code| code.code() == reason);
+                let path: &[&str] = match refused {
+                    Some(TaskflowCode::ResourceReadingIdInvalid) => &["id"],
+                    Some(TaskflowCode::ResourceReadingFactKeyInvalid) => &["fact_key"],
+                    Some(TaskflowCode::ResourceReadingPageIdInvalid) => &["page_id"],
+                    Some(TaskflowCode::ResourceReadingTargetIdInvalid) => &["target_id"],
+                    Some(TaskflowCode::ResourceReadingValueMaxInvalid) => &["value", "max"],
+                    Some(TaskflowCode::ResourceReadingValueMinInvalid) => &["value", "min"],
+                    Some(TaskflowCode::ResourceReadingMinimumConfidenceInvalid) => {
+                        &["minimum_confidence_milli"]
+                    }
+                    Some(TaskflowCode::ResourceReadingValidForInvalid) => &["valid_for_ms"],
                     _ => &[],
                 };
                 let pointer = path

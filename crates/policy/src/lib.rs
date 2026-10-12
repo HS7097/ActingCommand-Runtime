@@ -15,6 +15,7 @@ mod source;
 mod strategy;
 mod validation;
 
+pub use codes::PolicyCode;
 pub use compiler::*;
 pub use evaluator::*;
 pub use forward::*;

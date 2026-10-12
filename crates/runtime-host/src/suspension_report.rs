@@ -214,7 +214,7 @@ impl Snapshot<'_> {
                                     json!({
                                         "source": "recomputed",
                                         "status": compared.verdict.as_str(),
-                                        "reason": compared.reason,
+                                        "reason": compared.reason.map(|reason| reason.as_str()),
                                         "changed_cells_milli": compared.changed_cells_milli,
                                         "digest_mean_milli": compared.digest_mean_milli,
                                         "ccoeff": ccoeff.as_ref().ok(),
@@ -223,7 +223,7 @@ impl Snapshot<'_> {
                                     Some(compared.verdict.as_str()),
                                 )
                             }
-                            Err(error) => (unavailable(error.reason()), None),
+                            Err(error) => (unavailable(error.reason().as_str()), None),
                         }
                     }
                     _ => (unavailable("artifact_unreadable"), None),

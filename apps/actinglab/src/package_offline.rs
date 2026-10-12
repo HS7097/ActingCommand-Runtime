@@ -73,7 +73,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, expected)
         .map_err(|error| {
             offline_error(
-                error.code(),
+                error.code().as_str(),
                 error
                     .detail()
                     .map(str::to_string)
@@ -85,7 +85,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     let simulation = simulate_contained_task_at(&prepared, fixture.frames, now_unix_ms)
         .map_err(map_simulation_error)?;
     let refusal = match &simulation.decision {
-        OfflineDecision::Refused { code, detail } => Some((code.clone(), detail.clone())),
+        OfflineDecision::Refused { code, detail } => Some((*code, detail.clone())),
         _ => None,
     };
     let record = OfflineResultRecord {
@@ -107,7 +107,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
 
     if let Some((code, detail)) = refusal {
         return Err(offline_error(
-            &code,
+            code.as_str(),
             detail.unwrap_or_else(|| format!("offline decision refused with {code}")),
         )
         .with_details(json!({
@@ -776,7 +776,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn map_simulation_error(error: OfflineSimulationError) -> CliError {
-    offline_error(error.code(), error.to_string())
+    offline_error(error.code().as_str(), error.to_string())
 }
 
 fn offline_error(code: impl Into<String>, message: impl Into<String>) -> CliError {

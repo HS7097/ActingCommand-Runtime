@@ -6,6 +6,7 @@
 //! recovery graph against a caller-provided effect port so recovery plans can be
 //! tested without opening ADB, capture, MaaTouch, OCR, resources, or game logic.
 
+use crate::codes::ExecutionKernelCode;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -213,8 +214,8 @@ impl NodeOutcome {
     fn reason(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
-            Self::DetectFailed => "detect_failed",
-            Self::ActionFailed => "action_failed",
+            Self::DetectFailed => ExecutionKernelCode::DetectFailed.as_str(),
+            Self::ActionFailed => ExecutionKernelCode::ActionFailed.as_str(),
         }
     }
 }

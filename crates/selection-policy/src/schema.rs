@@ -11,7 +11,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
+
+use crate::codes::SelectionPolicyCode;
 
 /// Schema version accepted by this crate.
 pub const SELECTION_POLICY_SCHEMA_VERSION: &str = "actingcommand.selection-policy.v1";
@@ -39,7 +43,9 @@ pub const MAX_ID_BYTES: usize = 128;
 /// Upper bound on the members of one enumerated string type.
 pub const MAX_ENUM_VALUES: usize = 128;
 
-/// Closed set of failure codes reported by this crate.
+/// Closed set of failure codes reported by this crate. Each variant names one registered code
+/// (the crate's [`SelectionPolicyCode`] or the contract's `SharedCode`); its serde spelling is
+/// that code's spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionErrorCode {
@@ -57,6 +63,33 @@ pub enum SelectionErrorCode {
     ReadFailed,
     TypeMismatch,
     UnsupportedSchemaVersion,
+}
+
+impl SelectionErrorCode {
+    /// The registered code this variant names.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::ArithmeticOverflow => SelectionPolicyCode::ArithmeticOverflow.code(),
+            Self::DanglingReference => SharedCode::DanglingReference.code(),
+            Self::DocumentTooLarge => SharedCode::DocumentTooLarge.code(),
+            Self::DuplicateId => SharedCode::DuplicateId.code(),
+            Self::DuplicateKey => SharedCode::DuplicateKey.code(),
+            Self::FloatRejected => SelectionPolicyCode::FloatRejected.code(),
+            Self::IntegerOutOfRange => SelectionPolicyCode::IntegerOutOfRange.code(),
+            Self::InvalidArguments => SharedCode::InvalidArguments.code(),
+            Self::InvalidJson => SharedCode::InvalidJson.code(),
+            Self::LimitExceeded => SharedCode::LimitExceeded.code(),
+            Self::MissingRequiredField => SharedCode::MissingRequiredField.code(),
+            Self::ReadFailed => SelectionPolicyCode::ReadFailed.code(),
+            Self::TypeMismatch => SharedCode::TypeMismatch.code(),
+            Self::UnsupportedSchemaVersion => SharedCode::UnsupportedSchemaVersion.code(),
+        }
+    }
+
+    /// The registered spelling, which is also the serde spelling.
+    pub const fn as_str(self) -> &'static str {
+        self.code().as_str()
+    }
 }
 
 /// One typed failure with a human-readable detail.

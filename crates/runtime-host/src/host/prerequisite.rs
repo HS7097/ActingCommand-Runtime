@@ -169,7 +169,10 @@ impl HostShared {
         let deadline = material_deadline()?;
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
         let pure_refusal = |error: actingcommand_execution_kernel::ContainedTaskError| {
-            prerequisite_refusal(error.code(), error.detail().unwrap_or("").to_owned())
+            prerequisite_refusal(
+                error.code().as_str(),
+                error.detail().unwrap_or("").to_owned(),
+            )
         };
         while let Some(link) = next {
             let dependent = chain.last().unwrap_or(prepared);
@@ -398,7 +401,7 @@ fn fail_gate(
     error: ContainedTaskRunError<RequestFailure>,
 ) -> ContainedTaskRunError<RequestFailure> {
     let code = match &error {
-        ContainedTaskRunError::Task(error) => error.code(),
+        ContainedTaskRunError::Task(error) => error.code().as_str(),
         ContainedTaskRunError::Boundary(failure)
         | ContainedTaskRunError::NonfatalOperation(failure) => failure.error.code(),
     };
@@ -422,12 +425,12 @@ fn close_open(
     match error {
         ContainedTaskRunError::Task(error)
             if matches!(
-                error.code(),
+                error.code().as_str(),
                 "contained_task_recognition_failed" | "contained_task_page_unknown"
             ) =>
         {
             let mut primary = RuntimeHostError::request(
-                error.code(),
+                error.code().as_str(),
                 "run_contained_task",
                 RuntimeErrorCode::BackendOperationFailed,
             );
@@ -439,11 +442,13 @@ fn close_open(
                 Err(failure) => ContainedTaskRunError::Boundary(failure),
             }
         }
-        ContainedTaskRunError::Task(error) => match record_closed(runtime, open, error.code()) {
-            Ok(()) if keep_task_error => ContainedTaskRunError::Task(error),
-            Ok(()) => ContainedTaskRunError::task(error.code()),
-            Err(failure) => ContainedTaskRunError::Boundary(failure),
-        },
+        ContainedTaskRunError::Task(error) => {
+            match record_closed(runtime, open, error.code().as_str()) {
+                Ok(()) if keep_task_error => ContainedTaskRunError::Task(error),
+                Ok(()) => ContainedTaskRunError::task(error.code().as_str()),
+                Err(failure) => ContainedTaskRunError::Boundary(failure),
+            }
+        }
         ContainedTaskRunError::NonfatalOperation(failure)
             if !failure.poison_runtime
                 && !failure.error.is_fatal()
