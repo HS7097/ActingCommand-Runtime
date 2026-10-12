@@ -27,6 +27,8 @@ pub(crate) struct ProjectDiagnosticProjection {
     pub(crate) timestamp_unix_ms: u64,
     pub(crate) severity: EventSeverity,
     pub(crate) event_type: EventType,
+    /// The record's outcome code (ledger revision 3), when it carries an outcome.
+    pub(crate) code: Option<actingcommand_contract::outcome::CodeStr>,
 }
 
 pub(crate) struct ProjectInterfaceProjection {
@@ -119,8 +121,7 @@ impl ProjectInterfaceProjection {
                 timestamp_unix_ms: diagnostic.timestamp_unix_ms,
                 severity: diagnostic.severity,
                 event_type: diagnostic.event_type,
-                code: None,
-                fatal: diagnostic.severity == EventSeverity::Fatal,
+                code: diagnostic.code,
             })
             .collect::<Vec<_>>();
         loop {

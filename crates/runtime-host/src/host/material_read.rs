@@ -285,6 +285,15 @@ impl HostShared {
                         ContractLocation::ReadRuntimeMaterial,
                         RuntimeErrorCode::InvalidRequest,
                     )
+                    .with_outcome_values(|outcome| {
+                        outcome
+                            .artifact_id(crate::failure_identity::identifier_text(
+                                &request.artifact_id,
+                            ))
+                            .event_id(crate::failure_identity::identifier_text(
+                                &request.event.event_id,
+                            ))
+                    })
                     .with_native_detail(format!(
                         "artifact_id={} event_id={}",
                         crate::failure_identity::identifier_text(&request.artifact_id),
@@ -357,21 +366,13 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let error = error
             .clone()
+            // Ledger revision 3: the read's selection (a JSON message, Runtime text) is not
+            // recorded; the record links the selected event when its reference resolved.
             .with_diagnostic_detail(DiagnosticDetailDraft::new(
                 "material_read",
                 "attempt",
                 "committed_reference",
                 ContractLocation::ReadRuntimeMaterial.as_str(),
-                serde_json::json!({
-                    "event": selection.event,
-                    "artifact_id": selection.artifact_id,
-                    "snapshot_position": selection.snapshot_position,
-                    "offset": selection.offset,
-                    "requested_length": selection.requested_length,
-                    "reference_resolved": reference_resolved,
-                })
-                .to_string(),
-                Sensitivity::Internal,
             ));
         self.append_lifecycle_failure_with_severity(
             RuntimeLifecycleFailureStage::OperationCleanup,

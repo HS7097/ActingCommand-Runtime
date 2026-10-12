@@ -38,8 +38,7 @@ impl HostShared {
                     .detail()
                     .map(|detail| (DeviceDiagnosticSourceField::Detail, detail));
                 details[1] = value
-                    .cleanup_cause()
-                    .and_then(|cause| cause.detail())
+                    .cleanup_detail()
                     .map(|detail| (DeviceDiagnosticSourceField::CleanupDetail, detail));
             }
             EventPayload::Runtime(RuntimePayload::Failed(value)) => {
@@ -47,12 +46,9 @@ impl HostShared {
                     details[0] = lifecycle.primary_detail().map(|detail| {
                         (DeviceDiagnosticSourceField::LifecyclePrimaryDetail, detail)
                     });
-                    details[1] = lifecycle
-                        .cleanup_cause()
-                        .and_then(|cause| cause.detail())
-                        .map(|detail| {
-                            (DeviceDiagnosticSourceField::LifecycleCleanupDetail, detail)
-                        });
+                    details[1] = lifecycle.cleanup_detail().map(|detail| {
+                        (DeviceDiagnosticSourceField::LifecycleCleanupDetail, detail)
+                    });
                     details[2] = lifecycle
                         .cause()
                         .and_then(|cause| cause.detail())
@@ -94,9 +90,9 @@ impl HostShared {
             record.first = Some(sample.clone());
         }
         record.last = Some(sample);
-        record.declared_sensitivity = record
-            .declared_sensitivity
-            .max(detail.declared_sensitivity());
+        // Ledger revision 3: a detail carries only tokens and no sensitivity of its own, so the
+        // budget keeps the sensitivity it declares at its start (internal); foreign text rides
+        // on the source record's outcome, never on a sampled detail.
         record.emitted_count = record
             .emitted_count
             .checked_add(1)

@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::codes::HostLocation;
-use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     MAX_TASK_DIAGNOSTIC_RECORD_BYTES, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA_V2,
     TaskDiagnosticArtifactData, TaskDiagnosticColorData, TaskDiagnosticColorDigestData,
@@ -97,7 +98,6 @@ fn recognition_error(
             RecognitionPackErrorCode::RegionUnresolved => "RegionUnresolved",
         }
         .to_owned(),
-        message: error.message().to_owned(),
         region: error.region().cloned().map(Box::new),
         timing: error.timing().copied(),
         sample: error.sample().cloned().map(Box::new),
@@ -388,28 +388,27 @@ impl RuntimeContainedTask<'_> {
                 self.diagnostic_page(phase, outcome)?;
             }
             if let Err(error) = results {
+                // Ledger revision 3: the batch failure is the run's recognition failure; the
+                // detector's text is not recorded.
                 self.diagnostic(
                     None,
                     Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
                         phase: phase.to_owned(),
-                        message: error.cause.message().to_owned(),
+                        outcome: Outcome::new(SharedCode::ContainedTaskRecognitionFailed),
                     })),
                 )?;
                 for page in &error.unexecuted {
                     self.diagnostic(
-                    None,
-                    Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
-                        phase: phase.to_owned(),
-                        page: TaskDiagnosticUnexecutedPage {
-                            index: page.index,
-                            page_id: page.page_id.clone(),
-                            reason: match page.reason {
-                                actingcommand_page_detector::PageUnexecutedReason::BatchValidationFailed => "BatchValidationFailed",
-                                actingcommand_page_detector::PageUnexecutedReason::BatchTerminated => "BatchTerminated",
-                            }.to_owned(),
-                        },
-                    }),
-                )?;
+                        None,
+                        Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
+                            phase: phase.to_owned(),
+                            page: TaskDiagnosticUnexecutedPage {
+                                index: page.index,
+                                page_id: page.page_id.clone(),
+                                outcome: Outcome::new(page.reason.code()),
+                            },
+                        }),
+                    )?;
                 }
             }
             Ok(())
@@ -430,7 +429,6 @@ impl RuntimeContainedTask<'_> {
                     index: outcome.index,
                     page_id: page.page_id.clone(),
                     matched: page.matched,
-                    message: page.message.clone(),
                     required_passed: page.required_passed,
                     required_total: page.required_total,
                     any_of_passed: page.any_of_passed,
@@ -447,7 +445,6 @@ impl RuntimeContainedTask<'_> {
                     phase: phase.to_owned(),
                     index: outcome.index,
                     page_id: outcome.page_id.clone(),
-                    error: error.message().to_owned(),
                     failed_target: error.failed_target.as_ref().map(|target| {
                         TaskDiagnosticTargetFailure {
                             target_id: target.target_id.clone(),
@@ -484,7 +481,6 @@ impl RuntimeContainedTask<'_> {
                 target_index: target.target_index,
                 target_id: target.target_id.clone(),
                 passed: target.passed,
-                message: target.message.clone(),
             },
         )
     }
@@ -567,10 +563,12 @@ impl RuntimeContainedTask<'_> {
             None => self
                 .diagnostic(
                     None,
+                    // The guard's reason is not registered yet (A2-P renames it): its spelling
+                    // travels as the relayed outcome's `raw_code`.
                     Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
                         phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
-                        reason: reason.to_owned(),
+                        outcome: Outcome::relayed(reason),
                     }),
                 )
                 .map(|_| ()),
@@ -599,7 +597,6 @@ impl RuntimeContainedTask<'_> {
                 }
                 .to_owned(),
                 passed: target.passed,
-                message: target.message.clone(),
                 template: target.template.map(|value| TaskDiagnosticTemplateData {
                     x: value.x,
                     y: value.y,
@@ -849,13 +846,15 @@ impl RuntimeContainedTask<'_> {
         }
         let data = match result {
             Ok(outcome) => TaskDiagnosticTerminalData::Returned {
-                outcome: outcome.outcome,
+                task_result: outcome.outcome,
                 executed_steps: outcome.executed_steps,
                 final_page: outcome.final_page.clone(),
             },
+            // Ledger revision 3: the task failure as the run's terminal records it (the
+            // kernel's detail text is not kept).
             Err(ContainedTaskRunError::Task(error)) => TaskDiagnosticTerminalData::TaskError {
-                code: error.code().as_str().to_owned(),
-                detail: error.detail().map(str::to_owned),
+                outcome: Outcome::relayed(error.code().as_str())
+                    .operation(ContractLocation::RunContainedTask),
                 executed_steps: self.executed_steps,
                 timing: error.timing().cloned(),
             },
@@ -863,7 +862,7 @@ impl RuntimeContainedTask<'_> {
                 ContainedTaskRunError::Boundary(error)
                 | ContainedTaskRunError::NonfatalOperation(error),
             ) => TaskDiagnosticTerminalData::OperationError {
-                code: error.error.code().to_owned(),
+                outcome: error.error.outcome(),
                 executed_steps: self.executed_steps,
             },
         };

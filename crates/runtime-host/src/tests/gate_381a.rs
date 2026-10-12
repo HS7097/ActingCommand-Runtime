@@ -263,8 +263,8 @@ fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() 
 /// R3′: a Runtime failure latched while a held start prepares stops the start under its own
 /// code, `install_startup_stopped` during `install_transition`, and names the latched cause as
 /// `cause=<code> cause_operation=<operation>` on the FATAL line (actingd prints
-/// `FATAL actingd: <complete_message>`), in the transition's status fact and in the lifecycle
-/// failure's detail.
+/// `FATAL actingd: <complete_message>`), in the transition's status fact and, since ledger
+/// revision 3 (#378 A3), as the lifecycle failure outcome's `caused_by` link.
 #[test]
 fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause() {
     const CAUSE: &str = "cause=ledger_failure cause_operation=append_runtime_event";
@@ -311,25 +311,28 @@ fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_
         .expect("runtime facts");
     host.close().expect("close the cold Runtime");
 
-    let stopped_details = failures
+    let stopped_outcomes = failures
         .iter()
         .filter_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload.lifecycle_failure(),
+            EventPayload::Runtime(RuntimePayload::Failed(payload))
+                if payload.lifecycle_failure().is_some() =>
+            {
+                Some(payload.outcome())
+            }
             _ => None,
         })
-        .filter(|failure| failure.code() == "install_startup_stopped")
-        .map(|failure| {
-            failure
-                .native_detail()
-                .map(|detail| detail.text().to_owned())
-        })
+        .filter(|outcome| outcome.code().as_str() == "install_startup_stopped")
         .collect::<Vec<_>>();
-    assert_eq!(stopped_details.len(), 1, "{stopped_details:?}");
+    assert_eq!(stopped_outcomes.len(), 1, "{stopped_outcomes:?}");
     assert!(
-        stopped_details[0]
-            .as_deref()
-            .is_some_and(|detail| detail.contains(CAUSE)),
-        "lifecycle failure detail: {stopped_details:?}"
+        outcome_links(
+            stopped_outcomes[0],
+            actingcommand_contract::outcome::CauseRelation::CausedBy
+        )
+        .iter()
+        .any(|cause| cause.code().as_str() == "ledger_failure"
+            && outcome_str(cause, "operation") == Some("append_runtime_event")),
+        "lifecycle failure outcome: {stopped_outcomes:?}"
     );
 
     let failed_status = facts

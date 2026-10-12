@@ -123,7 +123,9 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
         "one open warning, no repetition on later input or replay"
     );
     let warning = recovery_events[0];
-    assert_eq!(warning.severity(), EventSeverity::Warning);
+    // Ledger revision 3 (#378 A3): the recovery record carries no outcome, so its severity is
+    // its event type's category (`runtime.lifecycle_observed`: info).
+    assert_eq!(warning.severity(), EventSeverity::Info);
     assert_eq!(warning.sensitivity(), Sensitivity::Sensitive);
     assert_eq!(
         warning.links().instance_id().copied(),

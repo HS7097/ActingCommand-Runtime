@@ -423,7 +423,7 @@ impl AgentDispatcherState {
                 let response = AgentSessionResponse::new(
                     status.session_id(),
                     AgentResponseDisposition::NeedsHuman,
-                    "session_timeout",
+                    actingcommand_contract::outcome::CodeStr::from(HostCode::SessionTimeout.code()),
                     now_unix_ms,
                 )
                 .map_err(|_| {

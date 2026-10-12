@@ -510,13 +510,16 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                     .lifecycle_failure()
                     .and_then(|failure| failure.cause())
                     .filter(|cause| cause.vendor_stdio().is_some())
+                    .map(|cause| (cause, outcome.outcome()))
             })
             .collect::<Vec<_>>();
         assert_eq!(causes.len(), 1, "same close occurrence is published once");
-        let cause = causes[0];
-        assert_eq!(
-            cause.native_detail().expect("original failure").text(),
-            "injected unconfirmed capture close"
+        let (cause, failure_outcome) = causes[0];
+        // Ledger revision 3 (#378 A3): the cause's native text is `raw_text` on a foreign link of
+        // the failure's outcome.
+        assert!(
+            outcome_with_raw_text(failure_outcome, "injected unconfirmed capture close").is_some(),
+            "original failure: {failure_outcome:?}"
         );
         let facts = cause.vendor_stdio().expect("typed owner facts");
         assert_eq!(facts.process_id, 41);
@@ -574,9 +577,8 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
 // Task Contract: Workflow #257 / C1B7. Test class: specification criterion.
 #[test]
 fn required_failure_events_preserve_cleanup_detail() {
-    use actingcommand_contract::{
-        CleanupCauseSeverity, DiagnosticOutcomePayload, PublicEventPayload,
-    };
+    use actingcommand_contract::outcome::CauseRelation;
+    use actingcommand_contract::{DiagnosticOutcomePayload, PublicEventPayload};
 
     for capture in [false, true] {
         let mut baseline_types = None;
@@ -720,7 +722,11 @@ fn required_failure_events_preserve_cleanup_detail() {
                     && let Some(groups) = lifecycle.resource_dispositions()
                 {
                     assert!(lifecycle.cause().is_none());
-                    assert_eq!(lifecycle.stage(), "runtime.lifecycle.session_close");
+                    // Ledger revision 3 (#378 A3): the stage is the outcome's registered location.
+                    assert_eq!(
+                        outcome_str(failure.outcome(), "stage"),
+                        Some(crate::codes::HostLocation::RuntimeLifecycleSessionClose.as_str())
+                    );
                     assert_eq!(
                         groups,
                         [actingcommand_contract::ResourceDisposition {
@@ -841,33 +847,46 @@ fn required_failure_events_preserve_cleanup_detail() {
                     EffectDisposition::Indeterminate
                 }
             );
-            assert_eq!(outcome.cleanup_cause().is_some(), cleanup_detail.is_some());
-            if let Some(cause) = outcome.cleanup_cause() {
-                assert_eq!(cause.code(), "input_backend_close_failed");
-                assert_eq!(cause.severity(), CleanupCauseSeverity::Transient);
-                assert_eq!(cause.detail().is_some(), cleanup_detail == Some(true));
-                if let Some(detail) = cause.detail() {
+            // Ledger revision 3 (#378 A3): the failed cleanup is the outcome's `cleanup` link (its
+            // code) and the record's `cleanup_detail` (where it arose); the cleanup's text and its
+            // declared sensitivity are no longer part of the record.
+            let cleanups = outcome_links(outcome.outcome(), CauseRelation::Cleanup);
+            assert_eq!(cleanups.len(), usize::from(cleanup_detail.is_some()));
+            if let [cleanup] = cleanups.as_slice() {
+                assert_eq!(cleanup.code().as_str(), "input_backend_close_failed");
+                assert_eq!(
+                    outcome.cleanup_detail().is_some(),
+                    cleanup_detail == Some(true)
+                );
+                if let Some(detail) = outcome.cleanup_detail() {
                     assert_eq!(detail.category(), "command_flush");
                     assert_eq!(detail.stage(), "maatouch.stdin.flush");
                     assert_eq!(detail.backend(), "maatouch");
                     assert_eq!(detail.operation(), "close");
-                    assert_eq!(detail.message(), "exit_status=1 stderr=cleanup_failed");
-                    assert_eq!(detail.declared_sensitivity(), Sensitivity::Secret);
-                    assert_eq!(flow[1].sensitivity, Sensitivity::Secret);
                 }
+            } else {
+                assert!(outcome.cleanup_detail().is_none());
             }
             let mut serialized = serde_json::to_value(outcome).expect("outcome serialization");
             let decoded: DiagnosticOutcomePayload =
                 serde_json::from_value(serialized.clone()).expect("typed reader");
             assert_eq!(&decoded, outcome);
             if cleanup_detail.is_none() {
-                assert!(serialized.get("cleanup_cause").is_none());
+                assert!(serialized.get("cleanup_detail").is_none());
                 baseline_outcome = Some(serialized);
             } else {
-                serialized
+                // Without its `cleanup` link and `cleanup_detail` the record equals the
+                // baseline's.
+                let record = serialized.as_object_mut().expect("outcome object");
+                record.remove("cleanup_detail");
+                let failure = record["outcome"]
                     .as_object_mut()
-                    .expect("outcome object")
-                    .remove("cleanup_cause");
+                    .expect("the record's outcome");
+                let causes = failure["causes"].as_array_mut().expect("outcome links");
+                causes.retain(|link| link["relation"] != "cleanup");
+                if causes.is_empty() {
+                    failure.remove("causes");
+                }
                 assert_eq!(Some(&serialized), baseline_outcome.as_ref());
             }
             assert!(!format!("{outcome:?}").contains("cleanup_failed"));
@@ -896,12 +915,15 @@ fn required_failure_events_preserve_cleanup_detail() {
                 PublicEventPayload::Input(value) | PublicEventPayload::Capture(value) => value,
                 _ => panic!("normal input/capture"),
             };
-            assert_eq!(public.cleanup_cause().is_some(), cleanup_detail.is_some());
-            if let Some(cause) = public.cleanup_cause() {
-                assert_eq!(cause.code(), "input_backend_close_failed");
-                assert_eq!(cause.severity(), CleanupCauseSeverity::Transient);
-                assert!(cause.detail().is_none());
+            // The public projection keeps the outcome codes only: the `cleanup` link's code and
+            // no foreign text.
+            let public_outcome = public.outcome().expect("public outcome");
+            let public_cleanups = outcome_links(public_outcome, CauseRelation::Cleanup);
+            assert_eq!(public_cleanups.len(), usize::from(cleanup_detail.is_some()));
+            if let [cleanup] = public_cleanups.as_slice() {
+                assert_eq!(cleanup.code().as_str(), "input_backend_close_failed");
             }
+            assert!(outcome_raw_texts(public_outcome).is_empty());
             let normal_json = serde_json::to_string(&normal_receipt).expect("normal JSON");
             for private in [
                 "primary bounded input context",

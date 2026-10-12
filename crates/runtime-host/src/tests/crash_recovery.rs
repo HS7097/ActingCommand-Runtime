@@ -757,19 +757,15 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
 #[test]
 fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() {
     let mut recovered_task_failure_code = None;
-    for (case, expected_terminal, expected_class) in [
-        ("success", Some(EventType::TaskCompleted), None),
-        (
-            "task-recoverable",
-            Some(EventType::TaskFailed),
-            Some(PolicyFailureClass::Recoverable),
-        ),
-        (
-            "task-severe",
-            Some(EventType::TaskFailed),
-            Some(PolicyFailureClass::Severe),
-        ),
-        ("lease-expired", None, Some(PolicyFailureClass::Severe)),
+    // Ledger revision 3 (#378 A3): a failed run's class comes from its failure's code
+    // (`is_severe_policy_failure`), never from the terminal's severity, which is now the
+    // code's category. The two device severities fail with the same code, so they record the
+    // same class.
+    for (case, expected_terminal) in [
+        ("success", Some(EventType::TaskCompleted)),
+        ("task-recoverable", Some(EventType::TaskFailed)),
+        ("task-severe", Some(EventType::TaskFailed)),
+        ("lease-expired", None),
     ] {
         let root = TempDir::new().expect("tempdir");
         let shared_instance_id = instance_id();
@@ -975,25 +971,13 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
             source.timestamp_unix_ms,
             "{case}: persisted recovery time"
         );
-        match (case, execution_payload.outcome()) {
+        match (case, execution_payload.policy_result()) {
             ("success", PolicyExecutionOutcome::Succeeded { .. }) => {}
             ("task-recoverable" | "task-severe", PolicyExecutionOutcome::Failed { failure }) => {
-                assert_eq!(
-                    failure.original_class,
-                    expected_class.expect("failure class")
-                );
                 let task_terminal = events
                     .iter()
                     .find(|event| event.event_type == EventType::TaskFailed)
                     .expect("task failure");
-                assert_eq!(
-                    task_terminal.severity,
-                    if case == "task-recoverable" {
-                        EventSeverity::Warning
-                    } else {
-                        EventSeverity::Fatal
-                    }
-                );
                 let ProjectionPayload::Full(payload) = &task_terminal.payload else {
                     panic!("{case}: full task failure payload")
                 };
@@ -1001,17 +985,32 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                     panic!("{case}: semantic task failure")
                 };
                 let TaskSemanticFact::TerminalCommitted {
-                    failure_code: Some(code),
+                    outcome: Some(outcome),
                     ..
                 } = payload.fact()
                 else {
-                    panic!("{case}: task failure code")
+                    panic!("{case}: task failure outcome")
                 };
-                assert_eq!(failure.error_code, *code);
+                let code = outcome.code();
+                assert_eq!(
+                    task_terminal.severity,
+                    EventSeverity::from_category(outcome.category()),
+                    "{case}: the terminal's severity is its outcome's category"
+                );
+                assert_eq!(
+                    failure.original_class,
+                    if actingcommand_contract::is_severe_policy_failure(code) {
+                        PolicyFailureClass::Severe
+                    } else {
+                        PolicyFailureClass::Recoverable
+                    },
+                    "{case}: the class is the failure code's"
+                );
+                assert_eq!(failure.error_code, code.as_str());
                 match &recovered_task_failure_code {
                     Some(expected) => assert_eq!(
                         code, expected,
-                        "structured severity must not depend on the failure code"
+                        "both device severities fail with the same code"
                     ),
                     None => recovered_task_failure_code = Some(code.clone()),
                 }

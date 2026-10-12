@@ -620,6 +620,7 @@ impl HostShared {
                 } else {
                     EffectDisposition::NotPerformed
                 },
+                error.record_outcome(),
                 error.diagnostic_detail().cloned(),
                 error.cleanup_cause().cloned(),
                 AuditInput::new(),

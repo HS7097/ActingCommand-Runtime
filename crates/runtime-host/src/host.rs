@@ -87,7 +87,7 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, StartupPackageDisposition, TaskEntryRecognitionPhase,
+    SchedulingOutcomeProjection, StartupPackageDisposition, TaskEntryRecognitionPhase,
     TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
     TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
     TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
@@ -3202,9 +3202,7 @@ impl RuntimeHost {
                     intent_already_recorded,
                     final_page,
                     executed_steps: Some(executed_steps),
-                    failure_code,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: failure_code.map(actingcommand_contract::outcome::Outcome::relayed),
                     scheduling_outcome: None,
                     selected_scheduling_outcome: None,
                     capture_summary: None,
@@ -3290,9 +3288,7 @@ impl RuntimeHost {
                     intent_already_recorded: false,
                     final_page,
                     executed_steps: Some(0),
-                    failure_code: None,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: None,
                     scheduling_outcome: Some((game, declaration)),
                     selected_scheduling_outcome,
                     capture_summary: None,
@@ -3453,7 +3449,7 @@ impl RuntimeHost {
                     )
                     .map(|_| ())
                     .map_err(|error| {
-                        error.with_failure_stage("runtime.lifecycle.shutdown_requested")
+                        error.with_failure_stage(HostLocation::RuntimeLifecycleShutdownRequested)
                     }),
             );
         }
@@ -4155,7 +4151,7 @@ impl HostShared {
                             HostLocation::CloseExecutionKernel,
                             &error,
                         )
-                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.as_str())),
+                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.location())),
                     );
                 }
                 if unconfirmed {
@@ -4287,7 +4283,6 @@ fn accept_loop(
                             stream,
                             connection_shared,
                             connection_id,
-                            connection_serial,
                             maximum_frame_bytes,
                             io_timeout,
                         )

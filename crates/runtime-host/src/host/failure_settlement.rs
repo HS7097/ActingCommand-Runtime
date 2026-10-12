@@ -361,13 +361,12 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "policy_driver",
                     RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
                     "runtime_host",
                     error.operation(),
-                    error.code(),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),

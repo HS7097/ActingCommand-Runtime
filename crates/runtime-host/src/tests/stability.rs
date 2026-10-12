@@ -353,11 +353,11 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
         assert!(matches!(
             projected_task_semantic_fact(task_failed[0]),
             Some(TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Failure,
+                task_result: TaskOutcome::Failure,
                 executed_steps: Some(steps),
-                failure_code: Some(code),
+                outcome: Some(outcome),
                 ..
-            }) if *steps == max_steps && code == "contained_task_requires_scheduler"
+            }) if *steps == max_steps && outcome.code().as_str() == "contained_task_requires_scheduler"
         ));
         let streams = events
             .iter()

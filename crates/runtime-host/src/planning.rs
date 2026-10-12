@@ -159,7 +159,7 @@ pub(crate) fn collect_maintenance_evidence(
                     && payload.observed_at_unix_ms() >= window_start
                     && payload.observed_at_unix_ms() <= query.as_of_unix_ms() =>
             {
-                let duration_ms = match payload.outcome() {
+                let duration_ms = match payload.policy_result() {
                     actingcommand_contract::PolicyExecutionOutcome::Succeeded { runtime_ms } => {
                         *runtime_ms
                     }

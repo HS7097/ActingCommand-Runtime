@@ -162,21 +162,37 @@ fn actions(events: &[PersistedEvent], event_type: EventType) -> Vec<EventAction>
         .collect()
 }
 
-/// The `runtime.failed` records among `events`: each one's code and primary detail message.
+/// The `runtime.failed` records among `events`: each one's code and its outcome as the
+/// `key=value` tokens its primary detail message carried before ledger revision 3 (#378 A3):
+/// every scalar value of the outcome, and `cause=<code>` for each `caused_by` link.
 fn failures(events: &[PersistedEvent]) -> Vec<(String, String)> {
     events
         .iter()
         .filter_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::Failed(record)) => {
-                record.lifecycle_failure().map(|failure| {
-                    (
-                        failure.code().to_owned(),
-                        failure
-                            .primary_detail()
-                            .map(|detail| detail.message().to_owned())
-                            .unwrap_or_default(),
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.lifecycle_failure().is_some() =>
+            {
+                let outcome = record.outcome();
+                let mut tokens = outcome
+                    .values()
+                    .iter()
+                    .filter_map(|(key, value)| match value {
+                        serde_json::Value::String(text) => Some(format!("{key}={text}")),
+                        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                            Some(format!("{key}={value}"))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                tokens.extend(
+                    outcome_links(
+                        outcome,
+                        actingcommand_contract::outcome::CauseRelation::CausedBy,
                     )
-                })
+                    .into_iter()
+                    .map(|cause| format!("cause={}", cause.code())),
+                );
+                Some((outcome.code().as_str().to_owned(), tokens.join(" ")))
             }
             _ => None,
         })

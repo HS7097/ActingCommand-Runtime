@@ -61,10 +61,11 @@ actingcommand_contract::outcome_codes! {
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error,
         /// Error. A held or released start stopped before it finished preparing because the
-        /// Runtime latched a failure meanwhile. Operation `install_transition`. Until A2 makes
-        /// it a `caused_by` link, the latched failure travels as the tokens
-        /// `cause=<code> cause_operation=<operation>` (Workflow #381 A R3′). A restart may
-        /// succeed: the watchdog considers a start (R5′).
+        /// Runtime latched a failure meanwhile. Operation `install_transition`. The latched
+        /// failure is the outcome's `caused_by` link in the ledger (ledger revision 3), and the
+        /// tokens `cause=<code> cause_operation=<operation>` on the developer line and in the
+        /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
+        /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error,
         /// Error. A held start ended because a shutdown request for its owner was accepted
         /// before it was released. Operation `install_transition`. A formal stop: the watchdog
@@ -94,7 +95,8 @@ actingcommand_contract::outcome_codes! {
         /// record's links).
         PolicySettlementDispatchLeftOpen => "policy_settlement_dispatch_left_open": warning,
         /// Error. A start could not settle a scheduled run: the host's recovery or the ledger
-        /// refused its settlement (keys `failure_code`, the refusal's code, and `instance_id`,
+        /// refused its settlement (keys `failure_code`, the refusal's code when registered, else
+        /// its `caused_by` link, and `instance_id`,
         /// `task_id`, `lease_id` when the dispatch has one grant; the run id is on the record's
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
@@ -104,13 +106,13 @@ actingcommand_contract::outcome_codes! {
         /// request's one failure record (keys `restart_phase`, `stop_result`,
         /// `stop_elapsed_ms`, `start_dispatched`, `device_process_present`, and
         /// `start_elapsed_ms`, `process_started`, `android_started`, `adb_port_present` when
-        /// known). Until A2 makes it a `caused_by` link, the Stop's control failure travels as
-        /// the token `cause=<code>` (`emulator_control_wait_timeout` or
-        /// `emulator_control_failed`).
+        /// known; `stop_result` only for a token of its vocabulary). The Stop's control
+        /// failure (`emulator_control_wait_timeout` or `emulator_control_failed`) is the
+        /// outcome's `caused_by` link (ledger revision 3).
         EmulatorRestartStopFailed => "emulator_restart_stop_failed": error,
         /// Error. An operator emulator restart whose Stop phase was confirmed and whose Start
         /// phase failed (Workflow #381 B F4); same keys, `start_elapsed_ms` always present, and
-        /// the Start's control failure as the token `cause=<code>`.
+        /// the Start's control failure as the outcome's `caused_by` link.
         EmulatorRestartStartFailed => "emulator_restart_start_failed": error,
         /// Warning. A Stop confirmed by `info` alone because its process listing failed
         /// (Workflow #381 B F2, D6): once per Stop under the request's links, before
@@ -1074,6 +1076,17 @@ actingcommand_contract::outcome_codes! {
         TaskIdTooLongForFacts => "task_id_too_long_for_facts": error,
         TerminalAlreadyCommitted => "terminal_already_committed": error,
         UnknownEmulatorCapability => "unknown_emulator_capability": error,
+        // Workflow #378 A3 (ledger revision 3): the outcomes of records whose former
+        // reason or code was an unregistered spelling. Pending (B2 settles them).
+        RecoveryRungSkippedNoRecoveryPackage => "recovery_rung_skipped_no_recovery_package": info,
+        RecoveryRungSkippedNoStartupPackage => "recovery_rung_skipped_no_startup_package": info,
+        RecoveryRungSkippedNoEmulatorControl => "recovery_rung_skipped_no_emulator_control": info,
+        RecoveryRungSkippedCaptureUnavailable => "recovery_rung_skipped_capture_unavailable": info,
+        RecoveryRungSkippedInputUnavailable => "recovery_rung_skipped_input_unavailable": info,
+        RecoveryRungSkippedAdbUnavailable => "recovery_rung_skipped_adb_unavailable": info,
+        SessionTimeout => "session_timeout": warning,
+        RecoveryLadderExhausted => "recovery_ladder_exhausted": error,
+        RecoveryLadderInterrupted => "recovery_ladder_interrupted": warning,
     }
 }
 
@@ -1837,6 +1850,28 @@ actingcommand_contract::outcome_locations! {
         WithholdPolicyInstanceAvailability => "withhold_policy_instance_availability",
         WriteCatalogState => "write_catalog_state",
         WriteOwnerFile => "write_owner_file",
+        // Workflow #378 A3: the stages of runtime lifecycle failures (`runtime.failed`), which
+        // were the dotted tokens `runtime.lifecycle.*`; those stay the detail's stage.
+        RuntimeLifecycleInstallDrain => "runtime_lifecycle_install_drain",
+        RuntimeLifecycleInstallHeld => "runtime_lifecycle_install_held",
+        RuntimeLifecycleInstallRelease => "runtime_lifecycle_install_release",
+        RuntimeLifecyclePolicyInitialization => "runtime_lifecycle_policy_initialization",
+        RuntimeLifecyclePolicyMonitor => "runtime_lifecycle_policy_monitor",
+        RuntimeLifecyclePolicyForward => "runtime_lifecycle_policy_forward",
+        RuntimeLifecycleStrategicReport => "runtime_lifecycle_strategic_report",
+        RuntimeLifecycleSessionClose => "runtime_lifecycle_session_close",
+        RuntimeLifecycleConnectionPreparation => "runtime_lifecycle_connection_preparation",
+        RuntimeLifecycleOperationCleanup => "runtime_lifecycle_operation_cleanup",
+        RuntimeLifecycleConnectionCleanup => "runtime_lifecycle_connection_cleanup",
+        RuntimeLifecycleShutdownJoin => "runtime_lifecycle_shutdown_join",
+        RuntimeLifecycleInfoFileRemoval => "runtime_lifecycle_info_file_removal",
+        RuntimeLifecycleRetainedReference => "runtime_lifecycle_retained_reference",
+        RuntimeLifecycleHostClose => "runtime_lifecycle_host_close",
+        RuntimeLifecyclePolicyDriver => "runtime_lifecycle_policy_driver",
+        RuntimeLifecyclePolicyControl => "runtime_lifecycle_policy_control",
+        RuntimeLifecyclePolicyBootstrap => "runtime_lifecycle_policy_bootstrap",
+        RuntimeLifecycleSelectionRecord => "runtime_lifecycle_selection_record",
+        RuntimeLifecycleShutdownRequested => "runtime_lifecycle_shutdown_requested",
     }
 }
 

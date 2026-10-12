@@ -51,13 +51,27 @@ fn ladder_finished(
         .into_iter()
         .find_map(|(event, phase)| match phase {
             RuntimeLifecyclePhase::RecoveryLadderFinished {
-                outcome,
+                ladder_result,
                 rungs_tried,
-            } => Some((event, outcome, rungs_tried)),
+                ..
+            } => Some((event, ladder_result, rungs_tried)),
             _ => None,
         })
 }
 
+/// Ledger revision 3 (#378 A3): the code of the ladder end's outcome (an exhausted climb's why).
+fn ladder_end_code(event: &PersistedEvent) -> Option<&str> {
+    match event.payload() {
+        EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
+            value.outcome().map(|outcome| outcome.code().as_str())
+        }
+        _ => None,
+    }
+}
+
+/// Each finished rung with its result and, ledger revision 3 (#378 A3), the code of its
+/// outcome (the former `reason`): for a rung a holding interruption ended, the code of the
+/// interruption its `recovery_ladder_interrupted` outcome is caused by.
 pub(super) fn rung_outcomes(
     events: &[PersistedEvent],
 ) -> Vec<(RecoveryRung, RecoveryRungOutcome, Option<String>)> {
@@ -66,23 +80,41 @@ pub(super) fn rung_outcomes(
         .filter_map(|(_, phase)| match phase {
             RuntimeLifecyclePhase::RecoveryRungFinished {
                 rung,
+                rung_result,
                 outcome,
-                reason,
                 ..
-            } => Some((rung, outcome, reason)),
+            } => Some((
+                rung,
+                rung_result,
+                outcome.map(|outcome| {
+                    let reason = if outcome.code().as_str() == "recovery_ladder_interrupted" {
+                        outcome
+                            .causes()
+                            .first()
+                            .map_or(&outcome, |link| link.outcome())
+                    } else {
+                        &outcome
+                    };
+                    reason.code().as_str().to_owned()
+                }),
+            )),
             _ => None,
         })
         .collect()
 }
 
-/// The diagnostic message of a `runtime.failed` record.
-fn failure_message(event: &PersistedEvent) -> Option<&str> {
+/// The outcome of a `runtime.failed` record: ledger revision 3 (#378 A3) records the failure
+/// there instead of `code=<code>` and `key=value` tokens in a diagnostic message.
+fn failure_outcome(event: &PersistedEvent) -> Option<&actingcommand_contract::outcome::Outcome> {
     match event.payload() {
-        EventPayload::Runtime(RuntimePayload::Failed(record)) => {
-            record.detail().map(|detail| detail.message())
-        }
+        EventPayload::Runtime(RuntimePayload::Failed(record)) => Some(record.outcome()),
         _ => None,
     }
+}
+
+/// Whether `event` is a `runtime.failed` record whose outcome has the code `spelling`.
+fn failure_coded(event: &PersistedEvent, spelling: &str) -> bool {
+    failure_outcome(event).is_some_and(|outcome| outcome.code().as_str() == spelling)
 }
 
 fn count(events: &[PersistedEvent], event_type: EventType) -> usize {
@@ -239,7 +271,8 @@ impl LadderRun {
             .run_scheduled_contained_task(&self.context, &self.request)
             .expect_err("the scheduled run fails");
         assert!(
-            !error.is_fatal() && actingcommand_contract::is_stuck_recovery_trigger(error.code()),
+            !error.is_fatal()
+                && actingcommand_contract::is_stuck_recovery_trigger(&received_code(error.code())),
             "a stuck-recovery trigger: {}",
             error.code()
         );
@@ -393,6 +426,8 @@ fn a_failed_policy_run_hands_its_key_to_its_ladder_which_holds_it_through_every_
     let (finished, outcome, rungs_tried) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
     assert_eq!(rungs_tried, 2);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(ladder_end_code(finished), Some("recovery_ladder_exhausted"));
     assert_eq!(finished.severity(), EventSeverity::Error);
     assert_eq!(
         rung_outcomes(&events)
@@ -446,7 +481,12 @@ fn a_failed_policy_run_hands_its_key_to_its_ladder_which_holds_it_through_every_
     // No rung met `lease_busy`, and rung 2's stop ran on the key.
     assert_eq!(count(&events, EventType::SchedulerDenied), 0);
     assert!(events.iter().all(|event| {
-        !failure_message(event).is_some_and(|message| message.contains("lease_busy"))
+        !failure_outcome(event).is_some_and(|outcome| {
+            outcome
+                .codes()
+                .iter()
+                .any(|code| code.as_str() == "lease_busy")
+        })
     }));
     assert_eq!(run.state.application_count.load(Ordering::Acquire), 1);
 
@@ -506,6 +546,11 @@ fn a_pause_during_a_rung_run_ends_the_climb_at_warning_and_completes() {
     let events = all_events(&run.host);
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(
+        ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
     assert_eq!(finished.severity(), EventSeverity::Warning);
     let rungs = rung_outcomes(&events);
     assert!(
@@ -620,6 +665,11 @@ fn a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release(
     let events = all_events(&run.host);
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(
+        ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
     assert_eq!(finished.severity(), EventSeverity::Warning);
     let rungs = rung_outcomes(&events);
     assert_eq!(
@@ -752,7 +802,7 @@ fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_sta
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
     assert!(actingcommand_contract::is_stuck_recovery_trigger(
-        error.code()
+        &received_code(error.code())
     ));
     wait_for_rung_three_start(&ladder_state);
     assert_eq!(
@@ -828,6 +878,8 @@ fn a_climb_whose_rungs_all_ran_and_failed_stays_at_error_under_a_pause_at_its_en
     let events = all_events(&run.host);
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(ladder_end_code(finished), Some("recovery_ladder_exhausted"));
     assert_eq!(finished.severity(), EventSeverity::Error);
     let rungs = rung_outcomes(&events);
     assert_eq!(
@@ -880,6 +932,11 @@ fn a_pause_that_cancels_rung_three_s_package_run_ends_the_climb_at_warning() {
     );
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(
+        ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
     assert_eq!(finished.severity(), EventSeverity::Warning);
     let rungs = rung_outcomes(&events);
     assert_eq!(
@@ -975,6 +1032,11 @@ fn an_install_drain_during_a_climb_ends_the_ladder_and_drains() {
     let events = all_events(&run.host);
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(
+        ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
     assert_eq!(finished.severity(), EventSeverity::Warning);
     let rungs = rung_outcomes(&events);
     assert!(
@@ -1008,6 +1070,11 @@ fn a_shutdown_during_a_climb_ends_the_ladder_without_a_leak_or_a_fatal_error() {
     let events = closed_ledger_events(root.path());
     let (finished, outcome, _) = ladder_finished(&events).expect("ladder finished");
     assert_eq!(outcome, RecoveryLadderOutcome::Exhausted);
+    // Ledger revision 3 (#378 A3): the severity is the category of the ladder end's outcome.
+    assert_eq!(
+        ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
     assert_eq!(finished.severity(), EventSeverity::Warning);
     let rungs = rung_outcomes(&events);
     assert!(
@@ -1326,8 +1393,10 @@ fn a_start_while_capacity_refuses_records_the_refusal_and_leaves_no_queued_entry
     // The run's own capacity check refused it and recorded the refusal; no task ran.
     assert!(
         events.iter().any(|event| {
+            // Ledger revision 3 (#378 A3): the severity is the category of the record's
+            // outcome, its diagnostic code `runtime_diagnostic` (error).
             event.event_type() == EventType::SchedulerDenied
-                && event.severity() == EventSeverity::Warning
+                && event.severity() == EventSeverity::Error
                 && event.payload().action() == actingcommand_contract::EventAction::ScheduleAdmit
         }),
         "the capacity refusal is recorded"
@@ -1407,9 +1476,7 @@ fn a_worker_panic_is_recorded_and_the_rebuilt_worker_runs_the_next_payload() {
         .expect("schedule the panicking payload");
     wait_until("panic_caught", || {
         all_events(&host).iter().any(|event| {
-            event.severity() == EventSeverity::Warning
-                && failure_message(event)
-                    .is_some_and(|message| message.contains("code=panic_caught"))
+            event.severity() == EventSeverity::Warning && failure_coded(event, "panic_caught")
         })
     });
     // The second claim waits behind the panicked payload's key until that key lapses.
@@ -1424,24 +1491,32 @@ fn a_worker_panic_is_recorded_and_the_rebuilt_worker_runs_the_next_payload() {
                 .is_none()
     });
     let events = all_events(&host);
-    let text = events
+    // Ledger revision 3 (#378 A3): the panic is the record's `panic_caught` outcome, its
+    // boundary and panic text values of that outcome.
+    let panic = events
         .iter()
-        .filter_map(failure_message)
-        .find(|message| message.contains("code=panic_caught"))
+        .filter_map(failure_outcome)
+        .find(|outcome| outcome.code().as_str() == "panic_caught")
         .expect("panic record");
     assert!(
         events.iter().any(|event| matches!(
             event.payload(),
             EventPayload::Runtime(RuntimePayload::Failed(record))
-                if record.detail().is_some_and(|detail| detail.category() == "startup_package"
-                    && detail.message().contains("code=panic_caught"))
+                if record.detail().is_some_and(|detail| detail.category() == "startup_package")
+                    && record.outcome().code().as_str() == "panic_caught"
         )),
-        "{text}"
+        "{panic:?}"
     );
-    assert!(text.contains("boundary=instance_worker"), "{text}");
+    // The boundary is a registered location naming the instance worker.
     assert!(
-        text.contains("raw_text=injected instance worker panic"),
-        "{text}"
+        outcome_str(panic, "boundary")
+            .is_some_and(|boundary| boundary.ends_with("instance_worker")),
+        "{panic:?}"
+    );
+    assert!(
+        outcome_str(panic, "raw_text")
+            .is_some_and(|text| text.starts_with("injected instance worker panic")),
+        "{panic:?}"
     );
     assert!(
         count(&events, EventType::LeaseExpired) + count(&events, EventType::LeaseTransferred) >= 1,
@@ -2010,7 +2085,7 @@ fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<St
     };
     match execution.payload() {
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
-            match payload.outcome() {
+            match payload.policy_result() {
                 PolicyExecutionOutcome::Failed { failure } => Some(failure.error_code.clone()),
                 PolicyExecutionOutcome::Succeeded { .. } => None,
             }
@@ -2049,9 +2124,7 @@ fn assert_settled_once_as_interrupted(events: &[PersistedEvent], run_id: &RunId)
         .iter()
         .filter(|event| {
             event.links().run_id() == Some(run_id)
-                && failure_message(event).is_some_and(|message| {
-                    message.contains("code=policy_settlement_release_recovered")
-                })
+                && failure_coded(event, "policy_settlement_release_recovered")
         })
         .collect::<Vec<_>>();
     let [record] = records.as_slice() else {
@@ -2070,7 +2143,7 @@ fn assert_retry_backoff_passed(events: &[PersistedEvent], run_id: &RunId) {
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
             if event.links().run_id() == Some(run_id) =>
         {
-            match payload.outcome() {
+            match payload.policy_result() {
                 PolicyExecutionOutcome::Failed { failure } => failure.retry_at_unix_ms,
                 PolicyExecutionOutcome::Succeeded { .. } => None,
             }
@@ -2109,7 +2182,9 @@ fn run_terminal<'a>(
     };
     let code = match terminal.payload() {
         EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-            TaskSemanticFact::TerminalCommitted { failure_code, .. } => failure_code.clone(),
+            TaskSemanticFact::TerminalCommitted { outcome, .. } => outcome
+                .as_ref()
+                .map(|outcome| outcome.code().as_str().to_owned()),
             _ => panic!("the terminal's fact"),
         },
         _ => panic!("the terminal's payload"),
@@ -2151,9 +2226,7 @@ fn assert_settled_once_from_its_terminal(events: &[PersistedEvent], run_id: &Run
         .iter()
         .filter(|event| {
             event.links().run_id() == Some(run_id)
-                && failure_message(event).is_some_and(|message| {
-                    message.contains("code=policy_settlement_release_recovered")
-                })
+                && failure_coded(event, "policy_settlement_release_recovered")
         })
         .collect::<Vec<_>>();
     let [record] = records.as_slice() else {
@@ -2349,7 +2422,9 @@ fn run_shape(events: &[PersistedEvent], run: &RunId, lease: &LeaseId) -> String 
                 event.event_type(),
                 event.payload().effect_disposition(),
                 event.severity(),
-                failure_message(event).unwrap_or_default(),
+                failure_outcome(event)
+                    .map(|outcome| outcome.code().as_str())
+                    .unwrap_or_default(),
             )
         })
         .collect::<Vec<_>>()
@@ -2516,9 +2591,9 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
         {
             match payload.fact() {
                 TaskSemanticFact::TerminalCommitted {
-                    failure_code: Some(code),
+                    outcome: Some(outcome),
                     ..
-                } => Some(code.clone()),
+                } => Some(outcome.code().as_str().to_owned()),
                 _ => None,
             }
         }
@@ -2534,8 +2609,7 @@ fn a_lapsed_run_cut_after_its_own_release_is_settled_once_from_its_own_facts() {
     );
     assert!(!events.iter().any(|event| {
         event.links().run_id() == Some(&run_id)
-            && failure_message(event)
-                .is_some_and(|message| message.contains("code=policy_settlement_release_recovered"))
+            && failure_coded(event, "policy_settlement_release_recovered")
     }));
     assert_eq!(
         recorded_failure_code(&events, &run_id),
@@ -2824,10 +2898,11 @@ fn a_scheduled_dispatch_is_closed_after_a_package_rebind_before_the_restart() {
     .expect("restart after the rebind");
     let events = all_events(&host);
     assert_settled_once_as_interrupted(&events, &run_id);
-    assert!(!events.iter().any(|event| {
-        failure_message(event)
-            .is_some_and(|message| message.contains("code=policy_settlement_dispatch_left_open"))
-    }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| { failure_coded(event, "policy_settlement_dispatch_left_open") })
+    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the restarted host");
 }
@@ -2853,11 +2928,7 @@ fn a_scheduled_dispatch_the_start_leaves_open_is_recorded_once() {
     let events = all_events(&host);
     let records = events
         .iter()
-        .filter(|event| {
-            failure_message(event).is_some_and(|message| {
-                message.contains("code=policy_settlement_dispatch_left_open")
-            })
-        })
+        .filter(|event| failure_coded(event, "policy_settlement_dispatch_left_open"))
         .collect::<Vec<_>>();
     let [record] = records.as_slice() else {
         panic!("one record of the open dispatch: {}", records.len());
@@ -2953,8 +3024,7 @@ fn a_crash_mid_rung_settles_cleanly_and_retention_closes_the_run_at_the_epoch_en
     );
     assert!(!events.iter().any(|event| {
         event.links().run_id() == Some(cut)
-            && failure_message(event)
-                .is_some_and(|message| message.contains("code=policy_settlement_release_recovered"))
+            && failure_coded(event, "policy_settlement_release_recovered")
     }));
     host.close().expect("close the restarted host");
     let artifacts = ArtifactStore::open(root.path()).expect("open the artifact store");

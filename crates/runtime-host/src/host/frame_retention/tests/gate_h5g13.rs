@@ -21,8 +21,7 @@ use actingcommand_contract::{
     EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
     FRAME_RETENTION_POLICY_VERSION, IdentifierIssuer, IssuedEventId, IssuedInstanceId,
     OriginModule, OwnerEpoch, OwnerResourceDisposition, ProjectedArtifactReference,
-    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, Sensitivity,
-    TerminalEvent,
+    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
     FrameRetentionClass, FrameRetentionSwitches, GlobalLedger, GlobalLedgerError,
@@ -81,7 +80,7 @@ impl ArtifactCapacityAdmission for Capacity {
             decided_at_monotonic_ms: 0,
             requested_bytes: bytes,
             target_volume: Some("volume-a".to_owned()),
-            outcome: CapacityAdmissionOutcome::Allowed,
+            admission_result: CapacityAdmissionOutcome::Allowed,
             reason: CapacityAdmissionReason::FreshSample,
             fact: Some(CapacityFactReference {
                 event_id: self.fact,
@@ -308,16 +307,21 @@ impl Fixture<'_> {
                 EventActor::Runtime,
             ),
             EventLinksDraft::default(),
+            // Ledger revision 3: the Warning is the record's outcome (a warning-category code
+            // with its required frame); a detail has no message or sensitivity.
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                actingcommand_contract::outcome::Outcome::new(
+                    crate::codes::HostCode::FrameRetentionRemoveFailed,
+                )
+                .operation(crate::codes::HostLocation::MaintainFrameRetention)
+                .artifact_id("artifact_00000000000000000000000000000001"),
                 DiagnosticDetailDraft::new(
                     "frame_retention",
                     "frame_retention.remove",
                     "artifact_store",
                     "maintain_frame_retention",
-                    "links=none",
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             )

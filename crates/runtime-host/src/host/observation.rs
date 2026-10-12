@@ -360,6 +360,7 @@ impl HostShared {
                     } else {
                         EffectDisposition::NotPerformed
                     },
+                    runtime_error.record_outcome(),
                     runtime_error.diagnostic_detail().cloned(),
                     runtime_error.cleanup_cause().cloned(),
                     AuditInput::new(),

@@ -3738,13 +3738,22 @@ impl HostShared {
         if let Some(holder_kind) = holder_kind {
             detail.push_str(&format!(" holder_kind={}", holder_kind.as_str()));
         }
-        detail.push_str(&format!(" queue_position={}", removed.queued().position()));
+        let queue_position = removed.queued().position();
+        detail.push_str(&format!(" queue_position={queue_position}"));
         Err(RequestFailure::request(
             RuntimeHostError::request(
                 actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
                 HostLocation::AwaitOperatorClaim,
                 RuntimeErrorCode::QueueExpired,
             )
+            // Ledger revision 3: the record's outcome carries the wait as values.
+            .with_outcome_values(|outcome| {
+                let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
+                match holder_kind {
+                    Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
+                    None => outcome,
+                }
+            })
             .with_native_detail(detail),
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),

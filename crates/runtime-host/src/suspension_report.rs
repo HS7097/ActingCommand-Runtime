@@ -133,9 +133,9 @@ impl Snapshot<'_> {
             .find_map(|event| match event.payload() {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
                     TaskSemanticFact::TerminalCommitted {
-                        failure_code: Some(code),
+                        outcome: Some(outcome),
                         ..
-                    } => Some(code.clone()),
+                    } => Some(outcome.code().as_str().to_owned()),
                     _ => None,
                 },
                 _ => None,
@@ -147,11 +147,19 @@ impl Snapshot<'_> {
             .iter()
             .rev()
             .find_map(|event| match event.payload() {
-                EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload
-                    .lifecycle_failure()
-                    .filter(|record| record.code() == code)
-                    .and_then(|record| record.native_detail())
-                    .map(|detail| detail.text().to_owned()),
+                // Ledger revision 3: the lifecycle failure's code is the record's outcome and
+                // its native detail the `raw_text` of that outcome's direct foreign link.
+                EventPayload::Runtime(RuntimePayload::Failed(payload))
+                    if payload.lifecycle_failure().is_some()
+                        && payload.outcome().code().as_str() == code =>
+                {
+                    payload.outcome().causes().iter().find_map(|link| {
+                        link.outcome()
+                            .value("raw_text")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                }
                 _ => None,
             });
         (terminal, detail.map_or(Value::Null, Value::String))
@@ -338,7 +346,7 @@ pub fn suspension_report(
                     severity: event.severity(),
                     decision_id: payload.decision_id().to_owned(),
                     observed_at_unix_ms: payload.observed_at_unix_ms(),
-                    outcome: payload.outcome().clone(),
+                    outcome: payload.policy_result().clone(),
                 });
         }
     }

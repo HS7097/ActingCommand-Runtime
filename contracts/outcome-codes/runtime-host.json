@@ -85,7 +85,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. Until slice A2 turns it into a caused_by link, the latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. The latched failure is the outcome's caused_by link in the ledger (ledger revision 3), and the tokens cause=<code> cause_operation=<operation> on the FATAL line and in the transition's status fact. A restart may succeed, so the watchdog considers a start.",
       "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
       "handling": "TBD"
     },
@@ -126,7 +126,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "failure_code": "required",
+        "failure_code": "optional",
         "instance_id": "required",
         "lease_id": "optional",
         "task_id": "required"
@@ -310,12 +310,12 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "optional",
         "stop_elapsed_ms": "required",
-        "stop_result": "required"
+        "stop_result": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
       "handling": "TBD"
     },
@@ -333,12 +333,12 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "required",
         "stop_elapsed_ms": "required",
-        "stop_result": "required"
+        "stop_result": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
       "handling": "TBD"
     },
@@ -3951,7 +3951,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -3977,7 +3984,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -12570,7 +12584,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -12583,7 +12604,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -12627,6 +12655,123 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operator's scheduling pause of the instance defers the dispatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_recovery_package": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its return_home rung: the failed run bound no recovery package and no return-home package is configured for its game and server (the rung's recovery_rung_finished outcome; formerly the reason no_recovery_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_startup_package": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its application_restart rung: the instance has no startup package (the rung's recovery_rung_finished outcome; formerly the reason no_startup_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_emulator_control": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its emulator_restart rung: the instance has no emulator control (the rung's recovery_rung_finished outcome; formerly the reason no_emulator_control).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_capture_unavailable": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's capture channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason capture_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_input_unavailable": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's input channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason input_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_adb_unavailable": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's ADB baseline does not answer (the rung's recovery_rung_finished outcome; formerly the reason adb_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "session_timeout": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An agent session reached its deadline without a response: the Runtime answers it NeedsHuman with this code as the response code (formerly the unregistered spelling session_timeout).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_exhausted": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder ran out of rungs after the rungs that ran failed on their own (or every rung was skipped); the recovery_ladder_finished record's outcome, caused by the last failed rung's outcome when one failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_interrupted": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A holding interruption (shutdown, a lost key, an install drain, a closed admission, a pause drain or a key renewal refusal) ended a stuck-recovery ladder's climb; the outcome of the recovery_ladder_finished record and of the recovery_rung_finished record of the rung it ended, caused by the interruption.",
       "common_causes": "TBD",
       "handling": "TBD"
     }
@@ -18687,6 +18832,166 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Recording a scheduled dispatch's diagnostic failure record."
+    },
+    "runtime_lifecycle_install_drain": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an install transition's drain (formerly runtime.lifecycle.install_drain)."
+    },
+    "runtime_lifecycle_install_held": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a held install start (formerly runtime.lifecycle.install_held)."
+    },
+    "runtime_lifecycle_install_release": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a released install start preparing (formerly runtime.lifecycle.install_release)."
+    },
+    "runtime_lifecycle_policy_initialization": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy initialization (formerly runtime.lifecycle.policy_initialization)."
+    },
+    "runtime_lifecycle_policy_monitor": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy monitor (formerly runtime.lifecycle.policy_monitor)."
+    },
+    "runtime_lifecycle_policy_forward": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy forward projection (formerly runtime.lifecycle.policy_forward)."
+    },
+    "runtime_lifecycle_strategic_report": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a strategic report (formerly runtime.lifecycle.strategic_report)."
+    },
+    "runtime_lifecycle_session_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an execution session's close (formerly runtime.lifecycle.session_close)."
+    },
+    "runtime_lifecycle_connection_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a step of a physical instance's connection preparation (formerly runtime.lifecycle.connection_preparation)."
+    },
+    "runtime_lifecycle_operation_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an operation's cleanup or its failure's own record (formerly runtime.lifecycle.operation_cleanup)."
+    },
+    "runtime_lifecycle_connection_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a client connection's cleanup (formerly runtime.lifecycle.connection_cleanup)."
+    },
+    "runtime_lifecycle_shutdown_join": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: joining the Runtime's threads at shutdown (formerly runtime.lifecycle.shutdown_join)."
+    },
+    "runtime_lifecycle_info_file_removal": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: removing the Runtime's info file (formerly runtime.lifecycle.info_file_removal)."
+    },
+    "runtime_lifecycle_retained_reference": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a retained Runtime reference at close (formerly runtime.lifecycle.retained_reference)."
+    },
+    "runtime_lifecycle_host_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the Runtime host's close (formerly runtime.lifecycle.host_close)."
+    },
+    "runtime_lifecycle_policy_driver": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy driver (formerly runtime.lifecycle.policy_driver)."
+    },
+    "runtime_lifecycle_policy_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy control (formerly runtime.lifecycle.policy_control)."
+    },
+    "runtime_lifecycle_policy_bootstrap": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy bootstrap (formerly runtime.lifecycle.policy_bootstrap)."
+    },
+    "runtime_lifecycle_selection_record": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a select step's record that could not be written after the confirmation capture ended the run (formerly runtime.lifecycle.selection_record)."
+    },
+    "runtime_lifecycle_shutdown_requested": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: recording the shutdown_requested lifecycle phase as the Runtime host closes (formerly runtime.lifecycle.shutdown_requested)."
     }
   }
 }

@@ -53,7 +53,77 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
+use actingcommand_contract::outcome::{Outcome, VocabularyToken};
 use actingcommand_contract::{EmulatorInstanceAction, FactValue};
+
+/// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (ledger
+/// revision 3: the `restart_phase` value of a failed restart's outcome).
+#[derive(Clone, Copy)]
+struct RestartPhaseToken(&'static str);
+
+impl VocabularyToken for RestartPhaseToken {
+    const VOCABULARY: &'static str = "emulator_restart_phase";
+
+    fn token(self) -> &'static str {
+        self.0
+    }
+}
+
+/// How a restart's Stop ended, as a token of the catalog vocabulary `emulator_stop_result`.
+#[derive(Clone, Copy)]
+struct StopResultToken(&'static str);
+
+impl VocabularyToken for StopResultToken {
+    const VOCABULARY: &'static str = "emulator_stop_result";
+
+    fn token(self) -> &'static str {
+        self.0
+    }
+}
+
+/// The tokens of the vocabulary `emulator_stop_result`: `confirmed`, or the last part of the
+/// device stage a Stop failed at.
+const STOP_RESULT_TOKENS: [&str; 18] = [
+    "confirmed",
+    "control_exit",
+    "control_errcode",
+    "launch_error",
+    "wait_timeout",
+    "run",
+    "timeout",
+    "path",
+    "errcode",
+    "entry",
+    "exit",
+    "shape",
+    "decode",
+    "json",
+    "output_bound",
+    "unavailable",
+    "unsupported",
+    "unregistered",
+];
+
+/// The vocabulary token of a Stop's result; `None` for a stage part the vocabulary does not
+/// list, which the outcome then leaves out.
+fn stop_result_token(result: &str) -> Option<StopResultToken> {
+    STOP_RESULT_TOKENS
+        .iter()
+        .find(|token| **token == result)
+        .map(|token| StopResultToken(*token))
+}
+
+/// A Stop's process check as a token of the catalog vocabulary `device_process_presence`.
+#[derive(Clone, Copy)]
+struct ProcessPresenceToken(DeviceProcessPresence);
+
+impl VocabularyToken for ProcessPresenceToken {
+    const VOCABULARY: &'static str = "device_process_presence";
+
+    fn token(self) -> &'static str {
+        self.0.as_str()
+    }
+}
 
 const CONTROL_OPERATION: ContractLocation = ContractLocation::ControlEmulatorInstance;
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
@@ -243,7 +313,7 @@ fn stage_token(failure: &EmulatorControlFailure) -> &str {
     stage.rsplit_once('.').map_or(stage, |(_, token)| token)
 }
 
-/// The canonical spelling of an instance id, for a `key=value` token.
+/// The canonical spelling of an instance id, for an outcome's `instance_id` value.
 fn instance_token(instance_id: InstanceId) -> String {
     match serde_json::to_value(instance_id) {
         Ok(serde_json::Value::String(text)) => text,
@@ -866,8 +936,8 @@ impl HostShared {
     }
 
     /// The one failure record of a restart (F4, D2): `command.rejected` under the restart's
-    /// action, the receipt's terminal, and one `runtime.failed` whose primary detail carries the
-    /// tokens and whose native detail is the failing phase's vendor output.
+    /// action, the receipt's terminal, and one `runtime.failed` whose outcome carries the
+    /// report's values and whose native detail is the failing phase's vendor output.
     fn record_restart_report(
         &self,
         links: &EventLinksDraft,
@@ -875,45 +945,26 @@ impl HostShared {
         report: &RestartReport<'_>,
     ) -> RequestFailure {
         let provider = &report.failure.provider;
-        let code = report.code.as_str();
-        let mut message = format!(
-            "{code}: restart_phase={} stop_result={} stop_elapsed_ms={} start_dispatched={}",
-            report.phase,
-            report.stop_result,
-            report.stop_ms,
-            report.start_ms.is_some()
-        );
-        if let Some(start_ms) = report.start_ms {
-            message.push_str(&format!(" start_elapsed_ms={start_ms}"));
-        }
-        if let Some(state) = report.state {
-            message.push_str(&format!(
-                " process_started={} android_started={} adb_port_present={}",
-                state.process_started, state.android_started, state.adb_port_present
-            ));
-        }
-        message.push_str(&format!(
-            " device_process_present={} cause={}",
-            report.device_process_present.as_str(),
-            report.failure.code
-        ));
         let diagnostic = provider.failure.error.diagnostic();
         let stage = diagnostic.map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
         let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
+        // Ledger revision 3: the report's tokens are the outcome's values and the failing
+        // phase's control code its `caused_by` link (they were the detail's message).
         let mut error = RuntimeHostError::request(
             report.code,
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
         )
+        .with_outcome_values(|outcome| restart_report_outcome(outcome, report))
         .with_diagnostic_detail(DiagnosticDetailDraft::new(
             category,
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-            message,
-            Sensitivity::Sensitive,
         ))
         .with_native_detail(provider.failure.output_summary.clone());
+        error.lifecycle.caused_by =
+            Some(Outcome::new(report.failure.code).operation(CONTROL_OPERATION));
         error.lifecycle.raw_os_error = provider.failure.exit_code;
         error.lifecycle.instance_id = Some(instance_id);
         match self.emulator_control_failure(
@@ -936,7 +987,6 @@ impl HostShared {
         instance_id: InstanceId,
         stop_elapsed_ms: u64,
     ) -> Result<(), RequestFailure> {
-        let code = HostCode::EmulatorStopProcessUnverified.as_str();
         self.append_event(
             EventSeverity::Warning,
             EventSource::Runtime,
@@ -946,17 +996,16 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                Outcome::new(HostCode::EmulatorStopProcessUnverified)
+                    .operation(ContractLocation::ControlInstance)
+                    .instance_id(instance_token(instance_id))
+                    .device_process_present(ProcessPresenceToken(DeviceProcessPresence::Unknown))
+                    .stop_elapsed_ms(stop_elapsed_ms),
                 DiagnosticDetailDraft::new(
                     "emulator_control",
                     "mumu_manager.process_list",
                     "mumu_manager",
                     ContractLocation::ControlInstance.as_str(),
-                    format!(
-                        "{code}: instance_id={} device_process_present={} stop_elapsed_ms={stop_elapsed_ms}",
-                        instance_token(instance_id),
-                        DeviceProcessPresence::Unknown.as_str()
-                    ),
-                    Sensitivity::Sensitive,
                 ),
                 AuditInput::new(),
             ),
@@ -1297,8 +1346,8 @@ impl HostShared {
 }
 
 /// Maps the typed device failure onto the host error: code, projection, receipt state and the
-/// effect claim. The vendor output goes to `native_detail` only; the primary detail message
-/// is a controlled template (no paths), so the sanitizer accepts it as Sensitive.
+/// effect claim. The vendor output goes to `native_detail` only; the device observations are
+/// the outcome's values and the primary detail keeps the stage (ledger revision 3).
 fn emulator_control_error(
     failure: &EmulatorControlFailure,
     instance_id: InstanceId,
@@ -1334,40 +1383,65 @@ fn emulator_control_error(
     } else {
         EffectDisposition::NotPerformed
     };
-    let mut message = format!(
-        "{code}: stage={stage} exit_status={} elapsed_ms={}",
-        failure
-            .exit_code
-            .map_or_else(|| "none".to_owned(), |exit_code| exit_code.to_string()),
-        failure.elapsed_ms
-    );
-    if let Some(state) = &failure.last_state {
-        message.push_str(&format!(
-            " process_started={} android_started={} adb_port_present={} launch_err_code={}",
-            state.process_started,
-            state.android_started,
-            state.adb_port.is_some(),
-            state.launch_err_code
-        ));
-    }
-    // Workflow #381 B F2, F4 (coordinator answer D5): a Stop's process check, carried by its
-    // failure record (on the ladder's rung, the one carrier of `device_process_present=true`).
-    if let Some(present) = failure.device_process_present {
-        message.push_str(&format!(" device_process_present={}", present.as_str()));
-    }
+    // Ledger revision 3: the device failure's observations are the outcome's values (they were
+    // the detail's `key=value` message); the stage stays the detail's, the vendor output the
+    // native detail.
     let mut error = RuntimeHostError::request(code, CONTROL_OPERATION, runtime_code)
+        .with_outcome_values(|outcome| {
+            let outcome = outcome.elapsed_ms(failure.elapsed_ms);
+            let outcome = match failure.exit_code {
+                Some(exit_code) => outcome.exit_code(exit_code),
+                None => outcome,
+            };
+            let outcome = match &failure.last_state {
+                Some(state) => outcome
+                    .process_started(state.process_started)
+                    .android_started(state.android_started)
+                    .adb_port_present(state.adb_port.is_some()),
+                None => outcome,
+            };
+            // Workflow #381 B F2, F4 (coordinator answer D5): a Stop's process check, carried
+            // by its failure record (on the ladder's rung, the one carrier of
+            // `device_process_present=true`).
+            match failure.device_process_present {
+                Some(present) => outcome.device_process_present(ProcessPresenceToken(present)),
+                None => outcome,
+            }
+        })
         .with_diagnostic_detail(DiagnosticDetailDraft::new(
             category,
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-            message,
-            Sensitivity::Sensitive,
         ))
         .with_native_detail(failure.output_summary.clone());
     error.lifecycle.raw_os_error = failure.exit_code;
     error.lifecycle.instance_id = Some(instance_id);
     (error, state, effect)
+}
+
+/// The values of a failed restart's outcome (F4.1; ledger revision 3).
+fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outcome {
+    let outcome = outcome
+        .restart_phase(RestartPhaseToken(report.phase))
+        .stop_elapsed_ms(report.stop_ms)
+        .start_dispatched(report.start_ms.is_some())
+        .device_process_present(ProcessPresenceToken(report.device_process_present));
+    let outcome = match stop_result_token(report.stop_result) {
+        Some(token) => outcome.stop_result(token),
+        None => outcome,
+    };
+    let outcome = match report.start_ms {
+        Some(start_ms) => outcome.start_elapsed_ms(start_ms),
+        None => outcome,
+    };
+    match report.state {
+        Some(state) => outcome
+            .process_started(state.process_started)
+            .android_started(state.android_started)
+            .adb_port_present(state.adb_port_present),
+        None => outcome,
+    }
 }
 
 /// The busy denial of the fence (`fence=<reason>` as native detail).

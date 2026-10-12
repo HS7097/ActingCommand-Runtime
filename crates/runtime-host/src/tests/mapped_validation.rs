@@ -340,7 +340,7 @@ fn duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch() {
         .filter_map(|event| match &event.payload {
             ProjectionPayload::Full(payload) => match payload.as_ref() {
                 EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
-                    Some(payload.outcome())
+                    Some(payload.policy_result())
                 }
                 _ => None,
             },

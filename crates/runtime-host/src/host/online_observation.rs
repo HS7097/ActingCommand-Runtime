@@ -384,13 +384,12 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "contained_observation",
                     "observation.failed",
                     "contained_package",
                     error.operation(),
-                    error.code(),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),
@@ -455,8 +454,7 @@ pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> Request
         return RequestFailure::poison_without_terminal(error);
     }
     let evidence = TaskFailureEvidence {
-        code: error.code(),
-        severity: EventSeverity::Warning,
+        outcome: error.outcome(),
     };
     let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
     failure.task_failure = Some(evidence);

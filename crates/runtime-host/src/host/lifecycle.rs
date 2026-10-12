@@ -2,32 +2,134 @@
 
 use super::*;
 use crate::codes::HostLocation;
+use actingcommand_contract::outcome::{Location, Outcome};
+
+/// Each lifecycle failure stage: its registered location (ledger revision 3: the `stage` of the
+/// failure's outcome) and the dotted token it had before, which the record's diagnostic detail
+/// keeps as its stage (Workflow #378 A3). The last two are stages a host error names itself.
+const LIFECYCLE_STAGES: [(HostLocation, &str); 20] = [
+    // Workflow #381 A: a lifecycle failure stage had 2-4 dotted segments; the former one-word
+    // install stages failed that check, so no install failure could be recorded and every
+    // attempt latched the lifecycle append failure.
+    (
+        HostLocation::RuntimeLifecycleInstallDrain,
+        "runtime.lifecycle.install_drain",
+    ),
+    (
+        HostLocation::RuntimeLifecycleInstallHeld,
+        "runtime.lifecycle.install_held",
+    ),
+    (
+        HostLocation::RuntimeLifecycleInstallRelease,
+        "runtime.lifecycle.install_release",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyInitialization,
+        "runtime.lifecycle.policy_initialization",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyMonitor,
+        "runtime.lifecycle.policy_monitor",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyForward,
+        "runtime.lifecycle.policy_forward",
+    ),
+    (
+        HostLocation::RuntimeLifecycleStrategicReport,
+        "runtime.lifecycle.strategic_report",
+    ),
+    (
+        HostLocation::RuntimeLifecycleSessionClose,
+        "runtime.lifecycle.session_close",
+    ),
+    (
+        HostLocation::RuntimeLifecycleConnectionPreparation,
+        "runtime.lifecycle.connection_preparation",
+    ),
+    (
+        HostLocation::RuntimeLifecycleOperationCleanup,
+        "runtime.lifecycle.operation_cleanup",
+    ),
+    (
+        HostLocation::RuntimeLifecycleConnectionCleanup,
+        "runtime.lifecycle.connection_cleanup",
+    ),
+    (
+        HostLocation::RuntimeLifecycleShutdownJoin,
+        "runtime.lifecycle.shutdown_join",
+    ),
+    (
+        HostLocation::RuntimeLifecycleInfoFileRemoval,
+        "runtime.lifecycle.info_file_removal",
+    ),
+    (
+        HostLocation::RuntimeLifecycleRetainedReference,
+        "runtime.lifecycle.retained_reference",
+    ),
+    (
+        HostLocation::RuntimeLifecycleHostClose,
+        "runtime.lifecycle.host_close",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyDriver,
+        "runtime.lifecycle.policy_driver",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyControl,
+        "runtime.lifecycle.policy_control",
+    ),
+    (
+        HostLocation::RuntimeLifecyclePolicyBootstrap,
+        "runtime.lifecycle.policy_bootstrap",
+    ),
+    (
+        HostLocation::RuntimeLifecycleSelectionRecord,
+        "runtime.lifecycle.selection_record",
+    ),
+    (
+        HostLocation::RuntimeLifecycleShutdownRequested,
+        "runtime.lifecycle.shutdown_requested",
+    ),
+];
+
+/// The diagnostic detail's stage token of a lifecycle failure stage: its former dotted
+/// spelling, else the location's own spelling (a detail stage takes 1-4 dotted segments).
+fn lifecycle_detail_stage(stage: Location) -> &'static str {
+    LIFECYCLE_STAGES
+        .iter()
+        .find(|(location, _)| location.location() == stage)
+        .map_or(stage.as_str(), |(_, token)| *token)
+}
 
 impl RuntimeLifecycleFailureStage {
-    pub(super) const fn as_str(self) -> &'static str {
+    /// The stage's registered location: the `stage` of its lifecycle failure's outcome.
+    pub(super) const fn location(self) -> HostLocation {
         match self {
-            // Workflow #381 A: a lifecycle failure stage has 2-4 dotted segments; the former
-            // one-word install stages failed that check, so no install failure could be recorded
-            // and every attempt latched the lifecycle append failure.
-            Self::InstallDrain => "runtime.lifecycle.install_drain",
-            Self::InstallHeld => "runtime.lifecycle.install_held",
-            Self::InstallRelease => "runtime.lifecycle.install_release",
-            Self::PolicyInitialization => "runtime.lifecycle.policy_initialization",
-            Self::PolicyMonitor => "runtime.lifecycle.policy_monitor",
-            Self::PolicyForward => "runtime.lifecycle.policy_forward",
-            Self::StrategicReport => "runtime.lifecycle.strategic_report",
-            Self::SessionClose => "runtime.lifecycle.session_close",
-            Self::ConnectionPreparation => "runtime.lifecycle.connection_preparation",
-            Self::OperationCleanup => "runtime.lifecycle.operation_cleanup",
-            Self::ConnectionCleanup => "runtime.lifecycle.connection_cleanup",
-            Self::ShutdownJoin => "runtime.lifecycle.shutdown_join",
-            Self::InfoFileRemoval => "runtime.lifecycle.info_file_removal",
-            Self::RetainedReference => "runtime.lifecycle.retained_reference",
-            Self::HostClose => "runtime.lifecycle.host_close",
-            Self::PolicyDriver => "runtime.lifecycle.policy_driver",
-            Self::PolicyControl => "runtime.lifecycle.policy_control",
-            Self::PolicyBootstrap => "runtime.lifecycle.policy_bootstrap",
+            Self::InstallDrain => HostLocation::RuntimeLifecycleInstallDrain,
+            Self::InstallHeld => HostLocation::RuntimeLifecycleInstallHeld,
+            Self::InstallRelease => HostLocation::RuntimeLifecycleInstallRelease,
+            Self::PolicyInitialization => HostLocation::RuntimeLifecyclePolicyInitialization,
+            Self::PolicyMonitor => HostLocation::RuntimeLifecyclePolicyMonitor,
+            Self::PolicyForward => HostLocation::RuntimeLifecyclePolicyForward,
+            Self::StrategicReport => HostLocation::RuntimeLifecycleStrategicReport,
+            Self::SessionClose => HostLocation::RuntimeLifecycleSessionClose,
+            Self::ConnectionPreparation => HostLocation::RuntimeLifecycleConnectionPreparation,
+            Self::OperationCleanup => HostLocation::RuntimeLifecycleOperationCleanup,
+            Self::ConnectionCleanup => HostLocation::RuntimeLifecycleConnectionCleanup,
+            Self::ShutdownJoin => HostLocation::RuntimeLifecycleShutdownJoin,
+            Self::InfoFileRemoval => HostLocation::RuntimeLifecycleInfoFileRemoval,
+            Self::RetainedReference => HostLocation::RuntimeLifecycleRetainedReference,
+            Self::HostClose => HostLocation::RuntimeLifecycleHostClose,
+            Self::PolicyDriver => HostLocation::RuntimeLifecyclePolicyDriver,
+            Self::PolicyControl => HostLocation::RuntimeLifecyclePolicyControl,
+            Self::PolicyBootstrap => HostLocation::RuntimeLifecyclePolicyBootstrap,
         }
+    }
+
+    /// The stage's former dotted spelling, which diagnostic details keep as their stage token.
+    pub(super) fn as_str(self) -> &'static str {
+        lifecycle_detail_stage(self.location().location())
     }
 }
 
@@ -124,9 +226,11 @@ impl HostShared {
         self.append_lifecycle_failure_with_severity(stage, failure, links, entered_event_id, None)
     }
 
-    /// `append_lifecycle_failure` whose primary record of a non-fatal failure takes
+    /// `append_lifecycle_failure` whose primary record of a non-fatal failure requests
     /// `primary_severity` instead of `Error`; a cause record and a fatal record keep theirs
     /// (Workflow #336 L2c: a `linear_steps` task failure's record takes its terminal's severity).
+    /// Ledger revision 3 derives every record's severity from its outcome's category, so the
+    /// record and the terminal of the same failure agree; only a `Debug` request is kept.
     pub(super) fn append_lifecycle_failure_with_severity(
         &self,
         stage: RuntimeLifecycleFailureStage,
@@ -139,10 +243,6 @@ impl HostShared {
             RuntimeLifecycleFailure::PolicyAdmission { decision_id, .. } => Some(*decision_id),
             _ => None,
         };
-        let client_message = match &failure {
-            RuntimeLifecycleFailure::Client { message, .. } => Some(*message),
-            _ => None,
-        };
         let host_error = match &failure {
             RuntimeLifecycleFailure::Host(error)
             | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => Some(*error),
@@ -150,7 +250,7 @@ impl HostShared {
         };
         let failure_stage = host_error
             .and_then(|error| error.lifecycle.failure_stage)
-            .unwrap_or_else(|| stage.as_str());
+            .unwrap_or_else(|| stage.location().location());
         if let Some(error) = host_error
             && let Some(complete) = &error.lifecycle.complete_failure
         {
@@ -222,13 +322,16 @@ impl HostShared {
                 links.clone(),
             )?;
         }
-        let (origin, code, operation, fatal, runtime_code) = match failure {
+        // Ledger revision 3 (Workflow #378 A3): the failure is the record's outcome, built from
+        // the failing error or from the client's or actingd's own code, with the registered
+        // stage; no Runtime text (the former JSON summary, the client's display) is recorded.
+        let (origin, outcome, operation, fatal, runtime_code) = match failure {
             RuntimeLifecycleFailure::Host(error)
             | RuntimeLifecycleFailure::PolicyAdmission { error, .. } => (
                 "runtime_host",
-                error.code(),
-                Some(error.operation()),
-                Some(error.is_fatal()),
+                error.outcome(),
+                error.operation(),
+                error.is_fatal(),
                 Some(error.projection().code),
             ),
             RuntimeLifecycleFailure::Client {
@@ -239,40 +342,34 @@ impl HostShared {
                 message: _,
             } => (
                 "runtime_client",
-                code.as_str(),
-                Some(operation.as_str()),
-                Some(fatal),
+                Outcome::new(code).operation(operation),
+                operation.as_str(),
+                fatal,
                 runtime_code,
             ),
-            RuntimeLifecycleFailure::Process { code } => ("actingd", code, None, None, None),
+            RuntimeLifecycleFailure::Process { code } => (
+                "actingd",
+                Outcome::relayed(code),
+                "actingd_process",
+                false,
+                None,
+            ),
         };
-        let message = serde_json::to_string(&serde_json::json!({
-            "origin": origin,
-            "code": code,
-            "operation": operation,
-            "fatal": fatal,
-            "runtime_code": runtime_code,
-            "owner_epoch": self.owner_epoch,
-            "entered_event_id": entered_event_id,
-            "decision_id": decision_id,
-        }))
-        .map_err(|_| ledger_error(HostLocation::EncodeRuntimeLifecycleFailure))?;
+        let outcome = outcome.stage(failure_stage);
+        let detail_stage = lifecycle_detail_stage(failure_stage);
         let gate = lock(
             &self.fact_write_gate,
             HostLocation::AppendRuntimeLifecycleFailure,
         )?;
         let mut persisted = Vec::new();
         let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>,
-                        reference: Option<EventId>,
-                        client_part: Option<(&str, usize, usize)>| {
+                        reference: Option<EventId>| {
             let lifecycle = actingcommand_contract::RuntimeLifecycleFailureDraft::new(
                 self.owner_epoch,
-                failure_stage,
                 origin,
-                code,
+                outcome.clone(),
             )
-            .with_operation(operation)
-            .with_projection(fatal, runtime_code)
+            .with_runtime_code(runtime_code)
             .with_entered_event_id(reference.or_else(|| {
                 host_error.and_then(|error| error.diagnostics().prior_recorded_event())
             }))
@@ -287,20 +384,16 @@ impl HostShared {
                 host_error.and_then(|error| error.diagnostics().adb_recovery().cloned()),
             )
             .with_native_detail(
-                client_part
-                    .map(|(text, _, _)| {
-                        actingcommand_contract::LifecycleNativeDetail::new(text, false)
-                    })
-                    .or_else(|| {
-                        host_error.and_then(|error| error.diagnostics().native_detail().cloned())
-                    }),
+                host_error.and_then(|error| error.diagnostics().native_detail().cloned()),
             )
             .with_capacity(host_error.and_then(|error| error.lifecycle.capacity.clone()))
             .with_task_timing(host_error.and_then(|error| error.lifecycle.task_timing.clone()))
             .with_raw_os_error(host_error.and_then(|error| error.lifecycle.raw_os_error))
             .with_cleanup_cause(host_error.and_then(|error| error.cleanup_cause().cloned()))
             .with_cause(cause.cloned());
-            let cause_fatal = cause.map_or(fatal == Some(true), |cause| {
+            // The record's severity is its outcome's category (ledger revision 3); this
+            // requested severity is kept only as the producer's choice of a non-debug record.
+            let cause_fatal = cause.map_or(fatal, |cause| {
                 cause.severity() == actingcommand_contract::CleanupCauseSeverity::Fatal
             });
             let event = self
@@ -333,21 +426,9 @@ impl HostShared {
                             }),
                         DiagnosticDetailDraft::new(
                             "runtime_lifecycle",
-                            failure_stage,
+                            detail_stage,
                             origin,
-                            operation.unwrap_or("actingd_process"),
-                            match client_part {
-                                Some((_, index, count)) => {
-                                    let kind = if host_error.is_some() {
-                                        "ppocr_message_part"
-                                    } else {
-                                        "client_message_part"
-                                    };
-                                    format!("{message}; {kind}={index}/{count}")
-                                }
-                                None => message.clone(),
-                            },
-                            Sensitivity::Internal,
+                            operation,
                         ),
                         lifecycle,
                         AuditInput::new(),
@@ -376,37 +457,16 @@ impl HostShared {
                     cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
                 });
             if error.diagnostics().recorded_event().get().is_none() && !phase_close {
-                let mut parts = Vec::new();
-                let mut remaining = error.lifecycle.ppocr_message.as_deref().unwrap_or("");
-                while !remaining.is_empty() {
-                    let mut end = remaining.len().min(1024);
-                    while !remaining.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    parts.push(&remaining[..end]);
-                    remaining = &remaining[end..];
-                }
-                let mut first = None;
-                for (index, part) in parts.iter().enumerate() {
-                    let id = emit(
-                        None,
-                        first.or(entered_event_id),
-                        Some((part, index + 1, parts.len())),
-                    )?;
-                    first.get_or_insert(id);
-                }
-                let id = match first {
-                    Some(id) => id,
-                    None => emit(None, entered_event_id, None)?,
-                };
-                // A partial message is not a fully recorded error.
+                // Ledger revision 3: the PPOCR display text (Runtime text) is not recorded, so
+                // the failure is one record, not one per 1 KiB part of that text.
+                let id = emit(None, entered_event_id)?;
                 let _ = error.diagnostics().recorded_event().set(id);
             }
             let reference =
                 entered_event_id.or_else(|| error.diagnostics().recorded_event().get().copied());
             for cause in error.diagnostics().lifecycle_causes() {
                 if cause.recorded_event.get().is_none() {
-                    let id = emit(Some(&cause.cause), reference, None)?;
+                    let id = emit(Some(&cause.cause), reference)?;
                     let _ = cause.recorded_event.set(id);
                 }
             }
@@ -419,29 +479,10 @@ impl HostShared {
             {
                 let _ = error.diagnostics().recorded_event().set(*id);
             }
-        } else if let Some(text) = client_message {
-            // Each original detail retains its 1024-byte schema limit. Ordered,
-            // linked parts preserve the complete client display without truncation.
-            let mut parts = Vec::new();
-            let mut remaining = text;
-            while !remaining.is_empty() {
-                let mut end = remaining.len().min(1024);
-                while !remaining.is_char_boundary(end) {
-                    end -= 1;
-                }
-                parts.push(&remaining[..end]);
-                remaining = &remaining[end..];
-            }
-            let mut reference = entered_event_id;
-            for (index, part) in parts.iter().enumerate() {
-                let id = emit(None, reference, Some((part, index + 1, parts.len())))?;
-                reference.get_or_insert(id);
-            }
-            if parts.is_empty() {
-                emit(None, entered_event_id, None)?;
-            }
         } else {
-            emit(None, entered_event_id, None)?;
+            // A client's or actingd's failure: one record of its code. Ledger revision 3 does
+            // not record the client's display (Runtime text).
+            emit(None, entered_event_id)?;
         }
         if !persisted.is_empty() {
             self.synchronize_fact_store_under_gate()?;
@@ -460,7 +501,7 @@ impl HostShared {
         result: RuntimeHostResult<()>,
     ) {
         if let Err(error) = result {
-            let error = error.with_failure_stage(stage.as_str());
+            let error = error.with_failure_stage(stage.location());
             let writer_failed = slot.as_ref().is_some_and(|failure| {
                 failure.projection().code == RuntimeErrorCode::LedgerFailure
             }) || error.projection().code == RuntimeErrorCode::LedgerFailure
@@ -481,7 +522,7 @@ impl HostShared {
                 }
                 let complete = error.with_complete_failure(
                     crate::error::RuntimeFailureRelation::LifecycleRecord,
-                    append_error.with_failure_stage(stage.as_str()),
+                    append_error.with_failure_stage(stage.location()),
                 );
                 record_failure(slot, Err(complete));
                 return;
@@ -515,7 +556,10 @@ impl HostShared {
             EventPayload::Capture(CapturePayload::Failed(payload))
             | EventPayload::Input(InputPayload::Failed(payload)) => (
                 payload.detail().is_some(),
-                payload.cleanup_cause().is_some(),
+                // Ledger revision 3: a recorded cleanup cause is the outcome's `cleanup` link.
+                payload.outcome().causes().iter().any(|link| {
+                    *link.relation() == actingcommand_contract::outcome::CauseRelation::Cleanup
+                }),
             ),
             _ => (false, false),
         };
@@ -575,28 +619,17 @@ impl HostShared {
             OriginModule::Runtime,
             EventActor::Runtime,
             context.links.clone(),
+            // Ledger revision 3: the failure is the record's outcome; the former `key=value`
+            // summary and the connection's timing observation (Runtime text) are not recorded.
             RuntimePayloadDraft::failed(
                 diagnostic,
                 stage.effect(),
+                error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "runtime_connection",
                     stage.as_str(),
                     "local_ipc",
                     error.operation(),
-                    format!(
-                        "host_code={} fatal={} connection_id={} request_decoded={} observation={}",
-                        error.code(),
-                        error.is_fatal(),
-                        context.connection_serial,
-                        context.request_decoded,
-                        serde_json::json!({
-                            "owner_epoch": self.owner_epoch,
-                            "runtime_pid": std::process::id(),
-                            "clock": "process_instant",
-                            "stages": &context.timing,
-                        }),
-                    ),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),

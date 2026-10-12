@@ -74,7 +74,7 @@ impl HostShared {
                 event.target_label(),
                 event.target_fingerprint(),
                 event.changed_paths().to_vec(),
-                event.failure_code().map(str::to_owned),
+                event.outcome(),
                 AuditInput::new(),
             ),
         )?;

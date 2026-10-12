@@ -947,9 +947,9 @@ impl HostShared {
             RuntimeLifecycleFailureStage::InstallHeld
         };
         let mut failure = error.clone();
-        failure.lifecycle.failure_stage = Some(stage.as_str());
+        failure.lifecycle.failure_stage = Some(stage.location().location());
         if let Some(complete) = &mut failure.lifecycle.complete_failure {
-            complete.primary.lifecycle.failure_stage = Some(stage.as_str());
+            complete.primary.lifecycle.failure_stage = Some(stage.location().location());
         }
         self.append_lifecycle_failure(
             stage,

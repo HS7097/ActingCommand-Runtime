@@ -160,12 +160,27 @@ impl HostShared {
                 Some(detail) => format!("{error}: {detail}"),
                 None => error.to_string(),
             };
-            // A declared prefix beyond the authenticated source head is an invalid prefix.
+            // A declared prefix beyond the authenticated source head is an invalid prefix. Ledger
+            // revision 3: the ledger's refusal is the failure's `caused_by` link, not its text.
             match error.code() {
                 code if code
                     == actingcommand_ledger::LedgerCode::LedgerPrefixBeyondHead.as_str() =>
                 {
-                    source_error(HostCode::SavedSourceIncomplete, detail)
+                    let cause = actingcommand_contract::outcome::Outcome::new(
+                        actingcommand_ledger::LedgerCode::LedgerPrefixBeyondHead,
+                    );
+                    let cause =
+                        match actingcommand_contract::outcome::Location::relayed(error.operation())
+                        {
+                            Some(operation) => cause.operation(operation),
+                            None => cause,
+                        };
+                    RuntimeHostError::request(
+                        HostCode::SavedSourceIncomplete,
+                        ContractLocation::RecognizeArtifact,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_caused_by(cause)
                 }
                 relayed => relayed_source_error(relayed, detail),
             }

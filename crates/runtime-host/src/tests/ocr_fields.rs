@@ -369,28 +369,29 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .count(),
                 usize::from(matches!(mode, 0 | 4 | 7))
             );
-            // The client carries only the host code; the native detail is in the target ledger.
-            let native = ledger
+            // The client carries only the host code; the cause is in the target ledger. Ledger
+            // revision 3 (#378 A3): the lifecycle failure's outcome names it as a link (the
+            // ledger's `ledger_prefix_beyond_head`); the store's own sentence is not persisted.
+            let failures = ledger
                 .events()
                 .iter()
                 .filter_map(|event| match event.payload() {
                     EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
                         outcome,
-                    )) => outcome
-                        .lifecycle_failure()
-                        .and_then(|lifecycle| lifecycle.native_detail())
-                        .map(|detail| detail.text().to_owned()),
+                    )) if outcome.lifecycle_failure().is_some() => Some(outcome.outcome()),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
             if mode == 6 {
-                let expected = format!(
-                    "through_sequence {} exceeds head {source_head}",
-                    binding.through_sequence + 100_000
-                );
                 assert!(
-                    native.iter().any(|text| text.contains(&expected)),
-                    "{native:?}"
+                    failures.iter().any(|outcome| {
+                        outcome.code().as_str() == "saved_source_incomplete"
+                            && outcome
+                                .codes()
+                                .iter()
+                                .any(|code| code.as_str() == "ledger_prefix_beyond_head")
+                    }),
+                    "{failures:?}"
                 );
             }
             if mode == 8 {
@@ -831,7 +832,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 value["observations"][0]["frame_id"]
             );
             let terminals = events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
             assert_eq!(terminals.len(), 1);
             assert_eq!(terminals[0].links().run_id(), Some(&projection.run_id()));
             assert!(host.fatal_error().unwrap().is_none());
@@ -1169,10 +1170,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     | TaskSemanticFact::StepStarted { .. }
             )));
             assert!(facts.iter().any(|fact| matches!(fact,
-                TaskSemanticFact::EntryTargetDisposition { disposition, failure_code }
-                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && failure_code.is_none())
+                TaskSemanticFact::EntryTargetDisposition { disposition, outcome }
+                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && outcome.is_none())
                         || (*disposition == TaskEntryTargetDisposition::FailClosed && !starts_home
-                            && failure_code.as_deref() == Some("contained_task_home_entry_not_matched"))
+                            && outcome.as_ref().map(|outcome| outcome.code().as_str()) == Some("contained_task_home_entry_not_matched"))
             )));
         }
         let terminals = events
@@ -1196,7 +1197,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(matches!(
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     executed_steps: Some(0),
                     ..
                 }
@@ -1309,7 +1310,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(matches!(
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     executed_steps: Some(0),
                     ..
                 }

@@ -359,6 +359,7 @@ impl HostShared {
                     event_action,
                     error.diagnostic,
                     effect,
+                    error.error.record_outcome(),
                     error.error.diagnostic_detail().cloned(),
                     error.error.cleanup_cause().cloned(),
                     audit,

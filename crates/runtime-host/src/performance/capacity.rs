@@ -10,11 +10,11 @@ use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResul
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
 };
-use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Outcome, RawSource};
 use actingcommand_contract::{
     AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
-    CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
+    CapacityFactReference, CapacityPurpose, CapacityState, CapacityThresholds,
     CapacityVolumeSample, EventActor, EventSeverity, EventSource, EventType, LifecycleNativeDetail,
     OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceMetric,
     PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePayloadDraft,
@@ -118,7 +118,7 @@ impl CapacityProjection {
                 .as_ref()
                 .and_then(|binding| binding.as_ref().ok())
                 .cloned(),
-            outcome: CapacityAdmissionOutcome::Unknown,
+            admission_result: CapacityAdmissionOutcome::Unknown,
             reason: CapacityAdmissionReason::NoCommittedFact,
             fact: committed.as_ref().map(|value| value.reference.clone()),
         };
@@ -183,12 +183,12 @@ impl CapacityProjection {
                 0
             };
             let Some(required) = sample.thresholds.hard_bytes.checked_add(bytes) else {
-                decision.outcome = CapacityAdmissionOutcome::RequiredBytesOverflow;
+                decision.admission_result = CapacityAdmissionOutcome::RequiredBytesOverflow;
                 decision.reason = CapacityAdmissionReason::KnownBytesOverflow;
                 return Ok(decision);
             };
             if free < required {
-                decision.outcome = CapacityAdmissionOutcome::HardPressure;
+                decision.admission_result = CapacityAdmissionOutcome::HardPressure;
                 decision.reason = CapacityAdmissionReason::HardThreshold;
                 return Ok(decision);
             }
@@ -196,7 +196,7 @@ impl CapacityProjection {
                 outcome = CapacityAdmissionOutcome::SoftPressure;
             }
         }
-        decision.outcome = outcome;
+        decision.admission_result = outcome;
         decision.reason = CapacityAdmissionReason::FreshSample;
         Ok(decision)
     }
@@ -312,7 +312,7 @@ impl PerformanceMonitor {
             .as_ref()
             .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
         let decision = capacity.projection.decide(None, 0)?;
-        if !decision.outcome.allows() {
+        if !decision.admission_result.allows() {
             let mut error = RuntimeHostError::request(
                 SharedCode::CapacityAdmissionRefused,
                 HostLocation::AdmitNewBusiness,
@@ -358,15 +358,7 @@ impl PerformanceMonitor {
                         },
                         None,
                     ),
-                    Err(error) => (
-                        None,
-                        CapacityState::Unknown,
-                        Some(CapacityNativeCause {
-                            operation: error.operation.as_str().into(),
-                            raw_os_error: error.raw_os_error,
-                            detail: bounded_native(&error.detail),
-                        }),
-                    ),
+                    Err(error) => (None, CapacityState::Unknown, Some(capacity_cause(&error))),
                 };
                 let purposes = sample
                     .targets
@@ -581,7 +573,7 @@ impl CapacityMonitor {
                         PerformanceMonitorStateEventData {
                             observed_at_unix_ms: now.unix_ms,
                             health: PerformanceMonitorHealth::Degraded,
-                            failure_code: Some(HostCode::CapacitySampleUnavailable.as_str().into()),
+                            outcome: Some(Outcome::new(HostCode::CapacitySampleUnavailable)),
                             consecutive_failures: self.consecutive_failures,
                             terminal: false,
                             unavailable_metrics: vec![PerformanceMetric::DiskCapacity],
@@ -601,7 +593,7 @@ impl CapacityMonitor {
                     PerformanceMonitorStateEventData {
                         observed_at_unix_ms: now.unix_ms,
                         health: PerformanceMonitorHealth::Healthy,
-                        failure_code: None,
+                        outcome: None,
                         consecutive_failures: 0,
                         terminal: false,
                         unavailable_metrics: Vec::new(),
@@ -723,6 +715,28 @@ fn native_failure(code: impl Into<Code>, error: std::io::Error) -> RuntimeHostEr
     let mut result = failure(code);
     result.lifecycle.raw_os_error = error.raw_os_error();
     result.with_native_failure_detail(bounded_native(&error.to_string()))
+}
+
+/// Why a volume's free space is unknown (ledger revision 3): the failed OS query as a
+/// `foreign_os_error` with its native text (and the OS error number, when it gave one) and the
+/// probe's operation.
+fn capacity_cause(error: &actingcommand_host_metrics::CapacityUnavailable) -> Outcome {
+    let native = bounded_native(&error.detail);
+    let outcome = match error.raw_os_error {
+        Some(os_error) => native.os_outcome(os_error),
+        None => {
+            let outcome = Outcome::new(ContractCode::ForeignOsError)
+                .raw_source(RawSource::Os)
+                .raw_text(native.text())
+                .raw_text_sensitivity(actingcommand_contract::Sensitivity::Sensitive);
+            if native.truncated() {
+                outcome.raw_text_truncated(true)
+            } else {
+                outcome
+            }
+        }
+    };
+    outcome.operation(error.operation)
 }
 
 fn bounded_native(detail: &str) -> LifecycleNativeDetail {
