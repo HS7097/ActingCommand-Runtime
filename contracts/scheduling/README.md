@@ -486,8 +486,8 @@ decision gains a reason.
    - `why` is the candidate's last reason, the one that settled it
      (`instance_already_selected`, `host_budget_deferred`,
      `heavy_scene_budget_deferred`, an admission eligibility code,
-     `score_deferred`, `task_cooldown_active`, `trigger_false`, …); `none`
-     without a reason.
+     `score_deferred`, `task_cooldown_active`, `trigger_false`, …); it is
+     never `none` ("Why A Candidate Does Not Run" below).
 
 A stored `actingcommand.resource-targets.v2` policy is named
 `targets=active.v2:<sha>@<applied_at>` or `expired.v2:<sha>@<applied_at>`; while
@@ -510,6 +510,31 @@ policy dispatch events of an admission attempt (`policy.dispatch_intent`, then
 so a poll that dispatches nothing records nothing. Ranks, states, intents
 (decision identity and prerequisites), wake times and selections are unchanged
 by it.
+
+## Why A Candidate Does Not Run
+
+Workflow #386 (scheduling model v1.4.2 §8; slice SR-6a). Every decision that is not selected
+carries at least one reason, and its last reason is a registered outcome code
+(`contracts/outcome-codes.json`, the policy fragment for the evaluator's own codes): that is the
+code `why` names in a dispatch decision record, and it is never `none`. An evaluator path that
+would end a decision without a reason is a programming error: the candidate is still deferred,
+with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
+on, so the gap is visible instead of silent. The order in which the deferrals of the scheduling
+rules are decided, and so which code a deferred candidate carries, is in
+[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Evaluations
+stay out of the ledger; a person sees the reason in the instance's not-running row of the status
+and of MCP (slice SR-6b).
+
+Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
+but has not started is withdrawn when its task package is unloaded, and its decision record and
+reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, optional
+`request_id`, `instance_id`; Workflow #389 U-3, [`runtime-interface.md`](../runtime-interface.md),
+"Unloading a package in use"). It is not a deferral, so it has no place in the order above.
+
+**Status.** Written ahead of its code (documentation slice SR-0); until SR-6a lands, `why` still
+prints `none` for a decision without a reason. A reason counts as registered when its spelling
+is an active code of the outcome catalog; the evaluator's existing reason spellings are
+registered by the outcome-code typing of the policy crate (Workflow #378 A2d).
 
 ## Settlement Feedback And Eligibility Age
 

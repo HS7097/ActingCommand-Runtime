@@ -1,0 +1,22 @@
+{
+  "owner": "actinglab",
+  "codes": {
+    "lab_command_option_disabled": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "lab_option": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An actinglab offline package-tool command (recording, binding draft, package check, resource catalog and the like) ran while Lab option one (authoring) is not installed. It prints one JSON line, exits 1 and changes no file. actinglab reads the two options from the Runtime's configuration facts, or from the selected configuration generation when the Runtime does not answer; until #389 U-6, a configuration that names neither option counts as both installed.",
+      "common_causes": "Only the debugging option is installed.",
+      "handling": "Tick the authoring option on the installer's Lab page."
+    }
+  }
+}

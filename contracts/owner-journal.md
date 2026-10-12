@@ -26,8 +26,9 @@ watchdog may start the selected generation again. The field is optional and the
 schema version does not change: a record without it reads exactly as before, and a
 `closed_by` on an active or a v1 record is `owner_record_invalid`. The checkpoint's
 `last_record` is an owner record and carries it verbatim. Since v0.12.0 every
-reader of the journal accepts it (actingd start, `ledger-maintenance`,
-`actingledger`); the watchdog reads records leniently and needs no change. The
+reader of the journal accepts it (actingd start, `ledger-maintenance`, and
+`actingctl request-shutdown --wait`, which reads loosely); the watchdog reads
+records leniently and needs no change. The
 writers come with #389 slice U-4: the upgrade state's close record, and a
 maintenance owner (`ledger-maintenance`) whose previous close carries the marker
 copies it onto its own close, until a Runtime owner that is not a maintenance owner

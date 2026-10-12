@@ -3,6 +3,7 @@
   "codes": {
     "runtime_request_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "runtime_request_frame_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "runtime_request_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "runtime_request_flush_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -55,6 +59,7 @@
     },
     "runtime_receipt_header_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -68,6 +73,7 @@
     },
     "runtime_receipt_frame_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -81,6 +87,7 @@
     },
     "runtime_receipt_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -94,6 +101,7 @@
     },
     "runtime_receipt_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -107,6 +115,7 @@
     },
     "runtime_input_proxy_heartbeat_interval_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -120,6 +129,7 @@
     },
     "runtime_heartbeat_panicked": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -133,6 +143,7 @@
     },
     "runtime_input_proxy_heartbeat_spawn_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -146,6 +157,7 @@
     },
     "runtime_input_proxy_closed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -159,6 +171,7 @@
     },
     "runtime_input_proxy_heartbeat_stopped": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -172,6 +185,7 @@
     },
     "runtime_input_proxy_heartbeat_stop_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -185,6 +199,7 @@
     },
     "runtime_input_proxy_heartbeat_join_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -198,6 +213,7 @@
     },
     "runtime_input_proxy_state_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -211,6 +227,7 @@
     },
     "runtime_receipt_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -224,6 +241,7 @@
     },
     "runtime_read_timeout_restore_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -237,6 +255,7 @@
     },
     "runtime_receipt_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -250,6 +269,7 @@
     },
     "runtime_receipt_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -263,6 +283,7 @@
     },
     "runtime_result_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -276,6 +297,7 @@
     },
     "runtime_result_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -289,6 +311,7 @@
     },
     "runtime_shutdown_receipt_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -302,6 +325,7 @@
     },
     "install_transition_receipt_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -315,6 +339,7 @@
     },
     "material_read_receipt_selection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -328,6 +353,7 @@
     },
     "runtime_scheduling_resume_unconfirmed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -341,6 +367,7 @@
     },
     "runtime_contained_task_paused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -354,6 +381,7 @@
     },
     "runtime_contained_task_response_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -367,6 +395,7 @@
     },
     "runtime_client_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -380,6 +409,7 @@
     },
     "maintenance_trend_policy_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -393,6 +423,7 @@
     },
     "predictive_maintenance_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -406,6 +437,7 @@
     },
     "runtime_identifier_issuer_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -419,6 +451,7 @@
     },
     "runtime_owner_epoch_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -432,6 +465,7 @@
     },
     "runtime_project_interface_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -445,6 +479,7 @@
     },
     "runtime_receipt_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -458,6 +493,7 @@
     },
     "runtime_operation_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -471,6 +507,7 @@
     },
     "runtime_capture_sequence_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -484,6 +521,7 @@
     },
     "runtime_contained_task_prepared_client_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -497,6 +535,7 @@
     },
     "runtime_contained_task_cancel_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -510,6 +549,7 @@
     },
     "runtime_contained_task_recovery_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -523,6 +563,7 @@
     },
     "runtime_contained_task_recovery_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -536,6 +577,7 @@
     },
     "runtime_contained_task_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -549,6 +591,7 @@
     },
     "runtime_contained_task_cancel_wait_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -562,6 +605,7 @@
     },
     "runtime_contained_task_recovery_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": true,
@@ -575,6 +619,7 @@
     },
     "runtime_contained_task_cancellation_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -588,6 +633,7 @@
     },
     "agent_response_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -601,6 +647,7 @@
     },
     "strategic_report_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -614,6 +661,7 @@
     },
     "forward_projection_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -627,6 +675,7 @@
     },
     "forward_projection_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -640,6 +689,7 @@
     },
     "runtime_event_query_time_limit_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -653,6 +703,7 @@
     },
     "runtime_event_query_time_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -666,6 +717,7 @@
     },
     "runtime_event_query_page_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -679,6 +731,7 @@
     },
     "runtime_event_query_pagination_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -692,6 +745,7 @@
     },
     "runtime_event_query_event_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -705,6 +759,7 @@
     },
     "runtime_event_query_page_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -718,6 +773,7 @@
     },
     "run_summary_page_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -731,6 +787,7 @@
     },
     "run_summary_snapshot_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -744,6 +801,7 @@
     },
     "run_summary_pagination_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -757,6 +815,7 @@
     },
     "run_summary_event_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -770,6 +829,7 @@
     },
     "run_summary_event_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -783,6 +843,7 @@
     },
     "run_summary_resident_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -796,6 +857,7 @@
     },
     "run_summary_page_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -809,6 +871,7 @@
     },
     "material_read_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -822,6 +885,7 @@
     },
     "material_read_cancelled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -835,6 +899,7 @@
     },
     "material_read_source_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -848,6 +913,7 @@
     },
     "material_read_chunk_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -861,6 +927,7 @@
     },
     "material_read_assembly_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -874,6 +941,7 @@
     },
     "runtime_subscription_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -887,6 +955,7 @@
     },
     "runtime_subscription_timeout_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -900,6 +969,7 @@
     },
     "runtime_authoring_origin_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -913,6 +983,7 @@
     },
     "runtime_debug_origin_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -926,6 +997,7 @@
     },
     "runtime_read_timeout_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -939,6 +1011,7 @@
     },
     "runtime_planning_document_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -952,6 +1025,7 @@
     },
     "runtime_projection_failed_after_terminal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -965,6 +1039,7 @@
     },
     "runtime_official_ocr_projection_failed_after_terminal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -978,6 +1053,7 @@
     },
     "runtime_connection_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -991,6 +1067,7 @@
     },
     "runtime_official_ocr_terminal_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1004,6 +1081,7 @@
     },
     "runtime_official_ocr_terminal_payload_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1017,6 +1095,7 @@
     },
     "runtime_flow_projection_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1030,6 +1109,7 @@
     },
     "runtime_flow_projection_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1043,6 +1123,7 @@
     },
     "runtime_official_ocr_evidence_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1056,6 +1137,7 @@
     },
     "runtime_official_ocr_state_root_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1069,6 +1151,7 @@
     },
     "runtime_official_ocr_artifact_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1082,6 +1165,7 @@
     },
     "runtime_official_ocr_artifact_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1095,6 +1179,7 @@
     },
     "runtime_official_ocr_artifact_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1108,6 +1193,7 @@
     },
     "runtime_official_ocr_artifact_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1121,6 +1207,7 @@
     },
     "runtime_official_ocr_artifact_lifecycle_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1134,6 +1221,7 @@
     },
     "runtime_official_ocr_artifact_lifecycle_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1147,6 +1235,7 @@
     },
     "runtime_official_ocr_artifact_path_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1160,6 +1249,7 @@
     },
     "runtime_official_ocr_artifact_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1173,6 +1263,7 @@
     },
     "runtime_official_ocr_artifact_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1186,6 +1277,7 @@
     },
     "runtime_official_ocr_artifact_length_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1199,6 +1291,7 @@
     },
     "runtime_official_ocr_artifact_digest_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1212,6 +1305,7 @@
     },
     "runtime_official_ocr_payload_malformed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1225,6 +1319,7 @@
     },
     "runtime_official_ocr_payload_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1238,6 +1333,7 @@
     },
     "runtime_official_ocr_observation_malformed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1251,6 +1347,7 @@
     },
     "runtime_official_ocr_region_frame_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1264,6 +1361,7 @@
     },
     "runtime_official_ocr_frame_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1277,6 +1375,7 @@
     },
     "runtime_official_ocr_frame_lifecycle_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1290,6 +1389,7 @@
     },
     "runtime_official_ocr_frame_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1303,6 +1403,7 @@
     },
     "runtime_official_ocr_observation_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1316,6 +1417,7 @@
     },
     "runtime_official_ocr_comparison_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1329,6 +1431,7 @@
     },
     "runtime_official_ocr_comparison_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1342,6 +1445,7 @@
     },
     "runtime_official_ocr_observation_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1355,6 +1459,7 @@
     },
     "runtime_official_ocr_observation_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1368,6 +1473,7 @@
     },
     "runtime_official_ocr_fields_malformed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1381,6 +1487,7 @@
     },
     "runtime_official_ocr_fields_privacy_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1394,6 +1501,7 @@
     },
     "runtime_official_ocr_fields_terminal_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1407,6 +1515,7 @@
     },
     "runtime_official_ocr_mode_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1420,6 +1529,7 @@
     },
     "runtime_official_ocr_fields_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1433,6 +1543,7 @@
     },
     "runtime_official_ocr_region_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1446,6 +1557,7 @@
     },
     "runtime_official_ocr_provider_evidence_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1459,6 +1571,7 @@
     },
     "runtime_official_ocr_target_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1472,6 +1585,7 @@
     },
     "runtime_official_ocr_provider_evidence_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1485,6 +1599,7 @@
     },
     "runtime_official_ocr_comparison_malformed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1498,6 +1613,7 @@
     },
     "runtime_official_ocr_comparison_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1511,6 +1627,7 @@
     },
     "runtime_official_ocr_mapping_evidence_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1524,6 +1641,7 @@
     },
     "runtime_official_ocr_provider_evidence_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1537,6 +1655,7 @@
     },
     "runtime_official_ocr_projection_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1550,6 +1669,7 @@
     },
     "runtime_planning_document_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1563,6 +1683,7 @@
     },
     "runtime_project_page_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1576,6 +1697,7 @@
     },
     "runtime_project_versions_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1589,6 +1711,7 @@
     },
     "runtime_authoring_event_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1602,6 +1725,7 @@
     },
     "runtime_debug_package_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1615,6 +1739,7 @@
     },
     "runtime_evidence_export_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1628,6 +1753,7 @@
     },
     "runtime_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1641,6 +1767,7 @@
     },
     "run_summary_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1654,6 +1781,7 @@
     },
     "run_summary_payload_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1667,6 +1795,7 @@
     },
     "run_summary_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1680,6 +1809,7 @@
     },
     "run_summary_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1693,6 +1823,7 @@
     },
     "run_summary_lease_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1706,6 +1837,7 @@
     },
     "run_summary_policy_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1719,6 +1851,7 @@
     },
     "run_summary_settlement_interrupted_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1732,6 +1865,7 @@
     },
     "run_summary_receipt_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1745,6 +1879,7 @@
     },
     "run_summary_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1758,6 +1893,7 @@
     },
     "run_summary_package_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1771,6 +1907,7 @@
     },
     "run_summary_package_fact_count_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1784,6 +1921,7 @@
     },
     "run_summary_package_digest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1797,6 +1935,7 @@
     },
     "run_summary_package_digest_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1810,6 +1949,7 @@
     },
     "run_summary_device_event_forbidden": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1823,6 +1963,7 @@
     },
     "run_summary_simulation_provenance_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1836,6 +1977,7 @@
     },
     "run_summary_simulation_effect_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1849,6 +1991,7 @@
     },
     "run_summary_event_count_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1862,6 +2005,7 @@
     },
     "run_summary_projection_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1875,6 +2019,7 @@
     },
     "runtime_info_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1888,6 +2033,7 @@
     },
     "runtime_info_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1901,6 +2047,7 @@
     },
     "runtime_info_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1914,6 +2061,7 @@
     },
     "runtime_clock_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1927,6 +2075,7 @@
     },
     "runtime_clock_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1940,6 +2089,7 @@
     },
     "runtime_connect_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1953,6 +2103,7 @@
     },
     "runtime_write_timeout_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1966,6 +2117,7 @@
     },
     "runtime_tcp_nodelay_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1979,6 +2131,7 @@
     },
     "runtime_contained_task_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -1992,6 +2145,7 @@
     },
     "runtime_input_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2005,6 +2159,7 @@
     },
     "runtime_capture_sequence_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2018,6 +2173,7 @@
     },
     "run_status_read_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2031,6 +2187,7 @@
     },
     "recent_runs_limit_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2044,6 +2201,7 @@
     },
     "recent_runs_budget_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2057,6 +2215,7 @@
     },
     "run_status_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2070,6 +2229,7 @@
     },
     "run_status_identity_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2083,6 +2243,7 @@
     },
     "run_status_origin_inconsistent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2096,6 +2257,7 @@
     },
     "run_status_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2109,6 +2271,7 @@
     },
     "run_status_package_fact_count_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2122,6 +2285,7 @@
     },
     "run_status_terminal_state_inconsistent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2135,6 +2299,7 @@
     },
     "run_status_lease_terminal_inconsistent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2148,6 +2313,7 @@
     },
     "run_status_page_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2161,6 +2327,7 @@
     },
     "run_status_snapshot_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2174,6 +2341,7 @@
     },
     "run_status_pagination_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2187,6 +2355,7 @@
     },
     "run_status_event_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2200,6 +2369,7 @@
     },
     "run_status_event_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2213,6 +2383,7 @@
     },
     "run_status_resident_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2226,6 +2397,7 @@
     },
     "run_status_page_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2239,6 +2411,7 @@
     },
     "runtime_lab_operation_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2252,6 +2425,7 @@
     },
     "runtime_lab_operation_instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2265,6 +2439,7 @@
     },
     "runtime_lab_holder_issue_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2278,6 +2453,7 @@
     },
     "runtime_lab_operation_timeout_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2291,6 +2467,7 @@
     },
     "runtime_lab_operation_result_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2304,6 +2481,7 @@
     },
     "runtime_lab_operation_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2317,6 +2495,7 @@
     },
     "runtime_lab_receipt_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2330,6 +2509,7 @@
     },
     "runtime_lab_result_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2343,6 +2523,7 @@
     },
     "runtime_lab_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2356,6 +2537,7 @@
     },
     "runtime_observation_request_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2369,6 +2551,7 @@
     },
     "runtime_observation_instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2382,6 +2565,7 @@
     },
     "runtime_observation_receipt_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2395,6 +2579,7 @@
     },
     "runtime_observation_result_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2408,6 +2593,7 @@
     },
     "runtime_observation_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2421,6 +2607,7 @@
     },
     "runtime_observation_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2434,6 +2621,7 @@
     },
     "runtime_observation_write_authority_present": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2447,6 +2635,7 @@
     },
     "runtime_observation_artifact_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2460,6 +2649,7 @@
     },
     "runtime_observation_artifact_lifecycle_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2473,6 +2663,7 @@
     },
     "runtime_observation_artifact_lifecycle_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2486,6 +2677,7 @@
     },
     "runtime_observation_artifact_lifecycle_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2499,6 +2691,7 @@
     },
     "runtime_observation_artifact_lifecycle_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2512,6 +2705,7 @@
     },
     "runtime_observation_projection_sequence_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2525,6 +2719,7 @@
     },
     "runtime_observation_frame_lifecycle_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2538,6 +2733,7 @@
     },
     "runtime_observation_terminal_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2551,6 +2747,7 @@
     },
     "runtime_observation_recognition_lifecycle_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2564,6 +2761,7 @@
     },
     "runtime_observation_terminal_outcome_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2577,6 +2775,7 @@
     },
     "runtime_observation_artifact_verification_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2590,6 +2789,7 @@
     },
     "runtime_observation_artifact_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2603,6 +2803,7 @@
     },
     "runtime_observation_private_facts_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2616,6 +2817,7 @@
     },
     "runtime_observation_artifact_receipt_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2629,6 +2831,7 @@
     },
     "runtime_observation_frame_verification_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2642,6 +2845,7 @@
     },
     "runtime_contained_task_cancelled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2655,6 +2859,7 @@
     },
     "runtime_request_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2668,6 +2873,7 @@
     },
     "test_observation_recorder_lock_poisoned": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2681,6 +2887,7 @@
     },
     "test_observation_sequence_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2694,6 +2901,7 @@
     },
     "test_observation_elapsed_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "runtime-client",
       "layer": "client",
       "uncertain": false,
@@ -2704,6 +2912,39 @@
       "description": "A runtime client call failed: test observation elapsed overflow.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "client_channel_unsupported": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-client",
+      "layer": "client",
+      "uncertain": false,
+      "values": {
+        "operation": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime closed the connection on BindChannel without a receipt: an actingd built before #389 U-2. The client reconnected once, checked the owner epoch and goes on without a channel; it sends no BindChannel on later reconnects. Reported once per client process, on stderr or in the MCP warnings.",
+      "common_causes": "Root Tools newer than the actingd of the selected slot, for example after a slot rollback.",
+      "handling": "Nothing to repair. Each such client process leaves one connection failure in that actingd's ledger; Tools and Runtime of one release bind their channels."
+    },
+    "client_channel_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-client",
+      "layer": "client",
+      "uncertain": false,
+      "values": {
+        "operation": "required",
+        "channel": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "From #389 U-6 on, the runtime client's own check for a Lab-only session (resource authoring, runtime debug) refused a client whose channel is not lab; channel names the client's channel.",
+      "common_causes": "A program other than actinglab opened a Lab session through the runtime client library.",
+      "handling": "Open Lab sessions from actinglab."
     }
   },
   "locations": {
