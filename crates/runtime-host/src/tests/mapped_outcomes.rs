@@ -1714,3 +1714,380 @@ fn unmapped_generic_terminals_preserve_success_failure_and_cancelled_outcomes() 
         host.close().expect("close host");
     }
 }
+
+/// Workflow #399: the host of the catalog-switch tests, with the mapped producer package and the
+/// Runtime-owned facts observed at `facts_unix_ms`, the instant its clock shows.
+fn start_outcome_reference_host(
+    root: &TempDir,
+    clock: &Arc<ManualRuntimeClock>,
+    package: &[u8],
+    state: &Arc<FakeState>,
+    runtime_instance_id: InstanceId,
+    outcome_key: &str,
+    facts_unix_ms: u64,
+) -> RuntimeHost {
+    RuntimeHost::start(
+        config(root)
+            .with_runtime_clock(clock.clone())
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts_at(outcome_key, facts_unix_ms, false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                runtime_instance_id,
+                Arc::clone(state),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("catalog-switch runtime host")
+}
+
+/// Workflow #399: `sources` with `approval_id` as the catalog's only approval reference. An
+/// approval id names one catalog generation for good (another target is refused with
+/// `approval_target_identity_conflict`), so each later catalog a run is admitted under names
+/// its own id.
+fn with_catalog_approval_ref(mut sources: CatalogSources, approval_id: &str) -> CatalogSources {
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("catalog approval fixture JSON");
+        document["catalog"]["approval_refs"] = serde_json::json!([approval_id]);
+        source.bytes =
+            serde_json::to_vec_pretty(&document).expect("catalog approval fixture bytes");
+    }
+    sources
+}
+
+/// Workflow #399: a person approves the catalog generation `intent` was evaluated under,
+/// through each approval id that catalog names.
+fn approve_intent_catalog(case: &str, host: &RuntimeHost, intent: &DispatchIntent) {
+    let mut client = TestClient::connect(host);
+    client.declare_governance_identity();
+    for approval_id in &intent.approval_refs {
+        let decision = ApprovalDecisionRecord::new(
+            approval_id.as_str(),
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: intent.catalog_hash.clone(),
+                catalog_version: intent.catalog_version,
+            },
+            actingcommand_contract::ApprovalReasonCode::new("user_confirmed")
+                .expect("approval reason"),
+        )
+        .expect("catalog approval decision");
+        let request =
+            client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed,
+            "{case}: approve catalog version {} through {approval_id}",
+            intent.catalog_version
+        );
+    }
+}
+
+/// Workflow #399: evaluates the policy at `unix_ms` and admits the producer under the active
+/// catalog, approved through that catalog's own approval id.
+fn admit_producer_at(
+    case: &str,
+    host: &RuntimeHost,
+    outcome_key: &str,
+    unix_ms: u64,
+    seed: u64,
+) -> Box<PolicyRunContext> {
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
+    sample_capacity().expect("capacity sample for the producer's admission time");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, unix_ms, true),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            PolicyTrigger::Reconciliation,
+        )
+        .unwrap_or_else(|error| panic!("{case}: producer evaluation: {error}"));
+    admit_evaluated_producer(case, host, &cycle)
+}
+
+/// Workflow #399: admits the producer intent of `cycle`.
+fn admit_evaluated_producer(
+    case: &str,
+    host: &RuntimeHost,
+    cycle: &PolicyCycle,
+) -> Box<PolicyRunContext> {
+    let evaluation = cycle
+        .evaluation
+        .as_ref()
+        .unwrap_or_else(|| panic!("{case}: producer evaluation"));
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == "fixture.observe")
+        .unwrap_or_else(|| {
+            panic!(
+                "{case}: producer dispatch missing; got {:?}",
+                evaluation
+                    .dispatch_intents
+                    .iter()
+                    .map(|intent| intent.task_id.as_str())
+                    .collect::<Vec<_>>()
+            )
+        })
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .unwrap_or_else(|| panic!("{case}: producer reason chain"))
+        .clone();
+    approve_intent_catalog(case, host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
+        .unwrap_or_else(|error| panic!("{case}: producer admission: {error}"))
+    else {
+        panic!("{case}: expected the producer's run context")
+    };
+    context
+}
+
+/// Workflow #399: the consumer is not dispatched, and the producer outcome it reads is unknown
+/// (`outcome_missing`) for its instance.
+fn assert_consumer_outcome_unknown(case: &str, cycle: &PolicyCycle, outcome_key: &str) {
+    let evaluation = cycle
+        .evaluation
+        .as_ref()
+        .unwrap_or_else(|| panic!("{case}: recovery evaluation"));
+    assert!(
+        evaluation
+            .dispatch_intents
+            .iter()
+            .all(|intent| intent.task_id != "fixture.followup"),
+        "{case}: the consumer cannot run before the producer gives the outcome under this catalog"
+    );
+    let consumer = evaluation
+        .decisions
+        .iter()
+        .find(|decision| {
+            decision.task_id == "fixture.followup"
+                && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
+        })
+        .unwrap_or_else(|| panic!("{case}: consumer decision missing"));
+    let outcome_fact = format!("outcome.fixture.observe.{outcome_key}");
+    assert!(
+        consumer.detection_suggestions.iter().any(|suggestion| {
+            suggestion.fact_key == outcome_fact && suggestion.reason == "outcome_missing"
+        }),
+        "{case}: the consumer must read the producer outcome as unknown; got {consumer:?}"
+    );
+}
+
+#[test]
+fn a_catalog_first_referencing_an_earlier_run_outcome_reads_it_as_unknown_until_the_next_run() {
+    // Workflow #399, real-device run 2026-10-12 (Runtime ceef6f90): a new catalog first
+    // referenced the outcome of a task that had completed only under catalogs without that
+    // reference, and the start ended fatal (`policy_run_identity_missing`).
+    let outcome_key = "first-referenced-result";
+    for (case, producer_fails) in [("failed", true), ("succeeded", false)] {
+        let root = TempDir::new().expect("tempdir");
+        let package =
+            neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
+        let package_path = root.path().join("first-referenced-task.zip");
+        fs::write(&package_path, &package).expect("write producer package");
+        let request = ContainedTaskRequest::new(
+            package_path.to_string_lossy().into_owned(),
+            format!("{:x}", Sha256::digest(&package)),
+        )
+        .expect("producer request");
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        let runtime_instance_id = instance_id();
+        let clock = Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS,
+            POLICY_NOW_UNIX_MS,
+        ));
+
+        // Catalog v1 does not reference the producer's outcome.
+        let host = start_outcome_reference_host(
+            &root,
+            &clock,
+            &package,
+            &state,
+            runtime_instance_id,
+            outcome_key,
+            POLICY_NOW_UNIX_MS,
+        );
+        host.activate_policy_catalog(&budget_policy_sources(1))
+            .unwrap_or_else(|error| panic!("{case}: activate catalog v1: {error}"));
+        let (first_context, _) =
+            admit_mapped_run_at(&host, outcome_key, POLICY_NOW_UNIX_MS, 39_901);
+        if producer_fails {
+            host.complete_scheduled_policy_failure_without_terminal_for_test(&first_context)
+                .unwrap_or_else(|error| panic!("{case}: producer failure under v1: {error}"));
+        } else {
+            let receipt = host
+                .run_scheduled_contained_task(&first_context, &request)
+                .unwrap_or_else(|error| panic!("{case}: producer run under v1: {error}"));
+            host.complete_scheduled_policy_run(&first_context, &receipt)
+                .unwrap_or_else(|error| panic!("{case}: producer completion under v1: {error}"));
+        }
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close v1 host: {error}"));
+
+        // Restart, then switch to v2, whose consumer references that outcome.
+        advance_manual_clock_to(&clock, POLICY_RESTART_UNIX_MS);
+        let restarted = start_outcome_reference_host(
+            &root,
+            &clock,
+            &package,
+            &state,
+            runtime_instance_id,
+            outcome_key,
+            POLICY_RESTART_UNIX_MS,
+        );
+        restarted
+            .activate_policy_catalog(&with_catalog_approval_ref(
+                mapped_policy_sources(2, outcome_key),
+                "approval:fixture-a2",
+            ))
+            .unwrap_or_else(|error| panic!("{case}: activate catalog v2: {error}"));
+        let recovered = restarted
+            .evaluate_policy_cycle(PolicyTrigger::Recovery)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{case}: recovery evaluation under v2: {} ({error})",
+                    error.code()
+                )
+            });
+        assert!(
+            restarted
+                .fatal_error()
+                .expect("read runtime fatal state")
+                .is_none(),
+            "{case}: a first reference to an earlier run's outcome is not fatal"
+        );
+        assert_consumer_outcome_unknown(case, &recovered, outcome_key);
+
+        // The producer's first run under v2 gives the consumer its outcome.
+        let context = admit_evaluated_producer(case, &restarted, &recovered);
+        state.input_count.store(0, Ordering::Release);
+        let receipt = restarted
+            .run_scheduled_contained_task(&context, &request)
+            .unwrap_or_else(|error| panic!("{case}: producer run under v2: {error}"));
+        restarted
+            .complete_scheduled_policy_run(&context, &receipt)
+            .unwrap_or_else(|error| panic!("{case}: producer completion under v2: {error}"));
+        advance_manual_clock_to(
+            &clock,
+            context
+                .admission()
+                .activity
+                .next_eligible_unix_ms
+                .max(POLICY_RESTART_UNIX_MS + 1_000),
+        );
+        let after_run = restarted
+            .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+            .unwrap_or_else(|error| panic!("{case}: evaluation after the v2 run: {error}"));
+        assert!(
+            after_run
+                .evaluation
+                .as_ref()
+                .unwrap_or_else(|| panic!("{case}: evaluation after the v2 run"))
+                .dispatch_intents
+                .iter()
+                .any(|intent| intent.task_id == "fixture.followup"),
+            "{case}: the producer's run under v2 must make the consumer dispatchable"
+        );
+        restarted
+            .close()
+            .unwrap_or_else(|error| panic!("{case}: close v2 host: {error}"));
+    }
+}
+
+#[test]
+fn an_outcome_referenced_again_after_an_unreferenced_run_does_not_bring_back_the_older_result() {
+    // Workflow #399: referenced (v1), not referenced (v2), referenced again (v3). The pair's
+    // latest completion, the v2 run, has no outcome under v3, so the v1 result stays gone.
+    let outcome_key = "re-referenced-result";
+    let root = TempDir::new().expect("tempdir");
+    let (host, state, first_context, request, _, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
+    let first_receipt = host
+        .run_scheduled_contained_task(&first_context, &request)
+        .expect("producer run under v1");
+    let (_, first_outcome) = host
+        .complete_scheduled_policy_run(&first_context, &first_receipt)
+        .expect("producer completion under v1");
+    assert!(
+        first_outcome.is_some(),
+        "v1 references the outcome, so its run gives one"
+    );
+
+    host.activate_policy_catalog(&with_catalog_approval_ref(
+        budget_policy_sources(2),
+        "approval:fixture-a2",
+    ))
+    .expect("activate catalog v2 without the reference");
+    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
+    let second_context = admit_producer_at(
+        "not referenced",
+        &host,
+        outcome_key,
+        timeline.second_policy_unix_ms,
+        39_911,
+    );
+    state.input_count.store(0, Ordering::Release);
+    let second_receipt = host
+        .run_scheduled_contained_task(&second_context, &request)
+        .expect("producer run under v2");
+    host.complete_scheduled_policy_run(&second_context, &second_receipt)
+        .expect("producer completion under v2");
+    host.close().expect("close v1 and v2 host");
+
+    // Restart, then switch to v3, whose consumer references the outcome again.
+    advance_manual_clock_to(&clock, POLICY_RESTART_UNIX_MS);
+    let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
+    let restarted = start_outcome_reference_host(
+        &root,
+        &clock,
+        &package,
+        &state,
+        first_context.lease_token().instance_id(),
+        outcome_key,
+        POLICY_RESTART_UNIX_MS,
+    );
+    restarted
+        .activate_policy_catalog(&mapped_policy_sources(3, outcome_key))
+        .expect("activate catalog v3 with the reference again");
+    let recovered = restarted
+        .evaluate_policy_cycle(PolicyTrigger::Recovery)
+        .unwrap_or_else(|error| panic!("recovery evaluation under v3: {} ({error})", error.code()));
+    assert_consumer_outcome_unknown("referenced again", &recovered, outcome_key);
+    assert!(
+        !restarted
+            .policy_outcome_key_snapshot_for_test()
+            .expect("policy outcome snapshot under v3")
+            .completed_runs
+            .contains_key(&(
+                "fixture.observe".to_owned(),
+                POLICY_INSTANCE_ALIAS.to_owned(),
+            )),
+        "the v1 run cannot stand for the producer after its unreferenced v2 run"
+    );
+    restarted.close().expect("close v3 host");
+}

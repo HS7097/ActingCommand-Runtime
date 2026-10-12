@@ -1883,32 +1883,42 @@ impl PolicyHost {
                 keys.insert(task.id.clone(), referenced);
             }
         }
-        let mut completed_runs = BTreeMap::new();
-        for dispatch in self
+        // Workflow #399: a pair's latest completion alone decides its outcome. A completion
+        // carries a run identity only when its own catalog referenced the task's outcome, so a
+        // latest completion without one means the current catalog references an outcome the
+        // pair has not produced yet: the pair has no usable outcome (the evaluator reads it as
+        // `outcome_missing`) until the task completes under a referencing catalog.
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for (sequence, dispatch) in self
             .seen_dispatches
             .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
             .filter(|dispatch| keys.contains_key(&dispatch.data.task_id))
+            .filter_map(completion_of)
         {
-            let completed = dispatch.completed_run.clone().ok_or_else(|| {
-                fatal(
-                    "policy_run_identity_missing",
-                    "snapshot_policy_scheduling_outcomes",
-                )
-            })?;
             let key = (
-                completed.catalog_task_id.clone(),
-                completed.instance_alias.clone(),
+                dispatch.data.task_id.as_str(),
+                dispatch.data.instance_id.as_str(),
             );
-            if completed_runs
+            if latest
                 .get(&key)
-                .is_none_or(|current: &CompletedPolicyRunIdentity| {
-                    current.completion_sequence < completed.completion_sequence
-                })
+                .is_none_or(|(current, _)| *current < sequence)
             {
-                completed_runs.insert(key, completed);
+                latest.insert(key, (sequence, dispatch));
             }
         }
+        let completed_runs = latest
+            .into_values()
+            .filter_map(|(_, dispatch)| dispatch.completed_run.clone())
+            .map(|completed| {
+                (
+                    (
+                        completed.catalog_task_id.clone(),
+                        completed.instance_alias.clone(),
+                    ),
+                    completed,
+                )
+            })
+            .collect();
         Ok(PolicyOutcomeKeySnapshot {
             generation: Some(active.generation.clone()),
             keys,
@@ -1961,39 +1971,45 @@ impl PolicyHost {
     /// Workflow #191 A2 / #330 H1: each (catalog task, instance) pair's latest completed run.
     /// A pair's authoritative outcome is decided by its latest run alone, the same result as the
     /// online commit/clear sequence; the limit counts distinct pairs.
+    ///
+    /// Workflow #399: the latest completion is taken before its run identity is read. A pair
+    /// whose latest completion has none (its catalog did not reference the task's outcome) has
+    /// no authoritative outcome and is not counted, so an older run never stands for it.
     pub(crate) fn latest_completed_policy_runs(
         &self,
         limit: usize,
     ) -> RuntimeHostResult<Vec<CompletedPolicyRunIdentity>> {
-        let mut latest = BTreeMap::<(&str, &str), &CompletedPolicyRunIdentity>::new();
-        for run in self
-            .seen_dispatches
-            .values()
-            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
-            .filter_map(|dispatch| dispatch.completed_run.as_ref())
-        {
-            let key = (run.catalog_task_id.as_str(), run.instance_alias.as_str());
+        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
+        for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
+            let key = (
+                dispatch.data.task_id.as_str(),
+                dispatch.data.instance_id.as_str(),
+            );
             match latest.get(&key) {
                 // A completion sequence is the completion event's own; equal means corruption.
-                Some(existing) if existing.completion_sequence == run.completion_sequence => {
+                Some((existing, _)) if *existing == sequence => {
                     return Err(fatal(
                         "policy_outcome_replay_order_conflict",
                         "recover_policy_scheduling_outcomes",
                     ));
                 }
-                Some(existing) if existing.completion_sequence > run.completion_sequence => {}
-                None if latest.len() >= limit => {
-                    return Err(fatal(
-                        "policy_scheduling_outcome_capacity_exceeded",
-                        "recover_policy_scheduling_outcomes",
-                    ));
-                }
+                Some((existing, _)) if *existing > sequence => {}
                 _ => {
-                    latest.insert(key, run);
+                    latest.insert(key, (sequence, dispatch));
                 }
             }
         }
-        Ok(latest.into_values().cloned().collect())
+        let runs = latest
+            .into_values()
+            .filter_map(|(_, dispatch)| dispatch.completed_run.as_ref())
+            .collect::<Vec<_>>();
+        if runs.len() > limit {
+            return Err(fatal(
+                "policy_scheduling_outcome_capacity_exceeded",
+                "recover_policy_scheduling_outcomes",
+            ));
+        }
+        Ok(runs.into_iter().cloned().collect())
     }
 
     pub(crate) fn admitted_at(&self, decision_id: &str) -> RuntimeHostResult<u64> {
@@ -3175,6 +3191,15 @@ fn insert_seen_intent(
     order.insert(sequence, decision_id.clone());
     seen.insert(decision_id, record);
     Ok(())
+}
+
+/// A completed dispatch with its completion event's sequence (Workflow #399).
+/// `complete_dispatch` and `transition_record` set the lifecycle and the sequence together.
+fn completion_of(dispatch: &SeenDispatch) -> Option<(u64, &SeenDispatch)> {
+    match (dispatch.lifecycle, dispatch.completed_sequence) {
+        (DispatchLifecycle::Completed, Some(sequence)) => Some((sequence, dispatch)),
+        _ => None,
+    }
 }
 
 fn completed_policy_run_identity(
