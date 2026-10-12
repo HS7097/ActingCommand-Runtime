@@ -1890,6 +1890,19 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ocr_field_low_confidence": {
+      "category": "error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ocr_fields_declaration_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
