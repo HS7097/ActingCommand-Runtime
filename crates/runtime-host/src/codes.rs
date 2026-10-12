@@ -1996,3 +1996,62 @@ pub(crate) mod test_spellings {
         }
     }
 }
+
+// ---- Workflow #386 SR-0 (scheduling rules): registered ahead of their slices; begin ----
+actingcommand_contract::outcome_codes! {
+    /// Codes the scheduling rules (Workflow #386) register in the documentation slice SR-0,
+    /// ahead of the slices that emit them (named on each entry). Contracts:
+    /// `contracts/policy-suspension.md`, `contracts/scheduling-blackout.md`,
+    /// `contracts/cost-commit.md`, `contracts/instance-fact-store.md`.
+    pub(crate) enum SchedulingRuleHostCode {
+        /// Info. A rerun of a condition-terminated policy run is owed: the pair is treated as
+        /// triggered and promoted (keys `task_id`, `instance_id`, `failure_code`, `count`;
+        /// SR-2b).
+        PolicyRerunOwed => "policy_rerun_owed": info,
+        /// Info. An owed rerun waits because the instance's pacing stage is above the resume
+        /// stage or has not settled (keys `instance_id`, `pacing_stage`, and
+        /// `next_eligible_unix_ms` when known; SR-2b).
+        PolicyRerunWaiting => "policy_rerun_waiting": info,
+        /// Warning. An owed rerun was not served before its bookkeeping window ended (keys
+        /// `task_id`, `instance_id`, `failure_code`, `window_end_unix_ms`; SR-2b).
+        PolicyRerunExpired => "policy_rerun_expired": warning,
+        /// Warning. A pair ended by a condition more often in one occurrence than the limit
+        /// allows; the last one settles as an ordinary failure (keys `task_id`, `instance_id`,
+        /// `count`, `limit_count`; SR-2b).
+        PolicyRerunExhausted => "policy_rerun_exhausted": warning,
+        /// Error. A task package was suspended because admission refused it with a suspend
+        /// code (keys `package_id`, `actual_digest` (its content hash), `failure_code`,
+        /// `runtime_commit`; SR-3).
+        PackAdmissionSuspended => "pack_admission_suspended": error,
+        /// Info. A task package suspension was lifted: its content hash or the Runtime build
+        /// changed (keys `package_id`, `actual_digest`, `runtime_commit`; SR-3).
+        PackAdmissionLifted => "pack_admission_lifted": info,
+        /// Info. A candidate is deferred inside a blackout until its end (keys `instance_id`,
+        /// `blackout_id`, `next_eligible_unix_ms`; SR-4a).
+        BlackoutActive => "blackout_active": info,
+        /// Info. A candidate is deferred because its response deadline plus the quiet margin
+        /// reaches the next blackout start (keys `instance_id`, `blackout_id`,
+        /// `blackout_start_unix_ms`, `required_ms`; SR-4a).
+        BlackoutApproaching => "blackout_approaching": info,
+        /// Error. A run still active when a blackout started was stopped at its next
+        /// checkpoint (keys `blackout_id`, `blackout_start_unix_ms`; SR-4b).
+        BlackoutRunStopped => "blackout_run_stopped": error,
+        /// Error. A host blackout entry of the configuration breaks a rule (keys `field`, and
+        /// `blackout_id` when the entry has one; SR-4a).
+        BlackoutConfigInvalid => "blackout_config_invalid": error,
+        /// Error. A `session.feature.*` record breaks the feature-lock fact rules; the request
+        /// is refused (keys `fact_key`; SR-5a).
+        SessionFeatureFactInvalid => "session_feature_fact_invalid": error,
+        /// Info. An instance has no due task; its not-running row names the earliest wake
+        /// (keys `instance_id`, and `next_eligible_unix_ms` when known; SR-6).
+        DueTaskMissing => "due_task_missing": info,
+        /// Info. A candidate with an entry-cost step waits because the instance's pacing stage
+        /// is above the entry-cost stage limit (keys `instance_id`, `pacing_stage`, and
+        /// `next_eligible_unix_ms` when known; SR-10).
+        PolicyCostCommitWaiting => "policy_cost_commit_waiting": info,
+        /// Error. A `session.pack.schedule` record breaks the pack schedule rules; the request
+        /// is refused (keys `fact_key`, `field`; SR-11).
+        SessionPackScheduleInvalid => "session_pack_schedule_invalid": error,
+    }
+}
+// ---- Workflow #386 SR-0 (scheduling rules): end ----

@@ -202,6 +202,25 @@ actingcommand_contract::outcome_codes! {
         UnallowedValue => "unallowed_value": error,
         InvalidPointer => "invalid_pointer": error,
         UndeclaredKey => "undeclared_key": error,
+        // Workflow #386 SR-0 (scheduling rules): registered ahead of the slices that emit them
+        // (`contracts/scheduling-blackout.md`, `contracts/policy-suspension.md`,
+        // `contracts/cost-commit.md`). The fragment also carries SR-0's texts and values for
+        // the four sampling codes above, which SR-1 emits in their registered form. Begin.
+        /// Error. Admission refused a task whose declared sampling exceeds the smaller of its
+        /// step and task timeouts (keys `required_ms`, `limit_ms`, and `pack_operation_id`
+        /// when one operation exceeds it; SR-1).
+        RecognitionSampleBudgetInvalid => "recognition_sample_budget_invalid": error,
+        /// Warning. A run recognised a page its task declares as the sign of a locked feature
+        /// and stopped there, with no input (keys `fact_key`, `page_id`; SR-5b).
+        ContainedTaskFeatureLocked => "contained_task_feature_locked": warning,
+        /// Warning. Before the input of its declared entry-cost step, the run had too little
+        /// time left and stopped with nothing spent (keys `required_ms`, `remaining_ms`,
+        /// `step_id`; SR-10).
+        CostCommitTimeInsufficient => "cost_commit_time_insufficient": warning,
+        /// Error. A task package's `cost_commit` declaration breaks a rule (keys `package_id`,
+        /// `field`; SR-10).
+        CostCommitDeclarationInvalid => "cost_commit_declaration_invalid": error,
+        // Workflow #386 SR-0. End.
     }
 }
 

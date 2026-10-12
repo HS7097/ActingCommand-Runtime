@@ -352,4 +352,15 @@ outcome_keys! {
     channel: vocab(channel),
     lab_option: vocab(lab_option),
     // Workflow #389 U-0. End.
+    // ---- Workflow #386 SR-0 (scheduling rules): begin ----
+    required_ms: duration_ms,
+    remaining_ms: duration_ms,
+    limit_ms: duration_ms,
+    pack_operation_id: id,
+    step_id: id,
+    page_id: id,
+    blackout_id: id,
+    blackout_start_unix_ms: unix_ms,
+    pacing_stage: vocab(pacing_stage),
+    // ---- Workflow #386 SR-0 (scheduling rules): end ----
 }

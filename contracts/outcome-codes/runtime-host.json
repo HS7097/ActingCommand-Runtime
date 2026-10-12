@@ -12874,6 +12874,243 @@
       "description": "An unload withdrew a dispatch of the package that was admitted but had not started; recorded in the evaluation record and the reason chain.",
       "common_causes": "The package was unloaded while one of its dispatches waited to start.",
       "handling": "Nothing to repair."
+    },
+    "policy_rerun_owed": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "failure_code": "required",
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A rerun of a condition-terminated policy run (failure_code; count is its consecutive condition termination in this occurrence) is owed: the evaluator treats the pair as triggered and past its cooldown and promotes it ahead of the instance's other candidates. It is an ordinary policy dispatch in the instance's one queue.",
+      "common_causes": "The previous run ended with a condition code (time too short, sampling timeout, blackout stop, performance yield or hold, entry-cost time check) and the condition has lifted.",
+      "handling": "Nothing to repair."
+    },
+    "policy_rerun_waiting": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "pacing_stage": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An owed rerun waits because the instance's pacing stage (pacing_stage) is above scheduling.rerun.resume_stage, or fell to it less than resume_settle_ms ago. It is evaluated again when the stage changes.",
+      "common_causes": "Host load keeps the instance at stage s3 or s4.",
+      "handling": "Nothing to repair; the rerun follows when the stage settles at or below the resume stage, or expires at the end of its bookkeeping window."
+    },
+    "policy_rerun_expired": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "failure_code": "required",
+        "window_end_unix_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An owed rerun was not served before its bookkeeping window ended (window_end_unix_ms, taken from the settlement record). The run's failure then counts as an ordinary failure; the missed round is not carried into the next day.",
+      "common_causes": "The condition (load or a blackout) lasted until the window ended.",
+      "handling": "Nothing to repair for one occurrence. If it repeats, look at host load or the blackout table."
+    },
+    "policy_rerun_exhausted": {
+      "category": "warning",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "count": "required",
+        "limit_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A pair ended with a condition code more often in one occurrence (count) than scheduling.rerun.max_per_occurrence allows (limit_count); that run settles as an ordinary recoverable failure, with no rerun.",
+      "common_causes": "A package's time declarations are too tight even at stage s0.",
+      "handling": "Look at the package's timeouts, sampling and entry-cost declarations."
+    },
+    "pack_admission_suspended": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "actual_digest": "required",
+        "failure_code": "required",
+        "runtime_commit": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A task package was suspended because admission refused it with a code of scheduling.pack_admission.suspend_codes (failure_code) under the Runtime build runtime_commit; actual_digest is the package's content hash measured after the refusal. Every task bound to the package, on every instance, is deferred with this code and never prepared again until the content hash or the build changes. Other task packages of the same standard package are unaffected; a standard package is never suspended as a whole.",
+      "common_causes": "A package that needs more sampling time than its timeouts allow (recognition_sample_budget_invalid), typically after a Runtime upgrade with an unchanged package.",
+      "handling": "Fix and replace the package; the suspension lifts when its content hash changes. A Runtime build that accepts it lifts it too."
+    },
+    "pack_admission_lifted": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "actual_digest": "required",
+        "runtime_commit": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A task package suspension was lifted because the package's content hash (actual_digest, as measured now) or the Runtime build (runtime_commit) changed. The next preparation tries the package once; the same refusal under the same content hash and build suspends it again.",
+      "common_causes": "The package was replaced or the Runtime upgraded.",
+      "handling": "Nothing to repair."
+    },
+    "blackout_active": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "blackout_id": "required",
+        "next_eligible_unix_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate on the instance is deferred because a blackout (blackout_id: a catalog maintenance event or a host blackout entry) is active; it wakes at the blackout's end (next_eligible_unix_ms). Admission refuses an intent that crossed into the blackout with the same code.",
+      "common_causes": "A configured maintenance or reset period, or a host blackout such as a planned machine restart.",
+      "handling": "Nothing to repair."
+    },
+    "blackout_approaching": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "blackout_id": "required",
+        "blackout_start_unix_ms": "required",
+        "required_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate is deferred because its response deadline (required_ms) plus the quiet margin would reach the next blackout's start (blackout_start_unix_ms); it wakes at that blackout's end. Shorter candidates still run, so the instance goes quiet gradually.",
+      "common_causes": "A blackout starts soon.",
+      "handling": "Nothing to repair."
+    },
+    "blackout_run_stopped": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "blackout_id": "required",
+        "blackout_start_unix_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run the Runtime started itself (a ladder rung, a startup package, or a policy run held by performance pacing) was still active when a blackout started and was stopped at its next checkpoint; its cancellation reason is BlackoutStop. A policy run settles as a condition termination and is rerun after the blackout. Client runs (direct and Lab runs) are never stopped this way.",
+      "common_causes": "The blackout table changed after the run was admitted, or a ladder rung or startup package outlasted its estimate.",
+      "handling": "Nothing to repair for one occurrence."
+    },
+    "blackout_config_invalid": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "field": "required",
+        "blackout_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host blackout entry (scheduling.blackout.host) breaks a rule; field points at the member, blackout_id names the entry when it has one. check-config and startup refuse the configuration.",
+      "common_causes": "A duplicate id, a weekday outside 1 to 7, a minute of day outside 0 to 1439, or an offset outside the allowed range.",
+      "handling": "Fix the entry and commit the configuration again."
+    },
+    "session_feature_fact_invalid": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A session.feature. record breaks the feature-lock fact rules (its value is not a boolean, or it declares invalidate_on events); the publication request is refused. Not fatal.",
+      "common_causes": "A client wrote a number or a text, or attached invalidation events.",
+      "handling": "Publish a boolean record without invalidate_on."
+    },
+    "due_task_missing": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The instance has no task due in this evaluation; its not-running row names the earliest wake (next_eligible_unix_ms) when one is known.",
+      "common_causes": "Every task of the instance ran or waits for its next occurrence.",
+      "handling": "Nothing to repair."
+    },
+    "policy_cost_commit_waiting": {
+      "category": "info",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "pacing_stage": "required",
+        "next_eligible_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate whose task declares an entry-cost step (cost_commit) is deferred because the instance's pacing stage (pacing_stage) is above scheduling.cost_commit.max_stage; the instance's other candidates run as usual. It is evaluated again when the stage changes.",
+      "common_causes": "Host load keeps the instance at stage s3 or s4.",
+      "handling": "Nothing to repair."
+    },
+    "session_pack_schedule_invalid": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "field": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A session.pack.schedule record breaks the pack schedule rules (field points at the offending member): its value is not a record_list of package_id, from_unix_ms, until_unix_ms and schedulable rows, a row ends at or before it starts, or two rows of one package overlap. The publication request is refused. Not fatal.",
+      "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
+      "handling": "Write the scope's whole list again with non-overlapping rows."
     }
   },
   "locations": {

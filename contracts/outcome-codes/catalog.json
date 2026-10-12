@@ -1460,6 +1460,42 @@
     "lab_option": {
       "type": "vocab:lab_option",
       "description": "A Lab option of the installer."
+    },
+    "required_ms": {
+      "type": "duration_ms",
+      "description": "Time a step, an observation or an operation needs, in milliseconds."
+    },
+    "remaining_ms": {
+      "type": "duration_ms",
+      "description": "Time left before a deadline, in milliseconds."
+    },
+    "limit_ms": {
+      "type": "duration_ms",
+      "description": "The largest time a declaration may need, in milliseconds."
+    },
+    "pack_operation_id": {
+      "type": "id",
+      "description": "The id of an operation of a task package."
+    },
+    "step_id": {
+      "type": "id",
+      "description": "The id of a step that a task package declaration names."
+    },
+    "page_id": {
+      "type": "id",
+      "description": "The id of a page that a task package declares."
+    },
+    "blackout_id": {
+      "type": "id",
+      "description": "The id of a blackout: a catalog maintenance event or a host blackout entry."
+    },
+    "blackout_start_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a blackout starts, in Unix milliseconds."
+    },
+    "pacing_stage": {
+      "type": "vocab:pacing_stage",
+      "description": "The performance pacing stage of an instance."
     }
   },
   "vocabularies": {
@@ -4164,6 +4200,27 @@
           "description": "Option two: debugging."
         }
       }
+    },
+    "pacing_stage": {
+      "description": "A performance pacing stage of an instance (Workflow #385): s0 is normal pacing, each later stage a worse responsiveness band.",
+      "review": "pending",
+      "tokens": {
+        "s0": {
+          "description": "Normal: no slowdown, no pause."
+        },
+        "s1": {
+          "description": "First signs: longer intervals and one more retry, never a pause."
+        },
+        "s2": {
+          "description": "Tight: longer intervals and more retries, never a pause."
+        },
+        "s3": {
+          "description": "Short: dispatch shares fall and the instances with the smallest share pause first."
+        },
+        "s4": {
+          "description": "Severe: every dispatch pauses and running policy runs are held."
+        }
+      }
     }
   },
   "domains": {
@@ -5106,7 +5163,8 @@
       "runtime-host"
     ],
     "feature_": [
-      "contract"
+      "contract",
+      "policy"
     ],
     "feedback_": [
       "policy"
@@ -6926,6 +6984,45 @@
     ],
     "lab_command_": [
       "actinglab"
+    ],
+    "recognition_sample_": [
+      "execution-kernel"
+    ],
+    "candidate_sample_": [
+      "execution-kernel"
+    ],
+    "contained_task_feature_": [
+      "execution-kernel"
+    ],
+    "cost_commit_": [
+      "execution-kernel"
+    ],
+    "policy_rerun_": [
+      "runtime-host"
+    ],
+    "policy_cost_commit_": [
+      "runtime-host"
+    ],
+    "pack_admission_": [
+      "runtime-host"
+    ],
+    "blackout_": [
+      "runtime-host"
+    ],
+    "session_feature_": [
+      "runtime-host"
+    ],
+    "session_pack_schedule_": [
+      "runtime-host"
+    ],
+    "due_task_": [
+      "runtime-host"
+    ],
+    "decision_reason_": [
+      "policy"
+    ],
+    "pack_schedule_": [
+      "policy"
     ]
   },
   "fragments": {
