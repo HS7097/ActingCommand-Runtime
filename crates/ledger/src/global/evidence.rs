@@ -437,6 +437,15 @@ pub struct GlobalLedgerMetadata {
 }
 
 impl GlobalLedgerMetadata {
+    /// Workflow #395: bounds this snapshot's later reads (its view pages and artifact
+    /// resolution) by `deadline`; an earlier deadline it already holds stays in force.
+    pub fn set_read_deadline(&mut self, deadline: Instant) {
+        self.budget = Some(artifact_read_budget(self.budget, deadline));
+        if let Some(sqlite) = &mut self.sqlite {
+            sqlite.set_read_deadline(deadline);
+        }
+    }
+
     /// Resolves this opening's snapshot. Reopen metadata under the material use guard
     /// before rechecking current retention; an old instance cannot observe new facts.
     pub fn resolve_artifact(

@@ -4,7 +4,7 @@ use super::{ForensicError, ForensicReport, ForensicResult};
 use crate::codes::{ForensicsCode, ForensicsLocation};
 use actingcommand_artifact_store::{ArtifactStoreError, StoreCode, open_projected_stream};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     ArtifactEvictionDisposition, RUNTIME_MATERIAL_READ_BUDGET_MS, RuntimeErrorCode,
     RuntimeErrorProjection, RuntimeMaterialChunk, RuntimeMaterialReadFailure,
@@ -202,14 +202,49 @@ pub fn read_material_complete(
     }
 }
 
+// Workflow #395 (LEDG-395): the phases of one offline `actingledger material` read.
+/// The phases of one offline `material` read, in order (Workflow #395).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForensicMaterialPhase {
+    /// Opens authenticated metadata and resolves the selected reference and its retention.
+    Reference,
+    /// Under the reader's use guard, reopens the metadata and confirms the same reference and
+    /// its current retention.
+    CurrentReference,
+    /// Reads and verifies the material and encodes the reply.
+    VerifiedRead,
+}
+
+impl ForensicMaterialPhase {
+    /// The phase's registered location.
+    pub const fn location(self) -> Location {
+        match self {
+            Self::Reference => ForensicsLocation::ResolveMaterialReference.location(),
+            Self::CurrentReference => ForensicsLocation::ResolveCurrentMaterialReference.location(),
+            Self::VerifiedRead => ForensicsLocation::ReadVerifiedMaterial.location(),
+        }
+    }
+}
+
 /// One offline request opens fresh authenticated metadata twice, holding only the original
 /// ArtifactStore reader across the second lookup and full material verification.
 pub fn read_material_to<W: Write>(
     input: ForensicMaterialRequest,
     output: &mut W,
 ) -> ForensicResult<()> {
+    read_material_to_per_phase(input, output, |_| {
+        Duration::from_millis(RUNTIME_MATERIAL_READ_BUDGET_MS)
+    })
+}
+
+/// `read_material_to` with the budget of each phase taken from `budget`.
+pub fn read_material_to_per_phase<W: Write>(
+    input: ForensicMaterialRequest,
+    output: &mut W,
+    mut budget: impl FnMut(ForensicMaterialPhase) -> Duration,
+) -> ForensicResult<()> {
     let deadline = Instant::now()
-        .checked_add(Duration::from_millis(RUNTIME_MATERIAL_READ_BUDGET_MS))
+        .checked_add(budget(ForensicMaterialPhase::Reference))
         .ok_or_else(|| {
             material_error(
                 SharedCode::MaterialReadDeadlineOverflow.code(),

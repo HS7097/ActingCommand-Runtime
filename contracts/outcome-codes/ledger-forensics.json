@@ -799,6 +799,54 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Ledger forensics' operation or stage: validate view request."
+    },
+    "resolve_material_reference": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 1 of an offline material read (Workflow #395): open the ledger metadata and resolve the selected reference and its retention. A failure whose deadline ran out in this phase names it."
+    },
+    "resolve_current_material_reference": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 2 of an offline material read (Workflow #395): under the reader's use guard, reopen the ledger metadata and confirm the same reference and its current retention. A failure whose deadline ran out in this phase names it."
+    },
+    "read_verified_material": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 3 of an offline material read (Workflow #395): read and verify the material and encode the reply. A failure whose deadline ran out in this phase names it."
+    },
+    "read_runtime_facts_position": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 1 of an offline runtime fact read (Workflow #395): open the read-only metadata snapshot and read the event at the position. A failure whose deadline ran out in this phase names it."
+    },
+    "read_runtime_fact_snapshot_set": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 2 of an offline runtime fact read (Workflow #395): find the newest complete runtime fact snapshot set at or before the position. A failure whose deadline ran out in this phase names it."
+    },
+    "read_runtime_fact_changes": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 3 of an offline runtime fact read (Workflow #395): apply the runtime fact events after that set through the position. A failure whose deadline ran out in this phase names it."
     }
   }
 }

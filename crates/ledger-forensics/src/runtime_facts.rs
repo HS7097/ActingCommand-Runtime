@@ -16,7 +16,7 @@ use actingcommand_ledger::{
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const OPERATION: Location = ForensicsLocation::ReadRuntimeFactsAt.location();
 
@@ -55,6 +55,42 @@ pub enum ForensicRuntimeFactsUnavailable {
     LedgerEmpty,
     /// The position lies beyond the opened ledger's last sequence.
     PositionBeyondSnapshot,
+}
+
+// Workflow #395 (LEDG-395): the phases of one offline `actingledger facts --at` read.
+/// The phases of one offline runtime fact read, in order (Workflow #395).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForensicFactsPhase {
+    /// Opens the read-only metadata snapshot and reads the event at the position.
+    Position,
+    /// Finds the newest complete runtime fact snapshot set at or before the position.
+    SnapshotSet,
+    /// Applies the runtime fact events after that set through the position.
+    Changes,
+}
+
+impl ForensicFactsPhase {
+    /// The phase's registered location.
+    pub const fn location(self) -> Location {
+        match self {
+            Self::Position => ForensicsLocation::ReadRuntimeFactsPosition.location(),
+            Self::SnapshotSet => ForensicsLocation::ReadRuntimeFactSnapshotSet.location(),
+            Self::Changes => ForensicsLocation::ReadRuntimeFactChanges.location(),
+        }
+    }
+}
+
+/// `runtime_facts_at` with the budget of each phase taken from `budget`.
+pub fn runtime_facts_at_per_phase(
+    state_root: impl AsRef<Path>,
+    position: u64,
+    mut budget: impl FnMut(ForensicFactsPhase) -> Duration,
+) -> ForensicRuntimeFactsResult {
+    runtime_facts_at(
+        state_root,
+        position,
+        Instant::now() + budget(ForensicFactsPhase::Position),
+    )
 }
 
 /// Replays the runtime fact store at `position` (inclusive) from one read-only metadata
