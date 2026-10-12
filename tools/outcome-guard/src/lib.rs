@@ -1503,6 +1503,32 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         &[Check::G3],
         "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
     ),
+    // Possible double registration (coordinator note on A2c, PR #698): seven literals these
+    // functions compare stay spellings until the A2b/A2c merge follow-up.
+    bridge(
+        "crates/runtime-host/src/host/material_read.rs",
+        "HostShared::read_material",
+        &[Check::G5],
+        "A2b/A2c merge follow-up: compares a ledger, runtime-state or artifact-store code by its spelling, which A2c (PR #698) registers in its own registry; once both PRs merge the comparison takes the exported LedgerCode / StoreCode constant",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/policy_dispatch.rs",
+        "HostShared::project_authoritative_policy_inputs_with_gaps_under_gate",
+        &[Check::G5],
+        "A2b/A2c merge follow-up: compares a ledger, runtime-state or artifact-store code by its spelling, which A2c (PR #698) registers in its own registry; once both PRs merge the comparison takes the exported LedgerCode / StoreCode constant",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/read_events.rs",
+        "HostShared::subscribe_events",
+        &[Check::G5],
+        "A2b/A2c merge follow-up: compares a ledger, runtime-state or artifact-store code by its spelling, which A2c (PR #698) registers in its own registry; once both PRs merge the comparison takes the exported LedgerCode / StoreCode constant",
+    ),
+    bridge(
+        "crates/runtime-host/src/host/saved_artifact_ocr.rs",
+        "HostShared::recognize_artifact_inner",
+        &[Check::G5],
+        "A2b/A2c merge follow-up: compares a ledger, runtime-state or artifact-store code by its spelling, which A2c (PR #698) registers in its own registry; once both PRs merge the comparison takes the exported LedgerCode / StoreCode constant",
+    ),
     // End of the A2b bridges.
     AllowEntry {
         path: "apps/actingctl/src/mcp/protocol.rs",
