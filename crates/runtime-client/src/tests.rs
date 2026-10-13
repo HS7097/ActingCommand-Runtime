@@ -6,6 +6,8 @@ use super::*;
 mod gate_381a;
 // Workflow #381 B: the emulator control receipt wait (test plan C-3).
 mod gate_381b;
+// Workflow #391 item 3 (MCP-391c): an instance's recent runs are read by run.
+mod gate_391c;
 // Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
 mod gate_a2a;
 // #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).

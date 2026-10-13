@@ -41,6 +41,8 @@ const READ_RESERVE: Duration = Duration::from_secs(1);
 /// ac_diagnose reads the 10 most recent runs, the most `recent_runs` returns.
 const DIAGNOSE_RUNS: usize = 10;
 const ERRORS_PAGE_LIMIT: u16 = 20;
+/// ac_diagnose keeps at most this many of the instance's clock-slot rows (#372 K3).
+const DIAGNOSE_CLOCK_SLOTS: usize = 10;
 /// The tail of a failed subprocess's stderr kept in the result.
 const MAX_STDERR_TAIL: usize = 2048;
 
@@ -243,6 +245,7 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         location.state_root.as_deref().ok(),
         &alias,
         &json!(instance_id),
+        since,
     );
     let diagnosis = Diagnosis {
         instance: json!({"alias": alias, "instance_id": instance_id}),
@@ -261,27 +264,33 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
+        clock_slots: report.clock_slots,
+        clock_slots_total: report.clock_slots_total,
     };
-    diagnosis.render_within_budget(context, &connected, &query)
+    diagnosis.render_within_budget(|kept| diagnosis.errors_page(context, &connected, &query, kept))
 }
 
 /// ac_diagnose's parts, cut from their ends until the result fits the output budget.
-struct Diagnosis {
-    instance: Value,
-    since: u64,
-    incomplete: bool,
-    runs: Vec<Value>,
-    errors: Vec<Value>,
-    error_sequences: Vec<u64>,
-    errors_more: bool,
-    errors_next: Option<RuntimeEventQueryCursor>,
-    snapshot: u64,
-    continuable: bool,
-    repeating: Vec<Value>,
-    suspended: Vec<Value>,
-    lift: Vec<Value>,
-    report_warnings: Vec<Value>,
-    report_status: Value,
+pub(super) struct Diagnosis {
+    pub(super) instance: Value,
+    pub(super) since: u64,
+    pub(super) incomplete: bool,
+    pub(super) runs: Vec<Value>,
+    pub(super) errors: Vec<Value>,
+    pub(super) error_sequences: Vec<u64>,
+    pub(super) errors_more: bool,
+    pub(super) errors_next: Option<RuntimeEventQueryCursor>,
+    pub(super) snapshot: u64,
+    pub(super) continuable: bool,
+    pub(super) repeating: Vec<Value>,
+    pub(super) suspended: Vec<Value>,
+    pub(super) lift: Vec<Value>,
+    pub(super) report_warnings: Vec<Value>,
+    pub(super) report_status: Value,
+    /// At most 10 of the instance's clock-slot rows (#372 K3), refused and deferred first.
+    pub(super) clock_slots: Vec<Value>,
+    /// The instance's clock-slot rows in the window, kept or not.
+    pub(super) clock_slots_total: usize,
 }
 
 /// How many of each list a rendering keeps.
@@ -293,14 +302,15 @@ struct Kept {
     suspended: usize,
     lift: usize,
     report_warnings: usize,
+    clock_slots: usize,
 }
 
 impl Diagnosis {
-    fn render_within_budget(
+    /// Renders with every list whole, then cuts until the result fits. `errors_page` renders
+    /// the errors page with its first `kept` rows.
+    pub(super) fn render_within_budget(
         &self,
-        context: &ToolContext<'_>,
-        connected: &Connected,
-        query: &EventQuery,
+        errors_page: impl Fn(usize) -> Result<Value, ToolError>,
     ) -> ToolOutcome {
         let mut kept = Kept {
             runs: self.runs.len(),
@@ -309,17 +319,23 @@ impl Diagnosis {
             suspended: self.suspended.len(),
             lift: self.lift.len(),
             report_warnings: self.report_warnings.len(),
+            clock_slots: self.clock_slots.len(),
         };
         loop {
-            let result = self.render(context, connected, query, kept)?;
+            let result = self.render(kept, &errors_page)?;
             if tools::fits_success(&result) {
                 return Ok(ToolSuccess::new(result));
             }
-            // Cut what another tool can read again first: the errors page (ac_events), then
-            // the runs, oldest first (ac_get_run / ac_events). The rows of the actingd
-            // suspended report have no other MCP route, so they go last: repeating, lift,
-            // suspended, then the report's warnings.
-            if kept.errors > 0 {
+            // The clock-slot rows go first, from the end of their list (the owed rows before
+            // the refused and deferred ones, each oldest first): the full list stays in
+            // actingd suspended and clock_slots_total points there (#372 K3). Then what
+            // another tool can read again: the errors page (ac_events), then the runs, oldest
+            // first (ac_get_run / ac_events). The other rows of the actingd suspended report
+            // have no other MCP route, so they go last: repeating, lift, suspended, then the
+            // report's warnings.
+            if kept.clock_slots > 0 {
+                kept.clock_slots -= 1;
+            } else if kept.errors > 0 {
                 kept.errors -= 1;
             } else if kept.runs > 0 {
                 kept.runs -= 1;
@@ -340,19 +356,14 @@ impl Diagnosis {
 
     fn render(
         &self,
-        context: &ToolContext<'_>,
-        connected: &Connected,
-        query: &EventQuery,
         kept: Kept,
+        errors_page: &impl Fn(usize) -> Result<Value, ToolError>,
     ) -> Result<Value, ToolError> {
         let mut result = Map::new();
         result.insert("instance".to_owned(), self.instance.clone());
         result.insert("window".to_owned(), json!({"since_unix_ms": self.since}));
         list_into(&mut result, "runs", &self.runs, kept.runs);
-        result.insert(
-            "errors_page".to_owned(),
-            self.errors_page(context, connected, query, kept.errors)?,
-        );
+        result.insert("errors_page".to_owned(), errors_page(kept.errors)?);
         list_into(&mut result, "suspended", &self.suspended, kept.suspended);
         list_into(&mut result, "lift", &self.lift, kept.lift);
         list_into(&mut result, "repeating", &self.repeating, kept.repeating);
@@ -362,6 +373,18 @@ impl Diagnosis {
             &self.report_warnings,
             kept.report_warnings,
         );
+        list_into(
+            &mut result,
+            "clock_slots",
+            &self.clock_slots,
+            kept.clock_slots,
+        );
+        if kept.clock_slots < self.clock_slots_total {
+            result.insert(
+                "clock_slots_total".to_owned(),
+                json!(self.clock_slots_total),
+            );
+        }
         result.insert("suspended_report".to_owned(), self.report_status.clone());
         if self.incomplete {
             result.insert("incomplete".to_owned(), json!(true));
@@ -464,6 +487,52 @@ struct SuspensionRows {
     repeating: Vec<Value>,
     warnings: Vec<Value>,
     status: Value,
+    clock_slots: Vec<Value>,
+    clock_slots_total: usize,
+}
+
+/// Whether a report row names the instance, by its alias or its instance id.
+fn of_instance(row: &Value, alias: &str, instance_id: &Value) -> bool {
+    row.get("instance_id")
+        .is_some_and(|id| id.as_str() == Some(alias) || id == instance_id)
+}
+
+/// The instance's `clock_slots` rows of the report recorded since `since_unix_ms` (#372 K3):
+/// at most 10, the newest refused and deferred rows (those with a `gate_code`) first, then the
+/// newest owed rows; and how many there are in the window.
+pub(super) fn clock_slot_rows(
+    document: &Value,
+    alias: &str,
+    instance_id: &Value,
+    since_unix_ms: u64,
+) -> (Vec<Value>, usize) {
+    let rows = document
+        .get("clock_slots")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| {
+                    of_instance(row, alias, instance_id)
+                        && row
+                            .get("recorded_at_unix_ms")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|recorded| recorded >= since_unix_ms)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let total = rows.len();
+    // The report lists them newest first; the partition keeps that order on each side.
+    let (stopped, owed): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|row| row.get("gate_code").is_some());
+    let kept = stopped
+        .into_iter()
+        .chain(owed)
+        .take(DIAGNOSE_CLOCK_SLOTS)
+        .cloned()
+        .collect();
+    (kept, total)
 }
 
 /// Whether two paths name the same directory, as written or once resolved.
@@ -480,6 +549,7 @@ fn finish_suspension_report(
     state_root: Option<&Path>,
     alias: &str,
     instance_id: &Value,
+    since_unix_ms: u64,
 ) -> SuspensionRows {
     let unavailable = |status: Value| SuspensionRows {
         complete: false,
@@ -488,6 +558,8 @@ fn finish_suspension_report(
         repeating: Vec::new(),
         warnings: Vec::new(),
         status,
+        clock_slots: Vec::new(),
+        clock_slots_total: 0,
     };
     let captured = match child.map(JoinHandle::join) {
         Err(status) => return unavailable(status),
@@ -553,16 +625,14 @@ fn finish_suspension_report(
                     .and_then(Value::as_array)
                     .map(|rows| {
                         rows.iter()
-                            .filter(|row| {
-                                row.get("instance_id").is_some_and(|id| {
-                                    id.as_str() == Some(alias) || id == instance_id
-                                })
-                            })
+                            .filter(|row| of_instance(row, alias, instance_id))
                             .cloned()
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default()
             };
+            let (clock_slots, clock_slots_total) =
+                clock_slot_rows(&document, alias, instance_id, since_unix_ms);
             SuspensionRows {
                 complete: true,
                 suspended: rows("suspended"),
@@ -577,6 +647,8 @@ fn finish_suspension_report(
                     "status": "ok",
                     "through_sequence": document.get("through_sequence"),
                 }),
+                clock_slots,
+                clock_slots_total,
             }
         }
         // actingd's own failure document, as it printed it.

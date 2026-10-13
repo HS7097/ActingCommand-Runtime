@@ -14,6 +14,18 @@ const RUN_STATUS_OPERATION: Location = ClientLocation::ContainedRunStatus.locati
 const RECENT_RUNS_OPERATION: Location = ClientLocation::RecentRuns.location();
 const MAX_RECENT_RUNS: usize = 10;
 const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
+/// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
+/// its terminal. A run without an entry check starts with its main admission, a run with one
+/// records an entry fact once that check is done, and a run whose first check fails ends with
+/// its terminal; each records only a few of them. Listing by them reads a few events per run,
+/// however many other events its instance records.
+const RUN_LISTING_EVENT_TYPES: [EventType; 5] = [
+    EventType::TaskRequested,
+    EventType::TaskEntryPreflight,
+    EventType::TaskCompleted,
+    EventType::TaskFailed,
+    EventType::TaskCancelled,
+];
 
 /// Selects one contained run by the request that submitted it or by its run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +157,21 @@ struct StatusPages {
     complete: bool,
 }
 
+/// One run a listing found: its identity and its first listing fact in the window.
+#[derive(Debug, Clone, Copy)]
+struct ListedRun {
+    identity: TaskRunIdentity,
+    sequence: u64,
+}
+
+/// The runs of one window, each once, oldest first by their first listing fact there, all read
+/// at `snapshot`. `complete` is false when the deadline ended a read before its last page.
+struct RunListing {
+    runs: Vec<ListedRun>,
+    snapshot: u64,
+    complete: bool,
+}
+
 struct ReadRunStatus {
     status: ContainedRunStatus,
     first_fact_timestamp_unix_ms: Option<u64>,
@@ -165,8 +192,10 @@ impl RuntimeClient {
     }
 
     /// The most recent `limit` (1-10) contained runs first recorded on `instance` since
-    /// `since_unix_ms`, each in brief mode. The whole read has a 20 s budget, checked between
-    /// reads; when it ends the read early the result is `incomplete`. Read-only.
+    /// `since_unix_ms`, each in brief mode. The runs of the window are listed first and then
+    /// read one by one (Workflow #391 item 3), so the instance's other events are never read.
+    /// The whole read has a 20 s budget, checked between reads; when it ends the read early the
+    /// result is `incomplete`. Read-only.
     pub fn recent_runs(
         &self,
         instance: InstanceId,
@@ -187,43 +216,23 @@ impl RuntimeClient {
                     RECENT_RUNS_OPERATION,
                 )
             })?;
-        let listing = self.read_status_pages(
-            EventQuery {
+        let listing = self.list_runs(
+            &EventQuery {
                 instance_id: Some(instance),
                 from_timestamp_unix_ms: Some(since_unix_ms),
                 ..EventQuery::default()
             },
-            None,
             Some(deadline),
-            RECENT_RUNS_OPERATION,
         )?;
         let mut incomplete = !listing.complete;
-        let mut recent = Vec::new();
-        let mut requests = BTreeMap::new();
-        let mut runs_seen = BTreeSet::new();
-        for event in &listing.events {
-            let Some(identity) = run_fact_identity(event)? else {
-                continue;
-            };
-            if let Some(previous) = requests.insert(identity.request_id, identity) {
-                if previous != identity {
-                    return Err(status_error(ClientCode::RunStatusIdentityMismatch));
-                }
-                continue;
-            }
-            if !runs_seen.insert(identity.run_id) {
-                return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
-            }
-            recent.push(identity.request_id);
-        }
         let mut runs = Vec::with_capacity(limit);
-        for request_id in recent.into_iter().rev() {
+        for listed in listing.runs.iter().rev() {
             if Instant::now() >= deadline {
                 incomplete = true;
                 break;
             }
             match self.read_contained_run_status(
-                RunKey::RequestId(request_id),
+                RunKey::RequestId(listed.identity.request_id),
                 RunStatusMode::Brief,
                 Some(listing.snapshot),
                 Some(deadline),
@@ -251,6 +260,68 @@ impl RuntimeClient {
             incomplete,
             snapshot_ledger_position: listing.snapshot,
         })
+    }
+
+    /// The runs `window` holds a listing fact of (Workflow #391 item 3), one query per listing
+    /// fact type, all at the first query's snapshot; each run once, under the identity checks of
+    /// a run's own read. A later fact inside the window does not list an older run first: the
+    /// order is by each run's first listing fact in the window.
+    fn list_runs(
+        &self,
+        window: &EventQuery,
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<RunListing> {
+        let mut listing = RunListing {
+            runs: Vec::new(),
+            snapshot: 0,
+            complete: true,
+        };
+        let mut snapshot = None;
+        let mut listed = BTreeMap::<RequestId, usize>::new();
+        let mut runs_seen = BTreeSet::new();
+        for event_type in RUN_LISTING_EVENT_TYPES {
+            let read = self.read_status_pages(
+                EventQuery {
+                    event_type: Some(event_type),
+                    ..window.clone()
+                },
+                snapshot,
+                deadline,
+                RECENT_RUNS_OPERATION,
+            )?;
+            snapshot = Some(read.snapshot);
+            listing.snapshot = read.snapshot;
+            for event in &read.events {
+                let Some(identity) = run_fact_identity(event)? else {
+                    continue;
+                };
+                match listed.get(&identity.request_id) {
+                    Some(index) => {
+                        let run = &mut listing.runs[*index];
+                        if run.identity != identity {
+                            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
+                        }
+                        run.sequence = run.sequence.min(event.sequence);
+                    }
+                    None => {
+                        if !runs_seen.insert(identity.run_id) {
+                            return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
+                        }
+                        listed.insert(identity.request_id, listing.runs.len());
+                        listing.runs.push(ListedRun {
+                            identity,
+                            sequence: event.sequence,
+                        });
+                    }
+                }
+            }
+            if !read.complete {
+                listing.complete = false;
+                break;
+            }
+        }
+        listing.runs.sort_by_key(|run| run.sequence);
+        Ok(listing)
     }
 
     /// `None` only when `deadline` ended a paged read before its last page.

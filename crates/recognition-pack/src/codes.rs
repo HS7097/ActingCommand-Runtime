@@ -8,11 +8,11 @@
 actingcommand_contract::outcome_codes! {
     /// Why no candidate projection was produced.
     pub enum RecognitionPackCode {
-        CandidateLayoutUnknown => "candidate_layout_unknown": error,
-        CandidateFeatureFailed => "candidate_feature_failed": error,
-        CandidateFeatureProviderMissing => "candidate_feature_provider_missing": error,
-        CandidateSamplesUnavailable => "candidate_samples_unavailable": error,
-        CandidateSampleGeometryChanged => "candidate_sample_geometry_changed": error,
-        CandidateSampleRecordFailed => "candidate_sample_record_failed": error,
+        CandidateLayoutUnknown => "candidate_layout_unknown": error / declaration_error,
+        CandidateFeatureFailed => "candidate_feature_failed": error / pack_logic_mismatch,
+        CandidateFeatureProviderMissing => "candidate_feature_provider_missing": error / declaration_error,
+        CandidateSamplesUnavailable => "candidate_samples_unavailable": error / none,
+        CandidateSampleGeometryChanged => "candidate_sample_geometry_changed": error / environment_fault,
+        CandidateSampleRecordFailed => "candidate_sample_record_failed": error / none,
     }
 }

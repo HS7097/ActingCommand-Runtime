@@ -56,6 +56,9 @@ const RAW_TEXT_TRUNCATED_KEY: &str = "raw_text_truncated";
 /// `src/codes.rs`, and lists every entry in its catalog fragment
 /// `contracts/outcome-codes/<owner>.json` (the outcome guard's G1 checks both directions).
 ///
+/// Each entry names its category and, after a `/`, its ladder class (a token of the vocabulary
+/// `ladder_class`, Workflow #387), both equal to the fragment entry's.
+///
 /// Attributes on the enum and on each variant pass through unchanged, serde attributes
 /// included: a registry that must also (de)serialize adds `#[derive(serde::Serialize)]` and
 /// `#[serde(rename = "...")]` with the registered spelling.
@@ -63,7 +66,7 @@ const RAW_TEXT_TRUNCATED_KEY: &str = "raw_text_truncated";
 /// ```ignore
 /// actingcommand_contract::outcome_codes! {
 ///     pub enum HostCode {
-///         InstanceDiscoveryUnavailable => "instance_discovery_unavailable": error,
+///         InstanceDiscoveryUnavailable => "instance_discovery_unavailable": error / environment_fault,
 ///     }
 /// }
 /// ```
@@ -72,7 +75,7 @@ macro_rules! outcome_codes {
     (
         $(#[$meta:meta])*
         $vis:vis enum $name:ident {
-            $( $(#[$variant_meta:meta])* $variant:ident => $spelling:literal : $category:ident ),+ $(,)?
+            $( $(#[$variant_meta:meta])* $variant:ident => $spelling:literal : $category:ident / $ladder_class:ident ),+ $(,)?
         }
     ) => {
         $(#[$meta])*
@@ -97,6 +100,14 @@ macro_rules! outcome_codes {
             pub const fn category(self) -> $crate::outcome::Category {
                 match self {
                     $(Self::$variant => $crate::__outcome_category!($category)),+
+                }
+            }
+
+            /// The code's ladder class (Workflow #387): how the recovery ladder's trigger
+            /// matching reads the code.
+            pub const fn ladder_class(self) -> $crate::outcome::LadderClass {
+                match self {
+                    $(Self::$variant => $crate::__outcome_ladder_class!($ladder_class)),+
                 }
             }
 
@@ -232,6 +243,32 @@ macro_rules! __outcome_category {
     };
     (fatal) => {
         $crate::outcome::Category::Fatal
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __outcome_ladder_class {
+    (planned_stop) => {
+        $crate::outcome::LadderClass::PlannedStop
+    };
+    (budget_or_permission) => {
+        $crate::outcome::LadderClass::BudgetOrPermission
+    };
+    (declaration_error) => {
+        $crate::outcome::LadderClass::DeclarationError
+    };
+    (pack_logic_mismatch) => {
+        $crate::outcome::LadderClass::PackLogicMismatch
+    };
+    (environment_fault) => {
+        $crate::outcome::LadderClass::EnvironmentFault
+    };
+    (stability_warning) => {
+        $crate::outcome::LadderClass::StabilityWarning
+    };
+    (none) => {
+        $crate::outcome::LadderClass::NotApplicable
     };
 }
 
@@ -466,7 +503,7 @@ mod check;
 mod keys;
 mod vocabulary;
 
-pub use vocabulary::{CauseRelation, IoKind, IoOp, RawSource};
+pub use vocabulary::{CauseRelation, IoKind, IoOp, LadderClass, RawSource};
 
 /// The merged outcome catalog `contracts/outcome-codes.json`, embedded at build time. It is
 /// generated from the fragments by `outcome-guard merge` (in CI) and never edited by hand.

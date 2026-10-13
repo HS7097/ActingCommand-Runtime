@@ -3,7 +3,9 @@
 //! The outcome guard on this workspace (G1, G2-G6 outside the allow list, G7, G8, G9), plus
 //! counterexamples that show each check catches a break.
 
-use actingcommand_outcome_guard::catalog::{RELEASE_SCHEMA_VERSION, check_snapshot};
+use actingcommand_outcome_guard::catalog::{
+    RELEASE_SCHEMA_VERSION, check_ladder_class, check_snapshot,
+};
 use actingcommand_outcome_guard::source::{ChannelScope, Check, inspect_channels, scan_file};
 use actingcommand_outcome_guard::{
     ALLOW_LIST, ScannedFile, Workspace, check_channels, check_contract, check_keys, check_naming,
@@ -401,4 +403,137 @@ fn gate_g1_reports_a_registry_invocation_that_does_not_parse() {
         &check_registries(&changed),
         &format!("G1 {path}: line 2: outcome_codes! does not parse"),
     );
+}
+
+/// #387 D1a C-5 G1b (model-387 v1.2 §8.2 row C-5 G1b, §3.2): every catalog code carries a
+/// `ladder_class` that is a token of the vocabulary `ladder_class`, whose tokens are the seven
+/// classes of the decision table; a `stability_warning` code is of category warning or error.
+/// The guard refuses a missing or unknown class and a `stability_warning` of another category,
+/// and a settled code whose class changed turns G9 red.
+#[test]
+fn gate_c5_g1b_every_code_has_a_ladder_class_and_a_settled_class_stays() {
+    const CLASSES: [&str; 7] = [
+        "planned_stop",
+        "budget_or_permission",
+        "declaration_error",
+        "pack_logic_mismatch",
+        "environment_fault",
+        "stability_warning",
+        "none",
+    ];
+    let catalog = workspace().catalog.as_ref().expect("the catalog loads");
+    let tokens = catalog
+        .vocabularies
+        .get("ladder_class")
+        .and_then(|vocabulary| vocabulary.get("tokens"))
+        .and_then(serde_json::Value::as_object)
+        .map(|tokens| tokens.keys().map(String::as_str).collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    assert_eq!(
+        tokens,
+        BTreeSet::from(CLASSES),
+        "the vocabulary ladder_class"
+    );
+    for (name, entry) in &catalog.codes {
+        let class = entry
+            .get("ladder_class")
+            .and_then(serde_json::Value::as_str);
+        assert!(
+            class.is_some_and(|class| tokens.contains(class)),
+            "{name}: ladder_class {class:?} is not a token of the vocabulary ladder_class"
+        );
+        if class == Some("stability_warning") {
+            let category = entry.get("category").and_then(serde_json::Value::as_str);
+            assert!(
+                matches!(category, Some("warning" | "error")),
+                "{name}: a stability_warning code of category {category:?}"
+            );
+        }
+    }
+
+    // The guard's check of one code entry: (ladder_class, category, accepted).
+    let probe = catalog
+        .codes
+        .get("foreign_os_error")
+        .cloned()
+        .expect("the contract fragment lists foreign_os_error");
+    let cases: [(Option<&str>, &str, bool); 7] = [
+        (None, "error", false),
+        (Some("satellite"), "error", false),
+        (Some("stability_warning"), "info", false),
+        (Some("stability_warning"), "fatal", false),
+        (Some("stability_warning"), "warning", true),
+        (Some("stability_warning"), "error", true),
+        (Some("pack_logic_mismatch"), "error", true),
+    ];
+    for (class, category, accepted) in cases {
+        let mut entry = probe.clone();
+        entry.remove("ladder_class");
+        if let Some(class) = class {
+            entry.insert("ladder_class".to_owned(), class.into());
+        }
+        entry.insert("category".to_owned(), category.into());
+        let errors = check_ladder_class(&entry, &catalog.vocabularies, "probe");
+        assert_eq!(
+            errors.is_empty(),
+            accepted,
+            "ladder_class {class:?}, category {category}: {errors:?}"
+        );
+    }
+
+    // G9: a released settled entry keeps its class.
+    let current = probe
+        .get("ladder_class")
+        .and_then(serde_json::Value::as_str)
+        .expect("foreign_os_error names its ladder_class");
+    let other = CLASSES
+        .into_iter()
+        .find(|class| *class != current)
+        .expect("another class");
+    let values = probe
+        .get("values")
+        .and_then(serde_json::Value::as_object)
+        .expect("foreign_os_error has values")
+        .iter()
+        .map(|(key, presence)| {
+            let kind = catalog
+                .keys
+                .get(key)
+                .and_then(|entry| entry.get("type"))
+                .cloned()
+                .expect("a value key is in the key table");
+            let required = presence.as_str() == Some("required");
+            (
+                key.clone(),
+                serde_json::json!({"type": kind, "required": required}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    for (class, changed) in [(current, false), (other, true)] {
+        let snapshot = serde_json::json!({
+            "schema_version": RELEASE_SCHEMA_VERSION,
+            "release": "0.12.0",
+            "codes": {"foreign_os_error": {
+                "category": probe.get("category").cloned().expect("a category"),
+                "ladder_class": class,
+                "review": "settled",
+                "status": "active",
+                "values": values.clone()
+            }}
+        });
+        let violations = check_snapshot(
+            "released/0.12.0.json",
+            snapshot.as_object().expect("a snapshot object"),
+            catalog,
+        );
+        if changed {
+            assert_reported(
+                "G9",
+                &violations,
+                "G9 released/0.12.0.json: settled foreign_os_error changed its ladder_class",
+            );
+        } else {
+            assert_none("G9", violations);
+        }
+    }
 }

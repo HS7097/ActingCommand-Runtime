@@ -18,10 +18,10 @@ const DAY_ZERO_UNIX_MS: u64 = 1_700_006_400_000;
 const CLOCK_SLOT_PREFIX: &str = "signal:clock_slot:";
 const WINDOW_START_MINUTE: u16 = 6 * 60;
 const WINDOW_END_MINUTE: u16 = 23 * 60 + 30;
-const SLOT_TASK: &str = "fixture.slot";
+pub(super) const SLOT_TASK: &str = "fixture.slot";
 
 /// `hour:minute` UTC on scenario day `day`.
-const fn at(day: u64, hour: u64, minute: u64) -> u64 {
+pub(super) const fn at(day: u64, hour: u64, minute: u64) -> u64 {
     DAY_ZERO_UNIX_MS + day * DAY_MS + hour * HOUR_MS + minute * MINUTE_MS
 }
 
@@ -44,7 +44,7 @@ fn daily(minutes: &[u16]) -> serde_json::Value {
 }
 
 /// One generic task on the fixture instance.
-struct SlotTask {
+pub(super) struct SlotTask {
     id: &'static str,
     priority: u32,
     trigger: serde_json::Value,
@@ -52,7 +52,7 @@ struct SlotTask {
 }
 
 /// One task with a `daily` clock at `minutes` and `daily_limit` runs a day.
-fn slot_task(minutes: &[u16], daily_limit: u32) -> SlotTask {
+pub(super) fn slot_task(minutes: &[u16], daily_limit: u32) -> SlotTask {
     SlotTask {
         id: SLOT_TASK,
         priority: 100,
@@ -63,7 +63,11 @@ fn slot_task(minutes: &[u16], daily_limit: u32) -> SlotTask {
 
 /// A catalog of `tasks` with the activity window 06:00–23:30 UTC and an activity interval of
 /// 1 ms, plus a daily reset of every `task.` fact at `reset_minute` when given.
-fn slot_sources(version: u64, tasks: &[SlotTask], reset_minute: Option<u16>) -> CatalogSources {
+pub(super) fn slot_sources(
+    version: u64,
+    tasks: &[SlotTask],
+    reset_minute: Option<u16>,
+) -> CatalogSources {
     let mut sources = policy_sources(version);
     let mut document: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks");
@@ -228,8 +232,8 @@ fn open_slot_host(
 }
 
 /// One host on a manual Runtime clock, and the records read from it so far.
-struct Slots {
-    host: RuntimeHost,
+pub(super) struct Slots {
+    pub(super) host: RuntimeHost,
     clock: Arc<ManualRuntimeClock>,
     root: TempDir,
     registered: InstanceId,
@@ -240,7 +244,7 @@ struct Slots {
 }
 
 impl Slots {
-    fn start(sources: &CatalogSources, unix_ms: u64) -> Self {
+    pub(super) fn start(sources: &CatalogSources, unix_ms: u64) -> Self {
         Self::start_on(Backend::Device, sources, unix_ms)
     }
 
@@ -281,7 +285,7 @@ impl Slots {
             .expect("activate the next clock-slot catalog");
     }
 
-    fn evaluate(&mut self, unix_ms: u64) -> PolicyCycle {
+    pub(super) fn evaluate(&mut self, unix_ms: u64) -> PolicyCycle {
         self.set_time(unix_ms);
         let mut facts = policy_facts();
         facts.outcomes.clear();
@@ -302,7 +306,7 @@ impl Slots {
 
     /// Evaluates at `unix_ms`, then admits the dispatch the cycle selected for `task_id`,
     /// completes it and ends its lease, as a run of the task does.
-    fn dispatch(&mut self, unix_ms: u64, task_id: &str) {
+    pub(super) fn dispatch(&mut self, unix_ms: u64, task_id: &str) {
         let cycle = self.evaluate(unix_ms);
         let evaluation = cycle.evaluation.as_ref().expect("evaluation");
         let intent = evaluation
@@ -347,7 +351,7 @@ impl Slots {
     }
 
     /// An operator's instance pause, as `actingctl pause` sends it.
-    fn pause(&self) {
+    pub(super) fn pause(&self) {
         self.scheduling(RuntimeOperation::PauseScheduling {
             scope: SchedulingPauseScope::Instance {
                 instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
@@ -358,7 +362,7 @@ impl Slots {
         });
     }
 
-    fn resume(&self) {
+    pub(super) fn resume(&self) {
         self.scheduling(RuntimeOperation::ResumeScheduling {
             scope: SchedulingPauseScope::Instance {
                 instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
@@ -422,7 +426,7 @@ impl Slots {
     }
 
     /// A clean stop that keeps the state root for a read after it.
-    fn close_keeping_root(self) -> TempDir {
+    pub(super) fn close_keeping_root(self) -> TempDir {
         let Self { host, root, .. } = self;
         host.close().expect("close the clock-slot host");
         root
