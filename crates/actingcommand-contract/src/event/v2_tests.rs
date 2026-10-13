@@ -3445,6 +3445,31 @@ fn revision_3_renamed_members_keep_their_results_beside_the_envelope() {
     }
 }
 
+/// Workflow #378 A3 (acceptance CL-L3): every event type resolves its category from the
+/// embedded catalog, with no fallback. The tokens are the catalog's `event_type` vocabulary,
+/// which the guard (G7) keeps equal to the `EventType` enum, so this covers every variant.
+#[test]
+fn every_event_type_resolves_its_catalog_category() {
+    let tokens = crate::outcome::catalog_json()
+        .expect("embedded catalog")
+        .pointer("/vocabularies/event_type/tokens")
+        .and_then(serde_json::Value::as_object)
+        .expect("event_type vocabulary");
+    assert!(!tokens.is_empty());
+    for (token, entry) in tokens {
+        let event_type: EventType = serde_json::from_value(serde_json::json!(token))
+            .unwrap_or_else(|error| panic!("{token} is no EventType: {error}"));
+        assert_eq!(
+            serde_json::to_value(event_type).expect("event type token"),
+            serde_json::json!(token)
+        );
+        let category: crate::outcome::Category =
+            serde_json::from_value(entry.get("category").cloned().expect("a category"))
+                .unwrap_or_else(|error| panic!("{token}: {error}"));
+        assert_eq!(event_type.category(), category, "{token}");
+    }
+}
+
 #[test]
 fn record_severity_is_the_outcome_category_else_the_event_type_category() {
     // The categories the catalog gives these codes and event types (vocabulary `event_type`):

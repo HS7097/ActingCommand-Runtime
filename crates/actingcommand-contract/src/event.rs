@@ -503,10 +503,18 @@ pub enum EventType {
 
 impl EventType {
     /// The category of this event type in the catalog this build embeds (vocabulary
-    /// `event_type`): the severity of a record that carries no outcome. The guard (G7) keeps
-    /// every token's category in the catalog; a build whose catalog lacks one reads `info`.
+    /// `event_type`): the severity of a record that carries no outcome. The catalog is
+    /// embedded at build time and the guard (G7) keeps every token's category in it, so a
+    /// missing token or an unreadable catalog is a build defect: it panics, naming the token,
+    /// and never reads as another category (Workflow #378 A3, acceptance CL-L3).
     pub fn category(self) -> crate::outcome::Category {
-        event_type_category(self).unwrap_or(crate::outcome::Category::Info)
+        event_type_category(self).unwrap_or_else(|| {
+            panic!(
+                "the embedded outcome catalog gives the event type {} no category",
+                serde_json::to_value(self)
+                    .map_or_else(|_| format!("{self:?}"), |token| token.to_string())
+            )
+        })
     }
 
     pub fn family(self) -> EventFamily {
@@ -641,13 +649,14 @@ fn event_type_category(event_type: EventType) -> Option<crate::outcome::Category
     use std::sync::OnceLock;
     static CATEGORIES: OnceLock<HashMap<String, crate::outcome::Category>> = OnceLock::new();
     let categories = CATEGORIES.get_or_init(|| {
-        let tokens = crate::outcome::catalog_json()
-            .ok()
-            .and_then(|catalog| catalog.pointer("/vocabularies/event_type/tokens"))
-            .and_then(serde_json::Value::as_object);
+        let catalog = crate::outcome::catalog_json()
+            .unwrap_or_else(|error| panic!("the embedded outcome catalog does not parse: {error}"));
+        let tokens = catalog
+            .pointer("/vocabularies/event_type/tokens")
+            .and_then(serde_json::Value::as_object)
+            .expect("the embedded outcome catalog lists the event_type vocabulary");
         tokens
-            .into_iter()
-            .flatten()
+            .iter()
             .filter_map(|(token, entry)| {
                 let category = entry.get("category")?.clone();
                 Some((token.clone(), serde_json::from_value(category).ok()?))
