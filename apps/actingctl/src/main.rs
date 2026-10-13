@@ -15,8 +15,14 @@ mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
 
-// Workflow #389 MCP-3: `runs` (MCP `ac_runs`), with the instance selector it shares with MCP.
+// Workflow #389 MCP-5a: `observe --export` (MCP `ac_observe`), with the instance selector and the
+// material export writer it shares with MCP.
 mod instance_selector;
+mod material_export;
+mod observe_export;
+// End of MCP-5a.
+
+// Workflow #389 MCP-3: `runs` (MCP `ac_runs`); it uses MCP-5a's instance selector above.
 mod run_list;
 // End of MCP-3.
 
@@ -67,6 +73,11 @@ fn main() -> ExitCode {
         if let Some(exit) = watchdog::dispatch(&arguments) {
             return exit;
         }
+    }
+    // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
+    // before `Invocation::parse`; `observe` without `--export` is unchanged.
+    if let Some(exit) = observe_export::dispatch(&arguments) {
+        return exit;
     }
     // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
     // `Invocation::parse`.

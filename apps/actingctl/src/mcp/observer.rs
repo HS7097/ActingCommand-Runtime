@@ -10,7 +10,6 @@ use super::tools::{
     self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::ActingctlCode;
-use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_contract::{
     ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition, LedgerView,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectedEvent,
@@ -21,11 +20,8 @@ use actingcommand_contract::{
 use actingcommand_runtime_client::{RuntimeMaterialCompleteResult, RuntimeMaterialSelection};
 use serde_json::{Map, Value, json};
 use std::env;
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
@@ -34,12 +30,10 @@ const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) const EVENTS_PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
-/// The largest material ac_material exports.
-const MAX_EXPORT_BYTES: usize = 32 * 1024 * 1024;
+/// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
+const MAX_EXPORT_BYTES: usize = crate::material_export::MAX_EXPORT_BYTES;
 /// Time kept back from the call budget for writing the exported file.
 const EXPORT_WRITE_RESERVE: Duration = Duration::from_secs(2);
-
-static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance"])?;
@@ -178,30 +172,13 @@ fn instance_row(
 }
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
-/// Runtime's status lists them.
+/// Runtime's status lists them: the selector the CLI shares (`crate::instance_selector`).
 pub(super) fn select_instance<'s>(
     instances: &'s [RuntimeInstanceStatus],
     selector: &str,
 ) -> Result<&'s RuntimeInstanceStatus, ToolError> {
-    let port = selector.parse::<u16>().ok();
-    let mut matching = instances.iter().filter(|instance| {
-        instance.instance_alias() == selector
-            || json!(instance.instance_id()).as_str() == Some(selector)
-            || port.is_some_and(|port| instance.adb_port() == Some(port))
-    });
-    let selected = matching.next().ok_or_else(|| {
-        ToolError::usage(
-            RuntimeErrorCode::InstanceUnknown,
-            format!("no configured instance has the alias, instance_id or ADB port {selector}"),
-        )
-    })?;
-    if matching.next().is_some() {
-        return Err(ToolError::usage(
-            ActingctlCode::InstanceAmbiguous,
-            format!("{selector} names more than one instance; pass its alias or instance_id"),
-        ));
-    }
-    Ok(selected)
+    crate::instance_selector::select(instances, selector)
+        .map_err(|miss| ToolError::usage(miss.code(), miss.message(selector)))
 }
 
 fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
@@ -394,12 +371,7 @@ pub(super) fn event_row(event: &ProjectedEvent) -> Value {
 
 /// `<seq>:<event_id>:<artifact_id>`: enough to find the material again in the ledger.
 fn material_ref(event: &ProjectedEvent, artifact: &ProjectedArtifactReference) -> String {
-    format!(
-        "{}:{}:{}",
-        event.sequence,
-        text_of(json!(event.event_id)),
-        text_of(json!(artifact.artifact_id))
-    )
+    crate::material_export::material_ref(event, artifact)
 }
 
 fn text_of(value: Value) -> String {
@@ -474,11 +446,12 @@ fn decode_cursor(
     Ok(cursor)
 }
 
-/// One committed material, found again from its ref at the ledger's current snapshot.
-struct Material {
-    position: LedgerEventPosition,
-    artifact: ProjectedArtifactReference,
-    snapshot: u64,
+/// One committed material, found again from its ref at the ledger's current snapshot (or, for
+/// ac_observe, the frame its observation just recorded).
+pub(super) struct Material {
+    pub(super) position: LedgerEventPosition,
+    pub(super) artifact: ProjectedArtifactReference,
+    pub(super) snapshot: u64,
 }
 
 pub(super) fn material(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
@@ -680,7 +653,7 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
-fn material_export(
+pub(super) fn material_export(
     context: &ToolContext<'_>,
     connected: &Connected,
     material: &Material,
@@ -782,7 +755,8 @@ pub(super) fn export_directory() -> PathBuf {
     env::temp_dir().join("actingcommand-mcp").join("materials")
 }
 
-/// The export writer: `bytes`, whose `sha256` (`sha256:<hex>`) the caller knows, to
+/// The export writer (`crate::material_export::write`, which `actingctl observe --export`
+/// shares) on the export directory: `bytes`, whose `sha256` (`sha256:<hex>`) the caller knows, to
 /// `<export directory>\<hex>.<extension>` through a partial file moved into place;
 /// `{path, sha256, size}`.
 pub(super) fn export_bytes(
@@ -790,32 +764,18 @@ pub(super) fn export_bytes(
     extension: &str,
     bytes: &[u8],
 ) -> Result<Value, ToolError> {
-    let failed = |action: &str, path: &Path, error: io::Error| {
-        ToolError::new(
-            "runtime",
-            ActingctlCode::MaterialExportFailed,
-            format!("{action} {}: {error}", path.display()),
-        )
-        .with_detail("path", json!(path.display().to_string()))
-    };
-    let digest = sha256.strip_prefix("sha256:").unwrap_or(sha256);
-    let directory = export_directory();
-    fs::create_dir_all(&directory)
-        .map_err(|error| failed("cannot create", directory.as_path(), error))?;
-    let path = directory.join(format!("{digest}.{extension}"));
-    let partial = directory.join(format!(
-        "{digest}.{extension}.{}-{}.partial",
-        process::id(),
-        EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::write(&partial, bytes).map_err(|error| failed("cannot write", partial.as_path(), error))?;
-    fs::rename(&partial, &path).map_err(|error| {
-        failed("cannot move into place", path.as_path(), error)
-            .with_detail("partial", json!(partial.display().to_string()))
-    })?;
-    Ok(json!({
-        "path": path.display().to_string(),
-        "sha256": sha256,
-        "size": bytes.len(),
-    }))
+    crate::material_export::write(&export_directory(), sha256, extension, bytes).map_err(
+        |failure| {
+            let error = ToolError::new(
+                "runtime",
+                ActingctlCode::MaterialExportFailed,
+                failure.message(),
+            )
+            .with_detail("path", json!(failure.path().display().to_string()));
+            match failure.partial() {
+                Some(partial) => error.with_detail("partial", json!(partial.display().to_string())),
+                None => error,
+            }
+        },
+    )
 }
