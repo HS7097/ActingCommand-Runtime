@@ -341,11 +341,22 @@ impl HostShared {
                     .finish_capture_failure_while_guarded(error, links.clone(), admission)
                     .map_err(RequestFailure::poison_without_terminal)?;
                 let runtime_error = RuntimeHostError::readonly_capture(&error);
-                if self
-                    .retain_unconfirmed_resources(&runtime_error, links.clone())
+                match self
+                    .settle_unconfirmed_resources(
+                        &runtime_error,
+                        links.instance_id().copied(),
+                        links.clone(),
+                    )
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
-                    return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    super::resource_fence::UnconfirmedResources::Confirmed => {}
+                    // Workflow #403: the instance is fenced; the observation fails non-fatally.
+                    super::resource_fence::UnconfirmedResources::Fenced(fence) => {
+                        return Err(RequestFailure::fence_without_terminal(fence));
+                    }
+                    super::resource_fence::UnconfirmedResources::Retained => {
+                        return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    }
                 }
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,

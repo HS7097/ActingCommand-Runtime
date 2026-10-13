@@ -2,6 +2,7 @@
 
 use super::facts::FactPublicationPurpose;
 use super::lease::HostClaim;
+use super::resource_fence::UnconfirmedResources;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -1302,16 +1303,26 @@ impl RuntimeContainedTask<'_> {
             if error.projection().code == RuntimeErrorCode::LedgerFailure {
                 return Err(RequestFailure::poison_without_terminal(error.clone()));
             }
-            let retained = self
+            let settled = self
                 .host
-                .retain_unconfirmed_resources(error, self.links())
+                .settle_unconfirmed_resources(error, Some(self.token.instance_id()), self.links())
                 .map_err(|failure| {
                     RequestFailure::poison_without_terminal(
                         failure.with_related_failure("geometry_observation", error),
                     )
                 })?;
-            if retained || error.is_fatal() {
-                return Err(RequestFailure::poison_without_terminal(error.clone()));
+            match settled {
+                // Workflow #403: the instance is fenced; the run fails non-fatally.
+                UnconfirmedResources::Fenced(fence) => {
+                    return Err(RequestFailure::fence_without_terminal(fence));
+                }
+                UnconfirmedResources::Retained => {
+                    return Err(RequestFailure::poison_without_terminal(error.clone()));
+                }
+                UnconfirmedResources::Confirmed if error.is_fatal() => {
+                    return Err(RequestFailure::poison_without_terminal(error.clone()));
+                }
+                UnconfirmedResources::Confirmed => {}
             }
         }
         let conclusion = match result {
@@ -3164,11 +3175,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .map_err(RequestFailure::poison_without_terminal)?;
                     let mut runtime_error =
                         RuntimeHostError::execution(HostLocation::RunContainedTaskCapture, &error);
-                    if self
-                        .host
-                        .retain_unconfirmed_resources(&runtime_error, links.clone())?
-                    {
-                        return Err(RequestFailure::poison_without_terminal(runtime_error));
+                    match self.host.settle_unconfirmed_resources(
+                        &runtime_error,
+                        Some(self.token.instance_id()),
+                        links.clone(),
+                    )? {
+                        UnconfirmedResources::Confirmed => {}
+                        // Workflow #403: the instance is fenced; the run fails non-fatally.
+                        UnconfirmedResources::Fenced(fence) => {
+                            return Err(RequestFailure::fence_without_terminal(fence));
+                        }
+                        UnconfirmedResources::Retained => {
+                            return Err(RequestFailure::poison_without_terminal(runtime_error));
+                        }
                     }
                     // #316-P4: a physical instance's first capture that fails while one ADB
                     // baseline probe (task deadline) also fails is the ADB baseline lost, not a

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::lease::HostClaim;
+use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
@@ -402,19 +403,35 @@ impl HostShared {
                     selection,
                 ))
             }
-            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
-                self.record_required_failure(&error.error, &outcome, lifecycle_links)?;
-                if self
-                    .retain_unconfirmed_resources(&error.error, EventLinksDraft::default())
+            Err(CriticalExecutionError::Action {
+                mut error, outcome, ..
+            }) => {
+                self.record_required_failure(&error.error, &outcome, lifecycle_links.clone())?;
+                match self
+                    .settle_unconfirmed_resources(
+                        &error.error,
+                        Some(token.instance_id()),
+                        lifecycle_links,
+                    )
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
-                    return Err(RequestFailure {
-                        state: RuntimeReceiptState::Failed,
-                        terminal: None,
-                        error: Box::new(error.error.into_fatal()),
-                        poison_runtime: true,
-                        task_failure: error.task_failure.map(|evidence| *evidence),
-                    });
+                    UnconfirmedResources::Confirmed => {}
+                    UnconfirmedResources::Retained => {
+                        return Err(RequestFailure {
+                            state: RuntimeReceiptState::Failed,
+                            terminal: None,
+                            error: Box::new(error.error.into_fatal()),
+                            poison_runtime: true,
+                            task_failure: error.task_failure.map(|evidence| *evidence),
+                        });
+                    }
+                    // Workflow #403: the instance is fenced; the input fails non-fatally and
+                    // ends as any backend failure does.
+                    UnconfirmedResources::Fenced(fence) => {
+                        fence_action_failure(&mut error, fence);
+                        // The action's own step ends once its write authority is back.
+                        error.destructive_started = destructive_step.is_some();
+                    }
                 }
                 if error.destructive_started {
                     self.finish_destructive_input(destructive_step.take(), connection_id)?;
@@ -652,7 +669,9 @@ impl HostShared {
                     result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
                 })
             }
-            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+            Err(CriticalExecutionError::Action {
+                mut error, outcome, ..
+            }) => {
                 let mut failure_links = self.events.request_links(
                     request,
                     Some(token.instance_id()),
@@ -662,18 +681,32 @@ impl HostShared {
                 if let Some(run_links) = run_links {
                     failure_links = run_links.apply(failure_links);
                 }
-                self.record_required_failure(&error.error, &outcome, failure_links)?;
-                if self
-                    .retain_unconfirmed_resources(&error.error, EventLinksDraft::default())
+                self.record_required_failure(&error.error, &outcome, failure_links.clone())?;
+                match self
+                    .settle_unconfirmed_resources(
+                        &error.error,
+                        Some(token.instance_id()),
+                        failure_links,
+                    )
                     .map_err(RequestFailure::poison_without_terminal)?
                 {
-                    return Err(RequestFailure {
-                        state: RuntimeReceiptState::Failed,
-                        terminal: None,
-                        error: Box::new(error.error.into_fatal()),
-                        poison_runtime: true,
-                        task_failure: None,
-                    });
+                    UnconfirmedResources::Confirmed => {}
+                    UnconfirmedResources::Retained => {
+                        return Err(RequestFailure {
+                            state: RuntimeReceiptState::Failed,
+                            terminal: None,
+                            error: Box::new(error.error.into_fatal()),
+                            poison_runtime: true,
+                            task_failure: None,
+                        });
+                    }
+                    // Workflow #403: the instance is fenced; the application command fails
+                    // non-fatally and ends as any backend failure does.
+                    UnconfirmedResources::Fenced(fence) => {
+                        fence_action_failure(&mut error, fence);
+                        // The action's own step ends once its write authority is back.
+                        error.destructive_started = destructive_step.is_some();
+                    }
                 }
                 if error.destructive_started {
                     self.finish_destructive_input(destructive_step.take(), connection_id)?;
@@ -1081,4 +1114,15 @@ fn execution_audit(provenance: ExecutionBackendProvenance, endpoint: &str) -> Au
         ExecutionBackendProvenance::PhysicalDevice => audit_endpoint(endpoint),
         ExecutionBackendProvenance::FixtureSimulation => AuditInput::new(),
     }
+}
+
+/// Workflow #403: an action whose instance an unconfirmed failure fenced fails with the fence's
+/// non-fatal failure, which a scheduled run also commits as its task failure.
+fn fence_action_failure(failure: &mut ActionFailure, fence: RuntimeHostError) {
+    failure.task_failure = Some(Box::new(TaskFailureEvidence {
+        outcome: fence.outcome(),
+        severe: false,
+    }));
+    failure.error = fence;
+    failure.poison_runtime = false;
 }

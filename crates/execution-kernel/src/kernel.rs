@@ -782,6 +782,30 @@ impl ExecutionKernel {
             }))
     }
 
+    /// Workflow #403: forgets the retained unconfirmed close of one instance once the host has
+    /// fenced that instance. The host then keeps the instance out of use until a preparation's
+    /// self-check proves its resources closed, and that preparation opens a fresh session.
+    /// Returns whether an unconfirmed close was retained.
+    pub fn forget_unconfirmed_instance_close(
+        &self,
+        instance_id: InstanceId,
+    ) -> ExecutionKernelResult<bool> {
+        let mut state = self.lock_state()?;
+        let unconfirmed = state
+            .instance_closes
+            .get(&instance_id)
+            .is_some_and(|result| {
+                result.as_ref().is_err_and(|error| {
+                    error.resource_quiescence()
+                        == Some(actingcommand_contract::ResourceQuiescence::Unconfirmed)
+                })
+            });
+        if unconfirmed {
+            state.instance_closes.remove(&instance_id);
+        }
+        Ok(unconfirmed)
+    }
+
     /// Reads the retained close outcome without attempting resource retirement again.
     pub fn unconfirmed_instance_close_error(
         &self,

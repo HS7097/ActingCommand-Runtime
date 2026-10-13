@@ -24,6 +24,9 @@ pub(super) struct FakeState {
     close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_input: AtomicBool,
     input_error: std::sync::Mutex<Option<DeviceError>>,
+    // Workflow #403: the error the next input returns, taken once, so one input can end with an
+    // unconfirmed close while later ones succeed.
+    input_error_once: std::sync::Mutex<Option<DeviceError>>,
     block_input: AtomicBool,
     input_started: AtomicBool,
     capture_open_count: AtomicUsize,
@@ -52,6 +55,9 @@ pub(super) struct FakeState {
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
     fail_application: AtomicBool,
+    // Workflow #403: the error the next application command returns, taken once, so one
+    // command can end with an unconfirmed close while later ones succeed.
+    application_error: std::sync::Mutex<Option<DeviceError>>,
     input_actions: std::sync::Mutex<Vec<InputAction>>,
     segmented_swipe_plans: std::sync::Mutex<Vec<PreparedSegmentedSwipePlan>>,
     // Workflow #369 review C-2: a discovery-bound instance with emulator control
@@ -122,6 +128,15 @@ impl FakeBackend {
         }
         if let Some(error) = self.state.input_error.lock().expect("input error").as_ref() {
             return Err(error.clone());
+        }
+        if let Some(error) = self
+            .state
+            .input_error_once
+            .lock()
+            .expect("one-shot input error")
+            .take()
+        {
+            return Err(error);
         }
         if self.state.fail_input.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected backend failure")
@@ -977,6 +992,15 @@ impl ExecutionBackendProvider for FakeProvider {
             .get(instance_alias)
             .expect("resolved fake application instance");
         entry.state.application_count.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = entry
+            .state
+            .application_error
+            .lock()
+            .expect("application error")
+            .take()
+        {
+            return Err(error);
+        }
         if entry.state.fail_application.load(Ordering::Acquire) {
             Err(DeviceError::fatal("private application failure"))
         } else {

@@ -5096,6 +5096,47 @@ const HOST_SPLIT: &[HostModule] = &[
         &["HostShared", "OperationSuccess", "RuntimeRunLinks"],
     ),
     host_module("resource_close", &["HostShared"]),
+    // Workflow #403: the per-instance resource fence. Every unconfirmed failure of the resource
+    // close family is settled here; the lease sweep hands fences on and a passing preparation
+    // lifts them.
+    HostModule {
+        module: "resource_fence",
+        owners: &["HostShared", "RequestFailure"],
+        definitions: &[
+            HostDefinition {
+                name: "HostShared::settle_unconfirmed_resources",
+                visibility: DeclaredVisibility::Super,
+                callers: &[
+                    "host/contained_task.rs",
+                    "host/input.rs",
+                    "host/monitor_control.rs",
+                    "host/observation.rs",
+                    "host/recovery_ladder.rs",
+                    "host/resource_close.rs",
+                ],
+                delegates: &[
+                    "forget_unconfirmed_instance_close",
+                    "self.retain_unconfirmed_owner",
+                ],
+            },
+            HostDefinition {
+                name: "HostShared::hand_resource_fences_to_ladders",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host.rs"],
+                delegates: &["self.resource_fence_ladder", "self.enqueue_ladder_claim"],
+            },
+            HostDefinition {
+                name: "HostShared::lift_resource_fence",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/resource_close.rs"],
+                delegates: &[
+                    "RuntimeLifecyclePhase::ResourceFenceLifted",
+                    "self.regate_policy_instance_availability",
+                ],
+            },
+        ],
+        delegates: &[],
+    },
     host_module("resource_targets", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),

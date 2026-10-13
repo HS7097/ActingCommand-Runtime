@@ -161,6 +161,17 @@ fn instance_row(
             }),
         );
     }
+    // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person.
+    if let Some(fence) = instance.resource_fence() {
+        row.insert(
+            "resource_fence".to_owned(),
+            json!({
+                "cause": fence.cause,
+                "since_unix_ms": fence.since_unix_ms,
+                "awaiting_person": fence.awaiting_person,
+            }),
+        );
+    }
     if let Some(monitor) = monitor.filter(|monitor| monitor.policy().is_some()) {
         row.insert(
             "monitor".to_owned(),
