@@ -25,19 +25,20 @@ use crate::events::{self, CursorBinding};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::packs;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, CodeStr};
 use actingcommand_contract::{
     CommandPayload, DiagnosticOutcomePayload, EventActor, EventPayload, EventQuery, EventSource,
     EventType, InstalledProcess, InstanceId, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     PolicyExecutionOutcome, PolicyExecutionPayload, PolicyFailureDisposition, PolicyPayload,
     ProjectedEvent, ProjectionPayload, RequestId, RuntimeControlPlaneStatus,
     RuntimeEventQueryCursor, RuntimeEventQueryPageRequest, RuntimePayload, TaskId,
-    scheduled_failure_code,
+    scheduled_failure_code_str,
 };
 use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunListFilter, RuntimeClient, RuntimeClientConfig,
     RuntimeClientError,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -374,7 +375,7 @@ fn recent_runs(
 struct GroupedRun {
     /// The policy task a scheduled run was dispatched for; a manual run has none.
     catalog_task_id: Option<String>,
-    failure_code: Option<String>,
+    failure_code: Option<CodeStr>,
     final_page: Option<String>,
     /// Its order in the run list: its first listing fact in the window.
     sequence: u64,
@@ -414,7 +415,7 @@ fn failed_and_open_runs(
                     let sequence = terminal.map_or(0, |terminal| terminal.sequence);
                     Some(relayed_failure_code(client, status.request_id, sequence)?)
                 }
-                Some(code) => Some(code.as_str().to_owned()),
+                Some(code) => Some(code.clone()),
                 None => None,
             };
             runs.push(GroupedRun {
@@ -439,14 +440,14 @@ fn failed_and_open_runs(
 
 /// The failure code of a failed run whose terminal relayed a spelling the catalog does not
 /// register (`outcome_relay_unregistered`): that spelling, read back from the terminal record at
-/// `sequence` (A3 ruling 7, `scheduled_failure_code`), so that distinct failures stay distinct
+/// `sequence` (A3 ruling 7, `scheduled_failure_code_str`), so that distinct failures stay distinct
 /// groups, as they stay distinct failure identities for the policy. The registered code when the
 /// record keeps no spelling.
 fn relayed_failure_code(
     client: &RuntimeClient,
     request_id: Option<RequestId>,
     sequence: u64,
-) -> Result<String, Failure> {
+) -> Result<CodeStr, Failure> {
     let query = EventQuery {
         from_sequence: Some(sequence),
         to_sequence: Some(sequence),
@@ -463,8 +464,8 @@ fn relayed_failure_code(
         .first()
         .and_then(|event| full_payload(event)?.outcome())
         .map_or_else(
-            || ContractCode::OutcomeRelayUnregistered.as_str().to_owned(),
-            scheduled_failure_code,
+            || CodeStr::from(ContractCode::OutcomeRelayUnregistered.code()),
+            scheduled_failure_code_str,
         ))
 }
 
@@ -486,7 +487,7 @@ fn group_runs(runs: &[GroupedRun], status: Option<&RuntimeControlPlaneStatus>) -
         let group = groups
             .entry((
                 run.catalog_task_id.as_deref(),
-                run.failure_code.as_deref(),
+                run.failure_code.as_ref().map(CodeStr::as_str),
                 run.final_page.as_deref(),
             ))
             .or_insert(Group {
@@ -562,7 +563,7 @@ fn order_groups(rows: &mut [(u64, u64, Value)]) {
 struct FailureRecord {
     event_type: String,
     catalog_task_id: Option<String>,
-    code: String,
+    code: CodeStr,
     sequence: u64,
 }
 
@@ -593,25 +594,27 @@ fn failure_record(event: &ProjectedEvent) -> Option<FailureRecord> {
 
 /// `runtime.failed`: the Runtime's own failure, coded by the record's outcome (ledger revision
 /// 3); an unregistered relayed spelling is read back from it, as the policy reads a run's
-/// (A3 ruling 7, `scheduled_failure_code`).
-fn runtime_failed_code(failed: &DiagnosticOutcomePayload) -> String {
-    scheduled_failure_code(failed.outcome())
+/// (A3 ruling 7, `scheduled_failure_code_str`).
+fn runtime_failed_code(failed: &DiagnosticOutcomePayload) -> CodeStr {
+    scheduled_failure_code_str(failed.outcome())
 }
 
 /// `command.rejected`: a refused request, coded by the record's outcome as `runtime.failed` is.
-fn command_rejected_code(rejected: &DiagnosticOutcomePayload) -> String {
-    scheduled_failure_code(rejected.outcome())
+fn command_rejected_code(rejected: &DiagnosticOutcomePayload) -> CodeStr {
+    scheduled_failure_code_str(rejected.outcome())
 }
 
 /// `policy.execution_recorded` of a run that paused its task (disposition `paused_task`): the
 /// policy task id and the failure code the policy recorded (`error_code`, already the run
-/// outcome's `scheduled_failure_code`). `None` for any other execution.
-fn paused_task(execution: &PolicyExecutionPayload) -> Option<(String, String)> {
+/// outcome's `scheduled_failure_code`), read as a received code. `None` for any other execution.
+fn paused_task(execution: &PolicyExecutionPayload) -> Option<(String, CodeStr)> {
     match execution.policy_result() {
         PolicyExecutionOutcome::Failed { failure }
             if failure.disposition == PolicyFailureDisposition::PausedTask =>
         {
-            Some((execution.task_id().to_owned(), failure.error_code.clone()))
+            // A spelling deserialises into a received code; a string always does.
+            let code = CodeStr::deserialize(Value::String(failure.error_code.clone())).ok()?;
+            Some((execution.task_id().to_owned(), code))
         }
         _ => None,
     }

@@ -1122,7 +1122,7 @@ fn diagnose_input() -> Value {
 }
 
 fn diagnose_result() -> Value {
-    json!({
+    let mut result = json!({
         "type": "object",
         "properties": {
             "instance": {"type": "object"},
@@ -1163,7 +1163,6 @@ fn diagnose_result() -> Value {
                     "type": "object",
                     "properties": {
                         "catalog_task_id": {"type": "string"},
-                        "failure_code": {"type": "string"},
                         "final_page": {"type": "string"},
                         "count": {"type": "integer"},
                         "first_seq": {"type": "integer"},
@@ -1182,7 +1181,6 @@ fn diagnose_result() -> Value {
                     "properties": {
                         "type": {"type": "string"},
                         "catalog_task_id": {"type": "string"},
-                        "code": {"type": "string"},
                         "count": {"type": "integer"},
                         "first_seq": {"type": "integer"},
                         "last_seq": {"type": "integer"},
@@ -1206,7 +1204,14 @@ fn diagnose_result() -> Value {
             "runs_grouped",
             "failures_grouped",
         ],
-    })
+    });
+    // Workflow #389 MCP-7: a group's codes, members of its row like final_page (as ac_runs adds a
+    // row's failure_code).
+    result["properties"]["runs_grouped"]["items"]["properties"]["failure_code"] =
+        json!({"type": "string"});
+    result["properties"]["failures_grouped"]["items"]["properties"]["code"] =
+        json!({"type": "string"});
+    result
 }
 
 /// A job of this process: its kind, phase, warnings and, once it ended, its outcome.
