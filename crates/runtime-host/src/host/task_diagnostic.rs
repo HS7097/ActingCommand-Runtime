@@ -1002,6 +1002,49 @@ mod tests {
         }
     }
 
+    /// Workflow #378 A3 (acceptance CL-L6): the error page, the unexecuted page and the
+    /// unexecuted guard rows round-trip with their outcomes (ledger revision 3).
+    #[test]
+    fn error_and_unexecuted_rows_round_trip_with_their_outcome() {
+        let rows = [
+            record(
+                1,
+                None,
+                Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
+                    phase: "recognition".to_owned(),
+                    outcome: Outcome::new(SharedCode::ContainedTaskRecognitionFailed),
+                })),
+            ),
+            record(
+                2,
+                None,
+                Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
+                    phase: "recognition".to_owned(),
+                    page: TaskDiagnosticUnexecutedPage {
+                        index: 1,
+                        page_id: "page/b".to_owned(),
+                        outcome: Outcome::new(
+                            actingcommand_page_detector::PageUnexecutedReason::BatchTerminated
+                                .code(),
+                        ),
+                    },
+                }),
+            ),
+            record(
+                3,
+                None,
+                Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
+                    phase: "candidate_sample".to_owned(),
+                    target_id: Some("text/entry".to_owned()),
+                    outcome: Outcome::relayed("candidate_sample"),
+                }),
+            ),
+        ];
+        for row in &rows {
+            assert_eq!(&round_trip(row), row);
+        }
+    }
+
     fn round_trip(record: &TaskDiagnosticRecord) -> TaskDiagnosticRecord {
         let bytes = serde_json::to_vec(record).expect("serialize the record");
         serde_json::from_slice(&bytes).expect("read the record back")

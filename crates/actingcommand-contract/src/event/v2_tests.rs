@@ -3053,6 +3053,85 @@ const REVISION_2_MEMBERS: [&str; 5] = [
 const REVISION_2_TEXT_MEMBERS: [&str; 3] =
     ["\"native_detail\"", "\"cleanup_cause\"", "\"message\""];
 
+/// A selection record whose one actionable candidate was selected, with `confirmation`
+/// (acceptance CL-L6: the confirmation's `guard_failed` and `capture_failed` outcomes).
+fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayloadDraft {
+    let candidate_id = "slots/main#00".to_owned();
+    let projection = crate::CandidateProjection::new(
+        "list_page",
+        "slots/main",
+        crate::CandidateLayoutKind::FixedSlots,
+        crate::CandidateFrame {
+            width: 1280,
+            height: 720,
+        },
+        vec![crate::ProjectedCandidate {
+            id: candidate_id.clone(),
+            instance_index: 0,
+            actionable: true,
+            rect: crate::CandidateRect {
+                x: 214,
+                y: 204,
+                width: 176,
+                height: 90,
+            },
+            click: crate::CandidateRect {
+                x: 224,
+                y: 214,
+                width: 156,
+                height: 60,
+            },
+            features: crate::CandidateFeatureMap::from([(
+                "marked".to_owned(),
+                crate::CandidateFeature::Boolean {
+                    value: true,
+                    confidence: Some(940),
+                },
+            )]),
+        }],
+    )
+    .expect("candidate projection");
+    TaskPayloadDraft::semantic(
+        TaskSemanticFact::SelectionEvaluated {
+            step_index: 1,
+            operation_label: "select".to_owned(),
+            selection: Box::new(TaskSelectionRecord {
+                layout_id: "slots/main".to_owned(),
+                page_id: "list_page".to_owned(),
+                projection,
+                policy: TaskSelectionPolicy {
+                    path: "policy.json".to_owned(),
+                    package_sha256: "c".repeat(64),
+                    policy_sha256: format!("sha256:{}", "d".repeat(64)),
+                    policy_id: "policy-a".to_owned(),
+                },
+                fact_snapshot_id: "snapshot-a".to_owned(),
+                input_ledger_position: 1,
+                now_unix_ms: 1_752_147_200_000,
+                input_sha256: format!("sha256:{}", "e".repeat(64)),
+                selection_result: TaskSelectionOutcome::Selected { count: 1 },
+                outcome_key: "selected".to_owned(),
+                selected: vec![candidate_id.clone()],
+                verdicts: vec![TaskSelectionVerdict {
+                    candidate_id,
+                    status: TaskSelectionCandidateStatus::Ranked,
+                    score_milli: Some(1_000),
+                    rank: Some(1),
+                    gates: Vec::new(),
+                    terms: Vec::new(),
+                    reasons: Vec::new(),
+                }],
+                reasons: vec![PolicyReasonRecord {
+                    code: "best_score".to_owned(),
+                }],
+                confirmation,
+            }),
+        },
+        AuditInput::new(),
+    )
+    .into()
+}
+
 fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outcome::Code>)> {
     let issuer = identifier_issuer();
     let epoch = *issuer.mint_owner_epoch().expect("epoch").transport();
@@ -3286,6 +3365,168 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
             .into(),
             EventType::ProviderStartupObserved,
             crate::outcome::Code::relayed("vision_model_folder_invalid"),
+        ),
+        // Acceptance CL-L6: a revision-3 round trip of every E3 shape that no other test
+        // round-trips (the PR body lists where the others are covered).
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::RecoveryRungFinished {
+                    rung: RecoveryRung::EmulatorRestart,
+                    rung_result: RecoveryRungOutcome::Skipped,
+                    run_id: None,
+                    outcome: Some(Outcome::relayed(
+                        "recovery_rung_skipped_no_emulator_control",
+                    )),
+                    environment: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeLifecycleObserved,
+            crate::outcome::Code::relayed("recovery_rung_skipped_no_emulator_control"),
+        ),
+        (
+            RuntimePayloadDraft::lifecycle_observed(
+                epoch,
+                RuntimeLifecyclePhase::InstancePreparationFinished {
+                    stage: RecoveryTriggerStage::ConnectionPreparation,
+                    capture: crate::BackendObservationStatus::Passed,
+                    input: crate::BackendObservationStatus::Failed,
+                    outcome: Some(Outcome::new(crate::RuntimeErrorCode::BackendOpenFailed)),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeLifecycleObserved,
+            Some(crate::RuntimeErrorCode::BackendOpenFailed.code()),
+        ),
+        (
+            revision_3_selection(TaskSelectionConfirmation::GuardFailed {
+                outcome: failure.clone(),
+            }),
+            EventType::TaskSelectionEvaluated,
+            Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
+        ),
+        (
+            revision_3_selection(TaskSelectionConfirmation::CaptureFailed {
+                outcome: Outcome::relayed("selection_confirmation_capture_failed"),
+            }),
+            EventType::TaskSelectionEvaluated,
+            crate::outcome::Code::relayed("selection_confirmation_capture_failed"),
+        ),
+        // A geometry failure is not the record's outcome (its `outcome()` is `None`); the
+        // round trip's equality carries both failures.
+        (
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::GeometryObserved {
+                    observation: Box::new(TaskGeometryObservation {
+                        phase: TaskGeometryPhase::Recheck,
+                        frame: None,
+                        observation: None,
+                        conclusion: TaskGeometryConclusion::Unavailable,
+                        trigger: Some(TaskGeometryRecheckTrigger::RecognitionFailed),
+                        original_failure: Some(TaskGeometryFailure {
+                            outcome: Outcome::relayed("recognition_failed"),
+                            event_id: None,
+                        }),
+                        unavailable: Some(TaskGeometryFailure {
+                            outcome: failure.clone(),
+                            event_id: None,
+                        }),
+                    }),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::TaskGeometryObserved,
+            None,
+        ),
+        // A volume whose free space is unknown carries its OS failure as `cause`.
+        (
+            PerformancePayloadDraft::summary(
+                PerformanceSummaryEventData {
+                    context: PerformanceContext::unavailable(1_752_147_201_000),
+                    foreground: None,
+                    owned_processes: Vec::new(),
+                    third_party_high_load: Vec::new(),
+                    ledger_commits: None,
+                    capacity: Some(crate::PerformanceCapacitySample {
+                        owner_epoch: epoch,
+                        observed_at_unix_ms: 1_752_147_201_000,
+                        observed_at_monotonic_ms: 1,
+                        freshness_ms: 5_000,
+                        thresholds: crate::CapacityThresholds::default(),
+                        volumes: vec![crate::CapacityVolumeSample {
+                            volume_id: None,
+                            purposes: vec![
+                                crate::CapacityPurpose::Installation,
+                                crate::CapacityPurpose::State,
+                                crate::CapacityPurpose::Artifact,
+                                crate::CapacityPurpose::ArtifactStaging,
+                            ],
+                            available_bytes: None,
+                            state: crate::CapacityState::Unknown,
+                            cause: Some(
+                                LifecycleNativeDetail::new("volume query refused", false)
+                                    .os_outcome(5)
+                                    .operation(crate::codes::ContractLocation::ControlInstance),
+                            ),
+                        }],
+                    }),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::PerformanceSummary,
+            None,
+        ),
+        // An artifact failure with a secondary step: the `secondary` link.
+        (
+            ArtifactPayloadDraft::persistence_failed(
+                ArtifactFailureDraft {
+                    artifact_id: *artifact(b"revision-3 failure").reference().artifact_id(),
+                    stage: ArtifactFailureStage::BeforePublication,
+                    primary: ArtifactFailureCause {
+                        step: Outcome::new(crate::codes::SharedCode::ArtifactWriteFailed)
+                            .operation(crate::codes::ContractLocation::ExportEvidence),
+                        native_detail: LifecycleNativeDetail::new("primary native text", false),
+                        raw_os_error: Some(5),
+                    },
+                    secondary: vec![ArtifactFailureCause {
+                        step: Outcome::relayed("artifact_cleanup_failed"),
+                        native_detail: LifecycleNativeDetail::new("cleanup native text", false),
+                        raw_os_error: None,
+                    }],
+                    omitted_secondary_count: 0,
+                    capacity: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::ArtifactStoreFailed,
+            Some(crate::codes::SharedCode::ArtifactWriteFailed.code()),
+        ),
+        // The `config.subsystems` row (register E8): a runtime fact, its code a member.
+        (
+            RuntimePayloadDraft::fact_recorded(
+                {
+                    let [subsystems, _] = crate::RuntimeConfigManifest {
+                        subsystems: vec![crate::ConfigSubsystem {
+                            name: "frame_retention".to_owned(),
+                            enabled: true,
+                            outcome: Outcome::relayed("config_subsystem_configured"),
+                        }],
+                        parameters: Vec::new(),
+                    }
+                    .to_fact_records(1_752_147_200_000, OriginModule::Runtime);
+                    subsystems
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFactRecorded,
+            None,
         ),
         (
             SchedulerPayloadDraft::denied(
