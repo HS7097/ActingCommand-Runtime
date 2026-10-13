@@ -6,6 +6,7 @@ use super::{
 };
 use crate::codes::{HostCode, HostLocation};
 use crate::events::{RuntimeEvents, is_sanitization_failure};
+use crate::host::PolicyWakeSignal;
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -30,6 +31,8 @@ use std::time::Duration;
 pub(crate) struct CapacityPreflightConfig {
     pub(crate) performance: Option<PerformanceMonitorConfig>,
     pub(crate) thresholds: CapacityThresholds,
+    /// Workflow #383 AO-7: where the capacity monitor's records raise the policy driver's wakes.
+    pub(crate) policy_wakes: Arc<PolicyWakeSignal>,
 }
 
 pub(crate) struct CapacityRoots {
@@ -252,6 +255,8 @@ pub(super) struct CapacityMonitor {
     pressure: Option<PerformancePressureRecord>,
     /// The capacity sample of the last recorded summary; material change is measured against it.
     pub(super) recorded: Option<PerformanceCapacitySample>,
+    /// Workflow #383 AO-7: each record this monitor commits raises its policy driver wake here.
+    policy_wakes: Arc<PolicyWakeSignal>,
 }
 
 impl PerformanceMonitor {
@@ -289,6 +294,7 @@ impl PerformanceMonitor {
             consecutive_failures: 0,
             pressure: None,
             recorded: None,
+            policy_wakes: config.policy_wakes,
         });
         monitor.sample_and_record_capacity(ledger, events)?;
         artifacts
@@ -332,6 +338,7 @@ impl PerformanceMonitor {
         let Some(capacity) = self.capacity.as_mut() else {
             return Ok(());
         };
+        let wakes = Arc::clone(&capacity.policy_wakes);
         let now = capacity.projection.clock.sample()?;
         let targets = capacity
             .projection
@@ -445,6 +452,7 @@ impl PerformanceMonitor {
                 [PerformanceSemanticEvent::Summary(summary)] => append(
                     ledger,
                     events,
+                    &wakes,
                     severity,
                     PerformancePayloadDraft::summary(summary.as_ref().clone(), AuditInput::new()),
                 ),
@@ -469,7 +477,13 @@ impl PerformanceMonitor {
                     return Err(error);
                 }
                 let code = rejected_event_code(error.code(), EventType::PerformanceSummary)?;
-                return self.degrade_for_rejected_summary(now.unix_ms, &code, ledger, events);
+                return self.degrade_for_rejected_summary(
+                    now.unix_ms,
+                    &code,
+                    ledger,
+                    events,
+                    &wakes,
+                );
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
@@ -493,10 +507,11 @@ impl PerformanceMonitor {
         code: &str,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
+        wakes: &PolicyWakeSignal,
     ) -> RuntimeHostResult<()> {
         let tick = self.record_monitor_failure(observed_at_unix_ms, code, None)?;
         for event in &tick.events {
-            let persisted = append(ledger, events, event.severity(), event.payload())?;
+            let persisted = append(ledger, events, wakes, event.severity(), event.payload())?;
             self.record_event_reference(event, *persisted.event_id())?;
         }
         Ok(())
@@ -572,6 +587,7 @@ impl CapacityMonitor {
                 append(
                     ledger,
                     events,
+                    &self.policy_wakes,
                     if self.consecutive_failures == 3 {
                         EventSeverity::Error
                     } else {
@@ -596,6 +612,7 @@ impl CapacityMonitor {
             append(
                 ledger,
                 events,
+                &self.policy_wakes,
                 EventSeverity::Info,
                 PerformancePayloadDraft::monitor_recovered(
                     PerformanceMonitorStateEventData {
@@ -649,6 +666,7 @@ impl CapacityMonitor {
                 append(
                     ledger,
                     events,
+                    &self.policy_wakes,
                     if free < self.thresholds.hard_bytes {
                         EventSeverity::Error
                     } else {
@@ -670,6 +688,7 @@ impl CapacityMonitor {
             append(
                 ledger,
                 events,
+                &self.policy_wakes,
                 EventSeverity::Info,
                 PerformancePayloadDraft::pressure_ended(
                     PerformancePressureEventData {
@@ -687,6 +706,7 @@ impl CapacityMonitor {
 fn append(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
+    wakes: &PolicyWakeSignal,
     severity: EventSeverity,
     payload: PerformancePayloadDraft,
 ) -> RuntimeHostResult<PersistedEvent> {
@@ -698,7 +718,7 @@ fn append(
         events.system_links()?,
         payload,
     )?;
-    ledger.append(events.sanitize(draft)?).map_err(|error| {
+    let event = ledger.append(events.sanitize(draft)?).map_err(|error| {
         let mut result = RuntimeHostError::relayed_fatal(
             error.code(),
             error.operation(),
@@ -708,7 +728,10 @@ fn append(
             result = result.with_native_failure_detail(bounded_native(detail));
         }
         result
-    })
+    })?;
+    // Workflow #383 AO-7: a committed performance or capacity record wakes the policy driver.
+    wakes.raise(event.event_type());
+    Ok(event)
 }
 
 fn failure(code: impl Into<Code>) -> RuntimeHostError {

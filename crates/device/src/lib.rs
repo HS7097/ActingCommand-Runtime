@@ -15,6 +15,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     mod gate_381b;
+    mod gate_398_rd1a;
     mod gate_398_rd5a;
 }
 
@@ -23,6 +24,7 @@ mod adb_bounds_diagnostic;
 mod backend_open;
 pub mod capture;
 pub mod codes;
+mod device_serial;
 mod device_state;
 pub mod discovery;
 pub mod emulator;
@@ -44,6 +46,7 @@ pub use adb_bounds_diagnostic::*;
 pub use backend_open::*;
 pub use capture::*;
 pub use codes::{DeviceLocation, NemuResolutionReason};
+pub use device_serial::{DeviceSerial, handset_label};
 pub use device_state::*;
 pub use discovery::*;
 pub use emulator::*;

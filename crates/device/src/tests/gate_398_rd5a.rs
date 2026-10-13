@@ -145,6 +145,7 @@ fn adb_exit_failure(stderr: &str) -> DeviceError {
         stdout_lossy_decode: false,
         stderr_lossy_decode: false,
         state: AdbTransportState::Unknown,
+        raw_text_redacted: false,
     })
 }
 

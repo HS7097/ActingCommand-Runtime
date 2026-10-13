@@ -1299,6 +1299,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                 matched_expected: None,
                 match_mode: "exact".to_owned(),
                 block_count: 0,
+                located: None,
             })),
         };
         serde_json::to_writer(&mut stream, &record).unwrap();

@@ -3793,6 +3793,42 @@ fn b3_fact_publication_reaches_the_store_through_one_gated_entry() {
     );
 }
 
+/// Workflow #392 DA-A, test DA-A-T3 (model 392 v1.1, section 8.1): `display.aspect` is recorded
+/// only and has no reader. Its key is spelled once, by the constant of its one writer in
+/// `crates/runtime-host/src/host/facts.rs`, and the constant is named only where it is defined and
+/// where the writer builds the record. Any other mention of the spelling or of the constant in a
+/// production source under `apps`, `crates`, `providers` or `tools` is a reader.
+#[test]
+fn da_a_t3_display_aspect_has_no_reader() {
+    const WRITER: &str = "crates/runtime-host/src/host/facts.rs";
+    const SPELLING: &str = "\"display.aspect\"";
+    const CONSTANT: &str = "DISPLAY_ASPECT_FACT_KEY";
+    let identifier =
+        |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let root = workspace_root();
+    let mut mentions = BTreeMap::new();
+    for (path, source) in production_sources(&root, &["apps", "crates", "providers", "tools"]) {
+        let bytes = source.as_bytes();
+        let spelled = source.matches(SPELLING).count();
+        let named = source
+            .match_indices(CONSTANT)
+            .filter(|(start, _)| {
+                !identifier(start.checked_sub(1).and_then(|before| bytes.get(before)))
+                    && !identifier(bytes.get(start + CONSTANT.len()))
+            })
+            .count();
+        if spelled + named > 0 {
+            mentions.insert(path, (spelled, named));
+        }
+    }
+    assert_eq!(
+        mentions,
+        BTreeMap::from([(WRITER.to_owned(), (1, 2))]),
+        "display.aspect must be spelled once and named only by its definition and its one writer \
+         ((spelling count, constant count) per production source)"
+    );
+}
+
 #[test]
 fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {
     let root = workspace_root();
@@ -4903,6 +4939,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("policy_catalog", &["HostShared"]),
     host_module("policy_dispatch", &["HostShared"]),
     host_module("policy_outcome", &["HostShared"]),
+    host_module("policy_wake", &["HostShared"]),
     host_module("ppocr_diagnostic", &["HostShared", "RuntimeContainedTask"]),
     host_module("prerequisite", &["HostShared"]),
     HostModule {
@@ -5822,8 +5859,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "DeviceRuntimeConfig::runtime_state_root",
                 DeclaredVisibility::Private,
             ),
+            // Workflow #398 RD-1a: the test scaffolding keeps the configured serial as text, not a
+            // `DeviceTarget` holding a `DeviceSerial`, which would bind it for the test process.
             glue_test_owner(
-                "DeviceRuntimeConfig::target",
+                "DeviceRuntimeConfig::adb_serial",
                 SymbolKind::Field,
                 DeclaredVisibility::Super,
             ),
@@ -5839,6 +5878,11 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_test_owner(
                 "DeviceRuntimeConfig::touch_backend",
                 SymbolKind::Field,
+                DeclaredVisibility::Super,
+            ),
+            glue_test_owner(
+                "DeviceRuntimeConfig::test_adb_arg",
+                SymbolKind::Fn,
                 DeclaredVisibility::Super,
             ),
             glue_fn("DeviceRuntimeConfig::runtime_capture_endpoint"),
@@ -5860,7 +5904,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         invariants: &[
             glue_invariant("DeviceRuntimeConfig", "instance_alias: String"),
             glue_invariant("DeviceRuntimeConfig", "runtime_state_root: PathBuf"),
-            glue_invariant("DeviceRuntimeConfig", "target: DeviceTarget"),
+            glue_invariant("DeviceRuntimeConfig", "adb_serial: Option<String>"),
             glue_invariant("DeviceRuntimeConfig", "adb_source: AdbPathSource"),
             glue_invariant("DeviceRuntimeConfig", "adb_warning: Option<String>"),
             glue_invariant(

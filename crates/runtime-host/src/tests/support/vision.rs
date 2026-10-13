@@ -110,6 +110,7 @@ impl VisionProvider for FakeVisionProvider {
                         confidence: Some(0.99),
                     },
                 ],
+                detection: None,
             });
         }
         Ok(OcrProviderResult {
@@ -117,6 +118,7 @@ impl VisionProvider for FakeVisionProvider {
             text: text.to_owned(),
             blocks: Vec::new(),
             confidence: Some(0.99),
+            detection: None,
         })
     }
 

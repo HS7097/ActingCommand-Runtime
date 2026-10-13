@@ -20,7 +20,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-mod recovery;
+pub(crate) mod recovery;
 pub use recovery::{
     AdbCommandEvidence, AdbRecoveryPath, AdbRecoveryPhase, AdbRecoveryStep, AdbRecoveryText,
     AdbTargetRecovery, AdbTransportState, MAX_ADB_RECOVERY_STEPS, MAX_ADB_RECOVERY_TEXT_BYTES,
