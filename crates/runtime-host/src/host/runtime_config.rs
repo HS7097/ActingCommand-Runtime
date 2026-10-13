@@ -330,7 +330,7 @@ impl HostShared {
                     .operation(ConfigHostLocation::RestoreConfigOverrides),
                 DiagnosticDetailDraft::new(
                     "config_overrides",
-                    ConfigHostLocation::RestoreConfigOverrides.as_str(),
+                    ConfigHostLocation::RestoreConfigOverrides,
                     "runtime_host",
                     ConfigHostLocation::RestoreConfigOverrides.as_str(),
                 ),

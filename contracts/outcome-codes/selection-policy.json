@@ -79,7 +79,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -93,7 +97,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -107,7 +115,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -122,7 +134,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "unknown_reason": "optional"
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -137,7 +152,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -151,7 +170,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -165,7 +188,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -179,7 +206,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -193,7 +224,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -207,7 +242,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -221,7 +260,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -236,7 +279,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -252,7 +298,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -268,7 +317,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -284,7 +336,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -300,7 +355,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -316,7 +374,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -332,7 +393,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
-        "rule_id": "required"
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -347,7 +411,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -361,7 +429,11 @@
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",

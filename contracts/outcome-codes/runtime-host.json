@@ -9485,18 +9485,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
+      "values": {},
       "review": "pending",
       "status": "retired",
       "since": "0.12.0",
+      "retired_in": "0.12.0",
       "description": "Retired (Workflow #378 A2-P). The rejected event type of a performance observation event could not be spelled into the monitor failure code <code>.<event type>. Since 0.12.0 the failure is performance_event_rejected with the event type as the value event_type, which needs no encoding.",
       "common_causes": "None known: an event type always had a spelling.",
-      "handling": "None in 0.12.0 and later: the code is no longer emitted.",
-      "retired_in": "0.12.0"
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "performance_frame_gap_missing": {
       "category": "error",
@@ -18178,7 +18174,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "event_type": "required"
+        "event_type": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18193,7 +18192,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18209,7 +18212,10 @@
       "uncertain": false,
       "values": {
         "fact_key": "required",
-        "unknown_reason": "required"
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18224,7 +18230,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18238,7 +18248,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18253,7 +18267,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "fact_key": "required"
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18269,7 +18286,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "task_id": "required"
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18284,7 +18304,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
