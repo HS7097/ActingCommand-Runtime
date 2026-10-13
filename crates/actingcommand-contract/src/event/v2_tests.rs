@@ -3272,6 +3272,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
                 TaskSemanticFact::EntryRecoveryFailed {
                     package_sha256: package.clone(),
                     outcome: failure.clone(),
+                    role: None,
                 },
                 AuditInput::new(),
             )

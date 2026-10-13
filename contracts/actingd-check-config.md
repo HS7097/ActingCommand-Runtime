@@ -363,7 +363,12 @@ revision.
 - `warnings` is always present: one `env_override_ignored:<VAR>` per
   `ACTINGCOMMAND_*` fallback variable that is set while `allow_env_overrides`
   is off, in the order of "Environment overrides", and empty otherwise. A
-  warning is not a failure: `status` stays `ok`.
+  warning is not a failure: `status` stays `ok`. Workflow #373 NAV-6 adds one
+  `<code>:<game>` per broken standard-pack game root, and the bare code when
+  the root itself cannot be listed (see "Standard packs").
+- `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
+  root_problem, games }`, `root` `null` without a `standard_packs` section (see
+  "Standard packs").
 
 ```json
 {"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
@@ -544,6 +549,34 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Standard packs
+
+Workflow #373 NAV-6 (model M-373 v1.1 §4.3, §7) adds the optional top-level
+section `standard_packs` with one key, `root`: the directory that holds one root
+per game, `<root>/<game>/` (`contracts/package-reference.md`, "Standard package
+root"). The installer writes it once; a relative path resolves against the
+configuration file's directory, and an empty one is refused with
+`config_decode_failed`. It is a startup key: actingd reads it when it starts,
+and a change needs a restart. Without the section no standard-pack root is read.
+
+```json
+"standard_packs":{"root":"packages"}
+```
+
+This command reads every game root as startup does, root files only and no
+package admitted, and reports `standard_packs`:
+
+```json
+"standard_packs":{"root":"D:/runtime/packages","root_problem":null,"games":[{"game":"neutral","bundle_version":3,"pack_count":4,"root_files":["bundle.json","pages.json","interrupts.json"],"problem":null},{"game":"other","bundle_version":null,"pack_count":null,"root_files":["bundle.json","interrupts.json"],"problem":{"code":"standard_pack_root_invalid","category":"error","values":{"operation":"standard_pack_read","game":"other","path":"D:/runtime/packages/other/interrupts.json","standard_pack_problem":"pages_missing","json_pointer":""}}}]}
+```
+
+A directory that holds none of the root files is not a game root and is not
+listed. A broken game root is listed with its `problem` and adds one warning;
+`status` stays `ok`, because the configuration itself is valid: the root's
+problem is reported by this list and by the startup record, and a run that
+needs the root is refused when it is prepared. `root_problem` is set when the
+root directory itself cannot be listed (`standard_pack_root_unreadable`).
 
 ## Prerequisite packages
 

@@ -201,6 +201,9 @@ mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
 mod scheduling_pause;
 mod signatures;
+// Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.
+mod standard_pack;
+pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
 mod startup_package;
 mod state_control;
 mod task_diagnostic;
@@ -503,6 +506,9 @@ pub struct RuntimeHostConfig {
     /// of the return-home package a `linear_steps` package without a declared prerequisite
     /// package falls back to; not a configuration fact.
     return_home_packages: BTreeMap<(String, String), String>,
+    /// Workflow #373 NAV-6: `standard_packs.root`, the directory of the installed standard
+    /// packages' game roots; `None` reads no root. A startup key, never changed while running.
+    standard_packs_root: Option<PathBuf>,
     #[cfg(any(test, feature = "test-hooks"))]
     preparation_test_hook: Option<PreparationTestHook>,
     /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
@@ -542,6 +548,7 @@ impl RuntimeHostConfig {
             stuck_recovery: BTreeMap::new(),
             prerequisite_packages: BTreeMap::new(),
             return_home_packages: BTreeMap::new(),
+            standard_packs_root: None,
             #[cfg(any(test, feature = "test-hooks"))]
             preparation_test_hook: None,
             #[cfg(test)]
@@ -781,6 +788,18 @@ impl RuntimeHostConfig {
         &self.return_home_packages
     }
 
+    /// Workflow #373 NAV-6: sets `standard_packs.root`, the directory that holds one root per
+    /// game (`<root>/<game>/`). Read at startup and in each run's preparation.
+    pub fn with_standard_packs_root(mut self, root: Option<PathBuf>) -> Self {
+        self.standard_packs_root = root;
+        self
+    }
+
+    /// The configured `standard_packs.root`.
+    pub fn standard_packs_root(&self) -> Option<&Path> {
+        self.standard_packs_root.as_deref()
+    }
+
     /// The installed procedure bindings, if any.
     pub const fn procedure_manifest(&self) -> Option<&ProcedureManifest> {
         self.procedure_manifest.as_ref()
@@ -981,6 +1000,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 "return_home_packages",
                 &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
             )
+            .field("standard_packs_root", &self.standard_packs_root)
             .finish()
     }
 }
@@ -1516,6 +1536,7 @@ impl RuntimeHost {
             resource_fences: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
+            standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
@@ -1774,6 +1795,9 @@ impl RuntimeHost {
             if let Some(config_manifest) = &config.config_manifest {
                 shared.record_config_manifest(config_manifest)?;
             }
+            // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
+            // a broken one never stops the start.
+            shared.register_standard_packs_on_start()?;
             shared.record_policy_settlement_facts_on_start()?;
             // The scheduler reconciliation above precedes direct-run settlement; both
             // complete before background execution or root admission (#351 / #352).
@@ -3960,6 +3984,9 @@ struct HostShared {
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
     return_home_packages: BTreeMap<(String, String), String>,
+    // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
+    // was last read (memory only).
+    standard_packs: standard_pack::StandardPackRoots,
     // Workflow #336 L6: what each scheduled run's preparation resolved, by decision id, until
     // its execution record is written (memory only).
     scheduled_resolutions: Mutex<BTreeMap<String, failure_settlement::ScheduledResolution>>,

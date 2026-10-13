@@ -17965,6 +17965,127 @@
       "description": "A session.pack.schedule record breaks the pack schedule rules (field points at the offending member): its value is not a record_list of package_id, from_unix_ms, until_unix_ms and schedulable rows, a row ends at or before it starts, or two rows of one package overlap. The publication request is refused. Not fatal.",
       "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
       "handling": "Write the scope's whole list again with non-overlapping rows."
+    },
+    "standard_pack_registered": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "count": "required",
+        "added_package_ids": "optional",
+        "removed_package_ids": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A standard-pack game root's registry (package id to package directory, from bundle.json) was read at startup, or a run's preparation read a registry that differs from the one read before (Workflow #373 NAV-6): count is its number of packages; the added and removed package ids are listed, at most 64 each with their totals.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "standard_pack_root_unreadable": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "optional",
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A standard-pack game directory or root file, or the root directory itself (then without game), could not be read (an I/O failure other than a root file's absence; the OS error is the cause). Recorded at startup; a run that needs the root is refused in preparation (Workflow #373 NAV-6). A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_package_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "navigation_role": "required",
+        "navigation_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part. The run ends; data errors stop it (Fail Loud).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_interrupt_handled": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A shared interrupt page was handled during a run (Workflow #373 NAV-6): its handler ran as a layer of the run, then its then.run package when it names one; count is how many times this run has handled the page. Carried by the interrupt_handled task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_interrupt_ambiguous": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "One frame matched two or more shared interrupt pages (Workflow #373 NAV-6): none was handled and the run went on as it would without them. Carried by the interrupt_ambiguous task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_interrupt_limit_reached": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required",
+        "limit_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A shared interrupt page was seen once more than the run may handle it: its max_per_run, or 16 handlings of all pages in one run (Workflow #373 NAV-6). The run ends with no further input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_interrupt_escalated": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A shared interrupt page whose then is end_run was handled (Workflow #373 NAV-6): the run ends after its handler, as the standard pack's data asks; the ladder configuration decides what follows a routine run.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -24223,6 +24344,38 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime lifecycle failure stage: recording the shutdown_requested lifecycle phase as the Runtime host closes (formerly runtime.lifecycle.shutdown_requested)."
+    },
+    "standard_pack_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading a standard-pack game root's files (Workflow #373 NAV-6), at startup or in a run's preparation."
+    },
+    "standard_pack_register": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Recording a standard-pack game root's registry once it was read (Workflow #373 NAV-6)."
+    },
+    "interrupt_check": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Looking for shared interrupt pages on a frame a run's package did not accept (Workflow #373 NAV-6)."
+    },
+    "interrupt_handle": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Handling a shared interrupt page: admitting and running its handler and then.run packages (Workflow #373 NAV-6)."
     }
   }
 }

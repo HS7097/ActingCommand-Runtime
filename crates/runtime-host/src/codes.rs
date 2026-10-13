@@ -1148,6 +1148,31 @@ actingcommand_contract::outcome_codes! {
         /// optional `request_id`, `instance_id`).
         PackRegistryDispatchWithdrawn => "pack_registry_dispatch_withdrawn": info / none,
         // ---- end of #389 U-0 registrations
+        // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin
+        /// Info. A standard-pack game root's registry was read at startup, or a run's
+        /// preparation read one that differs from the last (keys `game`, `count`; optional
+        /// `added_package_ids`, `removed_package_ids`).
+        StandardPackRegistered => "standard_pack_registered": info / none,
+        /// Error. A standard-pack game directory or root file could not be read; the OS error
+        /// is the cause (key `path`; optional `game`, absent when the root itself cannot be
+        /// listed).
+        StandardPackRootUnreadable => "standard_pack_root_unreadable": error / declaration_error,
+        /// Error. A standard-pack package named for a part in a run is not of the run's server,
+        /// cannot be admitted or is not eligible (keys `package_id`, `navigation_role`,
+        /// `navigation_problem`).
+        ContainedTaskNavigationPackageInvalid => "contained_task_navigation_package_invalid": error / declaration_error,
+        /// Info. A shared interrupt page was handled (keys `page_id`, `count`).
+        ContainedTaskInterruptHandled => "contained_task_interrupt_handled": info / none,
+        /// Warning. One frame matched two or more shared interrupt pages; none was handled
+        /// (keys `page_ids`).
+        ContainedTaskInterruptAmbiguous => "contained_task_interrupt_ambiguous": warning / none,
+        /// Error. A shared interrupt page was seen once more than the run may handle it (keys
+        /// `page_id`, `count`, `limit_count`).
+        ContainedTaskInterruptLimitReached => "contained_task_interrupt_limit_reached": error / pack_logic_mismatch,
+        /// Error. A shared interrupt page whose `then` is `end_run` was handled (keys
+        /// `page_id`).
+        ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
+        // ---- Workflow #373 NAV-6: end
     }
 }
 
@@ -1942,6 +1967,12 @@ actingcommand_contract::outcome_locations! {
         RuntimeLifecyclePolicyBootstrap => "runtime_lifecycle_policy_bootstrap",
         RuntimeLifecycleSelectionRecord => "runtime_lifecycle_selection_record",
         RuntimeLifecycleShutdownRequested => "runtime_lifecycle_shutdown_requested",
+        // Workflow #373 NAV-6: reading and recording a standard-pack game root, and the shared
+        // interrupt pages of a run.
+        StandardPackRead => "standard_pack_read",
+        StandardPackRegister => "standard_pack_register",
+        InterruptCheck => "interrupt_check",
+        InterruptHandle => "interrupt_handle",
     }
 }
 

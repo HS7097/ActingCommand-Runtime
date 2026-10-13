@@ -3258,6 +3258,134 @@ fn check_config_previews_the_catalog_plan_read_only() {
     assert_eq!(before, after, "check-config must not write the state root");
 }
 
+/// Workflow #373 NAV-6, test row N6-2 (check-config; the start's records are runtime-host's
+/// `gate_373_nav6`): two standard-pack game roots below `standard_packs.root`, one valid and one
+/// broken. The configuration checks `ok`; both roots are listed, the broken one with its problem
+/// and one warning.
+#[test]
+fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+    config["standard_packs"] = json!({"root": "packages"});
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+    let digest = format!("{:064x}", 1);
+    let bundle = |game: &str| {
+        json!({
+            "schema_version": "actingcommand.bundle.v2",
+            "game": game,
+            "packs": [{"package_id": "neutral.test.features", "server": "test",
+                       "entry_task_id": "task", "digest": digest,
+                       "path": format!("packs/{digest}"), "file_count": 3, "byte_count": 64}]
+        })
+    };
+    let game_root = |game: &str, files: Vec<(&str, Value)>| {
+        let directory = root.path().join("packages").join(game);
+        fs::create_dir_all(&directory).expect("game root");
+        for (name, value) in files {
+            fs::write(
+                directory.join(name),
+                serde_json::to_vec(&value).expect("root file"),
+            )
+            .expect("write root file");
+        }
+    };
+    game_root(
+        "neutral",
+        vec![
+            ("bundle.json", bundle("neutral")),
+            (
+                "pages.json",
+                json!({"schema_version": "actingcommand.pages.v1", "game": "neutral",
+                       "features": ["neutral.test.features"],
+                       "pages": [{"id": "notice", "kind": "overlay"}]}),
+            ),
+            (
+                "interrupts.json",
+                json!({"schema_version": "actingcommand.interrupts.v1", "game": "neutral",
+                       "interrupts": [{"page": "notice", "handlers": ["neutral.test.features"],
+                                       "then": "resume", "max_per_run": 1}]}),
+            ),
+        ],
+    );
+    game_root(
+        "other",
+        vec![
+            ("bundle.json", bundle("other")),
+            (
+                "interrupts.json",
+                json!({"schema_version": "actingcommand.interrupts.v1", "game": "other",
+                       "interrupts": []}),
+            ),
+        ],
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args([
+            "check-config",
+            "--config",
+            config_path.to_str().expect("config path"),
+        ])
+        .output()
+        .expect("run actingd check-config");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "check-config report: {error}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["status"], "ok");
+    let packs = &report["standard_packs"];
+    assert!(
+        packs["root"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("packages")),
+        "{packs}"
+    );
+    assert_eq!(packs["root_problem"], Value::Null);
+    let games = packs["games"].as_array().expect("games");
+    assert_eq!(games.len(), 2, "{packs}");
+    assert_eq!(games[0]["game"], "neutral");
+    assert_eq!(games[0]["bundle_version"], 2);
+    assert_eq!(games[0]["pack_count"], 1);
+    assert_eq!(
+        games[0]["root_files"],
+        json!(["bundle.json", "pages.json", "interrupts.json"])
+    );
+    assert_eq!(games[0]["problem"], Value::Null);
+    assert_eq!(games[1]["game"], "other");
+    assert_eq!(
+        games[1]["root_files"],
+        json!(["bundle.json", "interrupts.json"])
+    );
+    assert_eq!(games[1]["problem"]["code"], "standard_pack_root_invalid");
+    assert_eq!(games[1]["problem"]["category"], "error");
+    assert_eq!(
+        games[1]["problem"]["values"]["standard_pack_problem"],
+        "pages_missing"
+    );
+    assert!(
+        report["warnings"]
+            .as_array()
+            .expect("warnings")
+            .contains(&json!("standard_pack_root_invalid:other")),
+        "{report}"
+    );
+}
+
 /// Every client of these process tests keeps the production I/O budget (5 s, the
 /// `RuntimeClientConfig` default; test plan §4 #11 retired the 500 ms test clients): a reply
 /// delayed behind the single ledger writer does not latch the client.

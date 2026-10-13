@@ -5142,6 +5142,8 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("saved_artifact_ocr", &["HostShared"]),
     host_module("scheduling_pause", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
+    // Workflow #373 NAV-6: the standard-pack root reader and a run's shared interrupt pages.
+    host_module("standard_pack", &["HostShared", "RuntimeContainedTask"]),
     host_module("startup_package", &["HostShared"]),
     host_module("state_control", &["HostShared"]),
     host_module("task_diagnostic", &["RuntimeContainedTask"]),

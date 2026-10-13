@@ -211,7 +211,8 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::RecoveryLadderFinished { .. }
         | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
         | RuntimeLifecyclePhase::FactSnapshotSetSkipped { .. }
-        | RuntimeLifecyclePhase::ResourceFenceLifted { .. } => CommitSync::Full,
+        | RuntimeLifecyclePhase::ResourceFenceLifted { .. }
+        | RuntimeLifecyclePhase::StandardPackRead { .. } => CommitSync::Full,
     }
 }
 
