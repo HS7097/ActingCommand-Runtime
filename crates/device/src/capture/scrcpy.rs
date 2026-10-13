@@ -236,11 +236,13 @@ pub(crate) fn server_arguments(
     arguments
 }
 
-/// Why a stream stopped delivering. Every end is `scrcpy_stream_ended` except the size refusal.
+/// Why a stream stopped delivering. Every end is `scrcpy_stream_ended` except the size refusal,
+/// `scrcpy_video_size_mismatch`.
 ///
-/// `scrcpy_stream_ended` is a transient device error (coordinator ruling 10-13, the
-/// instance-level rule of board #403): only that instance's run fails and the ladder handles
-/// it; the host never treats it as fatal for the Runtime.
+/// Both are transient device errors (coordinator rulings 10-13 09:0x and 09:2x, the
+/// instance-level rule of board #403: every scrcpy code is instance-level): only that
+/// instance's run fails and the ladder handles it; the host never treats them as fatal for the
+/// Runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamEnd {
     SocketClosed,
@@ -290,12 +292,7 @@ impl StreamEnd {
                 "the stream's video size is not the unscaled size requested",
             ),
         };
-        let severity = if matches!(code, StreamCaptureCode::ScrcpyStreamEnded) {
-            DeviceErrorSeverity::Transient
-        } else {
-            DeviceErrorSeverity::Fatal
-        };
-        coded_error(code, severity, detail).with_diagnostic(category, step)
+        coded_error(code, DeviceErrorSeverity::Transient, detail).with_diagnostic(category, step)
     }
 }
 
@@ -718,7 +715,9 @@ struct StreamHandle {
 pub struct ScrcpyBackend {
     adb_config: AdbConfig,
     config: ScrcpyConfig,
-    serial: String,
+    /// Workflow #398 RD-1a: adb gets [`DeviceTarget::adb_arg`]; records and text get
+    /// [`DeviceTarget::label`]. The raw serial is never kept in a field of its own.
+    target: DeviceTarget,
     crop: Option<ScrcpyCrop>,
     forward_port: Option<u16>,
     child: Option<Child>,
@@ -736,7 +735,7 @@ impl ScrcpyBackend {
     ) -> DeviceResult<Self> {
         config.validate()?;
         let server = checked_server(EMBEDDED_SERVER)?;
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         let adb = Adb::new(adb_config.clone());
         verify_adb_device(&adb, &target, &serial, CaptureBackendName::Scrcpy)?;
         let natural = parse_wm_size(&adb.screen_size(&serial)?)?;
@@ -756,7 +755,7 @@ impl ScrcpyBackend {
         let mut backend = Self {
             adb_config,
             config,
-            serial,
+            target,
             crop,
             forward_port: Some(port),
             child: None,
@@ -776,7 +775,7 @@ impl ScrcpyBackend {
         let arguments = server_arguments(&self.config, scid, self.crop);
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let child = adb
-            .shell_spawn(&self.serial, &arguments)
+            .shell_spawn(&self.target.adb_arg(), &arguments)
             .map_err(|error| start_failure_from(error, "capture.scrcpy.server.spawn"))?;
         self.child = Some(child);
         let deadline = Instant::now() + self.config.start_timeout;
@@ -910,9 +909,10 @@ impl ScrcpyBackend {
         }
         if let Some(port) = self.forward_port.take() {
             let local = format!("tcp:{port}");
+            let serial = self.target.adb_arg();
             if let Err(error) = Adb::new(self.adb_config.clone()).run(&[
                 "-s",
-                self.serial.as_str(),
+                serial.as_str(),
                 "forward",
                 "--remove",
                 local.as_str(),
@@ -947,7 +947,8 @@ impl CaptureBackend for ScrcpyBackend {
         };
         let observation = read_adb_capture_geometry(
             &Adb::new(self.adb_config.clone()),
-            &self.serial,
+            &self.target.adb_arg(),
+            &self.target.label(),
             CaptureBackendName::Scrcpy,
             deadline,
         )?;

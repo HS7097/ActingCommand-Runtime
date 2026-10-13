@@ -375,7 +375,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "#402 RD-3: the scrcpy stream's video size is not the unscaled size requested (the display, or its centred crop to the size alignment), so its frames would be scaled; the stream is refused instead of downsampled.",
+      "description": "#402 RD-3: the scrcpy stream's video size is not the unscaled size requested (the display, or its centred crop to the size alignment), so its frames would be scaled; the stream is refused instead of downsampled. When it happens at the start, the open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13 09:2x: every scrcpy code is instance-level).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

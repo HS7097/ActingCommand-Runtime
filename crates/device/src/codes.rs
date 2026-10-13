@@ -60,7 +60,9 @@ actingcommand_contract::outcome_codes! {
         /// Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).
         ScrcpyStreamEnded => "scrcpy_stream_ended": error / environment_fault,
         /// The encoder produced another video size than the unscaled crop requested, so a frame
-        /// would be scaled; it is refused instead.
+        /// would be scaled; it is refused instead. Only that instance's run fails and the ladder
+        /// handles it; the Runtime goes on (coordinator ruling 10-13 09:2x: every scrcpy code is
+        /// instance-level).
         ScrcpyVideoSizeMismatch => "scrcpy_video_size_mismatch": error / environment_fault,
         /// No frame encoded after the capture floor arrived within the configured wait.
         CaptureFrameStale => "capture_frame_stale": error / environment_fault,

@@ -4,7 +4,7 @@
 //! decoder, a scripted clock and a fake snapshot backend. No device, no adb, no real time.
 
 use super::*;
-use crate::{CaptureBackendChoice, DeviceKind};
+use crate::{CaptureBackendChoice, DeviceKind, DeviceSerial};
 use actingcommand_contract::{
     CaptureGeometry, CaptureGeometrySource, CaptureRotationSource, CaptureWmSizeKind,
     TaskGeometryConclusion, TaskGeometryFrame, TaskGeometryObservation,
@@ -101,16 +101,26 @@ type StreamEndCase = (
 );
 
 /// Each way a stream stops ends it with the code its failure requires, and a capture on the
-/// ended stream gets that code instead of a frame. Coordinator ruling 10-13 (the instance-level
-/// rule of board #403): `scrcpy_stream_ended` fails only this instance's run and the ladder
-/// handles it (an error of class `environment_fault`); the capture's error is a transient device
-/// error, never the non-transient one the host treats as fatal for the Runtime.
+/// ended stream gets that code instead of a frame. Coordinator rulings 10-13 09:0x and 09:2x
+/// (the instance-level rule of board #403: every scrcpy code is instance-level):
+/// `scrcpy_stream_ended` and `scrcpy_video_size_mismatch` fail only this instance's run and the
+/// ladder handles them (errors of class `environment_fault`); the capture's error is a transient
+/// device error, never the non-transient one the host treats as fatal for the Runtime.
 #[test]
 fn fake_stream_ends_with_the_code_its_failure_requires() {
     use actingcommand_contract::outcome::{Category, LadderClass};
-    let ended = StreamCaptureCode::ScrcpyStreamEnded;
-    assert_eq!(ended.category(), Category::Error);
-    assert_eq!(ended.ladder_class(), LadderClass::EnvironmentFault);
+    for code in [
+        StreamCaptureCode::ScrcpyStreamEnded,
+        StreamCaptureCode::ScrcpyVideoSizeMismatch,
+    ] {
+        assert_eq!(code.category(), Category::Error, "{}", code.as_str());
+        assert_eq!(
+            code.ladder_class(),
+            LadderClass::EnvironmentFault,
+            "{}",
+            code.as_str()
+        );
+    }
     let crop = aligned_crop(1080, 2340, 8);
     let expected = ExpectedVideo::of(crop, (1080, 2340));
     let session = session_packet(1080, 2336);
@@ -168,12 +178,7 @@ fn fake_stream_ends_with_the_code_its_failure_requires() {
             "{case}: {}",
             error.message()
         );
-        let severity = if code == ended {
-            DeviceErrorSeverity::Transient
-        } else {
-            DeviceErrorSeverity::Fatal
-        };
-        assert_eq!(error.severity(), severity, "{case}");
+        assert_eq!(error.severity(), DeviceErrorSeverity::Transient, "{case}");
     }
 }
 
@@ -313,13 +318,18 @@ fn rd3i_t2_a_sequence_floor_never_hands_back_the_frame_already_delivered() {
 
 /// A backend with no device behind it, for the error mapping.
 fn detached_backend(fresh_wait: Duration) -> ScrcpyBackend {
+    detached_backend_on(DeviceTarget::default(), fresh_wait)
+}
+
+/// [`detached_backend`] for `target`.
+fn detached_backend_on(target: DeviceTarget, fresh_wait: Duration) -> ScrcpyBackend {
     ScrcpyBackend {
         adb_config: AdbConfig::default(),
         config: ScrcpyConfig {
             fresh_wait,
             ..ScrcpyConfig::default()
         },
-        serial: String::new(),
+        target,
         crop: None,
         forward_port: None,
         child: None,
@@ -443,7 +453,7 @@ fn rd3i_t4_a_cropped_stream_records_its_crop_and_an_unrecorded_one_is_judged_as_
     let geometry = |frame_transform| CaptureGeometry {
         backend: CaptureBackendName::Scrcpy,
         source: CaptureGeometrySource::AdbDefaultDisplay {
-            serial: "TESTSERIAL0001".to_owned(),
+            serial: "handset:neutral.handset".to_owned(),
             wm_extent: display,
             wm_size_kind: CaptureWmSizeKind::Physical,
         },
@@ -609,5 +619,65 @@ fn a_server_that_does_not_start_fails_only_this_instance_run() {
             error.message()
         );
         assert_eq!(error.severity(), DeviceErrorSeverity::Transient, "{case}");
+    }
+}
+
+/// Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 1 and 2; #717 acceptance, follow-up 2): the
+/// scrcpy backend hands adb the serial of a target addressed by one, and every error text it
+/// makes names that device only by its label: an adb step of the start whose adb text names the
+/// serial, every stream end, a stale capture, a poisoned stream and a capture after close. The
+/// search covers the serial as given and in lowercase, in the message, `Display` and `Debug`.
+#[test]
+fn scrcpy_error_texts_name_a_serial_device_only_by_its_label() {
+    const SERIAL: &str = "TESTSERIAL0010";
+    const TOKEN: &str = "[device:handset:neutral.scrcpy]";
+    let target = DeviceTarget {
+        serial: Some(DeviceSerial::handset(SERIAL, "neutral.scrcpy")),
+        ..DeviceTarget::default()
+    };
+    assert_eq!(target.adb_arg(), SERIAL);
+    let mut backend = detached_backend_on(target, Duration::from_secs(2));
+    let adb_text = format!(
+        "adb -s {SERIAL} forward tcp:0 localabstract:scrcpy_00000001 failed with exit code 1\n\
+         stdout:\n\nstderr:\nerror: device '{SERIAL}' not found\n"
+    );
+    let adb_steps = [
+        start_failure_from(
+            DeviceError::fatal(adb_text.clone()),
+            "capture.scrcpy.forward",
+        ),
+        start_failure_from(
+            DeviceError::transient(adb_text),
+            "capture.scrcpy.server.push",
+        ),
+    ];
+    for error in &adb_steps {
+        assert!(error.message().contains(TOKEN), "{}", error.message());
+    }
+    let mut errors = adb_steps.to_vec();
+    for end in [
+        StreamEnd::SocketClosed,
+        StreamEnd::ProtocolInvalid,
+        StreamEnd::DecoderUnavailable,
+        StreamEnd::DecodeFailed,
+        StreamEnd::VideoSizeMismatch,
+    ] {
+        errors.push(backend.fresh_failure(FreshWaitFailure::Ended(end)));
+    }
+    errors.push(backend.fresh_failure(FreshWaitFailure::Stale {
+        latest_sequence: Some(3),
+    }));
+    errors.push(backend.fresh_failure(FreshWaitFailure::Poisoned));
+    errors.push(backend.capture_fresh(None).expect_err("no stream is open"));
+    let lowercase = SERIAL.to_ascii_lowercase();
+    for error in &errors {
+        for text in [
+            error.message().to_owned(),
+            format!("{error}"),
+            format!("{error:?}"),
+        ] {
+            assert!(!text.contains(SERIAL), "{text}");
+            assert!(!text.to_ascii_lowercase().contains(&lowercase), "{text}");
+        }
     }
 }
