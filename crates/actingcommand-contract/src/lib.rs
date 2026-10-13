@@ -34,6 +34,7 @@ pub mod resource_targets;
 pub mod runtime;
 pub mod runtime_fact;
 pub mod runtime_observation;
+pub mod standard_pack;
 pub mod state;
 pub mod taskflow;
 pub mod types;
@@ -60,6 +61,7 @@ pub use resource_targets::*;
 pub use runtime::*;
 pub use runtime_fact::*;
 pub use runtime_observation::*;
+pub use standard_pack::*;
 pub use state::*;
 pub use taskflow::*;
 pub use types::{

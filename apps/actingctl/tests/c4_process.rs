@@ -652,6 +652,8 @@ fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
         TaskSemanticFact::EntryRecoveryCompleted { .. } => "entry_recovery_completed",
         TaskSemanticFact::EntryRecoveryFailed { .. } => "entry_recovery_failed",
         TaskSemanticFact::EntryTargetDisposition { .. } => "entry_target_disposition",
+        TaskSemanticFact::InterruptHandled { .. } => "interrupt_handled",
+        TaskSemanticFact::InterruptAmbiguous { .. } => "interrupt_ambiguous",
         TaskSemanticFact::StepStarted { .. } => "step_started",
         TaskSemanticFact::SelectionEvaluated { .. } => "selection_evaluated",
         TaskSemanticFact::EffectIntent { .. } => "effect_intent",

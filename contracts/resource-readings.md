@@ -217,8 +217,8 @@ observations of the terminal frame, and the rejection is reported on its own.
 **Failure codes.** `TerminalCommitted.failure_code` holds the code alone. The detail is the
 native detail of the run's host failure (`RuntimeHostError`). A policy run's driver receives
 that error, and its failure record keeps the detail when the error was not already recorded.
-The IPC receipt of a manual `task-run` carries the code (`host_code`) but has no native detail
-field.
+The IPC receipt of a manual `task-run` carries the code (the top of its `outcome`, receipt v2)
+but has no native detail field.
 
 | Code | When | Native detail | Reading why from the ledger |
 | --- | --- | --- | --- |

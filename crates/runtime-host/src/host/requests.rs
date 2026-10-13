@@ -44,22 +44,21 @@ impl HostShared {
             Err(error) => {
                 if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
                     let failure = self.invalid_install_request(action, error.code())?;
-                    return runtime_error_receipt(
+                    return runtime_failure_receipt(
                         request,
                         failure.state,
                         failure.terminal,
-                        failure
-                            .error
-                            .projection()
-                            .clone()
-                            .with_host_failure(failure.error.code(), failure.error.operation()),
+                        failure.error.receipt_outcome(),
                     );
                 }
-                return runtime_error_receipt(
+                // Workflow #378 A4 (model section 7.2, L3): the denied receipt carries its
+                // refusal, the contract's validation code, over `invalid_request`.
+                return runtime_failure_receipt(
                     request,
                     RuntimeReceiptState::Denied,
                     None,
-                    RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false),
+                    RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
+                        .receipt_outcome(Some(error.code()), None),
                 );
             }
         };
@@ -105,11 +104,7 @@ impl HostShared {
                     )?
                     .insert(request.request_id(), failure.error.outcome());
                 }
-                let projection = failure
-                    .error
-                    .projection()
-                    .clone()
-                    .with_host_failure(failure.error.code(), failure.error.operation());
+                let outcome = failure.error.receipt_outcome();
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
                     let rejected = if let Some(event) =
                         failure.error.lifecycle.resource_declaration_event
@@ -129,11 +124,11 @@ impl HostShared {
                         terminal(&event)
                     };
                     failure.terminal.get_or_insert(rejected);
-                    return runtime_error_receipt(
+                    return runtime_failure_receipt(
                         request,
                         failure.state,
                         failure.terminal,
-                        projection,
+                        outcome,
                     )?
                     .with_resource_declaration(rejection, rejected)
                     .map_err(|_| receipt_error());
@@ -141,16 +136,16 @@ impl HostShared {
                 // Workflow #308 RT-S1a: a refused resource target document is answered with
                 // its field position and records nothing.
                 if let Some(rejection) = failure.error.resource_targets_rejection().cloned() {
-                    return runtime_error_receipt(
+                    return runtime_failure_receipt(
                         request,
                         failure.state,
                         failure.terminal,
-                        projection,
+                        outcome,
                     )?
                     .with_resource_targets_rejection(rejection)
                     .map_err(|_| receipt_error());
                 }
-                runtime_error_receipt(request, failure.state, failure.terminal, projection)
+                runtime_failure_receipt(request, failure.state, failure.terminal, outcome)
             }
         }
     }
@@ -185,6 +180,7 @@ impl HostShared {
                 result: RuntimeResult::Health {
                     owner_epoch: self.owner_epoch,
                 },
+                failure_outcome: None,
             }),
             RuntimeOperation::Status => self.control_plane_status(validated),
             RuntimeOperation::DiscoverInstances => self.discover_instances(validated),
@@ -244,6 +240,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result,
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::ConfigureMonitor {
@@ -466,6 +463,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result: RuntimeResult::FactPublished { event_id },
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::PublishFacts { observation } => {
@@ -487,6 +485,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result: RuntimeResult::FactPublished { event_id },
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::QueryEvents {
@@ -552,6 +551,10 @@ impl HostShared {
             }
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
+            }
+            // Workflow #387 D1b: a general instruction of the three counters.
+            RuntimeOperation::ConfigureSettings { changes } => {
+                self.configure_settings(request, validated, changes)
             }
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
@@ -626,13 +629,14 @@ impl OperationSuccess {
     fn into_receipt(self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
         match self.result {
             RuntimeResult::MaterialRead { result } => {
-                RuntimeReceipt::material_read(request, self.terminal, result)
+                RuntimeReceipt::material_read(request, self.terminal, result, self.failure_outcome)
             }
             RuntimeResult::ContainedLabOperation { operation } => {
                 RuntimeReceipt::contained_lab_operation(
                     request,
                     self.terminal.ok_or_else(receipt_error)?,
                     operation,
+                    self.failure_outcome,
                 )
             }
             result => RuntimeReceipt::success(request, self.state, self.terminal, result),
@@ -1086,6 +1090,9 @@ fn connection_loop(
             }
             Err(error) => Err(error),
         };
+        // Workflow #378 A4 (model section 7.1): the receipt leaves with the detail its request
+        // asks for, filtered once, here; the request cache keeps the full receipt.
+        let receipt = receipt.map(|receipt| receipt.for_request_detail(&request));
         let receipt = match receipt {
             Ok(receipt) => {
                 #[cfg(feature = "test-observation")]
@@ -1290,6 +1297,25 @@ impl HostShared {
         action: EventAction,
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<EventLinksDraft, RequestFailure> {
+        self.append_scoped_client_command_intent(
+            original,
+            request,
+            Some(instance_id),
+            action,
+            run_links,
+        )
+    }
+
+    /// [`Self::append_client_command_intent`] of a request that may concern no instance
+    /// (Workflow #387 D1b: `ConfigureSettings` is Runtime-wide).
+    pub(super) fn append_scoped_client_command_intent(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: Option<InstanceId>,
+        action: EventAction,
+        run_links: Option<RuntimeRunLinks>,
+    ) -> Result<EventLinksDraft, RequestFailure> {
         self.validate_c4_client_source(original)?;
         let (source, module, payload) = match original.source() {
             EventSource::Cli => (
@@ -1323,9 +1349,7 @@ impl HostShared {
                 ));
             }
         };
-        let mut links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
+        let mut links = self.events.request_links(request, instance_id, None, None);
         if let Some(run_links) = run_links {
             links = run_links.apply(links);
         }
@@ -1377,6 +1401,16 @@ fn runtime_error_receipt(
     error: RuntimeErrorProjection,
 ) -> RuntimeHostResult<RuntimeReceipt> {
     RuntimeReceipt::error(request, state, terminal, error).map_err(|_| receipt_error())
+}
+
+/// A denied or failed receipt carrying its refusal or failure as `outcome` (Workflow #378 A4).
+fn runtime_failure_receipt(
+    request: &RuntimeRequest,
+    state: RuntimeReceiptState,
+    terminal: Option<TerminalEvent>,
+    outcome: actingcommand_contract::outcome::Outcome,
+) -> RuntimeHostResult<RuntimeReceipt> {
+    RuntimeReceipt::failure(request, state, terminal, outcome).map_err(|_| receipt_error())
 }
 
 pub(super) fn terminal(event: &PersistedEvent) -> TerminalEvent {

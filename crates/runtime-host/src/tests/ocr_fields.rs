@@ -757,7 +757,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(matches!(
                 output.receipt().result(),
                 Some(RuntimeResult::ContainedTaskCompleted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     ..
                 })
             ));
@@ -964,7 +964,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         assert!(matches!(
             output.receipt().result(),
             Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 ..
             })
         ));
@@ -1200,7 +1200,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             let output = result.expect("official zero-input fields receipt");
             assert!(
                 matches!(output.receipt().result(), Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success, executed_steps: 0, final_page: Some(page), ..
+                task_result: TaskOutcome::Success, executed_steps: 0, final_page: Some(page), ..
             }) if page == "neutral/home")
             );
             assert!(matches!(

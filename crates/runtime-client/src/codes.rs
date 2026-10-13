@@ -246,6 +246,7 @@ actingcommand_contract::outcome_locations! {
         RuntimeMonitorStatus => "runtime_monitor_status",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
+        RuntimeConfigureSettings => "runtime_configure_settings",
         SelfCheckInstance => "self_check_instance",
         IssueLeaseHolder => "issue_lease_holder",
         IssueQueuedLeaseHolder => "issue_queued_lease_holder",

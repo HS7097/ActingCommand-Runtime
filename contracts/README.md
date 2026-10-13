@@ -30,6 +30,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `actinglab-dry-run.md` — the global actinglab `--dry-run`: each command's declared mode (preview, refused, no_effect, mixed), the `dry_run_unsupported` refusal, the preview shapes and the registered bootstrap and transient writes.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `actingd-check-config.md` — side-effect-free `actingd check-config` configuration validation and its result schema.
+- `runtime-config.md` — the shared configuration mechanism (Workflow #387 D1b): the crate `runtime-config`, the file and instruction layers, the defaults file `actingd.defaults.json`, the key table, the facts `config.parameters.<section>`, `config.selection` and `host.config_overrides`, the `ConfigureSettings` instruction with its checks and records, the restore of instruction values at start (the later change wins), and its codes.
 - `component-interfaces.md` — the `interfaces` declaration in the Runtime, Tools and UI build manifests and in resource bundles: the interface vocabulary and revisions with their code anchors, what a range means, the containment and negotiation checks, the bump rule, the known table for undeclared v0.11.0–v0.11.2 releases, what Runtime v0.11.3 moved, the checks acsetup makes per operation and why a Runtime rollback from v0.11.3 to v0.11.2 is refused (Workflow #364).
 - `actingd-unlock-owner.md` — offline `actingd unlock-owner`: the operator's confirmation appended as the retained owner epoch's close evidence, the `owner.unlock` fact and its result schema.
 - `owner-journal.md` — the `owner.lock` owner journal: records, the reader's derived state, the in-epoch checkpoint fold, its side-file crash recovery and error codes.
@@ -221,6 +222,22 @@ Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
+
+Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
+standard package may name shared interrupt pages (`interrupts.json`, see
+[package-reference.md](package-reference.md), "Standard package root"). A run looks
+at them only on a frame its own package did not accept: the verdict of its entry
+check (the frame on which the entry's window ended unmatched), and each frame of a
+wait that did not show what the package awaited (a page-graph frame no page of the
+package matched; a linear step's entry, transition, arrival or retry-decision page;
+a page-graph operation's destination). The hooked kernel loops are
+`recognize_required_entry`, `recognize_linear_entry`, `await_linear_entry`,
+`await_ordinary_home_entry` (entry verdicts) and `capture_until_page`,
+`await_postcondition`, `linear_wait`, `linear_wait_set` (waits, per frame). An
+interrupt page the running package declares itself is the package's own. One
+matched page is handled by its handler package as a layer of the run, and the wait
+resumes with its budget paused for the handling; an entry check starts again.
+Without `interrupts.json` for the game nothing is read and nothing changes.
 
 Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task
 (`navigable_route`, `in_page_guard`, `recognize_only`) may declare `entry_page` as

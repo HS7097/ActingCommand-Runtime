@@ -45,19 +45,22 @@ Ambiguous or unsuccessful runs, missing/extra files and failed verification stop
 the download. Keep the manifest and original source/run identity with the files.
 
 The Runtime manifest declares `runtime_payload_layout: "distribution-v1"`.
-The artifact root contains exactly these six files:
+The artifact root contains exactly these seven files:
 
 - `actingcommand-actingd.exe`
 - `actingctl.exe`
 - `actingd.config.example.json`
+- `actingd.defaults.json` (Workflow #387 D1b, from v0.12.0: the defaults the
+  program embeds; a configuration names only the keys it changes)
 - `INSTALL.md`
 - `RELEASE-NOTES.md`
 - `BUILD-MANIFEST.json`
 
-The manifest binds the five payload files individually. Historical Runtime
+The manifest binds the six payload files individually. Historical Runtime
 artifacts without the layout field have the fixed two-executable payload plus
-their manifest. An explicit unknown, empty or non-string layout is rejected;
-`distribution-v1` always requires all five payloads.
+their manifest, and `distribution-v1` artifacts built before v0.12.0 have no
+`actingd.defaults.json`. An explicit unknown, empty or non-string layout is
+rejected; `distribution-v1` always requires all its payloads.
 
 Tools use their separate artifact (`-ArtifactKind Tools`,
 `actingcommand-tools-<sha>`). Its manifest declares

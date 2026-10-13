@@ -34,10 +34,11 @@ fn policy_rejection_severity(code: &str) -> EventSeverity {
 }
 
 /// Workflow #369 W-1 (review L-6): the refusal that ends a dispatch intent whose admission guard
-/// stayed taken; it may run again about one second later.
+/// stayed taken; it may run again about one second later. Workflow #378 A4 (part B L3): its
+/// `instance_id` is the resolved instance's opaque identifier, not the policy's alias.
 fn dispatch_contended_error(
     now_unix_ms: u64,
-    instance_id: &str,
+    instance_id: InstanceId,
 ) -> RuntimeHostResult<RuntimeHostError> {
     let next_eligible_unix_ms = now_unix_ms
         .checked_add(DISPATCH_CONTENDED_RETRY_AFTER_MS)
@@ -55,7 +56,7 @@ fn dispatch_contended_error(
     )
     .with_outcome_values(|outcome| {
         outcome
-            .instance_id(instance_id)
+            .instance_id(crate::failure_identity::identifier_text(&instance_id))
             .next_eligible_unix_ms(next_eligible_unix_ms)
     });
     let mut rejection = error.policy_rejection();
@@ -144,10 +145,11 @@ impl HostShared {
                 HostLocation::AdmitPolicyDispatch,
                 RuntimeErrorCode::InvalidRequest,
             )
-            // Ledger revision 3: the policy's instance id, the holder and the waiting count.
+            // Ledger revision 3: the instance, the holder and the waiting count. Workflow #378
+            // A4 (part B L3): the resolved instance's opaque identifier, not the policy's alias.
             .with_outcome_values(|outcome| {
                 outcome
-                    .instance_id(instance_alias)
+                    .instance_id(crate::failure_identity::identifier_text(&instance_id))
                     .holder_kind(crate::error::ClaimKindToken(holder_kind))
                     .count(count)
             }),
@@ -1746,8 +1748,10 @@ impl HostShared {
                     ) {
                         Ok(Some(success)) => Ok(success),
                         Ok(None) => {
-                            match dispatch_contended_error(context.now_unix_ms, &intent.instance_id)
-                            {
+                            match dispatch_contended_error(
+                                context.now_unix_ms,
+                                resolved.instance_id(),
+                            ) {
                                 Ok(error) => Err(RequestFailure::request(
                                     error,
                                     RuntimeReceiptState::Denied,
@@ -2075,6 +2079,7 @@ impl HostShared {
                         revision,
                         drained: None,
                     },
+                    failure_outcome: None,
                 });
             }
             SchedulingPauseScope::Instance { instance_alias } => {
@@ -2156,6 +2161,7 @@ impl HostShared {
                     revision,
                     drained: Some(drained),
                 },
+                failure_outcome: None,
             }),
             // No half-open pause: a failed stage lifts the gate it closed, and the persisted
             // pause with it (Workflow #361 B1); a failed record poisons the request.
@@ -2358,6 +2364,7 @@ impl HostShared {
                     revision,
                     selfcheck: None,
                 },
+                failure_outcome: None,
             });
         };
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
@@ -2418,6 +2425,7 @@ impl HostShared {
                 revision,
                 selfcheck: Some(selfcheck),
             },
+            failure_outcome: None,
         })
     }
 
@@ -2592,6 +2600,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::PolicyInputIdentityProjected { identity },
+            failure_outcome: None,
         })
     }
 }

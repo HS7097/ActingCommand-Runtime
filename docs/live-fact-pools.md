@@ -1,7 +1,7 @@
 # Live adapter observations
 
 `actingctl agent-publish-facts --state-root <runtime-state> --record-file <observation.json>`
-publishes an authorized adapter declaration through request.v3 as Agent/Adapter.
+publishes an authorized adapter declaration through request.v4 as Agent/Adapter.
 Other actingctl commands use Cli/Cli. These origin enums are routing constraints,
 not authentication credentials. There is no selectable actor flag.
 

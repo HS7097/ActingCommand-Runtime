@@ -160,6 +160,7 @@ impl HostShared {
                     conditions: checked.conditions,
                 }),
             },
+            failure_outcome: None,
         })
     }
 }
@@ -296,6 +297,7 @@ impl HostShared {
             result: RuntimeResult::ResourceTargetView {
                 view: Box::new(view),
             },
+            failure_outcome: None,
         })
     }
 }

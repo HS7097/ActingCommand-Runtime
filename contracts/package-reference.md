@@ -423,3 +423,71 @@ supplied exact material for reconstruction (the content directory; a recorded Gi
 source-tree reference is refused with `source_tree_loader_retired`). Evidence ZIP export/replay
 keeps its own byte SHA-256 and does not archive source material or guarantee its future
 availability. Current ZIP production and resource deployment remain available.
+
+## Standard package root
+
+Workflow #373 NAV-6 (model M-373 v1.1 §3, §4.3, §7). An installed standard package keeps its
+data files beside its package directories, one directory per game below the configured
+`standard_packs.root` (`contracts/actingd-check-config.md`, "Standard packs"):
+
+```text
+<standard_packs.root>/<game>/
+  bundle.json        the bundle index (above); its packs are the game root's registry
+  pages.json         actingcommand.pages.v1: the game's page ids and its feature packages
+  interrupts.json    actingcommand.interrupts.v1: the shared interrupt pages
+  <directory>/       one package directory per bundle pack
+```
+
+- **Naming.** A root file is `<kind>.json` with `schema_version` `actingcommand.<kind>.v<N>`
+  and a `game` equal to its directory's name (and to `bundle.json`'s). Readers look only at the
+  directories `bundle.json` lists.
+- **Registry.** Package id → package directory: the game root plus the pack's `path` without
+  its `packs/` prefix. The registry is held in memory only; it records each pack's bundle
+  reference as written and compares it with nothing (PKG-S1).
+- **`pages.json`.** `{schema_version, game, features, pages}`: `features` names 1–8 packages of
+  the registry, at most one per server (the feature package: a `recognize_only` package whose
+  pages are exactly the listed ones); `pages` lists 1–256 pages `{id, kind}`, each `id` 1–64
+  bytes of `[a-z][a-z0-9_]*` and listed once, `kind` `page` or `overlay`. A package's page is
+  the listed page whose id equals the package's page id without the game prefix. Unknown
+  members are refused.
+- **`interrupts.json`.** `{schema_version, game, interrupts}`: at most 32 entries
+  `{page, handlers, then, max_per_run}`; `page` is a page of `pages.json`, named once;
+  `handlers` names 1–8 packages of the registry, at most one per server; `then` is `"resume"`,
+  `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server); `max_per_run`
+  is 1–8. The file requires `pages.json`.
+- **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
+  `parse_standard_pack_interrupts`, `validate_standard_pack_references`,
+  `StandardPackRegistry`) are shared by the Runtime's reader, check-config and
+  `actinglab resource validate` (`resource-declarations.md`). A refused file is
+  `standard_pack_root_invalid` with `game`, `path`, `standard_pack_problem` and `json_pointer`
+  (empty for the whole document); a file that cannot be read for another reason than its
+  absence is `standard_pack_root_unreadable`, its OS error the cause.
+- **When the Runtime reads it.** At startup every game root, root files only and no package
+  admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record
+  (`standard_pack_registered` with the package count, or the root's failure); a broken root
+  never stops the Runtime. In a run's preparation, the root of the run's game when it holds
+  `interrupts.json`: a broken root refuses the run before any lease and any task record; a
+  registry that differs from the one read last is recorded as `standard_pack_registered`
+  with the added and removed package ids; what was read stays fixed for the run. A game root
+  without `interrupts.json` is not read for a run, and the run is as it was without NAV-6.
+  Packages are admitted by their path when a run first uses them; a file replaced in place is
+  used from the next run on, with no restart.
+- **Shared interrupt pages** (§6). A run uses its server's feature package and the
+  interrupts whose handlers name a package of its server. Each frame on which the running
+  package's own expectation failed (its entry check's verdict, a page-graph frame no page of the
+  package matched, a frame of a wait for a step's, transition or `expect_after` page) is
+  evaluated against the interrupt pages the running package does not declare itself, in one
+  scene evaluation of the feature package. One match is handled: the handler runs as a layer of
+  the run (`EntryRecovery*` records with `role: interrupt_handler`), then the `then.run`
+  package, and the run resumes (a wait's budget is paused while it is handled), or ends with
+  `contained_task_interrupt_escalated` (`end_run`); an `interrupt_handled` record follows each.
+  Two or more matches are an `interrupt_ambiguous` record and nothing is handled. A page
+  handled `max_per_run` times, or a run that handled 16 pages, ends the run with
+  `contained_task_interrupt_limit_reached`. A feature, handler or `then.run` package that is
+  not of the run's server, cannot be admitted or is not eligible (a `recognize_only` feature
+  package of the run's game, server and resolution with exactly the listed pages; a handler or
+  `then.run` package eligible as a prerequisite layer of the run, declaring no prerequisite
+  package, a handler's entry holding its page) ends the run with
+  `contained_task_navigation_package_invalid` and its `navigation_role` and
+  `navigation_problem`. A handler or `then.run` package never looks at the interrupt pages
+  itself.

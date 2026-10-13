@@ -96,7 +96,7 @@ fn rd3i_t2_a_stale_capture_after_an_input_is_followed_by_no_input() {
         !matches!(
             receipt.result(),
             Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 ..
             })
         ),

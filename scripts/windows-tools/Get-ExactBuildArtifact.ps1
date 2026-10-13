@@ -478,6 +478,20 @@ try {
             'INSTALL.md',
             'RELEASE-NOTES.md'
         )
+        # Workflow #387 D1b: a Runtime built from D1b on also ships the defaults file
+        # actingd.defaults.json; the layout name stays, as for the Tools' platform-tools-v3.
+        $declaresDefaults = (
+            $manifest.PSObject.Properties.Name -contains 'files' -and
+            @(
+                @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
+                    $path = $_.PSObject.Properties['path']
+                    if ($null -ne $path) { [string]$path.Value }
+                }
+            ) -ccontains 'actingd.defaults.json'
+        )
+        if ($declaresDefaults) {
+            $expectedFiles += 'actingd.defaults.json'
+        }
     }
 
     # A Tools manifest with tools_payload_layout 'platform-tools-v1' adds the official

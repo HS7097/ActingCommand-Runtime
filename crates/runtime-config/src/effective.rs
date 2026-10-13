@@ -1,0 +1,598 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! The configuration in effect (Workflow #387 model v1.2 §5.6-§5.9): the file layer actingd
+//! assembled (the configuration manifest) with the instruction layer over it. An instruction
+//! changes only a settable key, takes effect at once and is kept as one `host.config_overrides`
+//! row; a start restores the rows by the "later change wins" rule of §12 question 3.
+
+use crate::codes::{ConfigCode, ConfigValueProblem};
+use crate::instance;
+use crate::table::{INSTANCE_SECTION, KeyRange, KeyRow, find_row};
+use crate::value::{canonical_json, parse_value, scalar_json};
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{
+    ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
+    ConfiguredSetting, FactScalar, RuntimeConfigManifest, config_parameter_section,
+};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The `host.config_overrides` row field naming the overridden key.
+pub const OVERRIDE_CONFIG_KEY: &str = "config_key";
+/// The row field holding the instruction value, canonical JSON text.
+pub const OVERRIDE_VALUE_JSON: &str = "value_json";
+/// The row field holding the file-layer value the instruction overrode, canonical JSON text.
+pub const OVERRIDE_BASE_JSON: &str = "base_json";
+/// The row field naming where that overridden value came from: `explicit` or `default`.
+pub const OVERRIDE_BASE_SOURCE: &str = "base_source";
+/// The row field holding when the instruction was set.
+pub const OVERRIDE_SET_UNIX_MS: &str = "set_unix_ms";
+/// The row field naming the owner epoch the instruction was set in.
+pub const OVERRIDE_SET_IN_OWNER_EPOCH: &str = "set_in_owner_epoch";
+/// The row field naming the request that set the instruction.
+pub const OVERRIDE_REQUEST_ID: &str = "request_id";
+/// The row field naming the channel the instruction came through (written from U-2 on).
+pub const OVERRIDE_CHANNEL: &str = "channel";
+
+/// Facts of other crates a whole-section check reads (§5.1, §5.3): the caller fills them in,
+/// so this crate depends on neither the scheduler nor the device layer. D1c adds the device
+/// layer's control bounds with the first check that reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CheckContext {
+    /// `scheduler.maximum_client_heartbeat_interval_ms` in effect (§4.3).
+    pub maximum_client_heartbeat_interval_ms: u64,
+}
+
+impl CheckContext {
+    pub const fn new(maximum_client_heartbeat_interval_ms: u64) -> Self {
+        Self {
+            maximum_client_heartbeat_interval_ms,
+        }
+    }
+}
+
+/// Why a key or a value is refused: the code, the key it concerns, why the value is refused
+/// and, for a bounded key, its range (§5.6 checks: "带 `config_key` 与原因").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigFailure {
+    code: ConfigCode,
+    config_key: String,
+    problem: Option<ConfigValueProblem>,
+    range: Option<(i64, i64)>,
+}
+
+impl ConfigFailure {
+    pub fn new(code: ConfigCode, config_key: impl Into<String>) -> Self {
+        Self {
+            code,
+            config_key: config_key.into(),
+            problem: None,
+            range: None,
+        }
+    }
+
+    /// `config_value_invalid` for `config_key`, for `problem`.
+    pub fn invalid_value(config_key: impl Into<String>, problem: ConfigValueProblem) -> Self {
+        Self {
+            problem: Some(problem),
+            ..Self::new(ConfigCode::ConfigValueInvalid, config_key)
+        }
+    }
+
+    /// The failure with the key's integer range, when it has one.
+    pub fn with_range(mut self, range: KeyRange) -> Self {
+        if let KeyRange::Integer { min, max } = range {
+            self.range = Some((min, max));
+        }
+        self
+    }
+
+    pub const fn failure_code(&self) -> ConfigCode {
+        self.code
+    }
+
+    pub fn config_key(&self) -> &str {
+        &self.config_key
+    }
+
+    pub const fn problem(&self) -> Option<ConfigValueProblem> {
+        self.problem
+    }
+
+    /// `outcome` with this failure's values: `config_key`, `config_value_problem` when the value
+    /// is refused and, for a bounded key, `range_min` and `range_max`.
+    pub fn with_values(&self, outcome: Outcome) -> Outcome {
+        let outcome = outcome.config_key(self.config_key.clone());
+        let outcome = match self.problem {
+            Some(problem) => outcome.config_value_problem(problem),
+            None => outcome,
+        };
+        match self.range {
+            Some((min, max)) => outcome.range_min(min).range_max(max),
+            None => outcome,
+        }
+    }
+
+    /// This failure as an outcome of its own.
+    pub fn outcome(&self) -> Outcome {
+        self.with_values(Outcome::new(self.code))
+    }
+}
+
+/// Who set an instruction and when: the request's identity, kept on its row (§5.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionStamp {
+    pub set_unix_ms: u64,
+    pub set_in_owner_epoch: String,
+    pub request_id: String,
+}
+
+/// One instruction value with what it overrode (§5.7 `host.config_overrides` row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionValue {
+    pub value: FactScalar,
+    pub value_json: String,
+    pub base_json: String,
+    pub base_source: ConfigParameterSource,
+    pub stamp: InstructionStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Setting {
+    key: String,
+    row: &'static KeyRow,
+    instance: Option<String>,
+    file_value: FactScalar,
+    file_source: ConfigParameterSource,
+    instruction: Option<InstructionValue>,
+}
+
+impl Setting {
+    fn effective(&self) -> (&FactScalar, ConfigParameterSource) {
+        match &self.instruction {
+            Some(instruction) => (&instruction.value, ConfigParameterSource::Instruction),
+            None => (&self.file_value, self.file_source),
+        }
+    }
+
+    fn parameter(&self) -> ConfigParameter {
+        let (value, source) = self.effective();
+        ConfigParameter {
+            key: self.key.clone(),
+            value: value.clone(),
+            source,
+            settable: self.row.settable.is_settable(),
+        }
+    }
+
+    /// The canonical JSON of the file-layer value.
+    fn file_json(&self) -> Option<String> {
+        scalar_json(self.row.value_type, &self.file_value).map(|value| canonical_json(&value))
+    }
+}
+
+/// What one `ConfigureSettings` leads to: the configuration afterwards, each changed key as it
+/// is in effect afterwards (the receipt, §5.6) and the sections whose `config.parameters.<section>`
+/// fact changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedSettings {
+    pub config: EffectiveConfig,
+    pub settings: Vec<ConfiguredSetting>,
+    pub sections: BTreeSet<String>,
+}
+
+/// One instruction value a start did not restore as it was (§5.7): `config_override_superseded`,
+/// `config_override_base_changed` (restored) or `config_override_dropped`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreNote {
+    pub note: ConfigCode,
+    pub config_key: String,
+}
+
+impl RestoreNote {
+    pub fn outcome(&self) -> Outcome {
+        Outcome::new(self.note).config_key(self.config_key.clone())
+    }
+}
+
+/// A `host.config_overrides` record that is not the shape this build writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverridesInvalid;
+
+/// The configuration in effect.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EffectiveConfig {
+    subsystems: Vec<ConfigSubsystem>,
+    settings: Vec<Setting>,
+}
+
+impl EffectiveConfig {
+    /// The file layer as actingd assembled it, without any instruction value. Every key must
+    /// be in the key table (`config_key_unknown`).
+    pub fn from_manifest(manifest: &RuntimeConfigManifest) -> Result<Self, ConfigFailure> {
+        let settings = manifest
+            .parameters
+            .iter()
+            .map(|parameter| {
+                let (row, instance) = find_row(&parameter.key).ok_or_else(|| {
+                    ConfigFailure::new(ConfigCode::ConfigKeyUnknown, parameter.key.clone())
+                })?;
+                Ok(Setting {
+                    key: parameter.key.clone(),
+                    row,
+                    instance: instance.map(str::to_owned),
+                    file_value: parameter.value.clone(),
+                    file_source: parameter.source,
+                    instruction: None,
+                })
+            })
+            .collect::<Result<Vec<_>, ConfigFailure>>()?;
+        Ok(Self {
+            subsystems: manifest.subsystems.clone(),
+            settings,
+        })
+    }
+
+    /// The whole-section check of every section (§5.3): the file layer at start, before any
+    /// instruction value is restored.
+    pub fn check(&self, context: &CheckContext) -> Result<(), ConfigFailure> {
+        let sections = self
+            .settings
+            .iter()
+            .map(|setting| config_parameter_section(&setting.key).to_owned())
+            .collect::<BTreeSet<_>>();
+        self.check_sections(&sections, context)
+    }
+
+    /// The manifest as it is in effect: each key's effective value and source (§5.9).
+    pub fn manifest(&self) -> RuntimeConfigManifest {
+        RuntimeConfigManifest {
+            subsystems: self.subsystems.clone(),
+            parameters: self.settings.iter().map(Setting::parameter).collect(),
+        }
+    }
+
+    /// The effective value of `key`, when the configuration has the key.
+    pub fn value(&self, key: &str) -> Option<&FactScalar> {
+        self.setting(key).map(|setting| setting.effective().0)
+    }
+
+    /// The instruction value of `key`, when one is in effect.
+    pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
+        self.setting(key)
+            .and_then(|setting| setting.instruction.as_ref())
+    }
+
+    fn setting(&self, key: &str) -> Option<&Setting> {
+        self.settings.iter().find(|setting| setting.key == key)
+    }
+
+    /// Applies one `ConfigureSettings`, all changes or none (§5.6): every key in the key table
+    /// (`config_key_unknown`), settable (`config_key_not_settable`), each value of the key's
+    /// type and range and every changed section whole (`config_value_invalid`). A change without
+    /// a value returns the key to its file-layer value.
+    pub fn apply(
+        &self,
+        changes: &[ConfigSettingChange],
+        stamp: &InstructionStamp,
+        context: &CheckContext,
+    ) -> Result<AppliedSettings, ConfigFailure> {
+        let mut next = self.clone();
+        let mut seen = BTreeSet::new();
+        let mut sections = BTreeSet::new();
+        for change in changes {
+            if !seen.insert(change.key.as_str()) {
+                return Err(ConfigFailure::invalid_value(
+                    change.key.clone(),
+                    ConfigValueProblem::RepeatedKey,
+                ));
+            }
+            let setting = next
+                .settings
+                .iter_mut()
+                .find(|setting| setting.key == change.key)
+                .ok_or_else(|| {
+                    ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
+                })?;
+            if !setting.row.settable.is_settable() {
+                return Err(ConfigFailure::new(
+                    ConfigCode::ConfigKeyNotSettable,
+                    change.key.clone(),
+                ));
+            }
+            setting.instruction = match &change.value {
+                None => None,
+                Some(value) => {
+                    let parsed = parse_value(setting.row, &change.key, value)?;
+                    let base_json = setting.file_json().ok_or_else(|| {
+                        ConfigFailure::invalid_value(
+                            change.key.clone(),
+                            ConfigValueProblem::WrongType,
+                        )
+                    })?;
+                    Some(InstructionValue {
+                        value: parsed,
+                        value_json: canonical_json(value),
+                        base_json,
+                        base_source: base_source(setting.file_source),
+                        stamp: stamp.clone(),
+                    })
+                }
+            };
+            sections.insert(config_parameter_section(&change.key).to_owned());
+        }
+        next.check_sections(&sections, context)?;
+        let settings = changes
+            .iter()
+            .map(|change| {
+                let setting = next.setting(&change.key).ok_or_else(|| {
+                    ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
+                })?;
+                let (value, source) = setting.effective();
+                Ok(ConfiguredSetting {
+                    key: change.key.clone(),
+                    value: value.clone(),
+                    source,
+                })
+            })
+            .collect::<Result<Vec<_>, ConfigFailure>>()?;
+        Ok(AppliedSettings {
+            config: next,
+            settings,
+            sections,
+        })
+    }
+
+    /// The whole-section checks of `sections` against the values in effect (§5.3), with the
+    /// facts of other crates in `context`. D1b: each instance of the per-instance section, which
+    /// reads none of them.
+    fn check_sections(
+        &self,
+        sections: &BTreeSet<String>,
+        _context: &CheckContext,
+    ) -> Result<(), ConfigFailure> {
+        if !sections.contains(INSTANCE_SECTION) {
+            return Ok(());
+        }
+        let instances = self
+            .settings
+            .iter()
+            .filter_map(|setting| setting.instance.as_deref())
+            .collect::<BTreeSet<_>>();
+        for instance in instances {
+            instance::check_instance(instance, |key| self.value(key).cloned())?;
+        }
+        Ok(())
+    }
+
+    /// The `host.config_overrides` rows of the instruction values in effect, in manifest order
+    /// (§5.7).
+    pub fn override_rows(&self) -> Vec<BTreeMap<String, FactScalar>> {
+        self.settings
+            .iter()
+            .filter_map(|setting| {
+                let instruction = setting.instruction.as_ref()?;
+                Some(BTreeMap::from([
+                    (
+                        OVERRIDE_CONFIG_KEY.to_owned(),
+                        FactScalar::String(setting.key.clone()),
+                    ),
+                    (
+                        OVERRIDE_VALUE_JSON.to_owned(),
+                        FactScalar::String(instruction.value_json.clone()),
+                    ),
+                    (
+                        OVERRIDE_BASE_JSON.to_owned(),
+                        FactScalar::String(instruction.base_json.clone()),
+                    ),
+                    (
+                        OVERRIDE_BASE_SOURCE.to_owned(),
+                        FactScalar::String(instruction.base_source.as_str().to_owned()),
+                    ),
+                    (
+                        OVERRIDE_SET_UNIX_MS.to_owned(),
+                        FactScalar::TimestampMs(instruction.stamp.set_unix_ms),
+                    ),
+                    (
+                        OVERRIDE_SET_IN_OWNER_EPOCH.to_owned(),
+                        FactScalar::String(instruction.stamp.set_in_owner_epoch.clone()),
+                    ),
+                    (
+                        OVERRIDE_REQUEST_ID.to_owned(),
+                        FactScalar::String(instruction.stamp.request_id.clone()),
+                    ),
+                ]))
+            })
+            .collect()
+    }
+
+    /// Restores the instruction values of a recorded `host.config_overrides` at start
+    /// (§5.6, §5.7, §12 question 3: the later change wins), and returns one note per value not
+    /// restored as it was:
+    ///
+    /// - the key no longer exists, is no longer settable, or its value no longer fits:
+    ///   dropped (`config_override_dropped`);
+    /// - it overrode an explicit value and the file changed or removed that value, or it
+    ///   overrode a default and the file names the key now: dropped
+    ///   (`config_override_superseded`);
+    /// - it overrode a default that changed while the file still does not name the key: kept,
+    ///   with the new default as what it overrides (`config_override_base_changed`);
+    /// - otherwise: kept as it was.
+    ///
+    /// The restored values then pass the whole-section check of their sections with this
+    /// start's file layer (§5.3); a section that fails it drops every value restored into it
+    /// (`config_override_dropped`). A record not of the shape this build writes is refused
+    /// whole.
+    pub fn restore(
+        &mut self,
+        rows: &[BTreeMap<String, FactScalar>],
+        context: &CheckContext,
+    ) -> Result<Vec<RestoreNote>, OverridesInvalid> {
+        let mut seen = BTreeSet::new();
+        let mut notes = Vec::new();
+        let mut restored_sections = BTreeSet::new();
+        for row in rows {
+            let recorded = RecordedOverride::parse(row)?;
+            if !seen.insert(recorded.config_key.clone()) {
+                return Err(OverridesInvalid);
+            }
+            let note = |code| RestoreNote {
+                note: code,
+                config_key: recorded.config_key.clone(),
+            };
+            let Some(setting) = self
+                .settings
+                .iter_mut()
+                .find(|setting| setting.key == recorded.config_key)
+            else {
+                notes.push(note(ConfigCode::ConfigOverrideDropped));
+                continue;
+            };
+            let value = serde_json::from_str::<Value>(&recorded.value_json)
+                .ok()
+                .and_then(|value| {
+                    parse_value(setting.row, &recorded.config_key, &value)
+                        .ok()
+                        .map(|parsed| (parsed, canonical_json(&value)))
+                });
+            let (Some((value, value_json)), Some(current_json), true) = (
+                value,
+                setting.file_json(),
+                setting.row.settable.is_settable(),
+            ) else {
+                notes.push(note(ConfigCode::ConfigOverrideDropped));
+                continue;
+            };
+            let file_names_key = setting.file_source == ConfigParameterSource::Explicit;
+            let base_json = match recorded.base_source {
+                ConfigParameterSource::Explicit
+                    if file_names_key && current_json == recorded.base_json =>
+                {
+                    recorded.base_json.clone()
+                }
+                ConfigParameterSource::Default if !file_names_key => {
+                    if current_json != recorded.base_json {
+                        notes.push(note(ConfigCode::ConfigOverrideBaseChanged));
+                    }
+                    current_json
+                }
+                _ => {
+                    notes.push(note(ConfigCode::ConfigOverrideSuperseded));
+                    continue;
+                }
+            };
+            setting.instruction = Some(InstructionValue {
+                value,
+                value_json,
+                base_json,
+                base_source: recorded.base_source,
+                stamp: recorded.stamp,
+            });
+            restored_sections.insert(config_parameter_section(&recorded.config_key).to_owned());
+        }
+        for section in restored_sections {
+            if self
+                .check_sections(&BTreeSet::from([section.clone()]), context)
+                .is_ok()
+            {
+                continue;
+            }
+            for setting in &mut self.settings {
+                if config_parameter_section(&setting.key) == section
+                    && setting.instruction.take().is_some()
+                {
+                    notes.retain(|note| note.config_key != setting.key);
+                    notes.push(RestoreNote {
+                        note: ConfigCode::ConfigOverrideDropped,
+                        config_key: setting.key.clone(),
+                    });
+                }
+            }
+        }
+        Ok(notes)
+    }
+}
+
+/// What an instruction value overrode, as a row records it: `explicit` when the file named the
+/// key, `default` for every other file-layer source (the restore rule tells only these two
+/// apart, §12 question 3).
+fn base_source(file_source: ConfigParameterSource) -> ConfigParameterSource {
+    match file_source {
+        ConfigParameterSource::Explicit => ConfigParameterSource::Explicit,
+        ConfigParameterSource::Default
+        | ConfigParameterSource::Discovered
+        | ConfigParameterSource::Instruction => ConfigParameterSource::Default,
+    }
+}
+
+/// One recorded `host.config_overrides` row.
+struct RecordedOverride {
+    config_key: String,
+    value_json: String,
+    base_json: String,
+    base_source: ConfigParameterSource,
+    stamp: InstructionStamp,
+}
+
+impl RecordedOverride {
+    fn parse(row: &BTreeMap<String, FactScalar>) -> Result<Self, OverridesInvalid> {
+        const FIELDS: [&str; 8] = [
+            OVERRIDE_CONFIG_KEY,
+            OVERRIDE_VALUE_JSON,
+            OVERRIDE_BASE_JSON,
+            OVERRIDE_BASE_SOURCE,
+            OVERRIDE_SET_UNIX_MS,
+            OVERRIDE_SET_IN_OWNER_EPOCH,
+            OVERRIDE_REQUEST_ID,
+            OVERRIDE_CHANNEL,
+        ];
+        if row.keys().any(|field| !FIELDS.contains(&field.as_str())) {
+            return Err(OverridesInvalid);
+        }
+        let text = |field: &str| match row.get(field) {
+            Some(FactScalar::String(text)) => Ok(text.clone()),
+            _ => Err(OverridesInvalid),
+        };
+        let base_source = match text(OVERRIDE_BASE_SOURCE)?.as_str() {
+            source if source == ConfigParameterSource::Explicit.as_str() => {
+                ConfigParameterSource::Explicit
+            }
+            source if source == ConfigParameterSource::Default.as_str() => {
+                ConfigParameterSource::Default
+            }
+            _ => return Err(OverridesInvalid),
+        };
+        let set_unix_ms = match row.get(OVERRIDE_SET_UNIX_MS) {
+            Some(FactScalar::TimestampMs(at)) => *at,
+            _ => return Err(OverridesInvalid),
+        };
+        if let Some(channel) = row.get(OVERRIDE_CHANNEL)
+            && !matches!(channel, FactScalar::String(_))
+        {
+            return Err(OverridesInvalid);
+        }
+        // A key is a configuration key's spelling, the type of the outcome key `config_key`.
+        let config_key = text(OVERRIDE_CONFIG_KEY)?;
+        if config_key.is_empty()
+            || !config_key.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'.' | b':' | b'-')
+            })
+        {
+            return Err(OverridesInvalid);
+        }
+        Ok(Self {
+            config_key,
+            value_json: text(OVERRIDE_VALUE_JSON)?,
+            base_json: text(OVERRIDE_BASE_JSON)?,
+            base_source,
+            stamp: InstructionStamp {
+                set_unix_ms,
+                set_in_owner_epoch: text(OVERRIDE_SET_IN_OWNER_EPOCH)?,
+                request_id: text(OVERRIDE_REQUEST_ID)?,
+            },
+        })
+    }
+}

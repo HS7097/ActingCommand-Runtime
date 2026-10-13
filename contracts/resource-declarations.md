@@ -30,6 +30,8 @@ and `operation explain` keep their existing behavior.
 | `control.json` | The source control declaration validator and production task-control parser |
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | `maintenance.json` (repository root only) | Shared `Vec<BundleMaintenance>` decoding and `validate_bundle_maintenance_declarations`; reported with family `maintenance` |
+| `pages.json` (repository root only) | The standard-pack page list (`actingcommand.pages.v1`, Workflow #373 NAV-6): the contract crate's `parse_standard_pack_pages`, the Runtime reader's own check; reported with family `standard_pack_pages` |
+| `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
@@ -56,6 +58,11 @@ values fail. This declaration read uses the existing path/document/aggregate bud
 it reads no packs. Bundle references, content digests, actual use eligibility and full
 prerequisite chains are checked by the formal bundle generator and execution kernel
 before generation, as specified in [package-reference.md](package-reference.md).
+
+The standard-pack root files are checked as the Runtime's root reader checks them
+(`package-reference.md`, "Standard package root"): shape, version, `game`, page ids, counts
+and, for `interrupts.json`, its pages against `pages.json`. The packages they name are
+checked against the packed bundle by the bundle generator, as maintenance declarations are.
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and

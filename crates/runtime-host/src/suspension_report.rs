@@ -23,7 +23,7 @@ use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, CodeStr, Location};
 use actingcommand_contract::{
-    CONFIG_PARAMETERS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
+    CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
     PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
     scheduled_failure_code,
@@ -402,7 +402,7 @@ pub fn suspension_report(
         .rev()
         .find_map(|event| match event.payload() {
             EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
-                if payload.record().key == CONFIG_PARAMETERS_FACT_KEY =>
+                if payload.record().key == CONFIG_SUBSYSTEMS_FACT_KEY =>
             {
                 Some(payload.record().observed_at_unix_ms)
             }

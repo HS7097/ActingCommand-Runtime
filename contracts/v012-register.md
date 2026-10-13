@@ -199,6 +199,23 @@ Each slice brings its own shape, written by the slice that brings it.
 |---|---|---|---|---|---|
 | T1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTargetData.uniqueness` (`TaskDiagnosticUniquenessData`) | new optional member, absent when unused | REC-2 (#396, REC-M v1.2.1 §2, §4) | REC-2 | present on the row of a target that declares `unique` and otherwise passed: `TaskDiagnosticUniquenessData {score_milli, margin_milli, second_score_milli?, second_rect?}` (`deny_unknown_fields`; `second_rect` an `OcrRegionRect`), the two optional members present exactly when a second place lies within the margin; REC-1's `failure` (V3) then carries `target_match_not_unique`, and a unique search past its limit is a recognition error row (`InvalidPackage`, with its timing) whose REC-1 `outcome` (V3) carries `target_match_search_incomplete`; no new member beyond `uniqueness`, no ledger record type is added; [resource-declarations.md](resource-declarations.md), section Task schema `0.9` unique matches |
 
+### 1.12 Wave 3: NAV-6 (#373, M-373 v1.1 §8.3, §8.4, §8.6)
+
+NAV-6 brings its own shapes and writes them. Without an `interrupts.json` in a game root, a run
+writes none of them and its records are those of v0.12.0 before NAV-6; the startup record N4
+appears only once `standard_packs.root` is set.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N1 | `TaskSemanticFact::EntryRecoveryPackageAdmitted`, `::EntryRecoveryCompleted`, `::EntryRecoveryFailed` (`task.entry_preflight`) | new optional member `role` (`TaskEntryRecoveryRole`) | NAV-6 | NAV-6 | value `interrupt_handler` (a shared interrupt page's handler or `then.run` package run as a layer); serde default, omitted when absent. Prerequisite, return-home and bound recovery layers carry none until NAV-3a (`prerequisite`, `return_home`) and NAV-5 (`navigation_hop`, `recovery_chain`) add their values (M-373 §8.3) |
+| N2 | `TaskSemanticFact::InterruptHandled` (`task.entry_preflight`, kind `interrupt_handled`) | new record | NAV-6 | NAV-6 | `{page, handler_package_label, then, count, outcome}` (`deny_unknown_fields` as every task fact): `page` the `pages.json` id, `then` `"resume"`, `"end_run"` or `{"run": <package label>}` (`TaskInterruptThen`), `count` 1..=8 (`invalid_task_interrupt` otherwise), `outcome` `contained_task_interrupt_handled` (info) with `page_id`, `count` |
+| N3 | `TaskSemanticFact::InterruptAmbiguous` (`task.entry_preflight`, kind `interrupt_ambiguous`) | new record | NAV-6 | NAV-6 | `{page_ids [2..=32 pages.json ids], outcome}`, `outcome` `contained_task_interrupt_ambiguous` (warning) with `page_ids`; the record M-373 §6.3 asks for (N6-8), a shape §8.3 does not name |
+| N4 | `RuntimeLifecyclePhase::StandardPackRead` (`runtime.lifecycle_observed`, phase `standard_pack_read`) | new lifecycle phase | NAV-6 | NAV-6 | `{outcome}`: `standard_pack_registered` (info; `game`, `count`, optional `added_package_ids`, `removed_package_ids`), `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`) or `standard_pack_root_unreadable` (`path`, optional `game`; `foreign_os_error` cause), all error but the first; system links; durable (`CommitSync::Full`). At startup one per game root; in a run's preparation one when the registry changed (M-373 §8.4) |
+| N5 | `standard_packs.root` (actingd configuration, section `standard_packs`) | new configuration key | NAV-6 | NAV-6 | a path, relative to the configuration file's directory; empty refused (`config_decode_failed`); no default (absent = no root is read); startup key (`settable = false`, M-373 §8.6). Parsed the existing way; D1b/D1c move it into `crates/runtime-config` as a section file. Not in `config.parameters` |
+| N6 | check-config v1 report: member `standard_packs` `{root, root_problem, games: [{game, bundle_version, pack_count, root_files, problem}]}` and `warnings` entries `<code>:<game>` | interface | NAV-6 | NAV-6 | always present; a broken game root keeps `status: ok` ([actingd-check-config.md](actingd-check-config.md), "Standard packs") |
+| N7 | root files `pages.json` (`actingcommand.pages.v1`) and `interrupts.json` (`actingcommand.interrupts.v1`) | resource file formats, not ledger shapes | NAV-6 (reader, contract checks) | resource side (NAV-1, NAV-2) | [package-reference.md](package-reference.md), "Standard package root"; `actinglab resource validate` families `standard_pack_pages`, `standard_pack_interrupts` |
+| N8 | `ContainedTaskRuntime::shared_interrupt` (execution kernel) | new trait method, default `NotHandled` | NAV-6 | — | not persisted; every other runtime keeps today's behaviour |
+
 ### 1.13 Resource fence (#403, approved 2026-10-13)
 
 An unconfirmed close of one instance's own resources fences that instance instead of ending the
@@ -215,6 +232,30 @@ once the Runtime is shutting down, still write `unconfirmed`.
 | F3 | `RecoveryTriggerStage::ResourceFence` (`resource_fence`) | new enum value of `recovery_ladder_started.trigger.stage` | #403 | #403 | a fence's ladder: no `run_id`, `task_id` or `preparation`; `failure_code` is the unconfirmed failure's code; a fence that manual work met (a direct task run, a client lease, an application or input command, a Lab operation) starts none (M387 B1) |
 | F4 | `RecoveryRungSkipReason::ResourceFence` (`resource_fence`) | new enum value of the rung plan's skip reason | #403 | #403 | the return-home rung of a fence's ladder, which never re-prepares the instance; its `recovery_rung_finished` outcome is `recovery_rung_skipped_resource_fence` (info) |
 | F5 | `RuntimeInstanceStatus.resource_fence` (`InstanceResourceFence`) | new optional member of the status projection (also in the runtime state observation of `command.validated`) | #403 | #403 | `{cause, since_unix_ms, awaiting_person}` (`deny_unknown_fields`), absent when the instance is not fenced; `cause` is the unconfirmed failure's code; `awaiting_person` once the fence's ladder ended without proof or none could start; `ac_overview` shows it as the row's `resource_fence` |
+
+### 1.14 Wave 3 slices (D1b, #387 M387 §5–§6)
+
+D1b brings its own shapes (rows R5, R6 of §1.5 and W3 of §3, written here as built) and writes
+them; [runtime-config.md](runtime-config.md) is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| G1 | `ConfigParameter.settable` (boolean); `ConfigParameterSource::Instruction`, spelled `instruction` | new member, new enum value (R5) | D1b | D1b | `settable` from the key table of `crates/runtime-config`; `instruction` only in the running Runtime's facts, never in `check-config` |
+| G2 | `config.parameters` → one runtime fact `config.parameters.<section>` per section (prefix `CONFIG_PARAMETERS_FACT_PREFIX`); rows `{key, value, source, settable}` | key change of a runtime fact (§5.1 split) | D1b | D1b | section = the key's first segment, `top_level` for a key without a dot; at most 256 rows each; a section an earlier start had and this one has not is recorded empty; readers: `actingctl status --config` (all sections, key order), not the suspension report (its start time now reads `config.subsystems`) |
+| G3 | `config.selection` | new runtime fact (R6), one row `{config_sha256, defaults_sha256, config_generation?}` | D1b | D1b | `sha256:<hex>` of the configuration file and of the embedded `actingd.defaults.json` (configuration files, not packages); `config_generation` decimal text, installed Runtime only; contract type `ConfigSelection` |
+| G4 | `host.config_overrides` | new runtime fact (R6), rows `{config_key, value_json, base_json, base_source, set_unix_ms, set_in_owner_epoch, request_id, channel?}` | D1b | D1b | `value_json` / `base_json` canonical JSON text; `base_source` `explicit` or `default`; `set_unix_ms` a `timestamp_ms` scalar; `channel` written from U-2 on; tagged (§4) |
+| G5 | `RuntimeOperation::ConfigureSettings { changes: [ConfigSettingChange {key, value?}] }` → `RuntimeResult::SettingsConfigured { settings: [ConfiguredSetting {key, value, source}] }` | new request and result kind (W3, runtime-client 2) | D1b | D1b | 1..=64 changes, keys unique, value ≤ 8 KiB serialized (`invalid_configure_settings`); general instruction, G14-copied; command records `command.received` / `validated` / `rejected` with action `runtime.action` (§1.6 U2) |
+| G6 | `CommandPayloadDraft::rejected_with_outcome` | writer API, no new member | D1b | D1b | the `command.rejected` record's `outcome` is the refusal (`config_*`) rather than `command_rejected` |
+| G7 | restore notes at start: `runtime.failed` with outcome `config_override_superseded` (info) / `config_override_base_changed` / `config_override_dropped` (warning) and `config_key` | existing record type, new outcome codes | D1b | D1b | severity = the code's category; system links |
+| G8 | `check-config` v1 report: member `config_selection`; `not_checked` token `instruction_values`; `config_manifest.parameters[].settable` | interface members | D1b | D1b | schema version stays `v1` (additive) |
+| G9 | `actingctl config set <key>=<json>…` / `config clear <key>…`; MCP `ac_config_set {changes: [{key, value?}]}` (observer tier until U-3) | CLI and MCP surface | D1b | D1b | the same request through both (D1-M8); MCP `INSTRUCTIONS` names `ac_config_set` (UIF:1013 → M387 §8.4) |
+| G10 | Runtime artifact payload `actingd.defaults.json` | distribution file | D1b | D1b | layout name stays `distribution-v1`; `Get-ExactBuildArtifact.ps1` accepts a Runtime artifact with or without it; the build compares its SHA-256 with `check-config`'s `config_selection.defaults_sha256` |
+
+Configuration keys (§5): D1b adds none. The per-instance `stuck_recovery` and
+`stuck_recovery_cooldown_secs` join the key table (settable, `default = code` until D1c gives
+them `section:recovery_ladder.*`); every key the manifest reported before D1b has a row
+(not settable). The defaults file ships empty (`{}`) until a section with `default = file`
+keys arrives (D1c on).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -248,10 +289,14 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W5 | read request `ScheduleExplanation { instance }` | runtime-client 3 | MCP-19 | reserved; per task: trigger, last dispatch, next due, not-run reason, produces, consumes, pools |
 | W6 | gate-class receipts carry `event_id` and store revisions, never a ledger sequence; install receipts after the commit | runtime-client 3 | AO-4 | [ledger-observer.md §13](ledger-observer.md#13-identity-without-ledger-positions-ao-3-ao-4-ao-4q-in-v0120) |
 | W7 | status blocks `ledger`, `tagged_state` | runtime-client 3 | AO-8 | [ledger-observer.md §14.2](ledger-observer.md#142-status-blocks) |
+| W8 | request `actingcommand.runtime.request.v4`: optional `detail` (`codes` \| `full`) | runtime-client 2 | A4 | #378 §7.1; absent, the source's class default applies (codes only for `source: ui`, the full outcome for every other source); requests v1–v3 are refused; [client-interactions.md](client-interactions.md) |
+| W9 | receipt `actingcommand.runtime.receipt.v2`: `outcome` (an `actingcommand.outcome.v1` envelope) on every receipt; the v1 member `error` (`RuntimeErrorProjection`) is removed | runtime-client 2 | A4 | #378 §7.2; admitted, observed, queued and cancelled carry `request_admitted`, `request_observed`, `request_queued`, `request_cancelled`; completed carries its kind's `request_<kind>_completed`; denied and failed carry the refusal or failure on top, with the values `runtime_code`, `operation`, `host_halted`, `holder_id`, `lease_id`, `retry_after_ms` where they apply; `host_halted` travels in codes mode too; a consumer judges refusal by `state` (denied/failed), the category only says how bad it is; codes mode is applied where the receipt leaves the host |
+| W10 | `RuntimeResult::ContainedTaskCompleted.outcome` → `task_result`; `ContainedTaskCancellationStatus::Terminal.outcome` → `task_result` | runtime-client 2 | A4 | #378 §8.1: renames in receipt v2 (same value), because `outcome` is reserved for the envelope |
+| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
-`UnloadPack` (UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
+`UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
 
 ## 4 Fact keys new in the 0.12 series and their tag class
 
@@ -332,9 +377,10 @@ from D1b on, and each section fact holds at most 256 rows.
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 
 `ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals); `runtime-client` [2, 2] (§3 W1–W4, A4, U-1,
-D2-S5, P-m); `actingd-config` 5 (§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5,
-D2-S2/S3); `install-control` stays [0, 1] until U-4. AO-0 changes no declaration.
+table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14);
+`runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3); `actingd-config` 5
+(§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
+[0, 1] until U-4. AO-0 changes no declaration.
 
 ## 7 What AO-0 does not register, and why
 

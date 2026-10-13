@@ -3607,6 +3607,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "CaptureSequence",
     "ClearMonitor",
     "ConfigureMonitor",
+    // Workflow #387 D1b (M387 §5.6): a general instruction the three counters send; no origin
+    // gate beyond the client sources the host checks.
+    "ConfigureSettings",
     "Health",
     "Input",
     "LoadPack",
@@ -5138,10 +5141,14 @@ const HOST_SPLIT: &[HostModule] = &[
         delegates: &[],
     },
     host_module("resource_targets", &["HostShared"]),
+    // Workflow #387 D1b: the configuration in effect.
+    host_module("runtime_config", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),
     host_module("scheduling_pause", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
+    // Workflow #373 NAV-6: the standard-pack root reader and a run's shared interrupt pages.
+    host_module("standard_pack", &["HostShared", "RuntimeContainedTask"]),
     host_module("startup_package", &["HostShared"]),
     host_module("state_control", &["HostShared"]),
     host_module("task_diagnostic", &["RuntimeContainedTask"]),

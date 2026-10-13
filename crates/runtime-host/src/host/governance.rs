@@ -67,6 +67,7 @@ impl HostShared {
                     approval_id: decision.approval_id().to_owned(),
                     disposition: decision.disposition(),
                 },
+                failure_outcome: None,
             });
         }
         approvals
@@ -136,6 +137,7 @@ impl HostShared {
                 approval_id: decision.approval_id().to_owned(),
                 disposition: decision.disposition(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -349,6 +351,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),
             result: RuntimeResult::GovernanceIdentityAccepted,
+            failure_outcome: None,
         })
     }
 }

@@ -384,11 +384,11 @@
     },
     "range_min": {
       "type": "integer",
-      "description": "The lowest revision of an interface range."
+      "description": "The lowest value of a range: the lowest revision of an interface range, or the lowest value a configuration key allows."
     },
     "range_max": {
       "type": "integer",
-      "description": "The highest revision of an interface range."
+      "description": "The highest value of a range: the highest revision of an interface range, or the highest value a configuration key allows."
     },
     "component": {
       "type": "vocab:component",
@@ -1533,6 +1533,14 @@
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
     },
+    "config_key": {
+      "type": "token",
+      "description": "A configuration key as config.parameters names it, for example a per-instance key instance.<instance id>.<member> (Workflow #387)."
+    },
+    "config_value_problem": {
+      "type": "vocab:config_value_problem",
+      "description": "Why a configuration value is refused (Workflow #387)."
+    },
     "device_state_probe": {
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
@@ -1540,6 +1548,34 @@
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
+    },
+    "standard_pack_problem": {
+      "type": "vocab:standard_pack_problem",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6)."
+    },
+    "json_pointer": {
+      "type": "pointer",
+      "description": "A JSON pointer into a declaration file; empty for the whole document."
+    },
+    "navigation_role": {
+      "type": "vocab:navigation_role",
+      "description": "The part a standard-pack package plays in a run (Workflow #373)."
+    },
+    "navigation_problem": {
+      "type": "vocab:navigation_problem",
+      "description": "Why a standard-pack package cannot play its part in a run (Workflow #373)."
+    },
+    "page_ids": {
+      "type": "list<id>",
+      "description": "Ids of pages, as a standard-pack page list or a task package names them."
+    },
+    "added_package_ids": {
+      "type": "list<name>",
+      "description": "Package ids a standard-pack registry gained since it was last read."
+    },
+    "removed_package_ids": {
+      "type": "list<name>",
+      "description": "Package ids a standard-pack registry lost since it was last read."
     }
   },
   "vocabularies": {
@@ -4380,6 +4416,127 @@
           "description": "settings get of a screen-timeout setting."
         }
       }
+    },
+    "standard_pack_problem": {
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6).",
+      "tokens": {
+        "malformed": {
+          "description": "The file is not JSON of the file's shape and version."
+        },
+        "game_mismatch": {
+          "description": "The file's game is not the game directory it sits in."
+        },
+        "bundle_invalid": {
+          "description": "bundle.json breaks the bundle index rules."
+        },
+        "bundle_missing": {
+          "description": "The game root holds interrupts.json or pages.json but no bundle.json."
+        },
+        "pages_missing": {
+          "description": "The game root holds interrupts.json but no pages.json."
+        },
+        "page_id_invalid": {
+          "description": "A page id is not 1-64 bytes of [a-z][a-z0-9_]*."
+        },
+        "page_duplicate": {
+          "description": "A page id is listed twice."
+        },
+        "pages_count": {
+          "description": "pages holds no page, or more than 256."
+        },
+        "features_count": {
+          "description": "features names no package, or more than 8."
+        },
+        "package_not_listed": {
+          "description": "A named package is not a package of the game root's bundle."
+        },
+        "server_duplicate": {
+          "description": "Two packages of one list belong to the same server."
+        },
+        "interrupts_count": {
+          "description": "interrupts holds more than 32 entries."
+        },
+        "interrupt_page_unlisted": {
+          "description": "An interrupt's page is not a page of pages.json."
+        },
+        "interrupt_duplicate": {
+          "description": "Two interrupts name the same page."
+        },
+        "packages_count": {
+          "description": "An interrupt's handlers or then.run names no package, or more than 8."
+        },
+        "max_per_run_invalid": {
+          "description": "An interrupt's max_per_run is outside 1 to 8."
+        }
+      }
+    },
+    "navigation_role": {
+      "description": "The part a standard-pack package plays in a run (Workflow #373).",
+      "tokens": {
+        "features": {
+          "description": "The feature package that recognises the pages of pages.json."
+        },
+        "edge": {
+          "description": "The package of a navigation.json edge (NAV-5)."
+        },
+        "chain": {
+          "description": "A step of a navigation.json recovery chain (NAV-5)."
+        },
+        "handler": {
+          "description": "The handler package of a shared interrupt page."
+        },
+        "then_run": {
+          "description": "The package a shared interrupt page's then.run names."
+        }
+      }
+    },
+    "navigation_problem": {
+      "description": "Why a standard-pack package cannot play its part in a run (Workflow #373).",
+      "tokens": {
+        "server_missing": {
+          "description": "The list names no package of the run's server."
+        },
+        "admission_failed": {
+          "description": "The package could not be admitted; the loader's refusal is the cause."
+        },
+        "role_ineligible": {
+          "description": "The package's declarations keep it from the part (execution mode, stability termination, post-admission OCR, resource readings or a designated operation)."
+        },
+        "identity_mismatch": {
+          "description": "Its game, server or resolution is not the run's package's."
+        },
+        "prerequisite_declared": {
+          "description": "It declares a prerequisite package of its own."
+        },
+        "entry_mismatch": {
+          "description": "Its entry does not hold the page it is named for."
+        },
+        "page_set_mismatch": {
+          "description": "The feature package's pages are not exactly the pages of pages.json."
+        }
+      }
+    },
+    "config_value_problem": {
+      "description": "Why a configuration value is refused, the reason config_value_invalid carries (Workflow #387).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-config/src/codes.rs",
+        "enum": "ConfigValueProblem"
+      },
+      "tokens": {
+        "wrong_type": {
+          "description": "The value is not of the key's type."
+        },
+        "out_of_range": {
+          "description": "The value is outside the key's allowed range or words."
+        },
+        "section_check": {
+          "description": "The value leaves its section failing the section's whole-section check."
+        },
+        "repeated_key": {
+          "description": "The request names the key more than once."
+        }
+      }
     }
   },
   "domains": {
@@ -4902,7 +5059,8 @@
     "config_": [
       "actingctl",
       "actingd",
-      "contract"
+      "contract",
+      "runtime-config"
     ],
     "configure_": [
       "ledger",
@@ -6340,6 +6498,7 @@
       "actinglab",
       "execution-kernel",
       "ledger",
+      "runtime-config",
       "runtime-host"
     ],
     "rect_": [
@@ -7176,6 +7335,7 @@
       "runtime-host"
     ],
     "blackout_": [
+      "runtime-config",
       "runtime-host"
     ],
     "session_feature_": [
@@ -7195,6 +7355,13 @@
     ],
     "scrcpy_": [
       "device"
+    ],
+    "standard_pack_": [
+      "contract",
+      "runtime-host"
+    ],
+    "interrupt_": [
+      "runtime-host"
     ]
   },
   "fragments": {
@@ -7219,6 +7386,7 @@
     "recognition-pack": "crates/recognition-pack",
     "resource-tooling": "crates/resource-tooling",
     "runtime-client": "crates/runtime-client",
+    "runtime-config": "crates/runtime-config",
     "runtime-database": "crates/runtime-database",
     "runtime-host": "crates/runtime-host",
     "runtime-state": "crates/runtime-state",

@@ -38,11 +38,24 @@ pub const MAX_RUNTIME_FACT_SNAPSHOT_BYTES: usize = crate::fact::MAX_FACT_OBSERVA
 pub const RUNTIME_FACT_SNAPSHOT_INTERVAL_MS: u64 = 60_000;
 /// Key of the runtime fact that carries the manifest's subsystem rows.
 pub const CONFIG_SUBSYSTEMS_FACT_KEY: &str = "config.subsystems";
-/// Key of the runtime fact that carries the manifest's parameter rows.
-pub const CONFIG_PARAMETERS_FACT_KEY: &str = "config.parameters";
+/// Key prefix of the runtime facts that carry the manifest's parameter rows: one fact
+/// `config.parameters.<section>` per section, the section being a key's first segment
+/// (Workflow #387 D1b, model v1.2 §5.9; the one `config.parameters` fact would pass its row
+/// bound).
+pub const CONFIG_PARAMETERS_FACT_PREFIX: &str = "config.parameters.";
+/// The section of a parameter key without a dot.
+pub const CONFIG_TOP_LEVEL_SECTION: &str = "top_level";
+/// Key of the runtime fact that names the configuration layers a start read (Workflow #387 D1b,
+/// model v1.2 §5.7): one row with the configuration file's and the defaults file's SHA-256 and,
+/// for an installed Runtime, the configuration generation.
+pub const CONFIG_SELECTION_FACT_KEY: &str = "config.selection";
+/// Key of the runtime fact that holds the settings an instruction changed (Workflow #387 D1b,
+/// model v1.2 §5.7): one row per overridden key, restored at start.
+pub const CONFIG_OVERRIDES_FACT_KEY: &str = "host.config_overrides";
 /// Upper bound on subsystems in one configuration manifest.
 pub const MAX_CONFIG_MANIFEST_SUBSYSTEMS: usize = 64;
-/// Upper bound on parameters in one configuration manifest.
+/// Upper bound on the parameters of one section of a configuration manifest: the rows of one
+/// `config.parameters.<section>` fact.
 pub const MAX_CONFIG_MANIFEST_PARAMETERS: usize = 256;
 /// Upper bound on a subsystem name or a parameter key, in bytes.
 pub const MAX_CONFIG_MANIFEST_NAME_BYTES: usize = 128;
@@ -159,10 +172,25 @@ impl RuntimeFactRecord {
     }
 }
 
+/// The section of a configuration parameter key: its first segment, or
+/// [`CONFIG_TOP_LEVEL_SECTION`] for a key without a dot (Workflow #387 D1b).
+pub fn config_parameter_section(key: &str) -> &str {
+    key.split_once('.')
+        .map_or(CONFIG_TOP_LEVEL_SECTION, |(section, _)| section)
+}
+
+/// The key of the runtime fact that carries one section's parameter rows.
+pub fn config_parameters_fact_key(section: &str) -> String {
+    format!("{CONFIG_PARAMETERS_FACT_PREFIX}{section}")
+}
+
 /// The in-memory runtime configuration manifest: which subsystems the host
 /// runs and why, and the effective value of every parameter it applies, each
-/// marked with where the value came from. It is data only; the host records
-/// it as the two `config.*` runtime facts once per startup.
+/// marked with where the value came from and whether an instruction may change
+/// it while the Runtime runs. It is data only; the host records it as the
+/// `config.subsystems` fact and one `config.parameters.<section>` fact per
+/// section at startup, and records a section again when an instruction changes
+/// it (Workflow #387 D1b).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfigManifest {
@@ -180,13 +208,15 @@ pub struct ConfigSubsystem {
     pub outcome: crate::outcome::Outcome,
 }
 
-/// One effective parameter value and where it came from.
+/// One effective parameter value, where it came from, and whether an
+/// instruction may change it while the Runtime runs (Workflow #387 D1b, `settable`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigParameter {
     pub key: String,
     pub value: FactScalar,
     pub source: ConfigParameterSource,
+    pub settable: bool,
 }
 
 /// Where an effective parameter value came from.
@@ -199,6 +229,8 @@ pub enum ConfigParameterSource {
     Default,
     /// Learned at startup from the environment (for example discovery).
     Discovered,
+    /// Set by a `ConfigureSettings` instruction while the Runtime runs (Workflow #387 D1b).
+    Instruction,
 }
 
 impl ConfigParameterSource {
@@ -208,25 +240,70 @@ impl ConfigParameterSource {
             Self::Explicit => "explicit",
             Self::Default => "default",
             Self::Discovered => "discovered",
+            Self::Instruction => "instruction",
+        }
+    }
+}
+
+/// The configuration layers one start read (Workflow #387 D1b, model v1.2 §5.7), recorded as
+/// `config.selection`: the configuration file's and the defaults file's `sha256:<hex>` and, for
+/// an installed Runtime, the configuration generation acsetup committed. Two starts with
+/// different selections read different file layers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_generation: Option<u64>,
+    pub config_sha256: String,
+    pub defaults_sha256: String,
+}
+
+impl ConfigSelection {
+    /// The `config.selection` fact: one row `{config_sha256, defaults_sha256}` with
+    /// `config_generation` (decimal text) when the Runtime is installed.
+    pub fn to_fact_record(
+        &self,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> RuntimeFactRecord {
+        let mut row = BTreeMap::from([
+            (
+                "config_sha256".to_owned(),
+                FactScalar::String(self.config_sha256.clone()),
+            ),
+            (
+                "defaults_sha256".to_owned(),
+                FactScalar::String(self.defaults_sha256.clone()),
+            ),
+        ]);
+        if let Some(generation) = self.config_generation {
+            row.insert(
+                "config_generation".to_owned(),
+                FactScalar::String(generation.to_string()),
+            );
+        }
+        RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_SELECTION_FACT_KEY.to_owned(),
+            value: FactValue::RecordList(vec![row]),
+            observed_at_unix_ms,
+            source,
+            ttl_ms: None,
         }
     }
 }
 
 impl RuntimeConfigManifest {
-    /// Checks the two list bounds and every name and key: non-empty,
-    /// control-free, and within the byte bounds. A manifest that passes here
-    /// always yields two records that pass [`RuntimeFactRecord::validate`].
+    /// Checks the subsystem bound, the per-section parameter bound and every
+    /// name and key: non-empty, control-free, within the byte bounds, and a
+    /// parameter key whose section fact key is a valid runtime fact key. A
+    /// manifest that passes here always yields records that pass
+    /// [`RuntimeFactRecord::validate`].
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if self.subsystems.len() > MAX_CONFIG_MANIFEST_SUBSYSTEMS {
             return Err(SanitizationError::new(
                 SanitizationCode::ConfigManifestSubsystemsTooMany,
                 "subsystems",
-            ));
-        }
-        if self.parameters.len() > MAX_CONFIG_MANIFEST_PARAMETERS {
-            return Err(SanitizationError::new(
-                SanitizationCode::ConfigManifestParametersTooMany,
-                "parameters",
             ));
         }
         for subsystem in &self.subsystems {
@@ -237,10 +314,22 @@ impl RuntimeConfigManifest {
                 ));
             }
         }
+        let mut per_section = BTreeMap::<&str, usize>::new();
         for parameter in &self.parameters {
-            if !manifest_text_ok(&parameter.key, MAX_CONFIG_MANIFEST_NAME_BYTES) {
+            let section = config_parameter_section(&parameter.key);
+            if !manifest_text_ok(&parameter.key, MAX_CONFIG_MANIFEST_NAME_BYTES)
+                || validate_runtime_fact_key(&config_parameters_fact_key(section)).is_err()
+            {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidConfigParameterKey,
+                    "parameters",
+                ));
+            }
+            let count = per_section.entry(section).or_default();
+            *count += 1;
+            if *count > MAX_CONFIG_MANIFEST_PARAMETERS {
+                return Err(SanitizationError::new(
+                    SanitizationCode::ConfigManifestParametersTooMany,
                     "parameters",
                 ));
             }
@@ -248,19 +337,78 @@ impl RuntimeConfigManifest {
         Ok(())
     }
 
-    /// Encodes the manifest as its two runtime facts, both in scope `runtime`
-    /// with no lifetime and the same observation time: `config.subsystems`
-    /// holds one row `{name, enabled, code}` per subsystem, plus the scalar
-    /// values of its outcome under their keys (ledger revision 3) and, when its
-    /// outcome has `note` links with a `variable`, those names comma-separated
-    /// under `ignored_variables` (never silent), and
-    /// `config.parameters` one row `{key, value, source}` per parameter, in
-    /// manifest order. Pure: nothing is sampled or appended here.
-    pub fn to_fact_records(
+    /// The sections of the parameters, each once, in name order.
+    pub fn parameter_sections(&self) -> Vec<&str> {
+        self.parameters
+            .iter()
+            .map(|parameter| config_parameter_section(&parameter.key))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// One `config.parameters.<section>` fact per section, in section name order, each with
+    /// the rows of [`Self::parameter_section_fact_record`].
+    pub fn parameter_fact_records(
         &self,
         observed_at_unix_ms: u64,
         source: OriginModule,
-    ) -> [RuntimeFactRecord; 2] {
+    ) -> Vec<RuntimeFactRecord> {
+        self.parameter_sections()
+            .into_iter()
+            .map(|section| self.parameter_section_fact_record(section, observed_at_unix_ms, source))
+            .collect()
+    }
+
+    /// The `config.parameters.<section>` fact of one section, in scope `runtime` with no
+    /// lifetime: one row `{key, value, source, settable}` per parameter of the section, in
+    /// manifest order; no row for a section the manifest does not have. Pure.
+    pub fn parameter_section_fact_record(
+        &self,
+        section: &str,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> RuntimeFactRecord {
+        let rows = self
+            .parameters
+            .iter()
+            .filter(|parameter| config_parameter_section(&parameter.key) == section)
+            .map(|parameter| {
+                BTreeMap::from([
+                    ("key".to_owned(), FactScalar::String(parameter.key.clone())),
+                    ("value".to_owned(), parameter.value.clone()),
+                    (
+                        "source".to_owned(),
+                        FactScalar::String(parameter.source.as_str().to_owned()),
+                    ),
+                    (
+                        "settable".to_owned(),
+                        FactScalar::Boolean(parameter.settable),
+                    ),
+                ])
+            })
+            .collect();
+        RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: config_parameters_fact_key(section),
+            value: FactValue::RecordList(rows),
+            observed_at_unix_ms,
+            source,
+            ttl_ms: None,
+        }
+    }
+
+    /// Encodes the manifest's subsystems as the `config.subsystems` fact, in
+    /// scope `runtime` with no lifetime: one row `{name, enabled, code}` per
+    /// subsystem, plus the scalar values of its outcome under their keys
+    /// (ledger revision 3) and, when its outcome has `note` links with a
+    /// `variable`, those names comma-separated under `ignored_variables`
+    /// (never silent). Pure: nothing is sampled or appended here.
+    pub fn subsystems_fact_record(
+        &self,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> RuntimeFactRecord {
         let subsystems = self
             .subsystems
             .iter()
@@ -313,38 +461,14 @@ impl RuntimeConfigManifest {
                 row
             })
             .collect();
-        let parameters = self
-            .parameters
-            .iter()
-            .map(|parameter| {
-                BTreeMap::from([
-                    ("key".to_owned(), FactScalar::String(parameter.key.clone())),
-                    ("value".to_owned(), parameter.value.clone()),
-                    (
-                        "source".to_owned(),
-                        FactScalar::String(parameter.source.as_str().to_owned()),
-                    ),
-                ])
-            })
-            .collect();
-        [
-            RuntimeFactRecord {
-                scope: RuntimeFactScope::Runtime,
-                key: CONFIG_SUBSYSTEMS_FACT_KEY.to_owned(),
-                value: FactValue::RecordList(subsystems),
-                observed_at_unix_ms,
-                source,
-                ttl_ms: None,
-            },
-            RuntimeFactRecord {
-                scope: RuntimeFactScope::Runtime,
-                key: CONFIG_PARAMETERS_FACT_KEY.to_owned(),
-                value: FactValue::RecordList(parameters),
-                observed_at_unix_ms,
-                source,
-                ttl_ms: None,
-            },
-        ]
+        RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_SUBSYSTEMS_FACT_KEY.to_owned(),
+            value: FactValue::RecordList(subsystems),
+            observed_at_unix_ms,
+            source,
+            ttl_ms: None,
+        }
     }
 }
 

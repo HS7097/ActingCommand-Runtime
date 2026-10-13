@@ -92,6 +92,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::InstancesDiscovered { discovery },
+            failure_outcome: None,
         })
     }
 

@@ -41,7 +41,7 @@ fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             executed_steps: 1,
             ..
         })

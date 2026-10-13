@@ -36,7 +36,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 | zip | 布局 | 内容 |
 | --- | --- | --- |
-| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingctl.exe`、`actingd.config.example.json`、`INSTALL.md`、`RELEASE-NOTES.md` |
+| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingctl.exe`、`actingd.config.example.json`、`actingd.defaults.json`（v0.12.0 起）、`INSTALL.md`、`RELEASE-NOTES.md` |
 | `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗启动器 `actingwatch.exe`，以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
 
 视觉模型与 ONNX Runtime 从不随发布：OCR/NN 引擎链接进 `actingcommand-actingd.exe`，模型从 `<vision root>\models\<model_ref>\` 读取；没有模型时，需要 OCR 的识别目标会明确失败。
@@ -216,11 +216,11 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 | 档位 | 工具 |
 | --- | --- |
-| observer（只读，9 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_get_run`、`ac_diagnose`、`ac_resources_list`、`ac_targets_get`、`ac_pack_check`、`ac_catalog_check` |
+| observer（读取，以及 Runtime 运行中可改的设置，10 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_get_run`、`ac_diagnose`、`ac_resources_list`、`ac_targets_get`、`ac_pack_check`、`ac_catalog_check`、`ac_config_set` |
 | operator（设备与调度，6 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_targets_set` |
 | author（Lab 录制，7 个） | `ac_lab_observe`、`ac_lab_do`、`ac_record_start`、`ac_record_mark`、`ac_record_stop`、`ac_record_status`、`ac_binding_draft` |
 
-**智能体守则。** 从 `ac_overview` 开始。长操作立即返回句柄，用 `ac_get_run`（带 `wait_s`）轮询；运行的句柄是 Runtime 的 request_id，跨重启有效。结果不确定时先 `ac_get_run`，不换参数重发写操作。批准、`actingd` 配置改动与守护进程重启归人。智能体操作手册是伞仓里的 skill `skills/actingcommand/`。
+**智能体守则。** 从 `ac_overview` 开始。长操作立即返回句柄，用 `ac_get_run`（带 `wait_s`）轮询；运行的句柄是 Runtime 的 request_id，跨重启有效。结果不确定时先 `ac_get_run`，不换参数重发写操作。批准、`actingd` 配置文件改动与守护进程重启归人；Runtime 运行中可改的设置用 `ac_config_set`（或 `actingctl config set|clear`）改，每次改动都入账。智能体操作手册是伞仓里的 skill `skills/actingcommand/`。
 
 **v0.11.6 已知问题**（修复排在 0.12 系列）：
 
@@ -234,7 +234,7 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安�
 
 `apps/actinglab` 的 `build.rs` 会读取 Git 元数据确定 HEAD。当 Git 元数据可用时，若同时设置了 `ACTINGCOMMAND_RUNTIME_HEAD`，它必须是 40 位十六进制且与仓库 HEAD 一致，否则构建 panic；当 Git 元数据不可用（例如无 `.git` 的源码树）时，该变量为必填。
 
-`actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems` / `config.parameters`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
+`actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
 
 ```bash
 # 本地构建与门禁；fmt 与 clippy 与 CI 相同，CI 的测试则按上文七个模块作业分开执行（CI 的发布构建另带 --locked 与显式 MSVC 目标）
@@ -248,7 +248,7 @@ actingcommand-actingd --config runtime.json
 
 # 客户端（子命令必须是第一个参数，之后才是标志；每条命令都需要 --state-root）
 actingctl status --state-root <state-root>
-actingctl status --config --state-root <state-root>     # 只取 config.subsystems / config.parameters 两条程序事实
+actingctl status --config --state-root <state-root>     # 只取 config.* 程序事实：subsystems、selection、parameters.<section>
 actingctl facts --program --state-root <state-root>
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>

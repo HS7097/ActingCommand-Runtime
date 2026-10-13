@@ -406,6 +406,7 @@ impl HostShared {
                     verified: terminal(&verified),
                 }),
             },
+            failure_outcome: None,
         })
     }
 }
