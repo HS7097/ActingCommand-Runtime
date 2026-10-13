@@ -101,6 +101,13 @@ No upstream automation source code has been copied into this repository as part 
 - Rust dependency license check: `realfft` 3.5.0 reports `MIT`; `rustfft` 6.4.1 and its dependencies `primal-check` 0.3.4, `strength_reduce` 0.2.4 and `transpose` 0.2.3 report `MIT OR Apache-2.0`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
 - Notes: all five are pure Rust. `num-complex`, `num-integer` and `num-traits`, which they also use, were already dependencies.
 
+### SIMD conversion and build helpers of the OpenH264 crates
+
+- Role (#402 RD-3): `openh264` 0.9.8 converts decoded YUV frames with `wide` 1.7.1, which builds on `safe_arch` 1.2.0; both are compiled into `actingcommand-actingd.exe` through `crates/device`. The build script of `openh264-sys2` 0.9.8 uses `nasm-rs` 0.3.2, with `walkdir` 2.5.0 and `same-file` 1.0.6, at build time only; these three are linked into no binary. The OpenH264 section above covers `openh264` and `openh264-sys2` themselves.
+- Source: crates.io, compiled from source; `Cargo.lock` pins each version with its crates.io SHA-256 checksum. No source file is copied into this repository.
+- Rust dependency license check: `wide` 1.7.1 and `safe_arch` 1.2.0 report `Zlib OR Apache-2.0 OR MIT`; `nasm-rs` 0.3.2 reports `MIT OR Apache-2.0`; `walkdir` 2.5.0 and `same-file` 1.0.6 report `Unlicense/MIT`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
+- Notes: `wide` 0.7.33 and `safe_arch` 0.7.4 were already dependencies of other crates; `Cargo.lock` names both versions of each. `cc`, `log`, `winapi-util`, `bytemuck` and `sha2`, which these crates also use, were already dependencies.
+
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 
 - upstream project name
