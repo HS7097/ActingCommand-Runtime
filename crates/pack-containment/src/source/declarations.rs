@@ -723,11 +723,19 @@ impl Declaration<'_> {
                 "verify_template",
                 "color_probe",
                 "check",
+                "verify_text",
             ],
         )?;
         if object.contains_key("check") && !self.schema_0_6_or_later() {
             return Err(self.error(
                 &child(pointer, "check"),
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
+        // Workflow #396 REC-1: a locate OCR target guards the input from task schema `0.9`.
+        if object.contains_key("verify_text") && self.schema != Some("0.9") {
+            return Err(self.error(
+                &child(pointer, "verify_text"),
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
@@ -741,9 +749,60 @@ impl Declaration<'_> {
             self.required(object, pointer, "expected_rect")?,
             &child(pointer, "expected_rect"),
         )?;
-        for field in ["verify_template", "color_probe", "check"] {
+        for field in ["verify_template", "color_probe", "check", "verify_text"] {
             if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
                 self.string(value, &child(pointer, field))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #396 REC-1: `ocr_targets[].locate` of task schema `0.9`. Its shape is checked
+    /// here; its values with the derived recognition pack (`contracts/ocr-fields.md`).
+    fn locate(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        const CELLS: [&str; 8] = [
+            "x", "y", "width", "height", "pitch_x", "pitch_y", "columns", "rows",
+        ];
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &["normalize", "blocks", "line_merge", "cells"],
+        )?;
+        for field in ["normalize", "blocks"] {
+            self.string(
+                self.required(object, pointer, field)?,
+                &child(pointer, field),
+            )?;
+        }
+        if let Some(line_merge) = object.get("line_merge") {
+            let line_merge_pointer = child(pointer, "line_merge");
+            if line_merge.is_object() {
+                let factor = self.object(line_merge, &line_merge_pointer, &["gap_factor"])?;
+                self.unsigned(
+                    self.required(factor, &line_merge_pointer, "gap_factor")?,
+                    &child(&line_merge_pointer, "gap_factor"),
+                )?;
+            } else {
+                self.string(line_merge, &line_merge_pointer)?;
+            }
+        }
+        if let Some(cells) = object.get("cells") {
+            let cells_pointer = child(pointer, "cells");
+            let cells = self.object(cells, &cells_pointer, &CELLS)?;
+            for field in CELLS {
+                if self
+                    .required(cells, &cells_pointer, field)?
+                    .as_i64()
+                    .is_none()
+                {
+                    return Err(self.error(
+                        &child(&cells_pointer, field),
+                        ResourceDeclarationReason::InvalidType,
+                    ));
+                }
             }
         }
         Ok(())
@@ -896,6 +955,7 @@ impl Declaration<'_> {
                 "model_ref",
                 "model_sha256",
                 "click",
+                "locate",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -929,6 +989,7 @@ impl Declaration<'_> {
                 "expected" => self.color(value, &pointer)?,
                 "max_distance" => self.max_distance(value, &pointer)?,
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
+                "locate" => self.locate(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 "mask" | "maskRange" => {
@@ -1184,11 +1245,17 @@ impl Declaration<'_> {
     }
 
     /// The `candidate_layouts` family (`contracts/selection-graph.md`, section Candidate
-    /// layouts): each layout has an ID, a page, the kind `fixed_slots`, 1..=8 distinct
-    /// features and 1..=64 slots. A slot's `rect` and `click` lie inside the coordinate space
-    /// and each of its `targets` keys is a declared feature. Whether the page is one the task
-    /// declares, and whether each target exists in the derived pack, is checked while the pack
-    /// is derived.
+    /// layouts): each layout has an ID, a page, the kind `fixed_slots` or `repeated_anchor`, and
+    /// 1..=8 distinct features; a feature may read its own `target` at an `offset` (both or
+    /// neither). A `fixed_slots` layout has 1..=64 slots, whose `rect` and `click` lie inside
+    /// the coordinate space and whose `targets` keys are declared features that read no target
+    /// of their own. A `repeated_anchor` layout names its anchor, 1..=64 `max_instances`, an
+    /// `order`, an optional `suppress_iou_milli` of 0..=999, an `instance_rect` and a `click`
+    /// relative to the anchor match (a signed origin and a positive size), and an optional
+    /// `readable_band` inside the coordinate space; each of its features reads a target at an
+    /// offset. A field of the other kind is unknown. Whether the page is one the task declares,
+    /// and whether each target exists in the derived pack with a kind the feature can read, is
+    /// checked while the pack is derived.
     fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
         for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
@@ -1199,6 +1266,13 @@ impl Declaration<'_> {
                     "id",
                     "page_id",
                     "kind",
+                    "anchor",
+                    "max_instances",
+                    "order",
+                    "suppress_iou_milli",
+                    "instance_rect",
+                    "click",
+                    "readable_band",
                     "features",
                     "slots",
                     "unknown_identity",
@@ -1218,8 +1292,31 @@ impl Declaration<'_> {
             let kind_pointer = child(&pointer, "kind");
             let kind = self.required(object, &pointer, "kind")?;
             self.string(kind, &kind_pointer)?;
-            if kind.as_str() != Some("fixed_slots") {
-                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            let anchored = match kind.as_str() {
+                Some("fixed_slots") => false,
+                Some("repeated_anchor") => true,
+                _ => {
+                    return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+            };
+            let other_kind: &[&str] = if anchored {
+                &["slots"]
+            } else {
+                &[
+                    "anchor",
+                    "max_instances",
+                    "order",
+                    "suppress_iou_milli",
+                    "instance_rect",
+                    "click",
+                    "readable_band",
+                ]
+            };
+            if let Some(field) = other_kind.iter().find(|field| object.contains_key(**field)) {
+                return Err(self.error(
+                    &child(&pointer, field),
+                    ResourceDeclarationReason::UnknownField,
+                ));
             }
             let features_pointer = child(&pointer, "features");
             let features = self.array(
@@ -1230,12 +1327,21 @@ impl Declaration<'_> {
                 return Err(self.error(&features_pointer, ResourceDeclarationReason::InvalidValue));
             }
             let mut names = BTreeSet::new();
+            let mut placed = BTreeSet::new();
             for (feature_index, feature) in features.iter().enumerate() {
                 let feature_pointer = child(&features_pointer, &feature_index.to_string());
                 let feature = self.object(
                     feature,
                     &feature_pointer,
-                    &["name", "value", "identity", "consensus", "integer"],
+                    &[
+                        "name",
+                        "value",
+                        "identity",
+                        "consensus",
+                        "integer",
+                        "target",
+                        "offset",
+                    ],
                 )?;
                 let name_pointer = child(&feature_pointer, "name");
                 let name = self.required(feature, &feature_pointer, "name")?;
@@ -1253,10 +1359,63 @@ impl Declaration<'_> {
                 ) {
                     return Err(self.error(&value_pointer, ResourceDeclarationReason::InvalidValue));
                 }
+                if anchored || feature.contains_key("target") || feature.contains_key("offset") {
+                    self.string(
+                        self.required(feature, &feature_pointer, "target")?,
+                        &child(&feature_pointer, "target"),
+                    )?;
+                    self.offset_point(
+                        self.required(feature, &feature_pointer, "offset")?,
+                        &child(&feature_pointer, "offset"),
+                    )?;
+                    placed.insert(name);
+                }
+            }
+            if anchored {
+                self.string(
+                    self.required(object, &pointer, "anchor")?,
+                    &child(&pointer, "anchor"),
+                )?;
+                let max_pointer = child(&pointer, "max_instances");
+                let max = self.required(object, &pointer, "max_instances")?;
+                self.unsigned(max, &max_pointer)?;
+                if !max.as_u64().is_some_and(|max| {
+                    (1..=CANDIDATE_PROJECTION_MAX_CANDIDATES as u64).contains(&max)
+                }) {
+                    return Err(self.error(&max_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+                let order_pointer = child(&pointer, "order");
+                let order = self.required(object, &pointer, "order")?;
+                self.string(order, &order_pointer)?;
+                if !matches!(order.as_str(), Some("top_to_bottom" | "left_to_right")) {
+                    return Err(self.error(&order_pointer, ResourceDeclarationReason::InvalidValue));
+                }
+                if let Some(suppress) = object.get("suppress_iou_milli") {
+                    let suppress_pointer = child(&pointer, "suppress_iou_milli");
+                    self.unsigned(suppress, &suppress_pointer)?;
+                    if suppress.as_u64().is_none_or(|milli| milli > 999) {
+                        return Err(
+                            self.error(&suppress_pointer, ResourceDeclarationReason::InvalidValue)
+                        );
+                    }
+                }
+                for field in ["instance_rect", "click"] {
+                    self.relative_rect(
+                        self.required(object, &pointer, field)?,
+                        &child(&pointer, field),
+                    )?;
+                }
+                if let Some(band) = object.get("readable_band") {
+                    self.frame_rect(band, &child(&pointer, "readable_band"), frame)?;
+                }
             }
             let slots_pointer = child(&pointer, "slots");
-            let slots = self.array(self.required(object, &pointer, "slots")?, &slots_pointer)?;
-            if !(1..=CANDIDATE_PROJECTION_MAX_CANDIDATES).contains(&slots.len()) {
+            let slots: &[Value] = if anchored {
+                &[]
+            } else {
+                self.array(self.required(object, &pointer, "slots")?, &slots_pointer)?
+            };
+            if !anchored && !(1..=CANDIDATE_PROJECTION_MAX_CANDIDATES).contains(&slots.len()) {
                 return Err(self.error(&slots_pointer, ResourceDeclarationReason::InvalidValue));
             }
             for (slot_index, slot) in slots.iter().enumerate() {
@@ -1282,7 +1441,7 @@ impl Declaration<'_> {
                     })?;
                 for (name, target) in targets {
                     let target_pointer = child(&targets_pointer, name);
-                    if !names.contains(name.as_str()) {
+                    if !names.contains(name.as_str()) || placed.contains(name.as_str()) {
                         return Err(
                             self.error(&target_pointer, ResourceDeclarationReason::InvalidValue)
                         );
@@ -1334,6 +1493,47 @@ impl Declaration<'_> {
                         self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, &error)
                     })?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// A rectangle relative to an anchor match: integers within the range of a recognition
+    /// pack rectangle, a signed origin and a positive size.
+    fn relative_rect(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["x", "y", "width", "height"])?;
+        for field in ["x", "y", "width", "height"] {
+            let field_pointer = child(pointer, field);
+            let value = self
+                .required(object, pointer, field)?
+                .as_i64()
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            if i32::try_from(value)
+                .ok()
+                .filter(|value| *value > 0 || matches!(field, "x" | "y"))
+                .is_none()
+            {
+                return Err(self.error(&field_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+        }
+        Ok(())
+    }
+
+    /// An offset `{x, y}` of integers within the range of a recognition pack coordinate.
+    fn offset_point(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let object = self.object(value, pointer, &["x", "y"])?;
+        for field in ["x", "y"] {
+            let field_pointer = child(pointer, field);
+            let value = self
+                .required(object, pointer, field)?
+                .as_i64()
+                .ok_or_else(|| {
+                    self.error(&field_pointer, ResourceDeclarationReason::InvalidType)
+                })?;
+            if i32::try_from(value).is_err() {
+                return Err(self.error(&field_pointer, ResourceDeclarationReason::InvalidValue));
             }
         }
         Ok(())
@@ -1823,7 +2023,9 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// must seal its bytes with `policy.sha256` and name a candidate layout its own task declares
 /// on the step's `from` page; the document must apply to that layout, read only features the
 /// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
-/// require exactly one candidate. The parser's declaration gate and contained task admission
+/// require exactly one candidate. A document that declares a record list, which `keyed_fact`
+/// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
+/// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
     task: &Declaration<'_>,
@@ -1987,6 +2189,22 @@ fn select_policy(
                     ));
                 }
             }
+        }
+        // A record list is read by the candidate's identity, so the layout rejects an unknown
+        // identity instead of handing the evaluator an unknown key.
+        if let Some(list_index) = policy
+            .facts
+            .iter()
+            .position(|fact| matches!(fact.value_type, ValueType::RecordList { .. }))
+            && let Some(handling) = layout
+                .get("unknown_identity")
+                .and_then(Value::as_str)
+                .filter(|handling| *handling != "reject")
+        {
+            return Err(refuse(
+                &format!("/facts/{list_index}/value_type"),
+                format!("layout={layout_id} unknown_identity={handling} record_list=declared"),
+            ));
         }
         if policy.selection.required_count != 1 {
             return Err(refuse(
@@ -2598,9 +2816,9 @@ impl Declaration<'_> {
         for (field, value) in object {
             let pointer = child("", field);
             match field.as_str() {
-                "locale" | "goal" | "entry_page" if !value.is_null() => {
-                    self.string(value, &pointer)?
-                }
+                "locale" | "goal" if !value.is_null() => self.string(value, &pointer)?,
+                // Workflow #373 NAV-3b: one entry page or an entry page set.
+                "entry_page" if !value.is_null() => self.page(value, &pointer)?,
                 "on_exhausted" if !value.is_null() => self.string(value, &pointer)?,
                 "max_task_retries" if !value.is_null() => self.unsigned(value, &pointer)?,
                 "provenance" if !value.is_null() && !value.is_object() => {
@@ -2813,5 +3031,103 @@ impl Declaration<'_> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A select step's document that gates and scores on a record list through `keyed_fact`.
+    fn keyed_policy_bytes() -> Vec<u8> {
+        let list = serde_json::json!({
+            "source": "keyed_fact", "fact_key": "session.example.list.targets",
+            "key_field": "member", "value_column": "rank",
+            "absent": {"type": "integer", "value": 0}
+        });
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": "member", "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b"]}}],
+            "facts": [{"fact_key": "session.example.list.targets",
+                       "value_type": {"type": "record_list", "key_column": "id",
+                                      "columns": {"rank": {"type": "integer"}}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "gates": [{"gate_id": "gate-listed",
+                       "predicate": {"kind": "integer_at_least", "value": list.clone(),
+                                     "threshold": 1},
+                       "on_unknown": {"kind": "abort_evaluation"}}],
+            "scoring": [{"term_id": "term-rank", "value": list,
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "abort_evaluation"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy bytes")
+    }
+
+    /// A task whose one select step names the document, on a layout with `unknown_identity`.
+    fn task_bundle(unknown_identity: &str, policy: &[u8]) -> Bundle {
+        Bundle {
+            task_id: "list-task".to_owned(),
+            dir: PathBuf::from("tasks/list-task"),
+            data: serde_json::json!({
+                "game": "game-a",
+                "operations": [{"id": "choose", "from": "list", "select": {
+                    "layout_id": "layout-list",
+                    "policy": {"path": "policies/list.json",
+                               "sha256": crate::Sha256Hash::digest(policy).to_string()}}}],
+                "candidate_layouts": [{"id": "layout-list", "page_id": "list",
+                    "unknown_identity": unknown_identity,
+                    "features": [{"name": "member", "value": "identity", "identity": {
+                        "entries": [{"id": "member-a", "aliases": ["a"]},
+                                    {"id": "member-b", "aliases": ["b"]}],
+                        "recognition": {"kind": "ocr_aliases", "max_distance": 1,
+                                        "minimum_margin": 1, "minimum_confidence_milli": 800}}}]}]
+            }),
+        }
+    }
+
+    #[test]
+    fn a_record_list_document_needs_a_layout_that_rejects_unknown_identities() {
+        let bytes = keyed_policy_bytes();
+        let task = Declaration {
+            file: Path::new("tasks/list-task/task.json"),
+            schema: Some("0.9"),
+        };
+        let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
+        select_policy(
+            &task,
+            &task_bundle("reject", &bytes),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect("a rejecting layout admits the document");
+
+        let error = select_policy(
+            &task,
+            &task_bundle("readable_attributes", &bytes),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect_err("readable attributes would hand the evaluator an unknown key");
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = error.details.expect("declaration issue");
+        assert_eq!(issue["field_path"], "/facts/0/value_type");
+        assert_eq!(issue["reason"], "invalid_value");
+        assert!(
+            error
+                .message
+                .contains("unknown_identity=readable_attributes"),
+            "{}",
+            error.message
+        );
     }
 }

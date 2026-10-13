@@ -37,11 +37,12 @@ mod views;
 pub use bindings::{InstanceBinding, InstanceBindings, instance_bindings};
 pub use codes::{ForensicsCode, ForensicsLocation};
 pub use material::{
-    ForensicMaterialCompleteResult, ForensicMaterialRequest, read_material_complete,
-    read_material_to,
+    ForensicMaterialCompleteResult, ForensicMaterialPhase, ForensicMaterialRequest,
+    read_material_complete, read_material_to, read_material_to_per_phase,
 };
 pub use runtime_facts::{
-    ForensicRuntimeFactsResult, ForensicRuntimeFactsUnavailable, runtime_facts_at,
+    ForensicFactsPhase, ForensicRuntimeFactsResult, ForensicRuntimeFactsUnavailable,
+    runtime_facts_at, runtime_facts_at_per_phase,
 };
 pub use signatures::{
     ForensicSignatureRequest, SignatureReplayReport, replay_signatures_read_only,

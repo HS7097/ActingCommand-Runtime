@@ -257,12 +257,49 @@ impl VisionRect {
     }
 }
 
+// Workflow #396 REC-1: how a request cuts its region into blocks.
+/// The largest `line_merge` gap factor a request may name (the folder's own range).
+pub const MAX_OCR_LINE_MERGE_GAP_FACTOR: u32 = 16;
+
+/// How an OCR request cuts its region into text blocks (Workflow #396 REC-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum OcrBlockMode {
+    /// A request that does not choose: a full-frame region runs the detector and the model
+    /// folder's line merge, any smaller region is read as one block.
+    #[default]
+    Implicit,
+    /// The whole region is read as one block whose rectangle is the region.
+    Region,
+    /// The detector runs inside the region and every box is read on its own, with its own
+    /// rectangle; boxes on one line merge as `line_merge` says.
+    Detect { line_merge: OcrLineMerge },
+}
+
+/// The line merge of a `Detect` request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OcrLineMerge {
+    /// Boxes are never merged.
+    Never,
+    /// The folder's merge rule with this factor in place of `detector.merge_gap_factor`
+    /// (0..=[`MAX_OCR_LINE_MERGE_GAP_FACTOR`]).
+    GapFactor(u32),
+}
+
+/// The detected boxes of a `Detect` request before the folder's `detector.max_boxes` kept the
+/// first `limit` of them: `detected > limit` means boxes were dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OcrDetectionCount {
+    pub detected: u32,
+    pub limit: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OcrInferenceRequest {
     pub frame: VisionFrame,
     pub region: VisionRect,
     pub languages: Vec<String>,
     pub timeout_ms: u64,
+    pub blocks: OcrBlockMode,
 }
 
 impl OcrInferenceRequest {
@@ -276,6 +313,7 @@ impl OcrInferenceRequest {
             region: self.region,
             languages: &self.languages,
             timeout_ms: self.timeout_ms,
+            blocks: self.blocks,
         }
     }
 }
@@ -287,12 +325,26 @@ pub struct OcrInferenceRequestView<'a> {
     pub region: VisionRect,
     pub languages: &'a [String],
     pub timeout_ms: u64,
+    pub blocks: OcrBlockMode,
 }
 
 impl OcrInferenceRequestView<'_> {
     pub fn validate(&self) -> VisionFfiResult<()> {
         self.frame.validate()?;
         validate_rect(self.region, self.frame.width, self.frame.height)?;
+        if let OcrBlockMode::Detect {
+            line_merge: OcrLineMerge::GapFactor(factor),
+        } = self.blocks
+            && factor > MAX_OCR_LINE_MERGE_GAP_FACTOR
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr",
+                format!(
+                    "OCR request line_merge gap_factor must be in 0..={MAX_OCR_LINE_MERGE_GAP_FACTOR}"
+                ),
+            ));
+        }
         if self.languages.is_empty() {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidRequest,
@@ -336,6 +388,7 @@ impl OcrInferenceRequestView<'_> {
             region: self.region,
             languages: self.languages.to_vec(),
             timeout_ms: self.timeout_ms,
+            blocks: self.blocks,
         })
     }
 }
@@ -356,6 +409,10 @@ pub struct OcrInferenceResult {
     pub warnings: Vec<String>,
     #[serde(skip)]
     pub ppocr_diagnostics: PpocrDiagnostics,
+    /// A `Detect` request's box count before truncation (Workflow #396 REC-1); absent for
+    /// every other request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detection: Option<OcrDetectionCount>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -703,6 +760,7 @@ mod tests {
             },
             languages: vec!["zh_cn".to_string()],
             timeout_ms: 1_000,
+            blocks: OcrBlockMode::Implicit,
         };
 
         let err = request.validate().expect_err("oversized region rejected");
@@ -719,6 +777,7 @@ mod tests {
             frame,
             languages: vec!["zh_cn".to_string()],
             timeout_ms: 1_000,
+            blocks: OcrBlockMode::Implicit,
         };
         let mut backend = UnavailableOcrBackend;
 
@@ -752,6 +811,7 @@ mod tests {
             frame,
             languages: vec!["en".to_string()],
             timeout_ms: 1_000,
+            blocks: OcrBlockMode::Implicit,
         };
         let result = OcrInferenceResult {
             ppocr_diagnostics: Vec::new(),
@@ -764,6 +824,7 @@ mod tests {
             confidence: Some(f32::NAN),
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
+            detection: None,
         };
 
         let err = result

@@ -1354,9 +1354,13 @@ fn build_recognition_pipeline(
         })?;
     detector
         .validate(&evaluator)
-        .map_err(|err| ContainmentError::PackParse {
-            path: pages_path.to_string(),
-            message: err.to_string(),
+        .map_err(|err| match err.declaration_issue() {
+            // Workflow #396 REC-1: a page set whose text reads exceed the budget.
+            Some(issue) => located_declaration_error(pages_path, issue),
+            None => ContainmentError::PackParse {
+                path: pages_path.to_string(),
+                message: err.to_string(),
+            },
         })?;
     Ok((evaluator, detector, page_set))
 }
@@ -2922,6 +2926,7 @@ mod tests {
                 text: "home".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(0.99),
+                detection: None,
             })
         }
 

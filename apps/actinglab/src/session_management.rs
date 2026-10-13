@@ -132,7 +132,8 @@ fn session_instance_registry_entry(id: &str, instance: &InstanceConfig) -> CliOu
     let missing_recommended_fields = instance_missing_recommended_fields(instance);
     Ok(json!({
         "id": id,
-        "serial": instance.serial,
+        "serial_configured": instance.serial.is_some(),
+        "device_label": device_label(id, instance),
         "game": instance.game,
         "server": instance.server,
         "package": instance.package,
@@ -160,6 +161,15 @@ fn session_instance_registry_entry(id: &str, instance: &InstanceConfig) -> CliOu
             "missing_recommended_fields": missing_recommended_fields
         }
     }))
+}
+
+/// Workflow #398 RD-1a (L8): an instance with a configured serial is shown by its label
+/// `handset:<id>`, never by the serial.
+fn device_label(id: &str, instance: &InstanceConfig) -> Option<String> {
+    instance
+        .serial
+        .as_ref()
+        .map(|_| actingcommand_device::handset_label(id))
 }
 
 fn instance_missing_required_fields(instance: &InstanceConfig) -> Vec<&'static str> {
@@ -205,7 +215,8 @@ pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> C
         "list" => Ok(json!({
             "instances": config.instances.iter().map(|(id, instance)| json!({
                 "id": id,
-                "serial": instance.serial,
+                "serial_configured": instance.serial.is_some(),
+                "device_label": device_label(id, instance),
                 "game": instance.game,
                 "server": instance.server,
                 "package": instance.package,

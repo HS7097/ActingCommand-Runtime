@@ -428,3 +428,191 @@ fn schema_0_6_converter_rejects_deprecated_template_primitives_with_migration_di
         assert!(error.message.contains("migrate"));
     }
 }
+
+/// Workflow #308 list selector slice L1: a task that declares a `repeated_anchor` layout.
+fn anchored_bundle(layout: Value) -> Bundle {
+    Bundle {
+        task_id: "fixture".to_string(),
+        dir: PathBuf::from("operations/fixture"),
+        data: json!({
+            "schema_version": "0.6",
+            "task_id": "fixture",
+            "game": "fixture",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 96, "height": 72},
+            "entry_page": "list_page",
+            "operations": [],
+            "candidate_layouts": [layout]
+        }),
+    }
+}
+
+fn anchored_layout() -> Value {
+    json!({
+        "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+        "anchor": "ui/row_marker", "max_instances": 4, "order": "top_to_bottom",
+        "suppress_iou_milli": 0,
+        "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+        "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+        "readable_band": {"x": 0, "y": 0, "width": 96, "height": 40},
+        "features": [{"name": "open", "value": "passed", "target": "state/row_open",
+                      "offset": {"x": 30, "y": 1}}]
+    })
+}
+
+fn declaration_issue(error: actingcommand_contract::LabError) -> ResourceDeclarationIssue {
+    serde_json::from_value(error.details.expect("declaration issue")).expect("issue shape")
+}
+
+#[test]
+fn repeated_anchor_layouts_pass_the_gate_and_derive_with_their_own_fields() {
+    declaration_file_requests(&[anchored_bundle(anchored_layout())])
+        .expect("the declaration gate admits a repeated_anchor layout");
+    let targets = HashMap::from([
+        (
+            "ui/row_marker".to_string(),
+            json!({"type": "template", "id": "ui/row_marker"}),
+        ),
+        (
+            "state/row_open".to_string(),
+            json!({"type": "color", "id": "state/row_open"}),
+        ),
+        (
+            "model/row_kind".to_string(),
+            json!({"type": "nn", "id": "model/row_kind"}),
+        ),
+        (
+            "check/row_ready".to_string(),
+            json!({"type": "composite", "id": "check/row_ready"}),
+        ),
+    ]);
+    let derived =
+        derive_candidate_layouts(&targets, &[anchored_bundle(anchored_layout())], "fixture")
+            .expect("derived layout");
+    assert_eq!(
+        serde_json::to_string(&derived).expect("derived JSON"),
+        concat!(
+            r#"[{"id":"layout/rows","page_id":"fixture/list_page","kind":"repeated_anchor","#,
+            r#""anchor":"ui/row_marker","max_instances":4,"order":"top_to_bottom","#,
+            r#""suppress_iou_milli":0,"instance_rect":{"x":-2,"y":-2,"width":40,"height":12},"#,
+            r#""click":{"x":10,"y":0,"width":20,"height":6},"#,
+            r#""readable_band":{"x":0,"y":0,"width":96,"height":40},"#,
+            r#""features":[{"name":"open","value":"passed","target":"state/row_open","#,
+            r#""offset":{"x":30,"y":1}}]}]"#
+        )
+    );
+
+    // An nn or composite feature cannot be read at an offset, and the anchor is a template.
+    for (field, target, pointer) in [
+        (
+            "/features/0/target",
+            "model/row_kind",
+            "/candidate_layouts/0/features/0/target",
+        ),
+        (
+            "/features/0/target",
+            "check/row_ready",
+            "/candidate_layouts/0/features/0/target",
+        ),
+        ("/anchor", "state/row_open", "/candidate_layouts/0/anchor"),
+    ] {
+        let mut layout = anchored_layout();
+        *layout.pointer_mut(field).expect("declared field") = json!(target);
+        let error = derive_candidate_layouts(&targets, &[anchored_bundle(layout)], "fixture")
+            .expect_err(pointer);
+        let issue = declaration_issue(error);
+        assert_eq!(issue.field_path, pointer);
+        assert_eq!(issue.reason, ResourceDeclarationReason::InvalidValue);
+    }
+}
+
+#[test]
+fn candidate_layout_gate_refuses_each_repeated_anchor_rule_at_its_pointer() {
+    let edit = |change: fn(&mut Value)| {
+        let mut layout = anchored_layout();
+        change(&mut layout);
+        layout
+    };
+    let slots_layout = |feature: Value| {
+        json!({
+            "id": "layout/slots", "page_id": "list_page", "kind": "fixed_slots",
+            "features": [feature],
+            "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+                       "click": {"x": 0, "y": 0, "width": 8, "height": 8},
+                       "targets": {"open": "state/row_open"}}]
+        })
+    };
+    let mut anchored_slots = slots_layout(json!({"name": "open", "value": "passed"}));
+    anchored_slots["anchor"] = json!("ui/row_marker");
+    for (layout, pointer, reason) in [
+        (
+            edit(|layout| layout["kind"] = json!("grid")),
+            "/candidate_layouts/0/kind",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| layout["slots"] = json!([])),
+            "/candidate_layouts/0/slots",
+            ResourceDeclarationReason::UnknownField,
+        ),
+        (
+            edit(|layout| {
+                layout.as_object_mut().expect("layout").remove("anchor");
+            }),
+            "/candidate_layouts/0/anchor",
+            ResourceDeclarationReason::MissingField,
+        ),
+        (
+            edit(|layout| layout["max_instances"] = json!(65)),
+            "/candidate_layouts/0/max_instances",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| layout["order"] = json!("row_major")),
+            "/candidate_layouts/0/order",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| layout["suppress_iou_milli"] = json!(1000)),
+            "/candidate_layouts/0/suppress_iou_milli",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| layout["instance_rect"]["width"] = json!(0)),
+            "/candidate_layouts/0/instance_rect/width",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| layout["readable_band"]["height"] = json!(80)),
+            "/candidate_layouts/0/readable_band",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            edit(|layout| {
+                layout["features"][0]
+                    .as_object_mut()
+                    .expect("feature")
+                    .remove("offset");
+            }),
+            "/candidate_layouts/0/features/0/offset",
+            ResourceDeclarationReason::MissingField,
+        ),
+        (
+            anchored_slots,
+            "/candidate_layouts/0/anchor",
+            ResourceDeclarationReason::UnknownField,
+        ),
+        (
+            slots_layout(json!({"name": "open", "value": "passed",
+                                "target": "state/row_open", "offset": {"x": 0, "y": 0}})),
+            "/candidate_layouts/0/slots/0/targets/open",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+    ] {
+        let error = declaration_file_requests(&[anchored_bundle(layout)]).expect_err(pointer);
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = declaration_issue(error);
+        assert_eq!(issue.declaration_file, "operations/fixture/task.json");
+        assert_eq!((issue.field_path.as_str(), issue.reason), (pointer, reason));
+    }
+}
