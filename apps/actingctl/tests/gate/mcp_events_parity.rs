@@ -6,7 +6,9 @@
 //! and once to the real `actingctl mcp-serve` over pipes (fixture I5, `mcp_harness`). The
 //! expected value is the table's: the CLI's stdout JSON equals the MCP `result`, minus the
 //! presentation members of §2.2. The page read here holds every row of its range and fits the
-//! MCP output budget, so it has none of those members and the two compare whole.
+//! MCP output budget, so it has none of those members and the two compare whole. A last CLI read
+//! of the same range shows that a filter takes effect (`exclude_event_types`), not only that both
+//! sides apply it alike.
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
@@ -94,7 +96,7 @@ fn gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters() {
         ("instance", json!(ALIAS)),
         ("after_sequence", json!(before)),
         ("through_sequence", json!(through)),
-        ("event_type", event_type),
+        ("event_type", event_type.clone()),
         ("origin_module", json!(origin_module)),
         ("exclude_event_types", json!(["runtime.started"])),
         ("detail", json!("payload")),
@@ -133,6 +135,31 @@ fn gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters() {
     assert_eq!(
         &printed, result,
         "actingctl events printed another page than ac_events answered for the same parameters"
+    );
+
+    // A filter takes effect, not only alike on both sides (§4.1: exclude_event_types leaves
+    // those types out). Over the same instance and range the instance's last row, of this
+    // type, would be on the page; with the type excluded no row of it is.
+    let excluding = cli_events(
+        root.path(),
+        &[
+            ("instance", json!(ALIAS)),
+            ("after_sequence", json!(before)),
+            ("through_sequence", json!(through)),
+            ("exclude_event_types", json!([event_type.clone()])),
+            ("limit", json!(256)),
+        ],
+    );
+    assert!(
+        excluding.get("next_cursor").is_none(),
+        "setup: the range does not fit one CLI page: {excluding}"
+    );
+    let left = excluding["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("actingctl events printed no events member: {excluding}"));
+    assert!(
+        left.iter().all(|row| row["type"] != event_type),
+        "exclude_event_types [{event_type}] left rows of that type on the page: {excluding}"
     );
 
     mcp.close_input();

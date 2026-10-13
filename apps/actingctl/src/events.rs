@@ -10,6 +10,12 @@
 //!
 //! `detail` opens `brief` and `payload`; `summary`, which reads A3's `outcome`, follows once A3
 //! (#721) has merged (coordinator ruling Q4).
+//!
+//! Paging. A cursor is bound to the process and the Runtime connection that issued it (§4.1).
+//! MCP pages with `next_cursor` inside its server's connection. The CLI pages with
+//! `--after-sequence <last_sequence>`: every `actingctl events` call is its own process, so the
+//! `next_cursor` one call prints always answers `cursor_invalid` in the next call, by design;
+//! `last_sequence` stays valid across calls and Runtime restarts.
 
 use crate::codes::ActingctlCode;
 use crate::instance_selector::{self, SelectorMiss};
@@ -75,7 +81,7 @@ pub(crate) const CLI_MAX_LIMIT: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
 pub(crate) const MAX_WAIT_S: u64 = 20;
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type>] [--exclude-event-types <type,...>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]";
+const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type>] [--exclude-event-types <type,...>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
 
 /// What each row carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
