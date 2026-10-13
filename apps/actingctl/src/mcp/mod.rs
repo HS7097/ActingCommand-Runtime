@@ -5,7 +5,9 @@
 //! output budget. It decides no business rule; what a run is, whether it may run and
 //! whether it is done come from the Runtime and runtime-client unchanged.
 
-mod child;
+// Workflow #389 MCP-7: the child-process runner moved to the crate, where `actingctl diagnose`
+// runs `actingd suspended` with it too.
+use crate::child;
 mod events;
 mod jobs;
 mod lab;
