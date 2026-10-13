@@ -119,6 +119,7 @@ mod gate_381b;
 mod gate_383;
 mod gate_392_daa;
 mod gate_398_rd1a;
+mod gate_epoch_close;
 mod gate_p0;
 mod home_entry;
 mod input;
