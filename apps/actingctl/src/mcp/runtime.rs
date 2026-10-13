@@ -72,23 +72,8 @@ impl Location {
     }
 }
 
-pub(super) fn pin_child(
-    command: &mut std::process::Command,
-    installation: Option<&actingcommand_contract::InstalledProcess>,
-) {
-    if let Some(installation) = installation {
-        command
-            .env(
-                actingcommand_contract::INSTALL_ROOT_ENV,
-                installation.root(),
-            )
-            .env(
-                actingcommand_contract::INSTALL_SELECTION_ENV,
-                installation.selection_json(),
-            )
-            .current_dir(installation.root());
-    }
-}
+// Workflow #389 MCP-7: shared with `actingctl diagnose`.
+pub(super) use crate::child::pin_child;
 
 /// The control connection with (Cli, Cli) origin, as actingctl itself uses.
 pub(super) struct Connected {

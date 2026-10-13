@@ -427,9 +427,11 @@ pub(super) static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "ac_diagnose",
-        title: "Instance diagnosis",
+        title: "Diagnosis",
         tier: Tier::Observer,
-        description: "What went wrong on one instance within a bounded window (since_unix_ms, default the last 24 h, at most 7 days back, else since_out_of_range; the window used is echoed). Returns runs: its recent failed or open runs (failed, admitted, running, interrupted_unterminated) as brief actingcommand.run-status.v1, newest first, from the 10 most recent runs; errors_page: the first page (oldest first) of its errors view in the window, rows as in ac_events, with next_cursor to continue in ac_events (view errors, same instance and since_unix_ms) when no task_id filter is set; suspended, lift and repeating: this instance's rows of the read-only actingd suspended report, verbatim, and report_warnings: that report's warnings; clock_slots: at most 10 of this instance's clock_slots rows of that report recorded since since_unix_ms (due clock slots refused, deferred or served late: refused and deferred rows first, then owed rows, newest first in each), verbatim, with clock_slots_total when fewer are kept (the full list is in actingd suspended); suspended_report: that report's status (unavailable with suspended_report_state_root_mismatch when it read another state root than this server). task_id narrows runs and errors to one task. incomplete true means a read did not finish. To fit the output budget, lists are cut in this order: clock_slots (owed rows first, oldest first), errors_page, runs (oldest first), repeating, lift, suspended, report_warnings, each marked <list>_truncated; runs cut for budget can be read with ac_get_run / ac_events.",
+        // Workflow #389 MCP-7 (command table §4.8): instance optional; runs_grouped and
+        // failures_grouped; the generation actingd suspended reads is found at every call.
+        description: "What went wrong within a bounded window, on one instance or, without instance, on every instance: the same read and result as actingctl diagnose. since_unix_ms is the window start (default the last 24 h, at most 7 days back, else since_out_of_range); the window used is echoed. Returns instance {alias, instance_id} (only with instance); runs: the recent failed or open runs (failed, admitted, running, interrupted_unterminated) as brief actingcommand.run-status.v1, newest first, from the 10 most recent runs; errors_page: the first page (oldest first) of the errors view in the window, rows as in ac_events, with next_cursor to continue in ac_events (view errors, same instance and since_unix_ms) when no task_id filter is set; suspended, lift and repeating: the rows of the read-only actingd suspended report (the instance's, else all), verbatim, and report_warnings: that report's warnings; clock_slots: at most 10 clock_slots rows of that report recorded since since_unix_ms (due clock slots refused, deferred or served late: refused and deferred rows first, then owed rows, newest first in each), verbatim, with clock_slots_total when fewer are kept (the full list is in actingd suspended); suspended_report: that report's status (unavailable with suspended_report_state_root_mismatch when it read another state root than this server). actingd suspended reports the configuration of the generation install\\active.json selects at this call, found again at every call, not the packs the running Runtime has loaded. runs_grouped: every failed or open run of the window grouped by (catalog_task_id: the policy task id of a scheduled run, absent for a manual run; failure_code; final_page), each {count, first_seq, last_seq, latest_request_id, instances}; failures_grouped: the window's runtime.failed and command.rejected records and the policy.execution_recorded records of runs that paused their task, grouped by (type, catalog_task_id, code), each {count, first_seq, last_seq}; both most frequent first, read with QueryEvents, which records nothing; a relayed code the catalog does not register keeps its relayed spelling. task_id narrows runs, errors and both groups to one Runtime task. incomplete true means a read did not finish. To fit the output budget, lists are cut in this order: failures_grouped, runs_grouped (the fewest-count groups first), clock_slots (owed rows first, oldest first), errors_page, runs (oldest first), repeating, lift, suspended, report_warnings, each marked <list>_truncated; runs cut for budget can be read with ac_get_run / ac_events.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -1102,7 +1104,12 @@ fn diagnose_input() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "instance": instance_argument(),
+            // Workflow #389 MCP-7: optional; without it every instance.
+            "instance": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Instance alias, instance_id or ADB port; without it every instance.",
+            },
             "task_id": {"type": "string", "minLength": 1, "description": "A Runtime task_id."},
             "since_unix_ms": {
                 "type": "integer",
@@ -1110,7 +1117,6 @@ fn diagnose_input() -> Value {
                 "description": "Window start; default 24 h ago, at most 7 days ago.",
             },
         },
-        "required": ["instance"],
         "additionalProperties": false,
     })
 }
@@ -1150,10 +1156,44 @@ fn diagnose_result() -> Value {
             "clock_slots_truncated": {"type": "boolean"},
             "clock_slots_total": {"type": "integer"},
             "suspended_report": {"type": "object"},
+            // Workflow #389 MCP-7 (command table §4.8).
+            "runs_grouped": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "catalog_task_id": {"type": "string"},
+                        "failure_code": {"type": "string"},
+                        "final_page": {"type": "string"},
+                        "count": {"type": "integer"},
+                        "first_seq": {"type": "integer"},
+                        "last_seq": {"type": "integer"},
+                        "latest_request_id": {"type": ["string", "null"]},
+                        "instances": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["count", "first_seq", "last_seq", "latest_request_id", "instances"],
+                },
+            },
+            "runs_grouped_truncated": {"type": "boolean"},
+            "failures_grouped": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "catalog_task_id": {"type": "string"},
+                        "code": {"type": "string"},
+                        "count": {"type": "integer"},
+                        "first_seq": {"type": "integer"},
+                        "last_seq": {"type": "integer"},
+                    },
+                    "required": ["type", "code", "count", "first_seq", "last_seq"],
+                },
+            },
+            "failures_grouped_truncated": {"type": "boolean"},
             "incomplete": {"type": "boolean"},
         },
         "required": [
-            "instance",
             "window",
             "runs",
             "errors_page",
@@ -1163,6 +1203,8 @@ fn diagnose_result() -> Value {
             "report_warnings",
             "clock_slots",
             "suspended_report",
+            "runs_grouped",
+            "failures_grouped",
         ],
     })
 }
