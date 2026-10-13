@@ -314,10 +314,10 @@ effect:
 | none | no policy on the instance, or no target names the task | unchanged | none |
 | unreadable | the instance's record cannot be read | unchanged | `resource_target_policy_unreadable`, every candidate of the instance |
 | expired | the policy's lifetime has passed | unchanged | `resource_target_policy_expired`, named candidates |
-| unmapped | the target's pool, or this task, no longer maps | unchanged | `resource_target_unmapped:<id>` |
-| pending | no usable inventory observation | unchanged | `resource_target_pending:<id>` |
-| satisfied | `g = 0` | unchanged; an override is released | `resource_target_satisfied:<id>` |
-| applied | `g >= 1` | scored as below | `resource_target_applied:<id>`, and `resource_target_override:<id>` in override mode |
+| unmapped | the target's pool, or this task, no longer maps | unchanged | `resource_target_unmapped` |
+| pending | no usable inventory observation | unchanged | `resource_target_pending` |
+| satisfied | `g = 0` | unchanged; an override is released | `resource_target_satisfied` |
+| applied | `g >= 1` | scored as below | `resource_target_applied`, and `resource_target_override` in override mode |
 
 A named task that can have no candidate on the instance (unknown, out of scope or disabled) is
 listed on every candidate of the instance as `resource_target_tasks_unevaluable`, so a target
@@ -357,18 +357,21 @@ either lapses; the evaluation wakes at each plus one. No other effect changes fr
 wakes, and none requests detection. The policy and the inventory are part of the combined
 `fact_snapshot_id`, so a changed inventory also refuses an already evaluated intent as stale.
 
-Reasons follow `scored` (whose detail ends with ` target=<id>:<mode>:<s>` when applied) and
-`score_unknown:*`, and precede the disposition reason: at most one policy-level reason (the
-first that applies of ignored, unreadable, expired, tasks_unevaluable), one target-level reason
-and one override reason. Codes carry no whitespace; every detail stays within 1024 bytes.
+Reasons follow `score_computed` (whose detail ends with ` target=<id>:<mode>:<s>` when
+applied) and `score_unknown`, and precede the disposition reason: at most one policy-level
+reason (the first that applies of ignored, unreadable, expired, tasks_unevaluable), one
+target-level reason and one override reason. Each reason is a registered code with its values
+(Workflow #378 A2-P); the target-level and override reasons carry the target's id as the value
+`resource_target_id`. The details are developer text, never persisted; every detail stays
+within 1024 bytes.
 
 | Code | Detail |
 | --- | --- |
-| `resource_target_applied:<id>` | `policy=<sha> applied_at=<ms> resource=<pool> fact_key=<k> mode=<m> current=<c> at_least=<T> gap=<g> scale=<S> importance=<I> weight=<w> per_run=<r> useful=<u> best_useful=<U> task_target=<s>[ capped]` |
-| `resource_target_override:<id>` | `superseded score=<s\|none> offset=<o>; utility kept` |
-| `resource_target_satisfied:<id>` | `policy=<sha> applied_at=<ms> current=<c> at_least=<T> gap=0 mode=<m>`, plus `; override released` in override mode |
-| `resource_target_pending:<id>` | `fact_key=<k> reason=<missing\|expired\|low_confidence\|invalid_value>; configuration applied, waiting for a valid observation` |
-| `resource_target_unmapped:<id>` | `resource=<pool> task=<task> why=<unknown_resource\|resource_not_observable\|resource_out_of_scope\|task_not_producing>` |
+| `resource_target_applied` | `policy=<sha> applied_at=<ms> resource=<pool> fact_key=<k> mode=<m> current=<c> at_least=<T> gap=<g> scale=<S> importance=<I> weight=<w> per_run=<r> useful=<u> best_useful=<U> task_target=<s>[ capped]` |
+| `resource_target_override` | `superseded score=<s\|none> offset=<o>; utility kept` |
+| `resource_target_satisfied` | `policy=<sha> applied_at=<ms> current=<c> at_least=<T> gap=0 mode=<m>`, plus `; override released` in override mode |
+| `resource_target_pending` | `fact_key=<k> reason=<missing\|expired\|low_confidence\|invalid_value>; configuration applied, waiting for a valid observation` |
+| `resource_target_unmapped` | `resource=<pool> task=<task> why=<unknown_resource\|resource_not_observable\|resource_out_of_scope\|task_not_producing>` |
 | `resource_target_policy_expired` | `policy=<sha> applied_at=<ms> valid_until=<ms>` |
 | `resource_target_policy_unreadable` | `stored policy cannot be read (<code>); instance runs base scheduling` |
 | `resource_target_tasks_unevaluable` | `<target>/<task>:<why>,...` in target and task order, at most 1010 bytes of items, the rest as `+<n>more` |
@@ -407,7 +410,7 @@ is listed as `<id>@<pool>:<why>` in `resource_target_tasks_unevaluable` on every
 the instance, beside the v1-style `<target>/<task>:<why>` items of named tasks that can have no
 candidate. Only these catalog-level failures are listed: a producing task that is merely held
 back this round (trigger, feedback stop, cooldown, placement, budget) is not a lapse. A target
-with `tasks` whose pool no longer resolves shows `resource_target_unmapped:<id>` on its named
+with `tasks` whose pool no longer resolves shows `resource_target_unmapped` on its named
 candidates, as v1.
 
 For an enabled instance `i` and a candidate `k` (a task that passed trigger, feedback stop,
@@ -471,21 +474,21 @@ shortfall weight (or the effective override) covering it; admission refuses its 
 `policy_facts_stale` once one lapses and the evaluation wakes at each plus one. Forward
 projections run the same evaluator and include the resource term.
 
-**Reasons.** On an enabled instance every candidate gains, after `scored` and
-`score_unknown:*` and before the disposition reason, at most five reasons:
+**Reasons.** On an enabled instance every candidate gains, after `score_computed` and
+`score_unknown` and before the disposition reason, at most five reasons:
 
 | Code | Detail |
 | --- | --- |
 | policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable` (items in target order, `<target>/<task>:<why>` for a named task as v1 and `<id>@<pool>:<unknown_resource\|resource_not_observable\|resource_out_of_scope\|no_producing_task>` for a lapsed target without `tasks`, joined by `,`, at most 1010 bytes, the rest as `+<n>more`), on every candidate of the instance; after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
 | `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
-| `resource_target_unmapped:<id>` | as v1, for a task a target names explicitly |
-| `resource_target_override:<id>` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
+| `resource_target_unmapped` | as v1, for a task a target names explicitly |
+| `resource_target_override` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
 | `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item |
 
 List details are counted while joining and stay within 1010 bytes; items that do not fit fold
-into `+<n>more`. On an enabled instance `scored` ends with ` resources=<R>` and, under an
+into `+<n>more`. On an enabled instance `score_computed` ends with ` resources=<R>` and, under an
 effective override, ` override=<id>:<keep|supersede>`; the dispatch decision record shows
-`target=<R>` in `rank_breakdown` and `candidate_not_selected`, `target_id=<override id|*>`,
+`target=<R>` in `rank_breakdown` and `decision_candidate_not_selected`, `target_id=<override id|*>`,
 `mode=<override|adjust>`, `superseded=1` under an effective override, and ends `rank_breakdown`
 with ` offset_kept=<0|1>`; `decision_record` names the policy `active.v2:<sha>@<applied_at>`
 or `expired.v2:<sha>@<applied_at>`. A v1 instance and an instance without a policy keep every

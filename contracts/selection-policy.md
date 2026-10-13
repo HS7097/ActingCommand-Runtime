@@ -80,7 +80,7 @@ read one; score it through a lookup instead. That is a validation error.
 A key whose value is unknown for one candidate and known for the other orders
 the known candidate first, whichever direction the key declares: an unknown
 never stands in for a value, so it can never outrank one. The candidate's
-verdict records a `tie_break.unknown` reason naming the key and the reason it
+verdict records a `tie_break_unknown` reason naming the key and the reason it
 could not be read. Two unknowns under the same key are indistinguishable and
 fall through to the next key.
 

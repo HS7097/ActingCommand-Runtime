@@ -384,22 +384,24 @@ ranking, the evaluator runs an optional score stage:
   every other candidate (`score_promoted`). An unscored candidate is never
   deferred or promoted: its effective value is `utility_milli + offset_milli`,
   plus an applied resource target's `s` in `adjust` mode; in `override` mode `s`
-  supersedes the offset (the utility term is kept). The reason
-  `score_unknown:<gate or term id>` records why it is unscored.
-- Every candidate that passed through the stage carries the reason `scored`
-  with detail `score=<milli|none> offset=<milli> effective=<milli>
+  supersedes the offset (the utility term is kept). The reason `score_unknown`
+  (value `rule_id`, the gate's id) records why it is unscored, and
+  `score_cost_unknown` that its utility term is dropped.
+- Every candidate that passed through the stage carries the reason
+  `score_computed` with detail `score=<milli|none> offset=<milli> effective=<milli>
   disposition=<deferred|promoted|none>`, followed by ` target=<id>:<mode>:<s>`
-  for an applied target. Reason codes are free strings; the dispatch-intent shape
-  and the decision identity are unchanged.
-- Resource target reasons follow `scored` and `score_unknown:*` and precede the
+  for an applied target. Each reason is a registered code with its values (an
+  outcome, Workflow #378 A2-P); its detail is developer text and is never
+  persisted. The decision identity is unchanged.
+- Resource target reasons follow `score_computed` and `score_unknown` and precede the
   disposition reason, at most three per candidate: one policy-level reason
   (the first that applies of `resource_target_policy_ignored`,
   `resource_target_policy_unreadable`, `resource_target_policy_expired`,
   `resource_target_tasks_unevaluable`), one target-level reason
-  (`resource_target_applied:<id>`, `resource_target_satisfied:<id>`,
-  `resource_target_pending:<id>` or `resource_target_unmapped:<id>`) and, for an
-  applied override, `resource_target_override:<id>`. A candidate that bypasses
-  the stage carries them too.
+  (`resource_target_applied`, `resource_target_satisfied`,
+  `resource_target_pending` or `resource_target_unmapped`) and, for an applied
+  override, `resource_target_override`, each with the target's id as the value
+  `resource_target_id`. A candidate that bypasses the stage carries them too.
 - An applied target bounds the candidate's `facts_fresh_until_unix_ms` by the
   inventory observation's expiry and the policy's `valid_until_unix_ms`, so
   admission refuses the intent as `policy_facts_stale` once either lapses, and
@@ -421,12 +423,13 @@ Every evaluation projects the active records at its input ledger position into
 `priority_offsets` (origin `user` for a person, `agent` otherwise), drops those
 whose TTL has elapsed at the evaluation instant, and reports an offset naming a
 task the catalog does not declare once per cycle as
-`priority_offset_unknown_task:<task>` without failing; the offsets are part of
+`priority_offset_unknown_task` (warning; value `task_id`) without failing; the offsets are part of
 the `fact_snapshot_id`. `contracts/instance-fact-store.md` ("Priority offset
 facts") owns the key, its validation, the origin exception and the projection.
-The `policy.dispatch_intent` payload is unchanged: the `scored` reason and its
-detail travel in the reason chain it already carries, and so does the dispatch
-decision record, in the same `reasons`.
+The `score_computed` reason travels in the reason chain the `policy.dispatch_intent`
+payload already carries, and so does the dispatch decision record, in the same
+`reasons`; each persisted reason is its outcome (`code`, `category`, `values`), and
+no detail is persisted.
 
 The Runtime catalog store accepts the selection document with the other four:
 activation stages it as `selection.json` in the immutable generation, records it
@@ -440,8 +443,10 @@ proposal patches address only the four catalog documents.
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
 record of why it was dispatched, appended after `placement_selected` and
-`ranked`; the selected decision's `reasons` stay equal to its chain. No other
-decision gains a reason.
+`rank_assigned`; the selected decision's `reasons` stay equal to its chain. No other
+decision gains a reason. The details below are developer text: they go to the
+developer log and the in-memory decision, and the dispatch events persist only each
+reason's outcome.
 
 1. `rank_breakdown`: `total=<t> base=<b> priority=<p> aging_ms=<a>
    strategic_milli=<w> urgency_milli=<u> contention=<c> effective=<e>
@@ -475,9 +480,9 @@ decision gains a reason.
      the same evaluation. `omitted_why` counts the unlisted ones by their last
      reason code in ascending code order, `none` when none is omitted; the codes
      that would take the detail past 1010 bytes fold into `+<n>more` (`n` codes).
-3. `candidate_not_selected:<task_id>`, one per listed related candidate, at
-   most eight: those that were ranked first, by total descending, then the
-   others, each by task id.
+3. `decision_candidate_not_selected` (value `task_id`), one per listed related
+   candidate, at most eight: those that were ranked first, by total descending,
+   then the others, each by task id.
    - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
      priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
      effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
@@ -498,7 +503,7 @@ it is active the target fields carry the candidate's resource term instead
 
 Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
 `decision_record` and at most `min(8, 128 - L - 2)` candidates when
-`128 - L >= 2`, otherwise nothing, and `ranked`'s detail then ends with
+`128 - L >= 2`, otherwise nothing, and `rank_assigned`'s detail then ends with
 `; decision_record omitted: reason chain at <L>/128`. A detail over 1024 bytes
 is cut at a character boundary to at most 1010 bytes and ends with
 `…[truncated]`. Codes carry no whitespace.
@@ -541,7 +546,7 @@ dispatch decision record. A decision left eligible becomes deferred. So `why`, a
 `omitted_why` counts, never name `none`; `omitted_why=none` still means that no candidate was
 omitted. `why` is always the last reason the evaluator wrote. The host can add reasons to a
 cycle's decisions after the evaluation: `eligible_since_unknown` ("Settlement Feedback And
-Eligibility Age" below) and `policy_instance_fact_missing:<key>`
+Eligibility Age" below) and `policy_instance_fact_missing` (value `fact_key`)
 ([`instance-fact-store.md`](../instance-fact-store.md), "Explanation"). These follow the
 evaluator's reasons and do not replace the reason that settled the decision.
 
@@ -556,7 +561,7 @@ projects carries what earlier runs of that task on that instance settled:
   of its execution record when it failed (0 when a reconciled settlement
   precedes its admission). The score stage uses it as the utility cost:
   `cost_ms = last_duration_ms` when above zero, else the declared
-  `expected_duration_ms`, and the `scored` detail prints that `cost_ms`.
+  `expected_duration_ms`, and the `score_computed` detail prints that `cost_ms`.
 - `failure_streak` is the number of consecutive failed runs ending at that
   latest completed run, 0 after a success. The evaluator validates and carries
   it; the score stage does not consume it yet.
@@ -661,7 +666,8 @@ that predicate Unknown with reason `type_mismatch`; a record missing its
 timestamp field resolves it Unknown with `field_missing` (the selection-policy
 words; Workflow #355 D12). Neither fails the evaluation: the other tasks and
 instances evaluate and dispatch normally, and the reason surfaces as the
-planning signal `<fact_key>.type_mismatch` or `<fact_key>.field_missing`. Each
+planning signal whose outcome is `planning_fact_unknown` with the values
+`fact_key` and `unknown_reason` (`type_mismatch` or `field_missing`). Each
 new fact snapshot reserves one more detection for that instance's activity
 window when that instance has no other dispatch in the cycle and its activity
 window is open (as for `fact_missing`), so an unrepaired pack type error ends as
@@ -734,7 +740,7 @@ A due clock occurrence that is not dispatched leaves one trace (Workflow #372). 
 
 - **A pair with no dispatch** gets refused and deferred records only at an evaluation where its activity window is open, or when it has no activity profile. An occurrence before that, for example from an activation at night, is covered by the owed record of the pair's first run, which carries `first_run`.
 - **Once per occurrence.** The record's `signal_id` is `signal:clock_slot:<refused|deferred|owed>:<hex>`, where `<hex>` is the lowercase SHA-256 of the UTF-8 bytes `task \0 instance \0 O`, with O in decimal ASCII. It is checked against the planning-signal projection before the record is written, so each kind is written at most once per (pair, O), across restarts too. A refused record stops later deferred ones. A deferred record stops a later refused one only for `policy_activity_window_closed`, the consequence of the pause or wait, not a new cause; a later budget, task-paused or configuration refusal is still written. Within a class the first gate seen wins.
-- **Token.** The record's `instance_id` is the instance alias and its `task_id` the task. `fact_code` is the code followed by `:<key>=<value>` for each present value, in the order `gate_code`, `budget_dimension`, `occurrence_unix_ms`, `window_start_unix_ms`, `window_end_unix_ms`, `next_eligible_unix_ms`, `next_occurrence_unix_ms`, `first_run`; an absent value is left out, never written as `none` or `null`. Refused and deferred records carry `gate_code` and `occurrence_unix_ms`, and when known `budget_dimension`, `window_end_unix_ms` (E, the end of the activity window open at the record), `next_eligible_unix_ms` (N) and `next_occurrence_unix_ms` (X). Owed records carry `occurrence_unix_ms` and `window_start_unix_ms`, `next_occurrence_unix_ms` (X) when known, and `first_run=true` for a first run. The values are code spellings, vocabulary tokens, decimal integers or `true`.
+- **Outcome.** The record's `instance_id` is the instance alias and its `task_id` the task. Its `outcome` is the code with its values (Workflow #378 A2-P): `task_id` and `alias` always, then each present value; an absent value is left out, never written as `none` or `null`. Refused and deferred records carry `gate_code` and `occurrence_unix_ms`, and when known `budget_dimension`, `window_end_unix_ms` (E, the end of the activity window open at the record), `next_eligible_unix_ms` (N) and `next_occurrence_unix_ms` (X). Owed records carry `occurrence_unix_ms` and `window_start_unix_ms`, `next_occurrence_unix_ms` (X) when known, and `first_run: true` for a first run. `gate_code` is a code, `budget_dimension` a vocabulary token, the times are Unix milliseconds and `first_run` is a boolean.
 - **Fate.** A refused or deferred record predicts `same_window` when E is present and N < min(E, X): served late in the same window; `next_window` when N < X and E is absent or N ≥ E: served in the next window as an owed run, which for a daily-limited task displaces that day's own slot; `collapsed` when N ≥ X: absorbed by the next occurrence; and `pending` without N (a pause, a wait, an unavailable instance, a paused task, the configuration). The pair's first admitted dispatch D after the record settles it: `collapsed` when D ≥ X, `same_window` when D < E, `next_window` otherwise; without D, `collapsed` once X has passed. An owed record settles as `served` when D < X, and as `absorbed` when D ≥ X or, without D, once X has passed.
 - **Fact invalidation.** Planning signals are appended without an instance link, so a clock-slot record invalidates every active fact whose `invalidate_on` lists `policy.planning_signal_observed`, on any instance.
 - **Not recorded.** An occurrence collapsed into the next one with no gate ever seen, which needs no Runtime running across two occurrences, and an occurrence a catalog skips by making its trigger false.
