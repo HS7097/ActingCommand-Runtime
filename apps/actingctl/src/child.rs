@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Child-process hygiene for the subprocess tools (#338 §四 子进程卫生): the child's stdin
-//! is null, its stdout and stderr are piped and read to the end at the same time, and on
-//! Windows it opens no console window (`CREATE_NO_WINDOW` through std's `CommandExt`, no
+//! Child-process hygiene for the subprocess tools (#338 §四 子进程卫生) and for `actingctl
+//! diagnose`, which runs `actingd suspended` as `ac_diagnose` does (Workflow #389 MCP-7): the
+//! child's stdin is null, its stdout and stderr are piped and read to the end at the same time,
+//! and on Windows it opens no console window (`CREATE_NO_WINDOW` through std's `CommandExt`, no
 //! new dependency). A child still running at the caller's deadline is deliberately not
 //! killed (std's `Child::kill` could end it): Lab children are not killed by the model, and
 //! `actingd suspended` is a bounded batch job that ends on its own. A Lab call's background job
@@ -20,13 +21,13 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A finished child and everything it wrote.
-pub(super) struct Captured {
-    pub(super) status: ExitStatus,
-    pub(super) stdout: Vec<u8>,
-    pub(super) stderr: Vec<u8>,
+pub(crate) struct Captured {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 
-pub(super) enum ChildFailure {
+pub(crate) enum ChildFailure {
     /// The program could not be started.
     Spawn(io::Error),
     /// Waiting for the child or reading its output failed.
@@ -35,13 +36,34 @@ pub(super) enum ChildFailure {
     StillRunning,
 }
 
-pub(super) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
+pub(crate) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
     run(command, Some(deadline))
 }
 
 /// Waits for the child however long it runs (a Lab call's background job).
-pub(super) fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+pub(crate) fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
     run(command, None)
+}
+
+/// Pins a child of an installed process to that installation: the install root and the
+/// selection travel as the launcher's snapshot, and the child starts in the install root.
+pub(crate) fn pin_child(
+    command: &mut Command,
+    installation: Option<&actingcommand_contract::InstalledProcess>,
+) {
+    if let Some(installation) = installation {
+        command
+            .env(
+                actingcommand_contract::INSTALL_ROOT_ENV,
+                installation.root(),
+            )
+            .env(
+                actingcommand_contract::INSTALL_SELECTION_ENV,
+                installation.selection_json(),
+            )
+            .current_dir(installation.root());
+    }
 }
 
 fn run(mut command: Command, deadline: Option<Instant>) -> Result<Captured, ChildFailure> {

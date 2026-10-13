@@ -313,8 +313,8 @@ fn parse_package_ref(text: &str, field: &str) -> Result<PackageRef, ToolError> {
 /// `<install root>\tools\actinglab.exe --json package digest --package <path>`: the package's
 /// content reference, as actinglab computes it.
 fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, ToolError> {
-    let location = context.runtime.locate();
-    location.check()?;
+    // Workflow #389 MCP-7 scope extension: the child gets the selection of this call.
+    let location = context.runtime.locate_now()?;
     let Some(root) = location.install_root else {
         return Err(ToolError::usage(
             ActingctlCode::LabToolUnavailable,
