@@ -253,9 +253,11 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         let task = &mut invalid[task_index].1;
         match case {
             0 => task["post_admission_ocr"]["fields"][0]["target_id"] = json!("missing"),
+            // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the pin is still required and its
+            // format still checked, so a 64-character pin that is not hex is refused.
             1 => {
                 task["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
-                    json!("0".repeat(64));
+                    json!("g".repeat(64));
             }
             2 => {
                 task["post_admission_ocr"]["fields"][0]
@@ -283,6 +285,16 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         assert_error_code(&output, "package_invalid");
         assert!(!fixture.temp.path().join("invalid-fields.zip").exists());
     }
+    // Workflow #336 PKG-S1 (model M-PKG v1.1 S1-T4): a well-formed dictionary SHA-256 that names
+    // other bytes is admitted and the run is evaluated as usual; the pin is compared with nothing.
+    let mut unrelated_pin = entries.clone();
+    let task = &mut unrelated_pin[task_index].1;
+    task["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
+        json!("0".repeat(64));
+    let fixture = TestFixture::from_bytes(encode(&unrelated_pin), home_frame(true));
+    let output = fixture.run(&[], "unrelated-pin.zip");
+    assert_success(&output, "would_click");
+    assert_deferred_post_admission_ocr(&envelope_data(&output)["post_admission_ocr"]);
     let mut required = entries.clone();
     let pages_index = required
         .iter()
@@ -476,9 +488,17 @@ fn package_dry_run_rejects_invalid_package_inputs() {
     let corrupt = TestFixture::from_bytes(b"not a zip".to_vec(), home_frame(true));
     assert_failure(&corrupt.run(&[], "corrupt.zip"));
 
+    // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the given reference is still format-checked,
+    // so a 64-character value that is not hex is refused; a well-formed one that is not the
+    // package's hash is admitted (S1-T3) and recorded as given, compared with nothing.
     let wrong_hash = TestFixture::new(PackageOptions::default(), home_frame(true));
-    let output = wrong_hash.run_with_hash(&"0".repeat(64), &[], "wrong-hash.zip");
-    assert_failure(&output);
+    let malformed = wrong_hash.run_with_hash(&"g".repeat(64), &[], "malformed-hash.zip");
+    assert_error_code(&malformed, "package_invalid");
+    assert!(!wrong_hash.temp.path().join("malformed-hash.zip").exists());
+    let unrelated = "0".repeat(64);
+    let output = wrong_hash.run_with_hash(&unrelated, &[], "wrong-hash.zip");
+    assert_success(&output, "would_click");
+    assert_eq!(envelope_data(&output)["package_sha256"], unrelated);
 
     for (name, options) in [
         (
