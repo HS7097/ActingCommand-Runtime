@@ -468,10 +468,10 @@ impl PerformanceMonitor {
                 if !is_sanitization_failure(&error) || self.config.is_none() {
                     return Err(error);
                 }
-                let failure = rejected_event_outcome(&error, EventType::PerformanceSummary);
+                let rejected = rejected_event_outcome(&error, EventType::PerformanceSummary);
                 return self.degrade_for_rejected_summary(
                     now.unix_ms,
-                    failure,
+                    rejected,
                     ledger,
                     events,
                     &wakes,
@@ -496,12 +496,12 @@ impl PerformanceMonitor {
     fn degrade_for_rejected_summary(
         &mut self,
         observed_at_unix_ms: u64,
-        failure: Outcome,
+        rejected: Outcome,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
         wakes: &PolicyWakeSignal,
     ) -> RuntimeHostResult<()> {
-        let tick = self.record_monitor_failure(observed_at_unix_ms, failure, None)?;
+        let tick = self.record_monitor_failure(observed_at_unix_ms, rejected, None)?;
         for event in &tick.events {
             let persisted = append(ledger, events, wakes, event.severity(), event.payload())?;
             self.record_event_reference(event, *persisted.event_id())?;
