@@ -794,6 +794,24 @@ impl PageProjection {
         Ok(removed)
     }
 
+    /// Min's last step (#391 MCP-391b): when the one resolvable element that `reduce_for_min`
+    /// keeps still does not fit the hard limit, omit it as well and keep the identity alone,
+    /// counted as omitted with a freshly hashed truncation state. Returns whether any entry
+    /// was left to omit.
+    pub fn reduce_to_identity(&mut self) -> LabResult<bool> {
+        let removed = self.elements.len()
+            + self.unscoped_controls.len()
+            + self.missing.len()
+            + self.fields.len()
+            != 0;
+        self.elements.clear();
+        self.unscoped_controls.clear();
+        self.missing.clear();
+        self.fields.clear();
+        self.refresh()?;
+        Ok(removed)
+    }
+
     fn refresh(&mut self) -> LabResult<()> {
         self.metrics.emitted_count = self.elements.len()
             + self.missing.len()
