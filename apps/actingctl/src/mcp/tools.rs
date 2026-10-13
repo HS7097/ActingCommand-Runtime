@@ -5,6 +5,7 @@
 //! tier gate, the result envelope `{ok, result, warnings?}` / `{ok:false, error}` and the
 //! output budget (§四 结果形状 / 预算).
 
+use super::events;
 use super::jobs::Jobs;
 use super::lab;
 use super::observer;
@@ -373,17 +374,18 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: overview_result,
         run: observer::overview,
     },
+    // Workflow #389 MCP-1 (MCP-0 command table v1.1 §4.1): ac_events is `actingctl events`.
     ToolDef {
         name: "ac_events",
         title: "Runtime ledger events",
         tier: Tier::Observer,
-        description: "One page of Runtime ledger events. Events are returned oldest first from since_unix_ms; pass since_unix_ms for recent events; follow next_cursor. Without since_unix_ms the page starts at the beginning of the ledger. Filters: instance (alias, instance_id or ADB port) and view (events = every event, observation, changes, errors = warning and above, health, lab). Each row carries only seq, ts, type, severity, instance, request_id, run_id, the ledger's diagnostic code and materials [{ref, media_type, size}] for ac_material (materials_truncated when that list was shortened to fit the output budget); no event payload text. limit defaults to 20 (at most 100). next_cursor continues the same query: send it back with the same filters. truncated true means the page was cut to the output budget and next_cursor resumes after its last row. A cursor dies when the Runtime connection or this server restarts (cursor_invalid): read again from the first page.",
+        description: "One page of Runtime ledger events, oldest first: the same read, parameters and page as actingctl events (QueryEvents, which records nothing in the ledger). Filters, all combined: instance (alias, instance_id or ADB port), view (events = every event, observation, changes, errors = warning and above, health, lab), since_unix_ms and until_unix_ms, after_sequence and through_sequence, event_type, exclude_event_types (at most 32, never the event_type), min_severity and max_severity (debug, info, warning, error, fatal), origin_module, task_id, run_id, request_id and correlation_id. Without since_unix_ms or after_sequence the page starts at the beginning of the ledger. Each row carries seq, ts, type, severity, instance, request_id, run_id, task_id, correlation_id, the ledger's diagnostic code and materials [{ref, media_type, size}] for ac_material (materials_truncated when that list was shortened to fit the output budget); detail payload adds the event's projected payload verbatim, detail brief (the default) has none. limit defaults to 20 (at most 100). last_sequence is the seq of the page's last row: pass it as after_sequence to read on from there, also after a restart. next_cursor continues the same query within its snapshot: send it back with the same filters and without after_sequence. truncated true means a brief page was cut to the output budget and next_cursor resumes after its last row. A payload page larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {export {path, sha256, size}, events_count, next_cursor, last_sequence} with the warning answer_exported. A cursor dies when the Runtime connection or this server restarts (cursor_invalid): read again from the first page or from after_sequence. To follow the ledger, poll this tool with after_sequence and wait_s (0-20, default 0), not ac_overview: an empty page is read again every second until rows arrive or wait_s ends, and waited_ms says how long it waited.",
         read_only: true,
         destructive: false,
         idempotent: true,
-        input_schema: events_input,
-        result_schema: events_result,
-        run: observer::events,
+        input_schema: events::input_schema,
+        result_schema: events::result_schema,
+        run: events::events,
     },
     ToolDef {
         name: "ac_material",
@@ -435,6 +437,20 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: diagnose_result,
         run: runs::diagnose,
     },
+    // Workflow #389 MCP-3 (MCP-0 command table v1.1 §4.3): ac_runs ↔ actingctl runs.
+    ToolDef {
+        name: "ac_runs",
+        title: "Run list",
+        tier: Tier::Observer,
+        description: "The contained runs, manual and scheduled, first recorded in a window, newest first, as actingctl runs lists them: since_unix_ms (default the last 24 h, at most 7 days back, else since_out_of_range) and until_unix_ms (optional, not before since_unix_ms); the window used is echoed. One row per run: request_id, run_id, task_id, catalog_task_id (the policy task id of a scheduled run; absent for a manual run), alias, instance_id, dispatch, origin, state, admitted_at_unix_ms (its first fact), ended_at_unix_ms and duration_ms (once it ended), task_result, failure_code, final_page and executed_steps (from its terminal). Filters: instance (alias, instance_id or ADB port; without it every instance), task_prefix (catalog_task_id prefix; a manual run never matches), dispatch (manual or scheduled), state (open = admitted or running, succeeded, failed, cancelled, interrupted_unterminated). limit defaults to 20 (at most 100). next_cursor continues the same list at the same ledger snapshot: send it back with the same filters (since_unix_ms and until_unix_ms may be left out); it stays valid across restarts. truncated true means the page was cut to the output budget; incomplete true, with the warning call_budget_exhausted, means the read budget ended the page early; next_cursor continues either. Runs are read run by run, so an instance's other events do not count. It only reads: one status read at most names the instance and the rows' aliases.",
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::run_list::input,
+        result_schema: super::run_list::result,
+        run: super::run_list::runs,
+    },
+    // End of MCP-3.
     ToolDef {
         name: "ac_resources_list",
         title: "Targetable resources",
@@ -973,74 +989,6 @@ fn overview_result() -> Value {
             "incomplete": {"type": "boolean"},
         },
         "required": ["daemon", "lab_tool", "install"],
-    })
-}
-
-fn events_input() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "instance": instance_argument(),
-            "view": {
-                "type": "string",
-                "enum": ["events", "observation", "changes", "errors", "health", "lab"],
-                "description": "Ledger view; without it every event.",
-            },
-            "since_unix_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "Only events at or after this Unix time in milliseconds.",
-            },
-            "cursor": {
-                "type": "string",
-                "minLength": 1,
-                "description": "next_cursor of the previous page, sent with the same filters.",
-            },
-            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIST, "default": DEFAULT_LIST},
-        },
-        "additionalProperties": false,
-    })
-}
-
-fn events_result() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "seq": {"type": "integer"},
-                        "ts": {"type": "integer"},
-                        "type": {"type": "string"},
-                        "severity": {"type": "string"},
-                        "instance": {"type": "string"},
-                        "request_id": {"type": "string"},
-                        "run_id": {"type": "string"},
-                        "code": {"type": "string"},
-                        "materials": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "ref": {"type": "string"},
-                                    "media_type": {"type": "string"},
-                                    "size": {"type": "integer"},
-                                },
-                                "required": ["ref", "media_type", "size"],
-                            },
-                        },
-                        "materials_truncated": {"type": "boolean"},
-                    },
-                    "required": ["seq", "ts", "type", "severity"],
-                },
-            },
-            "next_cursor": {"type": "string"},
-            "truncated": {"type": "boolean"},
-            "snapshot_ledger_position": {"type": "integer"},
-        },
-        "required": ["events", "snapshot_ledger_position"],
     })
 }
 

@@ -6,6 +6,7 @@
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
+mod events;
 #[cfg(test)]
 mod gate_381a;
 #[cfg(feature = "mcp")]
@@ -25,6 +26,10 @@ mod instance_selector;
 mod material_export;
 mod observe_export;
 // End of MCP-5a.
+
+// Workflow #389 MCP-3: `runs` (MCP `ac_runs`); it uses MCP-5a's instance selector above.
+mod run_list;
+// End of MCP-3.
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -74,6 +79,11 @@ fn main() -> ExitCode {
             return exit;
         }
     }
+    // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
+    if let Some(exit) = events::dispatch(&arguments) {
+        return exit;
+    }
+    // --- end MCP-1 ---
     // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
     // before `Invocation::parse`; `observe` without `--export` is unchanged.
     if let Some(exit) = observe_export::dispatch(&arguments) {
@@ -92,6 +102,11 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-11 (end) ----
+    // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
+    // `Invocation::parse`.
+    if let Some(exit) = run_list::dispatch(&arguments) {
+        return exit;
+    }
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {

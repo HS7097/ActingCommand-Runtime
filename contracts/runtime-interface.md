@@ -498,7 +498,7 @@ two.
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
 | `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; output as today | general |
-| `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `cursor`, `limit` ↔ same flags | general |
+| `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `exclude_event_types`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1). Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design) | general |
 | `ac_get_run` | read | `actingctl run get` | `handle` or `run_id` ↔ `--handle` or `--run-id`; `wait_s` is presentation | general |
 | `ac_material` | read | `actingctl material` | `ref`, `mode`, `offset`, `max_bytes` ↔ same flags | general |
 | `ac_diagnose` | read | `actingctl diagnose` | `instance`, `task_id`, `since_unix_ms` ↔ same flags. Its text says that `actingd suspended` reports the configuration and not runtime pack loads or unloads | general |
