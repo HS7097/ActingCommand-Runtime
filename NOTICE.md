@@ -73,6 +73,15 @@ No upstream automation source code has been copied into this repository as part 
 - Artifact contract status: the contract exists, and the source-only provider crate exists. A local-only R3 NN smoke was run on 2026-07-02 using ignored local artifacts: ONNXRuntime release `v1.24.4` CPU x64 asset `onnxruntime-win-x64-1.24.4.zip`, ONNX Models SqueezeNet `Opset16` model `Computer_Vision/squeezenet1_0_Opset16_torch_hub/squeezenet1_0_Opset16.onnx`, and local smoke labels. The smoke produced real ONNXRuntime JSON output through `ac_onnxruntime_classify_json`; these binaries/models/labels are not copied or redistributed in this repository.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, third-party notices, binary provenance, model terms, copied artifact paths, and redistribution obligations.
 
+## Rust crate dependencies
+
+### FFT for the exact template score map
+
+- Role (Workflow #396 REC-2, model D18): `crates/recognition` computes the template products `sum(T * I)` of the exact score map by an FFT cross-correlation (`contracts/resource-declarations.md`, section Task schema `0.9` unique matches). No other crate uses these crates.
+- Source: crates.io, compiled from source into the binaries that link `crates/recognition`; `Cargo.lock` pins each version with its crates.io SHA-256 checksum. No source file is copied into this repository.
+- Rust dependency license check: `realfft` 3.5.0 reports `MIT`; `rustfft` 6.4.1 and its dependencies `primal-check` 0.3.4, `strength_reduce` 0.2.4 and `transpose` 0.2.3 report `MIT OR Apache-2.0`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
+- Notes: all five are pure Rust. `num-complex`, `num-integer` and `num-traits`, which they also use, were already dependencies.
+
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 
 - upstream project name
