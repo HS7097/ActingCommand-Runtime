@@ -128,7 +128,7 @@ pub(super) fn input() -> Value {
             "task_prefix": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Only runs whose task_id starts with it.",
+                "description": "Only scheduled runs whose catalog_task_id (policy task id) starts with it; a manual run has none and never matches.",
             },
             "dispatch": {"type": "string", "enum": ["manual", "scheduled"]},
             "state": {
@@ -164,6 +164,7 @@ pub(super) fn result() -> Value {
                         "request_id": {"type": "string"},
                         "run_id": {"type": "string"},
                         "task_id": {"type": "string"},
+                        "catalog_task_id": {"type": "string"},
                         "alias": {"type": "string"},
                         "instance_id": {"type": "string"},
                         "dispatch": {"type": "string", "enum": ["manual", "scheduled", "unknown"]},

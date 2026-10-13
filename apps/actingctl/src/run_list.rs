@@ -232,10 +232,10 @@ impl Cursor {
         }
         Ok(Self {
             position: RunListPosition {
-                snapshot_ledger_position: number(*snapshot)?,
-                before_sequence: number(*before)?,
+                snapshot_ledger_position: number(snapshot)?,
+                before_sequence: number(before)?,
             },
-            since_unix_ms: number(*since)?,
+            since_unix_ms: number(since)?,
             until_unix_ms: match *until {
                 "-" => None,
                 until => Some(number(until)?),
@@ -453,8 +453,9 @@ pub(crate) fn read(
     })
 }
 
-/// One row of §4.3: the run's identity, its alias when its instance is still configured, its
-/// dispatch, origin and state, when it was first recorded and when it ended, and its terminal.
+/// One row of §4.3: the run's identity, the policy task id of a scheduled run, its alias when its
+/// instance is still configured, its dispatch, origin and state, when it was first recorded and
+/// when it ended, and its terminal.
 fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> Value {
     let run_status = &run.status;
     let alias = run_status.instance_id.and_then(|instance_id| {
@@ -471,6 +472,11 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
     }
     if let Some(task_id) = run_status.task_id {
         row.insert("task_id".to_owned(), json!(task_id));
+    }
+    // Workflow #389 MCP-3 ruling: the policy task id of a scheduled run, as its dispatch intent
+    // gives it; a manual run has none.
+    if let Some(catalog_task_id) = &run.catalog_task_id {
+        row.insert("catalog_task_id".to_owned(), json!(catalog_task_id));
     }
     if let Some(alias) = alias {
         row.insert("alias".to_owned(), json!(alias));

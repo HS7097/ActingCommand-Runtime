@@ -97,8 +97,13 @@ other list (Workflow #372 K3, `policy-suspension.md`).
 
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
-first by their first listing fact, each read in brief mode and kept by its task_id
-prefix, dispatch and state, at most 100 a page. A later page continues at the first
-page's snapshot, after the last run the page before it examined. A listing the deadline
-ended early examines no run; a page the deadline ended early is `incomplete` and
-continues after the last run it read.
+first by their first listing fact, each read in brief mode and kept by its dispatch and
+state, at most 100 a page. A scheduled run also carries its policy task id as
+`catalog_task_id`: the `task_id` of its `policy.dispatch_intent`. That event is linked to
+the run but recorded under the admission request, not the run's own request, so it is
+read with one query by run. A manual run has none. `task_prefix` matches
+`catalog_task_id`, not the run's own `task_id`, so a manual run never matches it
+(Workflow #389 MCP-3 ruling). A later page continues at the first page's snapshot, after
+the last run the page before it examined. A listing the deadline ended early examines no
+run; a page the deadline ended early is `incomplete` and continues after the last run it
+read.

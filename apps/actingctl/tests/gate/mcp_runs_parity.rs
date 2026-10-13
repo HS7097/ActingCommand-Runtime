@@ -6,17 +6,20 @@
 //! loopback that answers Health, Status and event queries from one in-memory ledger and records
 //! nothing, so every call reads the same snapshot (a real Runtime records each Status it
 //! answers, and its run facts come only from running a task package). The ledger holds a failed
-//! run on one instance, Lab captures on that instance, then a succeeded run on another. For each
-//! argument set the CLI's stdout JSON and the ac_runs result are the same object: nothing is cut
-//! to the output budget, so §2.2 leaves them no presentation difference. That object is the one
-//! §4.3 gives for this ledger.
+//! manual run on one instance, Lab captures on that instance, then a succeeded scheduled run on
+//! another. For each argument set the CLI's stdout JSON and the ac_runs result are the same
+//! object: nothing is cut to the output budget, so §2.2 leaves them no presentation difference.
+//! That object is the one §4.3 gives for this ledger, with the coordinator's ruling on it: a
+//! scheduled run's row carries its policy task id as `catalog_task_id`, a manual run's has none,
+//! and `task_prefix` matches `catalog_task_id`.
 
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    AuditInput, CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft,
-    EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity, EventSource,
-    IdentifierIssuer, IssuedInstanceId, OriginModule, OwnerEpoch, ProjectedEvent,
+    AuditInput, CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, EffectDisposition,
+    EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
+    EventQuery, EventSeverity, EventSource, IdentifierIssuer, IssuedInstanceId, OriginModule,
+    OwnerEpoch, PolicyDispatchEventData, PolicyPayloadDraft, PolicyReasonRecord, ProjectedEvent,
     ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeControlPlaneStatus,
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
@@ -41,6 +44,11 @@ const SINCE_UNIX_MS: u64 = 4_102_444_800_000;
 const EVENT_SPACING_MS: u64 = 1_000;
 const ALIAS_A: &str = "neutral.runs.a";
 const ALIAS_B: &str = "neutral.runs.b";
+/// The policy task the scheduler dispatched the run on instance B for: an opaque id from the
+/// resource side.
+const POLICY_TASK_B: &str = "neutral.routine.collect";
+/// A prefix of `POLICY_TASK_B`; no Runtime task_id (`task_<hex>`) starts with it.
+const POLICY_TASK_PREFIX: &str = "neutral.routine.";
 /// The Lab captures on instance A between the two runs.
 const LAB_CAPTURES: usize = 10;
 /// The largest request the scripted Runtime reads.
@@ -128,6 +136,24 @@ fn gate_actingctl_runs_and_ac_runs_answer_the_same_run_list_for_the_same_argumen
         "the page after the first page's next_cursor"
     );
 
+    // A prefix of the policy task id: the scheduled run only; the manual run has no policy task
+    // id and never matches.
+    let prefixed = parity(
+        &mut mcp,
+        &mut id,
+        root.path(),
+        json!({"since_unix_ms": SINCE_UNIX_MS, "task_prefix": POLICY_TASK_PREFIX}),
+    );
+    assert_eq!(
+        prefixed,
+        json!({
+            "runs": [ledger.succeeded_row.clone()],
+            "window": window,
+            "snapshot_ledger_position": snapshot,
+        }),
+        "the run list of the policy task prefix {POLICY_TASK_PREFIX}"
+    );
+
     mcp.close_input();
     drop(mcp);
     drop(runtime);
@@ -195,12 +221,13 @@ impl Ledger {
         let instance_b = issuer.mint_instance_id().expect("instance id");
         let failure = SharedCode::ContainedTaskHomeEntryNotMatched.as_str();
         let mut events = Vec::new();
-        // On instance A, a run whose entry page did not match fails before its package is
-        // admitted; then the Lab works on A.
+        // On instance A, a run started from the CLI whose entry page did not match fails before
+        // its package is admitted; then the Lab works on A.
         let failed = record_run(
             &issuer,
             &mut events,
             instance_a,
+            Dispatched::Cli,
             vec![
                 TaskSemanticFact::EntryRecognition {
                     phase: TaskEntryRecognitionPhase::Initial,
@@ -237,11 +264,16 @@ impl Ledger {
                 .into(),
             );
         }
-        // On instance B, a run whose entry page matched takes one step and succeeds.
+        // On instance B, a run the scheduler dispatched for one policy task: its entry page
+        // matched, it takes one step and succeeds.
         let succeeded = record_run(
             &issuer,
             &mut events,
             instance_b,
+            Dispatched::Scheduler {
+                alias: ALIAS_B,
+                catalog_task_id: POLICY_TASK_B,
+            },
             vec![
                 TaskSemanticFact::EntryRecognition {
                     phase: TaskEntryRecognitionPhase::Initial,
@@ -297,12 +329,15 @@ impl Ledger {
             )
             .expect("instance B status"),
         ];
-        // §4.3 rows: no request event names a dispatch or an origin, so both are unknown;
-        // admitted_at is the run's first fact and ended_at its terminal.
-        let mut failed_row = failed.row(ALIAS_A, "failed", "failure");
+        // §4.3 rows: the CLI run is manual from the CLI and has no policy task id; the
+        // scheduler's run is scheduled from the scheduler and carries its policy task id
+        // (ruling). admitted_at is the run's first fact and ended_at its terminal.
+        let mut failed_row = failed.row(ALIAS_A, "manual", "cli", "failed", "failure");
         failed_row["failure_code"] = json!(failure);
         failed_row["executed_steps"] = json!(0);
-        let mut succeeded_row = succeeded.row(ALIAS_B, "succeeded", "success");
+        let mut succeeded_row =
+            succeeded.row(ALIAS_B, "scheduled", "scheduler", "succeeded", "success");
+        succeeded_row["catalog_task_id"] = json!(POLICY_TASK_B);
         succeeded_row["final_page"] = json!("neutral/terminal");
         succeeded_row["executed_steps"] = json!(1);
         Arc::new(Self {
@@ -326,8 +361,16 @@ struct RecordedRun {
 }
 
 impl RecordedRun {
-    /// The row §4.3 gives for this run, without the members of its terminal's detail.
-    fn row(&self, alias: &str, state: &str, task_result: &str) -> Value {
+    /// The row §4.3 gives for this run, without its policy task id and the members of its
+    /// terminal's detail.
+    fn row(
+        &self,
+        alias: &str,
+        dispatch: &str,
+        origin: &str,
+        state: &str,
+        task_result: &str,
+    ) -> Value {
         let (first, last) = (timestamp(self.first), timestamp(self.last));
         json!({
             "request_id": self.links["request_id"],
@@ -335,8 +378,8 @@ impl RecordedRun {
             "task_id": self.links["task_id"],
             "alias": alias,
             "instance_id": self.links["instance_id"],
-            "dispatch": "unknown",
-            "origin": "unknown",
+            "dispatch": dispatch,
+            "origin": origin,
             "state": state,
             "admitted_at_unix_ms": first,
             "ended_at_unix_ms": last,
@@ -346,19 +389,83 @@ impl RecordedRun {
     }
 }
 
-/// Appends one run's facts on `instance` and returns it.
+/// How a run was dispatched, as the events before its facts record it.
+enum Dispatched {
+    /// By hand: its request opens with the CLI's command.
+    Cli,
+    /// By the scheduler for one policy task: the dispatch intent, under the admission request
+    /// and linked to the run, then the scheduler's command under the run's own request.
+    Scheduler {
+        alias: &'static str,
+        catalog_task_id: &'static str,
+    },
+}
+
+/// Appends one run on `instance`, the events of its dispatch and then its facts, and returns it.
 fn record_run(
     issuer: &IdentifierIssuer,
     events: &mut Vec<ProjectedEvent>,
     instance: IssuedInstanceId,
+    dispatched: Dispatched,
     facts: Vec<TaskSemanticFact>,
 ) -> RecordedRun {
+    let correlation_id = issuer.mint_correlation_id().expect("correlation id");
+    let task_id = issuer.mint_task_id().expect("task id");
+    let run_id = issuer.mint_run_id().expect("run id");
     let links = EventLinksDraft::default()
         .with_instance_id(instance)
         .with_request_id(issuer.mint_request_id().expect("request id"))
-        .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
-        .with_task_id(issuer.mint_task_id().expect("task id"))
-        .with_run_id(issuer.mint_run_id().expect("run id"));
+        .with_correlation_id(correlation_id)
+        .with_task_id(task_id)
+        .with_run_id(run_id);
+    match dispatched {
+        Dispatched::Cli => push(
+            issuer,
+            events,
+            EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::Cli),
+            links.clone(),
+            ClientPayloadDraft::cli_command(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        ),
+        Dispatched::Scheduler {
+            alias,
+            catalog_task_id,
+        } => {
+            let admission = EventLinksDraft::default()
+                .with_instance_id(instance)
+                .with_request_id(issuer.mint_request_id().expect("admission request id"))
+                .with_correlation_id(correlation_id)
+                .with_task_id(task_id)
+                .with_run_id(run_id)
+                .with_action_id(issuer.mint_action_id().expect("intent action id"));
+            push(
+                issuer,
+                events,
+                EventOrigin::new(
+                    EventSource::Scheduler,
+                    OriginModule::Policy,
+                    EventActor::Scheduler,
+                ),
+                admission,
+                PolicyPayloadDraft::dispatch_intent(
+                    dispatch_intent(alias, catalog_task_id),
+                    AuditInput::new(),
+                )
+                .into(),
+            );
+            push(
+                issuer,
+                events,
+                EventOrigin::new(
+                    EventSource::Scheduler,
+                    OriginModule::Scheduler,
+                    EventActor::Scheduler,
+                ),
+                links.clone(),
+                CommandPayloadDraft::received(EventAction::RuntimeTaskRun, AuditInput::new())
+                    .into(),
+            );
+        }
+    }
     let first = next_sequence(events);
     for fact in facts {
         push(
@@ -378,6 +485,31 @@ fn record_run(
         links: json!(events.last().expect("the run's facts").links),
         first,
         last,
+    }
+}
+
+/// The scheduler's dispatch intent for `catalog_task_id` on `alias`. Only its task_id is read;
+/// the other members hold neutral values the contract accepts.
+fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventData {
+    let placeholder = |digit: char| format!("sha256:{}", digit.to_string().repeat(64));
+    PolicyDispatchEventData {
+        decision_id: "decision.runs.scheduled".to_owned(),
+        task_id: catalog_task_id.to_owned(),
+        instance_id: alias.to_owned(),
+        operation_id: "operation.runs.scheduled".to_owned(),
+        package_digest: placeholder('a').into(),
+        procedure_binding_digest: placeholder('b'),
+        reason_chain_id: "reasons.runs.scheduled".to_owned(),
+        reasons: vec![PolicyReasonRecord {
+            code: "scheduled".to_owned(),
+            detail: "scripted dispatch".to_owned(),
+        }],
+        catalog_hash: placeholder('c'),
+        catalog_version: 1,
+        input_ledger_position: 1,
+        fact_snapshot_id: "facts.runs.scheduled".to_owned(),
+        approval_fact_ids: Vec::new(),
+        urgency_milli: 0,
     }
 }
 

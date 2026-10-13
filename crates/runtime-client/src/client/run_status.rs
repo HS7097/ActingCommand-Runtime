@@ -157,7 +157,8 @@ pub struct RecentContainedRuns {
 pub struct RunListFilter {
     /// Runs on this instance only.
     pub instance_id: Option<InstanceId>,
-    /// Runs whose task_id starts with this text.
+    /// Scheduled runs whose policy task id (`catalog_task_id`) starts with this text; a manual
+    /// run has none and never matches.
     pub task_prefix: Option<String>,
     pub dispatch: Option<RunDispatch>,
     /// Runs in one of these states; empty keeps every state.
@@ -172,10 +173,16 @@ pub struct RunListPosition {
     pub before_sequence: u64,
 }
 
-/// One run of a run list: its brief run status, its order and its two times.
+/// One run of a run list: its brief run status, the policy task id of a scheduled run, its order
+/// and its two times.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedContainedRun {
     pub status: ContainedRunStatus,
+    /// The policy task a scheduled run was dispatched for: the `task_id` of its
+    /// `policy.dispatch_intent`, named `catalog_task_id` where it stands beside the run's own
+    /// task_id (`SchedulingOutcomeIdentity`). An opaque string from the resource side. Absent
+    /// for a manual run.
+    pub catalog_task_id: Option<String>,
     /// What the list orders by, newest first: the sequence of the run's first listing fact in
     /// the window (its main admission, or its entry check when it has one).
     pub order_sequence: u64,
@@ -314,8 +321,10 @@ impl RuntimeClient {
     /// (Workflow #389 MCP-3, `actingctl runs` / `ac_runs`). The runs of the window are listed by
     /// run, as `recent_runs` lists them, and examined newest first by their order sequence: each
     /// is read in brief mode and kept when `filter` keeps it, until `limit` (1-100) are kept.
-    /// `from` continues an earlier page at that page's snapshot. `deadline` is checked between
-    /// reads; reaching it ends the page `incomplete`. Read-only.
+    /// A scheduled run also gets its policy task id, from its dispatch intent; `task_prefix`
+    /// matches that id, so a run without one is not kept and not read. `from` continues an
+    /// earlier page at that page's snapshot. `deadline` is checked between runs; reaching it ends
+    /// the page `incomplete`. Read-only.
     pub fn list_contained_runs(
         &self,
         since_unix_ms: u64,
@@ -376,15 +385,19 @@ impl RuntimeClient {
                 break;
             }
             let identity = listed.identity;
+            // Workflow #389 MCP-3 ruling: task_prefix matches the policy task id, which only a
+            // scheduled run has. A run without one, or whose one does not start with the
+            // prefix, is not read.
+            let mut catalog_task_id = None;
             if let Some(prefix) = &filter.task_prefix {
-                let task_id = serde_json::to_value(identity.task_id).ok();
-                if !task_id
-                    .as_ref()
-                    .and_then(Value::as_str)
-                    .is_some_and(|task_id| task_id.starts_with(prefix.as_str()))
-                {
-                    examined = listed.sequence;
-                    continue;
+                match self.dispatched_catalog_task_id(identity, listing.snapshot)? {
+                    Some(found) if found.starts_with(prefix.as_str()) => {
+                        catalog_task_id = Some(found);
+                    }
+                    _ => {
+                        examined = listed.sequence;
+                        continue;
+                    }
                 }
             }
             let Some(read) = self.read_contained_run_status(
@@ -413,8 +426,19 @@ impl RuntimeClient {
             {
                 continue;
             }
+            // Only a scheduled run carries a policy task id; a manual one never matches a
+            // task_prefix.
+            let catalog_task_id = match (read.status.dispatch, catalog_task_id) {
+                (RunDispatch::Scheduled, Some(found)) => Some(found),
+                (RunDispatch::Scheduled, None) => {
+                    self.dispatched_catalog_task_id(identity, listing.snapshot)?
+                }
+                _ if filter.task_prefix.is_some() => continue,
+                _ => None,
+            };
             page.runs.push(ListedContainedRun {
                 status: read.status,
+                catalog_task_id,
                 order_sequence: listed.sequence,
                 first_fact_unix_ms,
                 terminal_unix_ms: read.terminal_timestamp_unix_ms,
@@ -484,6 +508,38 @@ impl RuntimeClient {
         }
         listing.runs.sort_by_key(|run| run.sequence);
         Ok(listing)
+    }
+
+    /// The policy task id of the run `identity` names (Workflow #389 MCP-3 ruling): the `task_id`
+    /// of its one `policy.dispatch_intent`. The intent is linked to the run and its task but
+    /// recorded under the admission request, not the run's own request, so it is read with one
+    /// bounded query by run at `snapshot`. A run dispatched by hand has none. The id is an
+    /// opaque string from the resource side and is never parsed.
+    fn dispatched_catalog_task_id(
+        &self,
+        identity: TaskRunIdentity,
+        snapshot: u64,
+    ) -> RuntimeClientResult<Option<String>> {
+        let query = EventQuery {
+            run_id: Some(identity.run_id),
+            event_type: Some(EventType::PolicyDispatchIntent),
+            ..EventQuery::default()
+        };
+        let intents = self.first_status_events(query, 2, snapshot)?;
+        let intent = match intents.as_slice() {
+            [] => return Ok(None),
+            [intent] => intent,
+            _ => return Err(status_error(ClientCode::RunStatusIdentityAmbiguous)),
+        };
+        if intent.links.task_id() != Some(&identity.task_id) {
+            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
+        }
+        match full_payload(intent)? {
+            EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => {
+                Ok(Some(payload.task_id().to_owned()))
+            }
+            _ => Err(status_error(ClientCode::RunStatusIdentityMissing)),
+        }
     }
 
     /// `None` only when `deadline` ended a paged read before its last page.
