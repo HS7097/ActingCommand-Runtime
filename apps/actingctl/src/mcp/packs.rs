@@ -5,6 +5,11 @@
 //! document without the top-level `warnings`, which travel in the envelope (§2.3). The server's
 //! own install location stands for the CLI's `--root`, and an answer over the output budget is
 //! exported whole (§2.2, both presentation differences).
+//!
+//! Unlike the other tools, whose installation inputs are pinned when the server starts (#352),
+//! `ac_packs` finds the selected generation again at every call, as the CLI does (train 4 review
+//! ruling): after a deploy changes `install\active.json`, an open session answers the new
+//! generation, and a selection that cannot be read answers the CLI's codes.
 
 use super::observer;
 use super::tools::{
@@ -25,21 +30,10 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         .string("role")?
         .map(|text| Role::parse(text).ok_or_else(|| invalid_argument("role", "is not a role")))
         .transpose()?;
-    let location = context.runtime.locate();
-    location.check()?;
-    let config = location.config.as_deref().ok_or_else(|| {
-        ToolError::usage(
-            ActingctlCode::InstallRootUnresolved,
-            "this server does not run from an install root and was started without --root",
-        )
-        .blocked_by("mcp-serve --root <install root>")
-    })?;
-    let answer = reader::read(
-        location.installation.as_ref(),
-        config,
-        &Query { instance, role },
-    )
-    .map_err(refused)?;
+    let (installation, config) =
+        reader::selected_config(context.runtime.requested_root()).map_err(refused)?;
+    let answer = reader::read(installation.as_ref(), &config, &Query { instance, role })
+        .map_err(refused)?;
     within_budget(&answer)
 }
 

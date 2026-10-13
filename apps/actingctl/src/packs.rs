@@ -723,8 +723,11 @@ fn run(arguments: &[OsString]) -> Result<(), PacksError> {
 /// The selected configuration generation, found as mcp-serve finds it (`mcp/runtime.rs`): this
 /// process's install selection; else the install selection of `--root`; else
 /// `<root>\actingd.config.json` of a root without one, `--root` or the install root this
-/// executable runs from.
-fn selected_config(root: Option<&Path>) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
+/// executable runs from. `ac_packs` calls it at every call with the server's `--root`, so both
+/// read the generation selected now (train 4 review ruling).
+pub(crate) fn selected_config(
+    root: Option<&Path>,
+) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
     let process = actingcommand_contract::process_installation().map_err(|error| {
         PacksError::new(
             error.code(),
