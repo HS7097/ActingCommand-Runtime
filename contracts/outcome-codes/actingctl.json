@@ -1464,6 +1464,39 @@
       "description": "mcp-serve was started with the retired --tier argument. MCP has no tiers from #389 U-3 on: the server starts as usual with every general tool and the tools of the installed Lab options, and reports this once on stderr and in the tools/list warnings.",
       "common_causes": "A harness configuration written before #389 U-3.",
       "handling": "Remove --tier from the harness configuration; actingctl mcp-config prints the current form."
+    },
+    "start_runtime_already_running": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl start or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_wait_idle_expired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "aliases": "required",
+        "timeout_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl restart: after --wait-idle (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

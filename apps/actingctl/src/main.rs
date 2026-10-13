@@ -11,6 +11,9 @@ mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
+// Workflow #389 MCP-10: `start` and `restart`.
+#[cfg(windows)]
+mod runtime_start;
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
@@ -74,6 +77,13 @@ fn main() -> ExitCode {
     // before `Invocation::parse`; `observe` without `--export` is unchanged.
     if let Some(exit) = observe_export::dispatch(&arguments) {
         return exit;
+    }
+    // Workflow #389 MCP-10: `start` and `restart` take `--root`, not `--state-root`; CLI only.
+    #[cfg(windows)]
+    {
+        if let Some(exit) = runtime_start::dispatch(&arguments) {
+            return exit;
+        }
     }
     match run(arguments) {
         Ok(output) => match write_output(&output) {
