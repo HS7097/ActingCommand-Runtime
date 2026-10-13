@@ -8,6 +8,7 @@
 //! 06:00–23:30 UTC, UTC clocks and a manual Runtime clock.
 
 use super::*;
+use crate::codes::HostCode;
 use actingcommand_contract::SchedulingPauseScope;
 
 const MINUTE_MS: u64 = 60_000;

@@ -9,6 +9,7 @@
 
 use super::gate_372k2::{SLOT_TASK, Slots, at, slot_sources, slot_task};
 use super::*;
+use crate::codes::HostCode;
 use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal, signal_id};
 use crate::suspension_report::{SlotDispatch, SlotSignal, clock_slot_entry};
 use actingcommand_contract::PolicyBudgetDimension;
