@@ -266,6 +266,9 @@ struct ScheduledRecoveryDrafts {
     task_completed_mapped_other_request: actingcommand_contract::SanitizedEventDraft,
     task_failed_warning: actingcommand_contract::SanitizedEventDraft,
     task_failed_fatal: actingcommand_contract::SanitizedEventDraft,
+    /// A failed terminal of the recoverable code whose failure point was severe
+    /// (`failure_severe`, Workflow #378 A3 ruling 9).
+    task_failed_severe: actingcommand_contract::SanitizedEventDraft,
     task_failed_legacy: actingcommand_contract::SanitizedEventDraft,
     task_failed_invalid: actingcommand_contract::SanitizedEventDraft,
     task_effect: actingcommand_contract::SanitizedEventDraft,
@@ -277,6 +280,8 @@ struct ScheduledRecoveryDrafts {
     recovered_success_execution: actingcommand_contract::SanitizedEventDraft,
     recovered_warning_execution: actingcommand_contract::SanitizedEventDraft,
     recovered_fatal_execution: actingcommand_contract::SanitizedEventDraft,
+    /// The recoverable code's failure settled `Severe` (the class of `task_failed_severe`).
+    recovered_severe_execution: actingcommand_contract::SanitizedEventDraft,
     recovered_interrupted_execution: actingcommand_contract::SanitizedEventDraft,
     /// #670 verification N-2: the start's recovered release (grant chain, `not_performed`)
     /// after the run's terminal, the lease's expiry after it, and the interrupted settlement
@@ -400,29 +405,36 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
     // (`scheduled_failure_class`: `failure_severe`, else an always-severe code); the terminals
     // here are not `failure_severe`, so the fixture names a registered recoverable code and a
     // registered always-severe one.
-    let policy_failure = |class, runtime_ms| PolicyFailureRecord {
-        error_code: if class == PolicyFailureClass::Recoverable {
-            RECOVERABLE_FAILURE_CODE
-        } else {
-            SEVERE_FAILURE_CODE
-        }
-        .to_owned(),
-        reported_success: false,
-        original_class: class,
-        effective_class: class,
-        consecutive_same_error: 1,
-        escalation_streak: 1,
-        performance_tax_exempt: false,
-        retry_attempt: 0,
-        disposition: if class == PolicyFailureClass::Severe {
-            PolicyFailureDisposition::PausedTask
-        } else {
-            PolicyFailureDisposition::Continue
-        },
-        retry_at_unix_ms: None,
-        runtime_ms,
-        sensitive: false,
-        perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_400)),
+    let policy_failure_of =
+        |error_code: &str, class: PolicyFailureClass, runtime_ms| PolicyFailureRecord {
+            error_code: error_code.to_owned(),
+            reported_success: false,
+            original_class: class,
+            effective_class: class,
+            consecutive_same_error: 1,
+            escalation_streak: 1,
+            performance_tax_exempt: false,
+            retry_attempt: 0,
+            disposition: if class == PolicyFailureClass::Severe {
+                PolicyFailureDisposition::PausedTask
+            } else {
+                PolicyFailureDisposition::Continue
+            },
+            retry_at_unix_ms: None,
+            runtime_ms,
+            sensitive: false,
+            perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_400)),
+        };
+    let policy_failure = |class, runtime_ms| {
+        policy_failure_of(
+            if class == PolicyFailureClass::Recoverable {
+                RECOVERABLE_FAILURE_CODE
+            } else {
+                SEVERE_FAILURE_CODE
+            },
+            class,
+            runtime_ms,
+        )
     };
     let recovered_execution = |outcome| PolicyExecutionEventData {
         decision_id: dispatch.decision_id.clone(),
@@ -624,6 +636,29 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             )
             .into(),
         ),
+        task_failed_severe: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    task_result: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: Some(0),
+                    outcome: Some(Outcome::relayed(RECOVERABLE_FAILURE_CODE)),
+                    failure_severe: true,
+                    scheduling_disposition: None,
+                    task_timing: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
         task_failed_fatal: sanitize(
             1_752_147_200_400,
             EventSeverity::Fatal,
@@ -816,6 +851,27 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             PolicyPayloadDraft::execution_recorded(
                 recovered_execution(PolicyExecutionOutcome::Failed {
                     failure: policy_failure(PolicyFailureClass::Recoverable, 50),
+                }),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_severe_execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                recovered_execution(PolicyExecutionOutcome::Failed {
+                    failure: policy_failure_of(
+                        RECOVERABLE_FAILURE_CODE,
+                        PolicyFailureClass::Severe,
+                        50,
+                    ),
                 }),
                 AuditInput::new(),
             )
@@ -1216,6 +1272,79 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     assert_recovered_execution_chain(&recovered, &interrupted_drafts);
     assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
     interrupted.close().expect("close interrupted ledger");
+}
+
+/// Workflow #378 A3 (acceptance CL-L1, coordinator ruling 9): a failed terminal whose failure
+/// point was severe (`failure_severe`) settles `Severe` though its code is not on the static
+/// always-severe list.
+#[test]
+fn recovered_policy_execution_settles_a_failure_severe_terminal_severe() {
+    let root = TempDir::new().expect("failure-severe temp");
+    let ledger =
+        GlobalLedger::open(config(&root, "failure-severe-recovery-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&ledger, &drafts);
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    ledger
+        .append(drafts.task_failed_severe.clone())
+        .expect("severe task failure of a recoverable code");
+    ledger
+        .append(drafts.task_release.clone())
+        .expect("task release");
+    reconcile_scheduled_settlement(&ledger, &drafts.recovered_severe_execution)
+        .expect("a failure_severe terminal settles Severe");
+    let recovered = recovered_execution_fact(&ledger, &drafts.recovered_severe_execution);
+    assert_recovered_execution_chain(&recovered, &drafts);
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = recovered.payload()
+    else {
+        panic!("recovered execution payload");
+    };
+    assert!(matches!(
+        payload.policy_result(),
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.error_code == RECOVERABLE_FAILURE_CODE
+                && failure.original_class == PolicyFailureClass::Severe
+    ));
+    ledger.close().expect("close failure-severe ledger");
+}
+
+/// Workflow #378 A3 (acceptance CL-L1): the ledger re-derives the class from the terminal with
+/// the shared function and refuses an execution whose class disagrees with it, in either
+/// direction, with `scheduled_execution_recovery_failure_conflict`.
+#[test]
+fn recovered_policy_execution_refuses_a_class_the_terminal_does_not_give() {
+    for severe_terminal in [false, true] {
+        let drafts = scheduled_recovery_drafts();
+        let (terminal, execution) = if severe_terminal {
+            (
+                &drafts.task_failed_severe,
+                &drafts.recovered_warning_execution,
+            )
+        } else {
+            (
+                &drafts.task_failed_warning,
+                &drafts.recovered_severe_execution,
+            )
+        };
+        let root = TempDir::new().expect("class conflict temp");
+        let ledger =
+            GlobalLedger::open(config(&root, "class-conflict-recovery-writer")).expect("ledger");
+        append_scheduled_execution_recovery_prefix(&ledger, &drafts);
+        ledger
+            .append(drafts.task_request.clone())
+            .expect("task request");
+        ledger.append(terminal.clone()).expect("task failure");
+        ledger
+            .append(drafts.task_release.clone())
+            .expect("task release");
+        expect_recovered_execution_error(
+            ledger,
+            execution.clone(),
+            "scheduled_execution_recovery_failure_conflict",
+        );
+    }
 }
 
 #[test]
