@@ -325,7 +325,8 @@ fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 
 /// The document applies to `layout`: it names the layout, reads only features the layout
 /// declares with their type (`passed` as boolean, `measure_milli` as integer), and requires
-/// exactly one candidate.
+/// exactly one candidate. A document that reads a record list through `keyed_fact` needs a
+/// layout that rejects unknown identities, so the evaluator never meets an unknown key.
 fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<(), String> {
     if policy.applies_to.candidate_layout_id != layout.id {
         return Err(format!(
@@ -389,6 +390,12 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
                 }
             }
         }
+    }
+    if policy.uses_record_lists() && layout.unknown_identity != UnknownIdentityHandling::Reject {
+        return Err(format!(
+            "layout={} unknown_identity=readable_attributes record_list=declared",
+            layout.id
+        ));
     }
     if policy.selection.required_count != 1 {
         return Err(format!(
@@ -784,7 +791,13 @@ impl PreparedContainedTask {
             )
             .into());
         }
-        let facts = SelectionFactSnapshot::from_instance_snapshot(&snapshot, now_unix_ms);
+        // The rows of the record lists the document declares, which `keyed_fact` reads; every
+        // other record list stays unusable, so a document without one hashes as before.
+        let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+            &snapshot,
+            now_unix_ms,
+            &prepared.policy.record_list_keys(),
+        );
         let decision = decide(&prepared.policy, layout, &projection, &facts, now_unix_ms)?;
         let mut record =
             selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
@@ -1143,4 +1156,344 @@ pub fn dry_run_select(
         decision,
         policy_override: policy_override.is_some(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::CandidateRect;
+    use actingcommand_recognition_pack::{AssetResolver, RecognitionPackResult};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct MarkerAssets(Vec<u8>);
+
+    impl AssetResolver for MarkerAssets {
+        fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+            assert_eq!(path, "assets/marker.png");
+            Ok(self.0.clone())
+        }
+    }
+
+    /// Deterministic pixel noise: a shifted copy of it correlates with it near zero.
+    fn noise(x: u32, y: u32) -> [u8; 3] {
+        let mut state = u64::from(y * 64 + x).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x2545_f491;
+        let mut next = || {
+            state ^= state >> 33;
+            state = state.wrapping_mul(0xff51_afd7_ed55_8ccd);
+            state ^= state >> 33;
+            (state & 0xff) as u8
+        };
+        [next(), next(), next()]
+    }
+
+    fn frame(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Frame {
+        let pixel = &pixel;
+        Frame::from_pixels(
+            width,
+            height,
+            (0..height)
+                .flat_map(|y| (0..width).flat_map(move |x| pixel(x, y)))
+                .collect(),
+            actingcommand_device::PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .expect("fixture frame")
+    }
+
+    /// Workflow #308 list selector slice L1: a single-frame select step's existing path (policy
+    /// admission, projection, decision) over the rows of a `repeated_anchor` layout.
+    #[test]
+    fn a_single_frame_select_decides_over_the_actionable_rows_of_a_repeated_anchor_layout() {
+        let pack = actingcommand_recognition_pack::load_pack_from_json_str(
+            &json!({
+                "schema_version": "0.7",
+                "coordinate_space": {"width": 96, "height": 72},
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {"type": "template", "id": "ui/row_marker", "template_path": "assets/marker.png",
+                     "region": "full_frame", "threshold": 0.95},
+                    {"type": "color", "id": "state/row_open",
+                     "region": {"x": 0, "y": 0, "width": 4, "height": 4}, "expected": [0, 200, 0]}
+                ],
+                "candidate_layouts": [{
+                    "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                    "anchor": "ui/row_marker", "max_instances": 8, "order": "top_to_bottom",
+                    "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+                    "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+                    "features": [{"name": "open", "value": "passed", "target": "state/row_open",
+                                  "offset": {"x": 30, "y": 1}}]
+                }]
+            })
+            .to_string(),
+        )
+        .expect("pack");
+        let marker = frame(8, 6, noise).png_for_artifact().expect("marker PNG");
+        let evaluator =
+            RecognitionEvaluator::with_asset_resolver(pack, Arc::new(MarkerAssets(marker)))
+                .expect("evaluator");
+        // The first row is cut by the frame's top edge although its open square is drawn; the
+        // second row is closed and the third is open.
+        let markers = [(4_u32, 1_u32), (4, 30), (50, 30)];
+        let open_squares = [(34_u32, 2_u32), (80, 31)];
+        let rows = frame(96, 72, |x, y| {
+            for (left, top) in markers {
+                if (left..left + 8).contains(&x) && (top..top + 6).contains(&y) {
+                    return noise(x - left, y - top);
+                }
+            }
+            if open_squares
+                .iter()
+                .any(|(left, top)| (*left..left + 4).contains(&x) && (*top..top + 4).contains(&y))
+            {
+                return [0, 200, 0];
+            }
+            [30, 31, 32]
+        });
+        let scene = scene_from_frame(&rows).expect("scene");
+        let policy: SelectionPolicy = serde_json::from_value(json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "rows-open",
+            "applies_to": {
+                "candidate_layout_id": "layout/rows",
+                "outcome_keys": {"selected": "row_selected", "empty": "row_empty",
+                                 "insufficient": "row_insufficient",
+                                 "ambiguous": "row_ambiguous", "unknown": "row_unknown"}
+            },
+            "fields": [{"name": "open", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [{"gate_id": "open",
+                       "predicate": {"kind": "boolean_equals",
+                                     "value": {"source": "field", "field": "open"},
+                                     "expected": true},
+                       "on_unknown": {"kind": "drop_candidate"}}],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy");
+        policy.validate().expect("valid policy");
+        let layout = evaluator
+            .candidate_layout("layout/rows")
+            .expect("declared layout");
+        check_policy(&policy, layout).expect("the policy applies to the rows");
+
+        let projection = project(&evaluator, &scene, "layout/rows").expect("projection");
+        assert_eq!(
+            projection
+                .candidates()
+                .iter()
+                .map(|candidate| candidate.actionable)
+                .collect::<Vec<_>>(),
+            [false, true, true]
+        );
+        let facts = SelectionFactSnapshot {
+            snapshot_id: "empty".into(),
+            snapshot_at_unix_ms: 0,
+            facts: BTreeMap::new(),
+        };
+        let decision = decide(&policy, layout, &projection, &facts, 0).expect("decision");
+        // Only actionable rows are evaluated: the cut first row, which would read open and win
+        // the lowest-ID tie-break, is neither a verdict nor the choice.
+        assert_eq!(
+            decision
+                .candidates
+                .iter()
+                .map(|verdict| verdict.candidate_id.as_str())
+                .collect::<Vec<_>>(),
+            ["layout/rows#01", "layout/rows#02"]
+        );
+        assert_eq!(
+            chosen(&decision).expect("one choice"),
+            Some("layout/rows#02")
+        );
+        assert_eq!(
+            projection
+                .candidate("layout/rows#02")
+                .expect("chosen row")
+                .click,
+            CandidateRect {
+                x: 60,
+                y: 30,
+                width: 20,
+                height: 6
+            }
+        );
+    }
+
+    fn identity_layout(unknown_identity: &str) -> CandidateLayout {
+        serde_json::from_value(serde_json::json!({
+            "id": "layout-list", "page_id": "neutral/home", "kind": "fixed_slots",
+            "unknown_identity": unknown_identity,
+            "features": [{"name": "member", "value": "identity", "identity": {
+                "entries": [
+                    {"id": "member-a", "aliases": ["a"]},
+                    {"id": "member-b", "aliases": ["b"]},
+                    {"id": "member-c", "aliases": ["c"]}
+                ],
+                "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                                "minimum_confidence_milli": 800}
+            }}],
+            "slots": [{"rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                       "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                       "targets": {"member": "candidate/name"}}]
+        }))
+        .expect("layout decodes")
+    }
+
+    /// A document that gates and scores on a record list read through `keyed_fact`.
+    fn keyed_policy() -> SelectionPolicy {
+        let list = serde_json::json!({
+            "source": "keyed_fact", "fact_key": "session.example.list.targets",
+            "key_field": "member", "value_column": "rank",
+            "absent": {"type": "integer", "value": 0}
+        });
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-list",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": "member", "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b", "member-c"]}}],
+            "facts": [{"fact_key": "session.example.list.targets",
+                       "value_type": {"type": "record_list", "key_column": "id",
+                                      "columns": {"rank": {"type": "integer"}}},
+                       "max_age_ms": 3_600_000, "minimum_confidence_milli": 1_000}],
+            "gates": [{"gate_id": "gate-listed",
+                       "predicate": {"kind": "integer_at_least", "value": list.clone(),
+                                     "threshold": 1},
+                       "on_unknown": {"kind": "abort_evaluation"}}],
+            "scoring": [{"term_id": "term-rank", "value": list,
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "abort_evaluation"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("keyed policy decodes")
+    }
+
+    #[test]
+    fn a_keyed_fact_document_needs_a_layout_that_rejects_unknown_identities() {
+        let policy = keyed_policy();
+        policy.validate().expect("keyed policy validates");
+        check_policy(&policy, &identity_layout("reject")).expect("a rejecting layout admits it");
+        let refusal = check_policy(&policy, &identity_layout("readable_attributes"))
+            .expect_err("readable attributes would hand the evaluator an unknown key");
+        assert!(
+            refusal.contains("unknown_identity=readable_attributes"),
+            "{refusal}"
+        );
+
+        // The kernel reports the refusal under its code: a dry run checks the same document,
+        // given as an override, against the step's layout.
+        let task = select_task(identity_layout("readable_attributes"));
+        let facts = SelectionFactSnapshot::from_fact_records("snapshot-a", 1_000_000, &[]);
+        let error = dry_run_select(
+            &task,
+            "pick",
+            &home_frame(),
+            &facts,
+            1_000_000,
+            Some(&policy),
+        )
+        .expect_err("the document does not apply to the layout");
+        assert_eq!(
+            error.code().as_str(),
+            "contained_task_select_policy_mismatch"
+        );
+    }
+
+    /// A prepared task whose one select step `pick` runs from the home page on `layout`, with
+    /// the keyed document as its sealed policy.
+    fn select_task(layout: CandidateLayout) -> PreparedContainedTask {
+        let control: TaskControl = serde_json::from_value(serde_json::json!({
+            "schema_version": "Lab-1y.control.v1",
+            "package_id": "neutral.semantic.task",
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 2, "height": 1},
+            "entry_task_id": "task",
+            "capture_interval_ms": 1,
+            "step_timeout_ms": 2
+        }))
+        .expect("task control");
+        let mut program: TaskProgram = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "neutral",
+            "coordinate_space": {"width": 2, "height": 1},
+            "operations": [{
+                "id": "pick", "from": "home",
+                "select": {"layout_id": "layout-list",
+                           "policy": {"path": "policies/list.json", "sha256": "0".repeat(64)}}
+            }]
+        }))
+        .expect("task program");
+        program.operations[0].prepared_select = Some(Box::new(PreparedSelect {
+            layout_id: "layout-list".to_owned(),
+            path: "operations/task/policies/list.json".to_owned(),
+            package_sha256: "0".repeat(64),
+            policy: keyed_policy(),
+        }));
+        let mut pack: actingcommand_recognition_pack::RecognitionPack =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": [
+                    {"type": "color", "id": "page/home",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "expected": [255, 0, 0]},
+                    {"type": "ocr", "id": "candidate/name",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "languages": ["en"], "timeout_ms": 2000, "match_mode": "exact",
+                     "expected": ["a"], "case_sensitive": true, "minimum_confidence": 0.8,
+                     "model_ref": "PP-OCRv6_medium", "model_sha256": "a".repeat(64)}
+                ]
+            }))
+            .expect("recognition pack");
+        pack.candidate_layouts = vec![layout];
+        let evaluator = RecognitionEvaluator::new(std::path::PathBuf::new(), pack)
+            .expect("recognition evaluator");
+        let page_set: actingcommand_page_detector::PageSet =
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.3",
+                "pages": [{"id": "neutral/home", "required": ["page/home"]}]
+            }))
+            .expect("page set");
+        let detector =
+            actingcommand_page_detector::PageDetector::new(page_set).expect("page detector");
+        PreparedContainedTask {
+            control,
+            program,
+            evaluator,
+            detector,
+            entry_page: None,
+            scheduling_outcome: None,
+            post_admission_ocr: None,
+            post_admission_fields: None,
+            package_sha256: "fixture-sha256".into(),
+            entry_count: 1,
+            task_count: 1,
+        }
+    }
+
+    /// The home page of [`select_task`].
+    fn home_frame() -> Frame {
+        Frame::from_pixels(
+            2,
+            1,
+            [255, 0, 0, 0, 0, 0].to_vec(),
+            actingcommand_device::PixelFormat::Rgb8,
+            actingcommand_device::CaptureBackendName::FixtureSimulation,
+        )
+        .expect("fixture frame")
+    }
 }

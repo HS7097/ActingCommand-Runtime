@@ -11,6 +11,9 @@ pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>
 #[derive(Default)]
 pub(super) struct FakeState {
     physical_task_geometry: AtomicBool,
+    // Workflow #392 DA-A: the frame and display extent of `physical_task_geometry`, 16x9 when
+    // not set.
+    physical_task_extent: std::sync::Mutex<Option<(u32, u32)>>,
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -70,6 +73,16 @@ pub(super) struct FakeState {
     // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
     // self-check passes (`fake_opened_backend`).
     observed_open: AtomicBool,
+}
+
+impl FakeState {
+    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A).
+    fn physical_task_extent(&self) -> (u32, u32) {
+        self.physical_task_extent
+            .lock()
+            .expect("fake physical task extent")
+            .unwrap_or((16, 9))
+    }
 }
 
 struct FakeBackend {
@@ -299,13 +312,13 @@ impl CaptureBackend for FakeCapture {
         let physical_task_geometry = self.provenance == ExecutionBackendProvenance::PhysicalDevice
             && self.state.physical_task_geometry.load(Ordering::Acquire);
         let (width, height) = if physical_task_geometry {
-            (16, 9)
+            self.state.physical_task_extent()
         } else {
             (2, 1)
         };
         let mut pixels = [first.as_slice(), guard.as_slice()].concat();
         if physical_task_geometry {
-            pixels.resize(16 * 9 * 3, 0);
+            pixels.resize(width as usize * height as usize * 3, 0);
         }
         let mut frame = Frame::from_pixels(
             width,
@@ -358,7 +371,8 @@ impl CaptureBackend for FakeCapture {
             ));
         }
         // The existing fake supplies these dimensions and binding; no device is queried.
-        let extent = CaptureExtent::new(16, 9).expect("positive fake Task extent");
+        let (width, height) = self.state.physical_task_extent();
+        let extent = CaptureExtent::new(width, height).expect("positive fake Task extent");
         Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
             backend: CaptureBackendName::AdbScreencap,
             source: CaptureGeometrySource::AdbDefaultDisplay {

@@ -467,6 +467,27 @@ pub struct CaptureSelectionContext {
     pub nemu_frame: Option<Arc<NemuFrameGeometry>>,
 }
 
+impl CaptureSelectionContext {
+    /// The selection of a capture backend opened from `configured` (the target before
+    /// preparation, with its configured ADB) and `prepared` (what preparation resolved). The
+    /// targets are recorded by their labels, never a serial (Workflow #398 RD-1a, L1).
+    pub(crate) fn opened(
+        configured_adb: String,
+        configured: &DeviceTarget,
+        prepared: &CaptureBackendConfig,
+    ) -> Self {
+        Self {
+            requested: prepared.requested,
+            configured_adb,
+            configured_serial: configured.configured_label(),
+            resolved_adb: prepared.adb_config.adb_path.clone(),
+            selected_serial: prepared.target.label(),
+            mumu: prepared.resolved_mumu.clone(),
+            nemu_frame: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureBackendConfig {
     pub adb_config: AdbConfig,
@@ -626,17 +647,9 @@ pub fn create_capture_backend_with_memory(
     memory: Option<&crate::FrameMemoryBudget>,
 ) -> DeviceResult<SelectedCaptureBackend> {
     let configured_adb = config.adb_config.adb_path.clone();
-    let configured_serial = config.target.serial.clone();
+    let configured_target = config.target.clone();
     let config = prepare_capture_backend_config(config)?;
-    let selection = CaptureSelectionContext {
-        requested: config.requested,
-        configured_adb,
-        configured_serial,
-        resolved_adb: config.adb_config.adb_path.clone(),
-        selected_serial: config.target.resolved_serial(),
-        mumu: config.resolved_mumu.clone(),
-        nemu_frame: None,
-    };
+    let selection = CaptureSelectionContext::opened(configured_adb, &configured_target, &config);
     let mut selected = match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config, memory),
         CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config, memory),
@@ -773,7 +786,7 @@ where
                         NemuCaptureResolutionDetail::Target,
                     )
                 })?;
-                let target_serial = config.target.resolved_serial();
+                let target_serial = config.target.adb_arg();
                 Some(
                     resolve_running_target(
                         configured_adb,
@@ -812,7 +825,7 @@ where
                             context.reason() == NemuResolutionReason::SharedAdbMultipleDllVersions
                         }) =>
                     {
-                        let target_serial = config.target.resolved_serial();
+                        let target_serial = config.target.adb_arg();
                         match resolve_running_target(
                             configured_adb,
                             &target_serial,
@@ -1264,6 +1277,7 @@ fn build_capture_backend(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CaptureProbeCacheKey {
+    /// The target's label (Workflow #398 RD-1a: never the serial).
     serial: String,
     adb_path: String,
     backend: CaptureBackendName,
@@ -1272,7 +1286,7 @@ struct CaptureProbeCacheKey {
 impl CaptureProbeCacheKey {
     fn new(config: &CaptureBackendConfig, backend: CaptureBackendName) -> Self {
         Self {
-            serial: config.target.resolved_serial(),
+            serial: config.target.label(),
             adb_path: config.adb_config.adb_path.clone(),
             backend,
         }
@@ -1521,14 +1535,15 @@ impl CaptureBackend for ScreencapBackend {
         require_geometry_open(&self.close_result)?;
         read_adb_capture_geometry(
             &Adb::new(self.adb_config.clone()),
-            &self.target.resolved_serial(),
+            &self.target.adb_arg(),
+            &self.target.label(),
             CaptureBackendName::AdbScreencap,
             deadline,
         )
     }
 
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let serial = self.target.resolved_serial();
+        let serial = self.target.adb_arg();
         let adb = Adb::new(self.adb_config.clone());
         verify_adb_device(
             &adb,
@@ -1604,7 +1619,7 @@ impl DroidcastRawBackend {
             )
         })?;
         require_file(local_apk, "DroidCast_raw APK")?;
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         Ok(Self {
             adb_config,
             target,
@@ -1695,6 +1710,7 @@ impl CaptureBackend for DroidcastRawBackend {
         read_adb_capture_geometry(
             &Adb::new(self.adb_config.clone()),
             &self.serial,
+            &self.target.label(),
             CaptureBackendName::DroidcastRaw,
             deadline,
         )
@@ -1742,7 +1758,7 @@ impl CaptureBackend for DroidcastRawBackend {
         frame.geometry = CaptureGeometryObservation::Observed(CaptureGeometry {
             backend: CaptureBackendName::DroidcastRaw,
             source: CaptureGeometrySource::AdbDefaultDisplay {
-                serial: self.serial.clone(),
+                serial: self.target.label(),
                 wm_extent: geometry_extent(natural_width, natural_height)?,
                 wm_size_kind: size_kind,
             },
@@ -1914,14 +1930,15 @@ impl NemuIpcBackend {
                 "Nemu IPC unavailable: host OS is not Windows",
             ));
         }
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         let instance_id = config
             .instance_id
             .or_else(|| serial_to_nemu_instance_id(&serial))
             .ok_or_else(|| {
                 with_nemu_capture_resolution_detail(
                     DeviceError::fatal(format!(
-                        "Nemu IPC unavailable: cannot derive MuMu instance id from serial {serial}"
+                        "Nemu IPC unavailable: cannot derive MuMu instance id from serial {}",
+                        target.label()
                     ))
                     .with_nemu_resolution_context_if_absent(
                         NemuResolutionContext::new(NemuResolutionReason::TargetIdentityUnavailable),
@@ -3332,9 +3349,12 @@ fn observed_rotation(
     }
 }
 
+/// `serial` is the adb argument; the recorded source names the target by `label` (Workflow #398
+/// RD-1a: geometry records never carry a serial).
 fn read_adb_capture_geometry(
     adb: &Adb,
     serial: &str,
+    label: &str,
     backend: CaptureBackendName,
     deadline: Instant,
 ) -> DeviceResult<CaptureGeometryObservation> {
@@ -3351,7 +3371,7 @@ fn read_adb_capture_geometry(
     Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
         backend,
         source: CaptureGeometrySource::AdbDefaultDisplay {
-            serial: serial.to_string(),
+            serial: label.to_owned(),
             wm_extent: geometry_extent(width, height)?,
             wm_size_kind,
         },
@@ -5132,8 +5152,12 @@ mod tests {
                 adb_path: original_adb.clone(),
                 command_timeout: Duration::from_secs(1),
             },
+            // A neutral fake serial: a bound serial is redacted for the whole test process.
             DeviceTarget {
-                serial: Some("127.0.0.1:16416".to_string()),
+                serial: Some(crate::DeviceSerial::handset(
+                    "TESTSERIAL0005",
+                    "neutral.instance",
+                )),
                 ..DeviceTarget::default()
             },
         )
@@ -5146,7 +5170,7 @@ mod tests {
             |_, _, _| panic!("generic explicit Nemu capture must bind the running target"),
             |configured_adb, target_serial, instance_id, explicit_root, explicit_dll| {
                 assert_eq!(configured_adb, generic_adb);
-                assert_eq!(target_serial, "127.0.0.1:16416");
+                assert_eq!(target_serial, "TESTSERIAL0005");
                 assert_eq!(instance_id, None);
                 assert_eq!(explicit_root, None);
                 assert_eq!(explicit_dll, None);
@@ -5204,15 +5228,8 @@ mod tests {
                 Ok(DeviceResourceCloseOutcome::confirmed(0))
             }
         }
-        let context = CaptureSelectionContext {
-            nemu_frame: None,
-            requested: prepared.requested,
-            configured_adb: original_adb.clone(),
-            configured_serial: prepared.target.serial.clone(),
-            resolved_adb: prepared.adb_config.adb_path.clone(),
-            selected_serial: prepared.target.resolved_serial(),
-            mumu: prepared.resolved_mumu.clone(),
-        };
+        let context =
+            CaptureSelectionContext::opened(original_adb.clone(), &prepared.target, &prepared);
         let mut selected = selected_explicit(
             prepared.requested,
             CaptureBackendName::NemuIpc,

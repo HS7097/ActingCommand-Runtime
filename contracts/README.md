@@ -90,10 +90,18 @@ existing byte-vector read interfaces retain their behavior.
 Each formal contained task records its effective configuration before entry
 preflight as `actingcommand.runtime.effective-task-configuration.v1` in a
 GlobalLedger-linked DiagnosticJson artifact. Registered device configurations
-retain their requested backends, configured ADB and serial, resolved target,
-timeouts and explicit MuMu path inputs. Providers without a registered device
-configuration carry an explicit absent device observation; task timing remains
-recorded. The production registry supplies its parsed configuration directly.
+retain their requested backends, configured ADB, the configured serial's label,
+resolved target, timeouts and explicit MuMu path inputs. Providers without a
+registered device configuration carry an explicit absent device observation;
+task timing remains recorded. The production registry supplies its parsed
+configuration directly.
+
+Device serials (Workflow #398 RD-1a): a target is named by its label, never by a
+device serial. A target addressed by `HOST:PORT` keeps `HOST:PORT`; a target
+addressed by an adb serial is `handset:<alias>`. The serial members of the
+effective configuration (`configured_serial`, `resolved_serial`,
+`selected_serial`, the input selection's `serial`) and the capture geometry's ADB
+source carry the label.
 
 The task interpreter and the record share the same effective timing view:
 task/control timeout declarations, control/default task and step budgets,
@@ -103,10 +111,11 @@ deadline are separate; Host remaining time is measured at the stated monotonic
 observation time. Recording does not move any timer's start or polling boundary.
 
 The first successful capture adds the same Frame producer's selected backend,
-resolved ADB/serial and resolved MuMu installation root, ADB path, capture DLL
-path and installation source. Ordinary Frame constructors leave the selection
-unobserved. The first InputCommitted adds the successful input backend's name
-and selected serial through the existing session and critical-action return.
+resolved ADB and target label and resolved MuMu installation root, ADB path,
+capture DLL path and installation source. Ordinary Frame constructors leave the
+selection unobserved. The first InputCommitted adds the successful input
+backend's name and selected target label through the existing session and
+critical-action return.
 Configured values do not substitute for these actual observations. A bound
 entry recovery records its own timing and package identity when used. The task
 emits at most four configuration artifacts, each at most 1 MiB; encoding, size
@@ -212,6 +221,24 @@ Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
+
+Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task
+(`navigable_route`, `in_page_guard`, `recognize_only`) may declare `entry_page` as
+an array of 1–16 distinct pages instead of one page; `any` is never a member and
+each member must resolve to exactly one page of the package. A `linear_steps` task
+keeps one entry page, and `"any"` keeps its meaning (no entry check; never with
+phases). A set is always checked before the run: one frame evaluates only the set's
+pages; exactly one match starts the run, none goes to entry recovery, and more than
+one fails with `contained_task_recognition_conflict` before any input. An entry
+recovery package must end on a page of the set, and the recheck accepts any page
+of it. In a phased task each page of the set starts the one stage that lists an
+operation whose `from` is that page, and the run enters at the stage of the page it
+matched; static reachability is checked from every such start. A single entry page
+still starts the first stage. Admission refuses a set with
+`contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,
+`duplicate`, `any_in_set`, `unresolved`, `phase_start_missing`,
+`phase_start_ambiguous`). The `EntryRecognition` record carries `required_pages`
+and, when one matched, `matched_page`.
 
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.
 Existing StepStarted/StepFinished ledger facts carry optional `phase` evidence

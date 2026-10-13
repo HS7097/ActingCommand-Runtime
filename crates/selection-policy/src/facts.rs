@@ -8,15 +8,23 @@
 //! A fact that is absent, past its expiry, past the freshness bound its document declares,
 //! below the confidence its document requires, or not a scalar resolves to a typed
 //! [`UnknownReason`]. It never resolves to `false`, to `0`, or to an empty string.
+//!
+//! A record list carries its rows only when the document declares it, so the hashed input of a
+//! document that declares none keeps its bytes. A declared list is checked whole before any
+//! candidate is assessed; a list that cannot be read is an unknown, never an empty list.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
-    FactContent, FactRecord, FactScope, FactValue, InstanceFactSnapshot as ContractFactSnapshot,
+    FactContent, FactRecord, FactScalar, FactScope, FactValue,
+    InstanceFactSnapshot as ContractFactSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::schema::{FactDeclaration, ValueType};
+
+/// One row of a record list: its cells by column name.
+pub type RecordRow = BTreeMap<String, ScalarValue>;
 
 /// Closed scalar model shared by candidate fields and facts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -89,6 +97,15 @@ pub enum SelectionFactEntry {
     Unusable {
         reason: UnknownReason,
     },
+    /// A record list the document declares, with its rows; timestamps and durations are
+    /// integer milliseconds.
+    RecordList {
+        rows: Vec<RecordRow>,
+        published_at_unix_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at_unix_ms: Option<u64>,
+        confidence_milli: u16,
+    },
 }
 
 /// The instance fact projection an evaluation is allowed to read, pinned to one snapshot.
@@ -111,10 +128,28 @@ impl SelectionFactSnapshot {
         snapshot_at_unix_ms: u64,
         records: &[FactRecord],
     ) -> Self {
+        Self::from_fact_records_with_lists(
+            snapshot_id,
+            snapshot_at_unix_ms,
+            records,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// [`Self::from_fact_records`], except that a record list under one of `record_lists` (the
+    /// keys a document declares as record lists) carries its rows. Every other record list
+    /// stays [`UnknownReason::FactNotScalar`], so a document that declares none hashes the same
+    /// input as before.
+    pub fn from_fact_records_with_lists(
+        snapshot_id: impl Into<String>,
+        snapshot_at_unix_ms: u64,
+        records: &[FactRecord],
+        record_lists: &BTreeSet<&str>,
+    ) -> Self {
         let mut chosen: BTreeMap<String, (u8, SelectionFactEntry)> = BTreeMap::new();
         for record in records {
             let specificity = scope_specificity(&record.scope);
-            let entry = entry_for(record);
+            let entry = entry_for(record, record_lists.contains(record.key.as_str()));
             match chosen.get(&record.key) {
                 Some((previous, _)) if *previous >= specificity => {}
                 _ => {
@@ -137,13 +172,28 @@ impl SelectionFactSnapshot {
         snapshot: &ContractFactSnapshot,
         snapshot_at_unix_ms: u64,
     ) -> Self {
+        Self::from_instance_snapshot_with_lists(snapshot, snapshot_at_unix_ms, &BTreeSet::new())
+    }
+
+    /// [`Self::from_instance_snapshot`] with the rows of the record lists `record_lists`, as
+    /// [`Self::from_fact_records_with_lists`] keeps them.
+    pub fn from_instance_snapshot_with_lists(
+        snapshot: &ContractFactSnapshot,
+        snapshot_at_unix_ms: u64,
+        record_lists: &BTreeSet<&str>,
+    ) -> Self {
         let records: Vec<FactRecord> = snapshot
             .records
             .iter()
             .filter(|record| record.scope.matches(&snapshot.context))
             .cloned()
             .collect();
-        Self::from_fact_records(&snapshot.snapshot_id, snapshot_at_unix_ms, &records)
+        Self::from_fact_records_with_lists(
+            &snapshot.snapshot_id,
+            snapshot_at_unix_ms,
+            &records,
+            record_lists,
+        )
     }
 
     pub(crate) fn resolve(
@@ -157,6 +207,7 @@ impl SelectionFactSnapshot {
             .ok_or(UnknownReason::FactMissing)?;
         let (value, published_at_unix_ms, expires_at_unix_ms, confidence_milli) = match entry {
             SelectionFactEntry::Unusable { reason } => return Err(*reason),
+            SelectionFactEntry::RecordList { .. } => return Err(UnknownReason::FactNotScalar),
             SelectionFactEntry::Published {
                 value,
                 published_at_unix_ms,
@@ -169,22 +220,111 @@ impl SelectionFactSnapshot {
                 *confidence_milli,
             ),
         };
-        // The same predicate the contract's own `FactRecord::is_expired` uses, so one record
-        // has one expiry answer on both sides of the boundary.
-        if expires_at_unix_ms.is_some_and(|expiry| now_unix_ms > expiry) {
-            return Err(UnknownReason::FactExpired);
-        }
-        if now_unix_ms.saturating_sub(published_at_unix_ms) > declaration.max_age_ms {
-            return Err(UnknownReason::FactStale);
-        }
-        if confidence_milli < declaration.minimum_confidence_milli || confidence_milli == 0 {
-            return Err(UnknownReason::FactLowConfidence);
-        }
+        check_freshness(
+            declaration,
+            now_unix_ms,
+            published_at_unix_ms,
+            expires_at_unix_ms,
+            confidence_milli,
+        )?;
         if !value.matches(&declaration.value_type) {
             return Err(UnknownReason::TypeMismatch);
         }
         Ok(value)
     }
+
+    /// The rows of the record list `declaration` declares, checked whole: present, unexpired,
+    /// no older than `max_age_ms`, at or above the confidence floor, a record list, and every
+    /// row holding a string key and every declared column with its declared type. A list that
+    /// fails is `fact_missing`, `fact_expired`, `fact_stale`, `fact_low_confidence` or
+    /// `type_mismatch`; it is never read as an empty list.
+    pub(crate) fn resolve_list(
+        &self,
+        declaration: &FactDeclaration,
+        now_unix_ms: u64,
+    ) -> Result<&[RecordRow], UnknownReason> {
+        let ValueType::RecordList {
+            key_column,
+            columns,
+        } = &declaration.value_type
+        else {
+            return Err(UnknownReason::TypeMismatch);
+        };
+        let entry = self
+            .facts
+            .get(&declaration.fact_key)
+            .ok_or(UnknownReason::FactMissing)?;
+        let (rows, published_at_unix_ms, expires_at_unix_ms, confidence_milli) = match entry {
+            // An artifact or a list the snapshot was built without is not a readable list.
+            SelectionFactEntry::Unusable {
+                reason: UnknownReason::FactNotScalar,
+            } => return Err(UnknownReason::TypeMismatch),
+            SelectionFactEntry::Unusable { reason } => return Err(*reason),
+            SelectionFactEntry::Published {
+                published_at_unix_ms,
+                expires_at_unix_ms,
+                confidence_milli,
+                ..
+            } => (
+                None,
+                *published_at_unix_ms,
+                expires_at_unix_ms,
+                *confidence_milli,
+            ),
+            SelectionFactEntry::RecordList {
+                rows,
+                published_at_unix_ms,
+                expires_at_unix_ms,
+                confidence_milli,
+            } => (
+                Some(rows),
+                *published_at_unix_ms,
+                expires_at_unix_ms,
+                *confidence_milli,
+            ),
+        };
+        check_freshness(
+            declaration,
+            now_unix_ms,
+            published_at_unix_ms,
+            *expires_at_unix_ms,
+            confidence_milli,
+        )?;
+        let rows = rows.ok_or(UnknownReason::TypeMismatch)?;
+        let well_formed = rows.iter().all(|row| {
+            matches!(row.get(key_column), Some(ScalarValue::String(_)))
+                && columns.iter().all(|(column, column_type)| {
+                    row.get(column)
+                        .is_some_and(|cell| cell.matches(column_type))
+                })
+        });
+        if !well_formed {
+            return Err(UnknownReason::TypeMismatch);
+        }
+        Ok(rows.as_slice())
+    }
+}
+
+/// Expiry, the document's freshness bound and its confidence floor, in that order.
+fn check_freshness(
+    declaration: &FactDeclaration,
+    now_unix_ms: u64,
+    published_at_unix_ms: u64,
+    expires_at_unix_ms: Option<u64>,
+    confidence_milli: u16,
+) -> Result<(), UnknownReason> {
+    // The same predicate the contract's own `FactRecord::is_expired` uses, so one record
+    // has one expiry answer on both sides of the boundary.
+    if expires_at_unix_ms.is_some_and(|expiry| now_unix_ms > expiry) {
+        return Err(UnknownReason::FactExpired);
+    }
+    if now_unix_ms.saturating_sub(published_at_unix_ms) > declaration.max_age_ms {
+        return Err(UnknownReason::FactStale);
+    }
+    if confidence_milli < declaration.minimum_confidence_milli || confidence_milli == 0 {
+        return Err(UnknownReason::FactLowConfidence);
+    }
+    Ok(())
 }
 
 fn scope_specificity(scope: &FactScope) -> u8 {
@@ -195,12 +335,31 @@ fn scope_specificity(scope: &FactScope) -> u8 {
     }
 }
 
-fn entry_for(record: &FactRecord) -> SelectionFactEntry {
+fn entry_for(record: &FactRecord, declared_list: bool) -> SelectionFactEntry {
     let FactContent::Inline { value } = &record.content else {
         return SelectionFactEntry::Unusable {
             reason: UnknownReason::FactNotScalar,
         };
     };
+    if let (FactValue::RecordList(rows), true) = (value, declared_list) {
+        let rows = rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(column, cell)| row_cell(cell).map(|cell| (column.clone(), cell)))
+                    .collect::<Result<RecordRow, UnknownReason>>()
+            })
+            .collect::<Result<Vec<_>, _>>();
+        return match rows {
+            Ok(rows) => SelectionFactEntry::RecordList {
+                rows,
+                published_at_unix_ms: record.observed_at_unix_ms,
+                expires_at_unix_ms: record.expires_at_unix_ms,
+                confidence_milli: record.confidence_milli,
+            },
+            Err(reason) => SelectionFactEntry::Unusable { reason },
+        };
+    }
     let scalar = match value {
         FactValue::Boolean(value) => ScalarValue::Boolean(*value),
         FactValue::Integer(value) => ScalarValue::Integer(*value),
@@ -227,6 +386,19 @@ fn entry_for(record: &FactRecord) -> SelectionFactEntry {
         expires_at_unix_ms: record.expires_at_unix_ms,
         confidence_milli: record.confidence_milli,
     }
+}
+
+/// One record-list cell as a scalar: timestamps and durations as integer milliseconds, as a
+/// scalar fact reads them.
+fn row_cell(cell: &FactScalar) -> Result<ScalarValue, UnknownReason> {
+    Ok(match cell {
+        FactScalar::Boolean(value) => ScalarValue::Boolean(*value),
+        FactScalar::Integer(value) => ScalarValue::Integer(*value),
+        FactScalar::String(value) => ScalarValue::String(value.clone()),
+        FactScalar::TimestampMs(value) | FactScalar::DurationMs(value) => {
+            ScalarValue::Integer(i64::try_from(*value).map_err(|_| UnknownReason::TypeMismatch)?)
+        }
+    })
 }
 
 #[cfg(test)]

@@ -84,8 +84,13 @@ built-in behaviour, so a model without `model.json` reads exactly as before.
 | `decoder.space_class` | `drop` | `drop`, `space` | the class after the dictionary decodes to a space |
 
 A value out of range, an unknown field or a section on an `onnx-classify`
-description makes the folder invalid. The detector parameters apply only to
-`full_frame` regions.
+description makes the folder invalid. The detector parameters apply to a request that
+reads with the detector: a `full_frame` region of an OCR target without `locate`, and every
+`blocks: "detect"` request of a locate target, on any region (Workflow #396 REC-1,
+`ocr-fields.md`, section Located text). Box padding is clipped to the requested region. A
+`detect` request's `line_merge` replaces `detector.merge_gap_factor` (`{"gap_factor": n}`)
+or merges no boxes (`"none"`); every other detector parameter is the folder's. A `detect`
+read reports how many boxes the detector found before `max_boxes` kept the first of them.
 
 ## Identity
 
