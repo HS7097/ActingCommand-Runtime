@@ -50,11 +50,14 @@ actingcommand_contract::outcome_codes! {
         /// A device-state read failed or answered a shape the parser does not know (value
         /// `device_state_probe`; link `foreign_adb_error` when adb answered).
         DeviceStateUnreadable => "device_state_unreadable": error / environment_fault,
-        /// The screen was still not awake after one wake key and the settle time.
+        /// The screen was still not awake after one wake key and the settle time (value
+        /// `device_label`).
         DeviceWakeFailed => "device_wake_failed": error / environment_fault,
-        /// A keyguard without a credential still showed after one dismissal and the settle time.
+        /// A keyguard without a credential still showed after one dismissal and the settle time
+        /// (value `device_label`).
         DeviceKeyguardDismissFailed => "device_keyguard_dismiss_failed": error / environment_fault,
-        /// A keyguard waits for a person: it asks for a credential, or the policy is `wait`.
+        /// A keyguard waits for a person: it asks for a credential, or the policy is `wait` (value
+        /// `device_label`).
         DeviceLocked => "device_locked": warning / budget_or_permission,
     }
 }

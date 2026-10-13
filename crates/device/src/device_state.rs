@@ -23,10 +23,14 @@
 
 use crate::adb::{FOREGROUND_QUERY, FOREGROUND_STATUS};
 use crate::codes::DeviceStateCode;
-use crate::{Adb, CommandOutput, DeviceError, DeviceResult, parse_foreground_package};
+use crate::device_serial::redact_bound_serials;
+use crate::{
+    Adb, CommandOutput, DeviceError, DeviceResult, DeviceTarget, parse_foreground_package,
+};
 use actingcommand_contract::FencedWrite;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{self, Outcome, RawSource};
+use std::borrow::Cow;
 use std::time::Duration;
 
 actingcommand_contract::outcome_vocabulary! {
@@ -157,31 +161,38 @@ pub trait DeviceStateShell {
 
     /// Waits after an action before the state is read again.
     fn settle(&mut self, wait: Duration);
+
+    /// The target as people, logs and records see it (`device_label`, model-398 §3.4): a
+    /// handset's label, never its serial.
+    fn device_label(&self) -> String;
 }
 
 /// The production [`DeviceStateShell`]: `adb -s <target> shell <args>` through the installation's
-/// adb. It has no `Debug`, so the target never reaches a log.
+/// adb. It has no `Debug`; the target's serial reaches only the adb command line
+/// ([`DeviceTarget::adb_arg`], Workflow #398 RD-1a).
 pub struct AdbDeviceStateShell<'a> {
     adb: &'a Adb,
-    target: &'a str,
+    target: &'a DeviceTarget,
 }
 
 impl<'a> AdbDeviceStateShell<'a> {
-    /// `target` is the adb `-s` argument, for the command line only.
-    pub fn new(adb: &'a Adb, target: &'a str) -> Self {
+    /// `target` addresses the commands; records name it by its label only.
+    pub fn new(adb: &'a Adb, target: &'a DeviceTarget) -> Self {
         Self { adb, target }
     }
+}
 
-    fn command_line(&self, shell_args: &[&'a str]) -> Vec<&'a str> {
-        let mut args = vec!["-s", self.target, "shell"];
-        args.extend_from_slice(shell_args);
-        args
-    }
+/// `-s <target> shell <args>`.
+fn command_line<'a>(target: &'a str, shell_args: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["-s", target, "shell"];
+    args.extend_from_slice(shell_args);
+    args
 }
 
 impl DeviceStateShell for AdbDeviceStateShell<'_> {
     fn read(&mut self, command: DeviceStateRead) -> DeviceResult<CommandOutput> {
-        self.adb.run(&self.command_line(command.shell_args()))
+        let target = self.target.adb_arg();
+        self.adb.run(&command_line(&target, command.shell_args()))
     }
 
     fn act(
@@ -189,12 +200,17 @@ impl DeviceStateShell for AdbDeviceStateShell<'_> {
         witness: &FencedWrite,
         command: DeviceStateAction,
     ) -> DeviceResult<CommandOutput> {
+        let target = self.target.adb_arg();
         self.adb
-            .run_write(witness, &self.command_line(command.shell_args()))
+            .run_write(witness, &command_line(&target, command.shell_args()))
     }
 
     fn settle(&mut self, wait: Duration) {
         std::thread::sleep(wait);
+    }
+
+    fn device_label(&self) -> String {
+        self.target.label()
     }
 }
 
@@ -360,7 +376,9 @@ pub struct ScreenReady {
 ///   `device_locked`.
 /// - A read that fails or answers an unknown shape ends the check with `device_state_unreadable`.
 ///
-/// Every command goes through `shell`, so the check sends no input of any other kind.
+/// `device_wake_failed`, `device_keyguard_dismiss_failed` and `device_locked` name the target by
+/// its `device_label` (model-398 §10.1). Every command goes through `shell`, so the check sends no
+/// input of any other kind.
 pub fn check_screen(
     shell: &mut dyn DeviceStateShell,
     witness: &FencedWrite,
@@ -376,16 +394,16 @@ pub fn check_screen(
         )?;
         shell.settle(policy.wake_settle);
         if read_screen(shell)? != ScreenState::Awake {
-            return Err(Outcome::new(DeviceStateCode::DeviceWakeFailed));
+            return Err(labelled(shell, DeviceStateCode::DeviceWakeFailed));
         }
         woken = true;
     }
     let keyguard_dismissed = match read_keyguard(shell)? {
         KeyguardState::None => false,
-        KeyguardState::Secure => return Err(Outcome::new(DeviceStateCode::DeviceLocked)),
+        KeyguardState::Secure => return Err(labelled(shell, DeviceStateCode::DeviceLocked)),
         KeyguardState::Insecure => match policy.keyguard_insecure {
             InsecureKeyguardAction::Wait => {
-                return Err(Outcome::new(DeviceStateCode::DeviceLocked));
+                return Err(labelled(shell, DeviceStateCode::DeviceLocked));
             }
             InsecureKeyguardAction::Dismiss => {
                 act(
@@ -398,10 +416,13 @@ pub fn check_screen(
                 match read_keyguard(shell)? {
                     KeyguardState::None => true,
                     KeyguardState::Secure => {
-                        return Err(Outcome::new(DeviceStateCode::DeviceLocked));
+                        return Err(labelled(shell, DeviceStateCode::DeviceLocked));
                     }
                     KeyguardState::Insecure => {
-                        return Err(Outcome::new(DeviceStateCode::DeviceKeyguardDismissFailed));
+                        return Err(labelled(
+                            shell,
+                            DeviceStateCode::DeviceKeyguardDismissFailed,
+                        ));
                     }
                 }
             }
@@ -411,6 +432,11 @@ pub fn check_screen(
         woken,
         keyguard_dismissed,
     })
+}
+
+/// `code` naming the shell's target by its label.
+fn labelled(shell: &dyn DeviceStateShell, code: DeviceStateCode) -> Outcome {
+    Outcome::new(code).device_label(shell.device_label())
 }
 
 /// Runs `command`; when adb fails, the check ends with `failed` and the adb failure as its cause.
@@ -423,7 +449,7 @@ fn act(
     shell
         .act(witness, command)
         .map(drop)
-        .map_err(|error| with_adb_failure(Outcome::new(failed), &error))
+        .map_err(|error| with_adb_failure(labelled(shell, failed), &error))
 }
 
 fn read_parsed<T>(
@@ -437,23 +463,28 @@ fn read_parsed<T>(
         .read(command)
         .map_err(|error| with_adb_failure(unreadable(), &error))?;
     parse(output.stdout.as_str()).ok_or_else(|| {
-        // The answer adb printed is the foreign text the parser could not read.
+        // The answer adb printed is the foreign text the parser could not read. It is kept with
+        // every bound device serial replaced by its label token (Workflow #398 RD-1a).
         let answer = if output.stdout.trim().is_empty() {
             &output.stderr
         } else {
             &output.stdout
         };
-        unreadable().caused_by(
-            Outcome::new(ContractCode::ForeignAdbError)
-                .raw_source(RawSource::Adb)
-                .raw_text(answer),
-        )
+        let answer = redact_bound_serials(answer);
+        let mut link = Outcome::new(ContractCode::ForeignAdbError)
+            .raw_source(RawSource::Adb)
+            .raw_text(&*answer);
+        if matches!(answer, Cow::Owned(_)) {
+            link = link.raw_text_redacted(true);
+        }
+        unreadable().caused_by(link)
     })
 }
 
 /// `top` caused by adb's failure: adb's own output and exit code when adb answered, otherwise
 /// (adb could not run or did not finish) `top` alone, with the device layer's text in the
-/// developer diagnostics.
+/// developer diagnostics. adb's output arrives redacted (`AdbCommandEvidence`, Workflow #398
+/// RD-1a), and the link says so when a serial was replaced.
 fn with_adb_failure(top: Outcome, error: &DeviceError) -> Outcome {
     let Some(evidence) = error.adb_command() else {
         outcome::diagnostic(&top, error.message());
@@ -469,6 +500,9 @@ fn with_adb_failure(top: Outcome, error: &DeviceError) -> Outcome {
         .raw_text(&text.text);
     if text.truncated {
         link = link.raw_text_truncated(true);
+    }
+    if evidence.raw_text_redacted {
+        link = link.raw_text_redacted(true);
     }
     if let Some(exit_code) = evidence.exit_code {
         link = link.exit_code(exit_code);

@@ -9,15 +9,18 @@
 //!   RD-5b-T1 (wake), T2 (keyguard without a credential), T3 (keyguard with a credential) and
 //!   T8 (command whitelist). Withdrawing availability, holds and sampling stay with RD-5b.
 //!
-//! Every answer is hand-written neutral text, the target is never named, and no process runs.
-//! The settle wait is recorded, never slept.
+//! Every answer is hand-written neutral text and no process runs. The target is named only by
+//! its label (model-398 §10.1 `device_label`); the one serial is a neutral fake, and an answer
+//! that names it is kept only with its label token (§3.5 rule 4). The settle wait is recorded,
+//! never slept.
 
+use crate::adb::recovery::command_evidence;
 use crate::{
     AdbCommandEvidence, AdbRecoveryText, AdbTransportState, BatteryPlugged, BatteryState,
-    BatteryStatus, CommandOutput, DeviceError, DeviceResult, DeviceStateAction, DeviceStateRead,
-    DeviceStateShell, InsecureKeyguardAction, KeyguardState, ScreenCheckPolicy, ScreenReady,
-    ScreenState, ScreenTimeoutSettings, ThermalStatus, check_screen, read_battery, read_foreground,
-    read_home, read_keyguard, read_screen, read_screen_timeout, read_thermal,
+    BatteryStatus, CommandOutput, DeviceError, DeviceResult, DeviceSerial, DeviceStateAction,
+    DeviceStateRead, DeviceStateShell, InsecureKeyguardAction, KeyguardState, ScreenCheckPolicy,
+    ScreenReady, ScreenState, ScreenTimeoutSettings, ThermalStatus, check_screen, read_battery,
+    read_foreground, read_home, read_keyguard, read_screen, read_screen_timeout, read_thermal,
 };
 use actingcommand_contract::FencedWrite;
 use actingcommand_contract::outcome::{Category, Outcome};
@@ -50,6 +53,13 @@ const FOREGROUND_APP: &str = "  topResumedActivity=ActivityRecord{4c1d07 u0 com.
 const FOREGROUND_NONE: &str = "ac_dumpsys_rc=0\n";
 
 const HOME: &str = "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\ncom.example.launcher/.LauncherActivity\n";
+
+/// The scripted handset's neutral fake serial (no other test of this crate binds it), its alias,
+/// and the label and redaction token they give (model-398 §3.4, §3.5).
+const SERIAL: &str = "TESTSERIAL0003";
+const ALIAS: &str = "neutral.phone";
+const LABEL: &str = "handset:neutral.phone";
+const TOKEN: &str = "[device:handset:neutral.phone]";
 
 /// One thing the shell was asked to do, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +127,10 @@ impl DeviceStateShell for ScriptedShell {
 
     fn settle(&mut self, wait: Duration) {
         self.sent.push(Sent::Settle(wait));
+    }
+
+    fn device_label(&self) -> String {
+        LABEL.to_owned()
     }
 }
 
@@ -194,6 +208,15 @@ fn assert_unreadable(outcome: &Outcome, probe: &str, raw_text: &str) {
     assert_eq!(foreign.code().as_str(), "foreign_adb_error");
     assert_eq!(foreign.value("raw_source"), Some(&json!("adb")));
     assert_eq!(foreign.value("raw_text"), Some(&json!(raw_text)));
+}
+
+/// `outcome` names the scripted target by its label (model-398 §10.1).
+fn assert_labelled(outcome: &Outcome) {
+    assert_eq!(
+        outcome.value("device_label"),
+        Some(&json!(LABEL)),
+        "{outcome}"
+    );
 }
 
 /// RD-5a-T1, typed values: neutral answers of `dumpsys power`, the keyguard section,
@@ -280,7 +303,8 @@ fn rd5a_t1_neutral_answers_read_as_typed_values() {
 
 /// RD-5a-T1, unknown shapes: an answer the parser does not know is `device_state_unreadable`
 /// with the read's `device_state_probe` and the answer as adb's foreign text; nothing is guessed.
-/// A failed adb command is the same code, with adb's output and exit code as the cause.
+/// A failed adb command is the same code, with adb's output and exit code as the cause. Either
+/// text keeps the bound serial only as its label token, with `raw_text_redacted` (§3.5 rule 4).
 #[test]
 fn rd5a_t1_unknown_answers_and_adb_failures_are_device_state_unreadable() {
     const POWER_WITHOUT_WAKEFULNESS: &str =
@@ -338,6 +362,38 @@ fn rd5a_t1_unknown_answers_and_adb_failures_are_device_state_unreadable() {
         outcome.causes()[0].outcome().value("exit_code"),
         Some(&json!(1))
     );
+
+    // §3.5 rule 4: adb's text that names the bound serial is kept only with its label token, and
+    // the foreign link says so; for an answer that could not be read and for a failed command.
+    let serial = DeviceSerial::handset(SERIAL, ALIAS);
+    let missing = format!("error: device '{}' not found\n", serial.adb_arg());
+    let redacted = format!("error: device '{TOKEN}' not found\n");
+    let mut shell = ScriptedShell {
+        reads: vec![(
+            DeviceStateRead::Power,
+            VecDeque::from([Ok(output("", &missing))]),
+        )],
+        ..ScriptedShell::default()
+    };
+    let outcome = read_screen(&mut shell).expect_err("the answer names no wakefulness");
+    assert_unreadable(&outcome, "power", &redacted);
+    assert_eq!(
+        outcome.causes()[0].outcome().value("raw_text_redacted"),
+        Some(&json!(true))
+    );
+
+    let mut shell =
+        ScriptedShell::default().failing(
+            DeviceStateRead::Power,
+            DeviceError::fatal("adb shell failed with exit code 1")
+                .with_adb_command(command_evidence(&output("", &missing), false, Some(1))),
+        );
+    let outcome = read_screen(&mut shell).expect_err("adb failed");
+    assert_unreadable(&outcome, "power", &redacted);
+    assert_eq!(
+        outcome.causes()[0].outcome().value("raw_text_redacted"),
+        Some(&json!(true))
+    );
 }
 
 /// RD-5b-T1, device part: a screen that is not awake gets exactly one `KEYCODE_WAKEUP`, then the
@@ -382,6 +438,7 @@ fn rd5b_t1_a_dark_screen_gets_exactly_one_wake_key() {
         .expect_err("the screen stays dark");
         assert_eq!(failure.code().as_str(), "device_wake_failed");
         assert_eq!(failure.category(), Category::Error);
+        assert_labelled(&failure);
         assert_eq!(
             shell.sent,
             [
@@ -461,6 +518,7 @@ fn rd5b_t2_an_insecure_keyguard_is_dismissed_once_or_left_waiting() {
         .expect_err("the keyguard stays");
         assert_eq!(failure.code().as_str(), "device_keyguard_dismiss_failed");
         assert_eq!(failure.category(), Category::Error);
+        assert_labelled(&failure);
         assert_eq!(
             shell.sent,
             [
@@ -487,6 +545,7 @@ fn rd5b_t2_an_insecure_keyguard_is_dismissed_once_or_left_waiting() {
     )
     .expect_err("the dismissal failed");
     assert_eq!(failure.code().as_str(), "device_keyguard_dismiss_failed");
+    assert_labelled(&failure);
     assert_eq!(
         failure.causes()[0].outcome().code().as_str(),
         "foreign_adb_error"
@@ -509,6 +568,7 @@ fn rd5b_t3_a_secure_keyguard_is_device_locked_and_gets_no_command() {
             .expect_err("a person unlocks");
         assert_eq!(locked.code().as_str(), "device_locked");
         assert_eq!(locked.category(), Category::Warning);
+        assert_labelled(&locked);
         assert_eq!(
             shell.sent,
             [
@@ -528,6 +588,7 @@ fn rd5b_t3_a_secure_keyguard_is_device_locked_and_gets_no_command() {
     )
     .expect_err("a person unlocks");
     assert_eq!(locked.code().as_str(), "device_locked");
+    assert_labelled(&locked);
     assert_eq!(
         shell.sent,
         [

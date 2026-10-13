@@ -345,7 +345,9 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "device_label": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -359,7 +361,9 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "device_label": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -373,7 +377,9 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "device_label": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
