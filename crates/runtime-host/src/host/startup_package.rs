@@ -464,7 +464,7 @@ impl HostShared {
                     error.record_outcome(),
                     DiagnosticDetailDraft::new(
                         pending.run.failure_category(),
-                        RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
+                        RuntimeLifecycleFailureStage::OperationCleanup.location(),
                         "runtime_host",
                         error.operation(),
                     ),

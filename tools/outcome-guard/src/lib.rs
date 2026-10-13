@@ -319,25 +319,19 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft.operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "DiagnosticDetailDraft.stage",
-        &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a diagnostic detail draft's operation relays other crates' operation spellings (RuntimeHostError::operation, which relays ledger, store and kernel operations, and actingd_process) until the host and ledger channels take Location together; its stage is a registered location since A2-P, and B5 types the device categories and backends",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's operation; the record keeps it as a string until a received-location type exists, and the draft's operation channel relays other crates' strings until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.stage",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's stage; stages are registered locations since A2-P and the validator requires the location form, but the record keeps the stage as a string until a received-location type exists",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -379,19 +373,19 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::new",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): the draft's stage is a registered location since A2-P, but its operation parameter relays other crates' operation spellings (RuntimeHostError::operation) until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a diagnostic detail draft's operation relays other crates' operation spellings (RuntimeHostError::operation, which relays ledger, store and kernel operations, and actingd_process) until the host and ledger channels take Location together; its stage is a registered location since A2-P, and B5 types the device categories and backends",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's operation; the record keeps it as a string until a received-location type exists, and the draft's operation channel relays other crates' strings until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -401,21 +395,15 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "DiagnosticDetailDraft::stage",
-        &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::stage",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's stage; stages are registered locations since A2-P and the validator requires the location form, but the record keeps the stage as a string until a received-location type exists",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "validate_diagnostic_detail",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): validates a stored detail's stage and operation strings; stages are registered locations since A2-P (the location form is required), the record keeps both as strings until a received-location type exists, and the operation channel relays other crates' strings",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload/signature.rs",
@@ -600,24 +588,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     // A2e bridges: channels of the device crate that stay strings until the slice the reason
     // names removes the entry (brief-a2e.md; A2e is mechanical and keeps every emitted string).
     bridge(
-        "crates/device/src/adb.rs",
-        "CommandProgram.timeout_stage",
-        &[Check::G2],
-        "A2-P: a child program's bound-expiry stage (mumu_manager.timeout) is dotted and breaks the form; A2-P renames it",
-    ),
-    bridge(
-        "crates/device/src/adb_bounds_diagnostic.rs",
-        "AdbBoundsAction::operation",
-        &[Check::G2],
-        "A2-P: the adb input bounds operations tap and swipe are one word and break the form; A2-P renames them",
-    ),
-    bridge(
-        "crates/device/src/capture.rs",
-        "NemuCaptureResolutionDetail::stage",
-        &[Check::G2],
-        "A2-P: the Nemu capture resolution stages (nemu.installation.resolve, nemu.capture.identity, nemu.target.resolve) are dotted and break the form; A2-P renames them",
-    ),
-    bridge(
         "crates/device/src/discovery.rs",
         "mumu_instance_id",
         &[Check::G2],
@@ -628,60 +598,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "parse_dash_v_instance",
         &[Check::G2],
         "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic.stage",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic::new",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic::stage",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_if_absent",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorContext.operation",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorContext::operation",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_context",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_context_if_absent",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
     ),
     bridge(
         "crates/device/src/mumu_manager.rs",
@@ -700,12 +616,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "TouchBackendDiagnostics::push_failure",
         &[Check::G2],
         "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
-    ),
-    bridge(
-        "crates/device/src/touch.rs",
-        "adb_shell_input_connect_error",
-        &[Check::G2],
-        "A2-P: the stage parameter carries a dotted device stage (adb.*) and the operation parameter feeds the device error's operation channel, which carries one-word operations; A2-P renames them",
     ),
     // A2a part 2 bridges: channels of actingd, actingctl and vision-provider-check that stay
     // strings until the slice the reason names removes the entry (brief-a2a.md A2a-9).
@@ -1137,12 +1047,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/runtime-host/src/host/frame_retention.rs",
-        "FrameRetentionWarning::stage",
-        &[Check::G2],
-        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/frame_retention.rs",
         "pin_failure",
         &[Check::G2],
         "A2b/A2c merge follow-up: builds an artifact-store error, whose constructor takes spellings because the runtime host fills it with its own codes (A2c's ArtifactStoreError::fatal bridge); it takes Code with the store error when the host and ledger channels take Code together after the A2 train",
@@ -1202,18 +1106,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
-        "crates/runtime-host/src/host/requests.rs",
-        "protocol_error_at_code_spelling",
-        &[Check::G2],
-        "A2-P: an operation spelled like a shared code (material_read_deadline_overflow, material_read_length_overflow: one spelling for a code and a location); A2-P renames one side",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/requests.rs",
-        "receipt_error",
-        &[Check::G5],
-        "A2-P: the host's receipt-build failure keeps the spelling runtime_receipt_invalid, which the runtime client registered with another meaning (M378:90); A2-P renames the host side",
-    ),
-    bridge(
         "crates/runtime-host/src/host/saved_artifact_ocr.rs",
         "relayed_source_error",
         &[Check::G2],
@@ -1236,12 +1128,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "LedgerMaintenanceFailure.operation",
         &[Check::G2],
         "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
-        "crates/runtime-host/src/owner_unlock.rs",
-        "OwnerUnlockFailure.stage",
-        &[Check::G2],
-        "A2-P: the one-word unlock stages journal and ledger break the form; A2-P renames them (unlock-owner v2 is A6a's)",
     ),
     bridge(
         "crates/runtime-host/src/policy_host/clock_slot.rs",
@@ -1274,24 +1160,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
     ),
     bridge(
-        "crates/runtime-host/src/procedure_manifest.rs",
-        "field_refusal",
-        &[Check::G2],
-        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
-    ),
-    bridge(
-        "crates/runtime-host/src/procedure_manifest.rs",
-        "validate_token",
-        &[Check::G2],
-        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
-    ),
-    bridge(
-        "crates/runtime-host/src/provider.rs",
-        "DeviceRegistryInputDiagnosticBackend::run",
-        &[Check::G2],
-        "A2-P: passes the device layer's one-word input operation names (tap, swipe, key, ...) to the device error's diagnostic context, whose operation channel stays a string (A2e bridge DeviceErrorContext.operation); A2-P renames them",
-    ),
-    bridge(
         "crates/runtime-host/src/provider_startup.rs",
         "ProviderStartup::failed",
         &[Check::G2],
@@ -1308,12 +1176,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "suspension_report",
         &[Check::G3],
         "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
-    ),
-    bridge(
-        "crates/runtime-host/src/host.rs",
-        "artifact_store_error_at_code_spelling",
-        &[Check::G2],
-        "A2-P: an operation spelled like a shared code (effective_configuration_too_large: one spelling for a code and a location); A2-P renames one side",
     ),
     // End of the A2b bridges.
     AllowEntry {

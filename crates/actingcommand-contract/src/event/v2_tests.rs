@@ -1021,9 +1021,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     };
     let detail = DiagnosticDetailDraft::new(
         "native",
-        "device_registry.input.operation",
+        crate::codes::ContractLocation::ApplicationForegroundUnsupported,
         "adb_shell_input",
-        "tap",
+        "input_tap",
     );
     let sanitized = sanitize(failed(detail), 92);
 
@@ -1033,9 +1033,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     };
     let detail = outcome.detail().expect("diagnostic detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.input.operation");
+    assert_eq!(detail.stage(), "application_foreground_unsupported");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation(), "tap");
+    assert_eq!(detail.operation(), "input_tap");
     assert_eq!(
         outcome.outcome().code(),
         &DiagnosticCode::InputFailed.code()
@@ -1057,9 +1057,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         stored["payload"]["data"]["detail"],
         serde_json::json!({
             "category": "native",
-            "stage": "device_registry.input.operation",
+            "stage": "application_foreground_unsupported",
             "backend": "adb_shell_input",
-            "operation": "tap",
+            "operation": "input_tap",
         })
     );
     assert!(stored["payload"]["data"]["detail"].get("message").is_none());
@@ -1087,11 +1087,10 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     assert!(old_outcome.detail().is_none());
 
     let exact_token = "a".repeat(256);
-    let exact_stage = format!("{}.b", "a".repeat(254));
     sanitize(
         failed(DiagnosticDetailDraft::new(
             exact_token.clone(),
-            exact_stage,
+            crate::codes::ContractLocation::OpenCapturePipeline,
             exact_token.clone(),
             exact_token,
         )),
@@ -1105,16 +1104,53 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         );
     };
     for detail in [
-        DiagnosticDetailDraft::new("", "device.input", "adb", "tap"),
-        DiagnosticDetailDraft::new("Native", "device.input", "adb", "tap"),
-        DiagnosticDetailDraft::new("native", "device.input", "a".repeat(257), "tap"),
+        DiagnosticDetailDraft::new(
+            "",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "adb",
+            "tap",
+        ),
+        DiagnosticDetailDraft::new(
+            "Native",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "adb",
+            "tap",
+        ),
+        DiagnosticDetailDraft::new(
+            "native",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "a".repeat(257),
+            "tap",
+        ),
     ] {
         assert_rejected(detail, "invalid_diagnostic_detail_token");
     }
-    for stage in ["device..input", "Device.input", "a.b.c.d.e"] {
-        assert_rejected(
-            DiagnosticDetailDraft::new("native", stage, "adb", "tap"),
+    // Workflow #378 A2-P: a draft's stage is a registered location, so only a stored record
+    // can carry another spelling; its stage must have a location's form, at most 64 bytes.
+    let stored_stage = |stage: &str| {
+        let mut record = stored.clone();
+        record["payload"]["data"]["detail"]["stage"] = serde_json::json!(stage);
+        serde_json::from_value::<EventPayload>(record)
+            .expect("typed stored detail")
+            .validate()
+    };
+    let exact_stage = format!("{}_b", "a".repeat(62));
+    stored_stage(&exact_stage).expect("a 64-byte location-form stage");
+    let long_stage = format!("{}_b", "a".repeat(63));
+    for stage in [
+        "device..input",
+        "Device.input",
+        "a.b.c.d.e",
+        "device.stage",
+        long_stage.as_str(),
+    ] {
+        assert_eq!(
+            stored_stage(stage)
+                .expect_err("stored stage validation")
+                .code()
+                .as_str(),
             "invalid_diagnostic_detail_stage",
+            "{stage}"
         );
     }
 
@@ -3140,7 +3176,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
     let detail = || {
         DiagnosticDetailDraft::new(
             "runtime_connection",
-            "runtime.ipc.receipt_write",
+            crate::codes::ContractLocation::ControlInstance,
             "local_ipc",
             "runtime_local_ipc",
         )

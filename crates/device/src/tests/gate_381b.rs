@@ -191,7 +191,9 @@ impl MumuManagerRunner for Replay {
 }
 
 fn stage(error: &DeviceError) -> Option<&str> {
-    error.diagnostic().map(|diagnostic| diagnostic.stage())
+    error
+        .diagnostic()
+        .map(|diagnostic| diagnostic.stage().as_str())
 }
 
 /// RB-D2, the 10-09 replay: `info` does not answer for 30 s while the instance stops, and the
@@ -335,23 +337,23 @@ fn gate_the_info_document_is_read_in_both_shapes_with_its_required_and_optional_
         ),
         (
             json!({ "index": "0", "is_android_started": false }),
-            Err("mumu_manager.shape"),
+            Err("mumu_manager_shape"),
         ),
         (
             json!({ "index": "0", "is_process_started": false }),
-            Err("mumu_manager.shape"),
+            Err("mumu_manager_shape"),
         ),
         (
             json!({ "is_process_started": false, "is_android_started": false }),
-            Err("mumu_manager.shape"),
+            Err("mumu_manager_shape"),
         ),
         (
             json!({ "index": "1", "is_process_started": false, "is_android_started": false }),
-            Err("mumu_manager.shape"),
+            Err("mumu_manager_shape"),
         ),
         (
             json!({ "index": "0", "is_process_started": "false", "is_android_started": false }),
-            Err("mumu_manager.shape"),
+            Err("mumu_manager_shape"),
         ),
     ];
     for (document, expected) in rows {
@@ -383,7 +385,7 @@ fn gate_errcode_zero_is_the_acknowledgment_and_any_other_errcode_fails() {
     }
     let refused = parse_instance_document(&json!({ "errcode": 3, "errmsg": "refused" }), 0)
         .expect_err("an info envelope with errcode 3");
-    assert_eq!(stage(&refused), Some("mumu_manager.errcode"));
+    assert_eq!(stage(&refused), Some("mumu_manager_errcode"));
     parse_instance_document(
         &json!({
             "errcode": 0,
@@ -400,12 +402,12 @@ fn gate_errcode_zero_is_the_acknowledgment_and_any_other_errcode_fails() {
         (
             r#"{"errcode": 2, "errmsg": "refused"}"#,
             Some(0),
-            Some("mumu_manager.control_errcode"),
+            Some("mumu_manager_control_errcode"),
         ),
         (
             r#"{"errcode": 1, "errmsg": "refused"}"#,
             Some(1),
-            Some("mumu_manager.control_exit"),
+            Some("mumu_manager_control_exit"),
         ),
     ] {
         let mut replay =

@@ -10,6 +10,7 @@ use crate::{
     MinitouchConfig, PreparedSegmentedSwipePlan,
 };
 use actingcommand_contract::FencedWrite;
+use actingcommand_contract::outcome::Location;
 use std::time::{Duration, Instant};
 
 const MAX_ADB_INPUT_GESTURE_MS: u64 = 60_000;
@@ -1160,9 +1161,9 @@ impl AdbShellInputBackend {
             adb_shell_input_connect_error(
                 error,
                 DeviceErrorCategory::Native,
-                "adb.ensure_device.get_state",
+                crate::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
                 DeviceLocation::EnsureDevice,
-                DeviceLocation::EnsureDevice.as_str(),
+                DeviceLocation::EnsureDevice.location(),
                 DeviceErrorDiagnosticMessage::AdbShellInputDeviceStateUnavailable,
             )
         })?;
@@ -1170,9 +1171,9 @@ impl AdbShellInputBackend {
             adb_shell_input_connect_error(
                 error,
                 DeviceErrorCategory::Protocol,
-                "adb.input.bounds_validate",
+                crate::codes::DeviceStage::AdbInputBoundsValidate.location(),
                 DeviceLocation::ScreenSize,
-                DeviceLocation::BoundsValidate.as_str(),
+                DeviceLocation::BoundsValidate.location(),
                 DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
             )
         })?;
@@ -1180,9 +1181,9 @@ impl AdbShellInputBackend {
             adb_shell_input_connect_error(
                 error.input_parameter_failure(),
                 DeviceErrorCategory::Protocol,
-                "adb.input.bounds_validate",
+                crate::codes::DeviceStage::AdbInputBoundsValidate.location(),
                 DeviceLocation::BoundsConversion,
-                DeviceLocation::BoundsValidate.as_str(),
+                DeviceLocation::BoundsValidate.location(),
                 DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
             )
         })?;
@@ -1190,9 +1191,9 @@ impl AdbShellInputBackend {
             adb_shell_input_connect_error(
                 error,
                 DeviceErrorCategory::Protocol,
-                "adb.input.rotation.resolve",
+                crate::codes::DeviceStage::AdbInputRotationResolve.location(),
                 DeviceLocation::DeviceRotation,
-                DeviceLocation::RotationResolve.as_str(),
+                DeviceLocation::RotationResolve.location(),
                 DeviceErrorDiagnosticMessage::AdbShellInputRotationUnavailable,
             )
         })?;
@@ -1286,7 +1287,10 @@ impl AdbShellInputBackend {
                 (bounds.max_x, bounds.max_y),
                 self.connect_geometry,
             ))
-            .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+            .with_diagnostic_if_absent(
+                DeviceErrorCategory::Protocol,
+                crate::codes::DeviceStage::AdbInputBoundsValidate.location(),
+            )
             .with_diagnostic_context_if_absent(
                 "adb_shell_input",
                 action.operation(),
@@ -1298,9 +1302,9 @@ impl AdbShellInputBackend {
 fn adb_shell_input_connect_error(
     error: DeviceError,
     category: DeviceErrorCategory,
-    stage: &'static str,
+    stage: Location,
     child_operation: DeviceLocation,
-    operation: &'static str,
+    operation: Location,
     diagnostic_message: DeviceErrorDiagnosticMessage,
 ) -> DeviceError {
     let severity = error.severity();
@@ -1538,12 +1542,15 @@ mod tests {
         );
         let ensure_diagnostic = ensure_error.diagnostic().expect("state diagnostic");
         assert_eq!(ensure_diagnostic.category(), DeviceErrorCategory::Native);
-        assert_eq!(ensure_diagnostic.stage(), "adb.ensure_device.get_state");
+        assert_eq!(
+            ensure_diagnostic.stage().as_str(),
+            "adb_ensure_device_get_state"
+        );
         let ensure_context = ensure_error
             .diagnostic_context()
             .expect("state diagnostic context");
         assert_eq!(ensure_context.backend(), "adb_shell_input");
-        assert_eq!(ensure_context.operation(), "ensure_device");
+        assert_eq!(ensure_context.operation().as_str(), "ensure_device");
         assert_eq!(
             ensure_context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -1573,12 +1580,15 @@ mod tests {
         );
         let screen_diagnostic = screen_error.diagnostic().expect("size diagnostic");
         assert_eq!(screen_diagnostic.category(), DeviceErrorCategory::Protocol);
-        assert_eq!(screen_diagnostic.stage(), "adb.input.bounds_validate");
+        assert_eq!(
+            screen_diagnostic.stage().as_str(),
+            "adb_input_bounds_validate"
+        );
         let screen_context = screen_error
             .diagnostic_context()
             .expect("size diagnostic context");
         assert_eq!(screen_context.backend(), "adb_shell_input");
-        assert_eq!(screen_context.operation(), "bounds_validate");
+        assert_eq!(screen_context.operation().as_str(), "bounds_validate");
         assert_eq!(
             screen_context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -1606,12 +1616,15 @@ mod tests {
         );
         let bounds_diagnostic = bounds_error.diagnostic().expect("bounds diagnostic");
         assert_eq!(bounds_diagnostic.category(), DeviceErrorCategory::Protocol);
-        assert_eq!(bounds_diagnostic.stage(), "adb.input.bounds_validate");
+        assert_eq!(
+            bounds_diagnostic.stage().as_str(),
+            "adb_input_bounds_validate"
+        );
         let bounds_context = bounds_error
             .diagnostic_context()
             .expect("bounds diagnostic context");
         assert_eq!(bounds_context.backend(), "adb_shell_input");
-        assert_eq!(bounds_context.operation(), "bounds_validate");
+        assert_eq!(bounds_context.operation().as_str(), "bounds_validate");
         assert_eq!(
             bounds_context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -1644,12 +1657,15 @@ mod tests {
             rotation_diagnostic.category(),
             DeviceErrorCategory::Protocol
         );
-        assert_eq!(rotation_diagnostic.stage(), "adb.input.rotation.resolve");
+        assert_eq!(
+            rotation_diagnostic.stage().as_str(),
+            "adb_input_rotation_resolve"
+        );
         let rotation_context = rotation_error
             .diagnostic_context()
             .expect("rotation diagnostic context");
         assert_eq!(rotation_context.backend(), "adb_shell_input");
-        assert_eq!(rotation_context.operation(), "rotation_resolve");
+        assert_eq!(rotation_context.operation().as_str(), "rotation_resolve");
         assert_eq!(
             rotation_context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -1754,8 +1770,8 @@ mod tests {
             assert!(!detail.contains(['/', '\\', ':']));
             assert!(!detail.chars().any(char::is_control));
             assert_eq!(
-                error.diagnostic().expect("diagnostic").stage(),
-                "adb.input.bounds_validate"
+                error.diagnostic().expect("diagnostic").stage().as_str(),
+                "adb_input_bounds_validate"
             );
             assert_eq!(
                 error
@@ -1811,8 +1827,12 @@ mod tests {
                 ))
             );
             assert_eq!(
-                error.diagnostic_context().expect("context").operation(),
-                "swipe"
+                error
+                    .diagnostic_context()
+                    .expect("context")
+                    .operation()
+                    .as_str(),
+                "input_swipe"
             );
         }
         let long_tap = backend
@@ -1864,10 +1884,13 @@ mod tests {
         );
         assert!(error.diagnostic_message().expect("message").contains("connect_observation=unavailable connect_natural_max_x=unavailable connect_natural_max_y=unavailable connect_rotation_degrees=unavailable"));
         let lower = DeviceError::transient("complete lower geometry error")
-            .with_diagnostic(DeviceErrorCategory::Native, "adb.lower.failure")
+            .with_diagnostic(
+                DeviceErrorCategory::Native,
+                crate::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
+            )
             .with_diagnostic_context(
                 "adb_shell_input",
-                "lower",
+                crate::codes::DeviceLocation::EnsureDevice,
                 DeviceErrorSensitivity::Sensitive,
             );
         let preserved = unavailable.bounds_failure(

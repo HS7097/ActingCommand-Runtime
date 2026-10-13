@@ -3693,7 +3693,7 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
             input_open_error: Some(
                 DeviceError::fatal("injected input open failure").with_diagnostic(
                     actingcommand_device::DeviceErrorCategory::Native,
-                    "adb.ensure_device.get_state",
+                    actingcommand_device::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
                 ),
             ),
             ..FakeState::default()

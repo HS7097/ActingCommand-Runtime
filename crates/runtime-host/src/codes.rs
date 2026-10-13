@@ -1136,6 +1136,9 @@ actingcommand_contract::outcome_codes! {
         /// performance monitor degraded instead of ending the Runtime (keys `event_type`; its
         /// `caused_by` link is the contract's sanitization outcome; Workflow #378 A2-P).
         PerformanceEventRejected => "performance_event_rejected": error / none,
+        /// Error. The host could not build a runtime receipt (A2-P: was the client's
+        /// `runtime_receipt_invalid`).
+        RuntimeReceiptBuildFailed => "runtime_receipt_build_failed": error / none,
     }
 }
 
@@ -1905,7 +1908,7 @@ actingcommand_contract::outcome_locations! {
         WriteCatalogState => "write_catalog_state",
         WriteOwnerFile => "write_owner_file",
         // Workflow #378 A3: the stages of runtime lifecycle failures (`runtime.failed`), which
-        // were the dotted tokens `runtime.lifecycle.*`; those stay the detail's stage.
+        // were the dotted tokens `runtime.lifecycle.*`; since A2-P also the detail's stage.
         RuntimeLifecycleInstallDrain => "runtime_lifecycle_install_drain",
         RuntimeLifecycleInstallHeld => "runtime_lifecycle_install_held",
         RuntimeLifecycleInstallRelease => "runtime_lifecycle_install_release",
@@ -1926,6 +1929,31 @@ actingcommand_contract::outcome_locations! {
         RuntimeLifecyclePolicyBootstrap => "runtime_lifecycle_policy_bootstrap",
         RuntimeLifecycleSelectionRecord => "runtime_lifecycle_selection_record",
         RuntimeLifecycleShutdownRequested => "runtime_lifecycle_shutdown_requested",
+        AdbEndpointPending => "adb_endpoint_pending",
+        AdbEndpointUnresolved => "adb_endpoint_unresolved",
+        DeviceRegistryInputOperation => "device_registry_input_operation",
+        EmulatorControlBinding => "emulator_control_binding",
+        EmulatorControlRegistration => "emulator_control_registration",
+        RuntimeIpcRequestRead => "runtime_ipc_request_read",
+        RuntimeIpcRequestDecode => "runtime_ipc_request_decode",
+        RuntimeIpcRequestCache => "runtime_ipc_request_cache",
+        RuntimeIpcDispatch => "runtime_ipc_dispatch",
+        RuntimeIpcReceiptBuild => "runtime_ipc_receipt_build",
+        RuntimeIpcReceiptWrite => "runtime_ipc_receipt_write",
+        RuntimeIpcConnectionPanic => "runtime_ipc_connection_panic",
+        FrameRetentionMove => "frame_retention_move",
+        FrameRetentionCounter => "frame_retention_counter",
+        FrameRetentionRemove => "frame_retention_remove",
+        RuntimeMonitorRestore => "runtime_monitor_restore",
+        ObservationFailed => "observation_failed",
+        InstanceDiscoveryFailed => "instance_discovery_failed",
+        MumuManagerControl => "mumu_manager_control",
+        MumuManagerProcessList => "mumu_manager_process_list",
+        MaterialReadAttempt => "material_read_attempt",
+        UnlockOwnerLedger => "unlock_owner_ledger",
+        MaterialReadDeadlineCompute => "material_read_deadline_compute",
+        MaterialReadLengthConvert => "material_read_length_convert",
+        EffectiveConfigurationSizeCheck => "effective_configuration_size_check",
     }
 }
 

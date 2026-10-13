@@ -32,11 +32,7 @@ impl MaterialReadContext {
         Ok(Some(Self {
             deadline: Instant::now()
                 .checked_add(Duration::from_millis(RUNTIME_MATERIAL_READ_BUDGET_MS))
-                .ok_or_else(|| {
-                    protocol_error_at_code_spelling(
-                        SharedCode::MaterialReadDeadlineOverflow.as_str(),
-                    )
-                })?,
+                .ok_or_else(|| protocol_error(HostLocation::MaterialReadDeadlineCompute))?,
             max_reply_bytes: request
                 .max_reply_bytes
                 .min(maximum_frame_bytes)
@@ -219,9 +215,7 @@ impl HostShared {
                 (offset, bytes)
             };
             let length = u32::try_from(bytes.len()).map_err(|_| {
-                MaterialReadError::Identity(protocol_error_at_code_spelling(
-                    SharedCode::MaterialReadLengthOverflow.as_str(),
-                ))
+                MaterialReadError::Identity(protocol_error(HostLocation::MaterialReadLengthConvert))
             })?;
             result.state = RuntimeMaterialReadState::Verified;
             result.chunk = Some(RuntimeMaterialChunk {
@@ -365,7 +359,7 @@ impl HostShared {
             // recorded; the record links the selected event when its reference resolved.
             .with_diagnostic_detail(DiagnosticDetailDraft::new(
                 "material_read",
-                "attempt",
+                HostLocation::MaterialReadAttempt,
                 "committed_reference",
                 ContractLocation::ReadRuntimeMaterial.as_str(),
             ));

@@ -238,7 +238,7 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
             .and_then(|last| last.detail.as_ref())
             .expect("full detail")
             .stage(),
-        "device_registry.capture.operation"
+        "capture_frame_layout"
     );
     // Ledger revision 3 (#378 A3): the device's text is no longer the detail's message; it is
     // `raw_text` on the source record's outcome.
@@ -283,10 +283,13 @@ fn capture_failure_persists_nemu_resolution_context() {
             .to_owned();
         *state.capture_open_error.lock().expect("capture open error") = Some(
             error
-                .with_diagnostic(DeviceErrorCategory::Protocol, "nemu.installation.resolve")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    actingcommand_device::codes::DeviceStage::NemuInstallationResolve.location(),
+                )
                 .with_diagnostic_context(
                     "nemu_ipc",
-                    "installation_resolve",
+                    actingcommand_device::codes::DeviceLocation::InstallationResolve,
                     DeviceErrorSensitivity::Internal,
                 ),
         );
@@ -412,7 +415,7 @@ fn capture_failure_persists_nemu_resolution_context() {
             assert!(!full.contains(&expected_message));
         }
         assert_eq!(detail.category(), "protocol");
-        assert_eq!(detail.stage(), "nemu.installation.resolve");
+        assert_eq!(detail.stage(), "nemu_installation_resolve");
         assert_eq!(detail.backend(), "nemu_ipc");
         assert_eq!(detail.operation(), "installation_resolve");
         assert_eq!(state.capture_open_count.load(Ordering::Acquire), 1);
@@ -437,9 +440,9 @@ fn capture_failure_preserves_device_diagnostic_detail_in_global_ledger() {
         .diagnostic_detail()
         .expect("kernel capture detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.capture.operation");
+    assert_eq!(detail.stage().as_str(), "capture_frame_layout");
     assert_eq!(detail.backend(), "nemu_ipc");
-    assert_eq!(detail.operation(), "capture");
+    assert_eq!(detail.operation(), "capture_sequence");
     // Ledger revision 3 (#378 A3): the device's text left the detail; it is the error's native
     // detail, recorded as a sensitive foreign `raw_text`.
     let native = kernel_error.native_detail().expect("device text");
@@ -527,9 +530,9 @@ fn capture_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     };
     let detail = outcome.detail().expect("stored capture diagnostic detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.capture.operation");
+    assert_eq!(detail.stage(), "capture_frame_layout");
     assert_eq!(detail.backend(), "nemu_ipc");
-    assert_eq!(detail.operation(), "capture");
+    assert_eq!(detail.operation(), "capture_sequence");
     let device_text = outcome_with_raw_text(outcome.outcome(), "injected capture failure")
         .expect("device text on a foreign link");
     assert_eq!(

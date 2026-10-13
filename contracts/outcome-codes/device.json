@@ -584,6 +584,838 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Operation of the adb shell input backend's connect that the device error's diagnostic context names when the display rotation cannot be resolved."
+    },
+    "adb_ensure_device_get_state": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: adb get-state while confirming that the target answers device."
+    },
+    "adb_input_bounds_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the adb shell input backend reading or validating the touch bounds, or refusing an action outside them."
+    },
+    "adb_input_rotation_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the adb shell input backend resolving the display rotation at connect."
+    },
+    "capture_frame_layout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating a captured frame's dimensions and pixel buffer length."
+    },
+    "capture_scrcpy_config": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy capture backend's configuration check before it starts."
+    },
+    "capture_scrcpy_connect": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: connecting to the scrcpy server's sockets."
+    },
+    "capture_scrcpy_crop": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: computing the scrcpy capture crop from the display size."
+    },
+    "capture_scrcpy_first_frame": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: waiting for the first scrcpy frame after the start."
+    },
+    "capture_scrcpy_forward": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: creating the adb forward to the scrcpy server or reading its port."
+    },
+    "capture_scrcpy_fresh_wait": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: waiting for a scrcpy frame encoded after the capture floor."
+    },
+    "capture_scrcpy_header": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the scrcpy stream header (device name and codec)."
+    },
+    "capture_scrcpy_server_digest": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the scrcpy server file the build carries before it is pushed."
+    },
+    "capture_scrcpy_server_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy server process exited before its sockets connected."
+    },
+    "capture_scrcpy_server_local_copy": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing the carried scrcpy server to a local file for the push."
+    },
+    "capture_scrcpy_server_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the scrcpy server to the device."
+    },
+    "capture_scrcpy_server_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the scrcpy server process through adb."
+    },
+    "capture_scrcpy_socket": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: configuring or reading a scrcpy socket."
+    },
+    "capture_scrcpy_stream_decode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: decoding a scrcpy video packet."
+    },
+    "capture_scrcpy_stream_decoder_open": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: opening the scrcpy video decoder."
+    },
+    "capture_scrcpy_stream_protocol": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a malformed scrcpy stream packet."
+    },
+    "capture_scrcpy_stream_server_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy server exited while streaming."
+    },
+    "capture_scrcpy_stream_socket_closed": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy video socket closed while streaming."
+    },
+    "capture_scrcpy_stream_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the scrcpy stream reader."
+    },
+    "capture_scrcpy_stream_state": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the scrcpy stream's shared state."
+    },
+    "capture_scrcpy_stream_video_size": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy encoder's video size differs from the requested crop."
+    },
+    "input_nemu_capability": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the selected Nemu input capability is unavailable for the operation."
+    },
+    "input_segmented_swipe_capability": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the selected input backend does not support segmented swipe."
+    },
+    "maatouch_handshake_aborted": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MaaTouch reported Aborted during its handshake."
+    },
+    "maatouch_handshake_channel_receive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: receiving the MaaTouch handshake from its reader."
+    },
+    "maatouch_handshake_pid_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the MaaTouch pid line."
+    },
+    "maatouch_handshake_pid_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the MaaTouch pid line."
+    },
+    "maatouch_handshake_pressure_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the configured MaaTouch default pressure against the device range."
+    },
+    "maatouch_handshake_stdout_eof": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MaaTouch stdout ended before the handshake."
+    },
+    "maatouch_handshake_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch handshake did not arrive in time."
+    },
+    "maatouch_handshake_version_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the MaaTouch version value."
+    },
+    "maatouch_handshake_version_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the MaaTouch handshake line."
+    },
+    "maatouch_handshake_version_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch version line has an unexpected shape."
+    },
+    "maatouch_handshake_version_value_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the MaaTouch handshake values."
+    },
+    "maatouch_install_chmod": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: making the pushed MaaTouch binary executable."
+    },
+    "maatouch_install_local_file_metadata": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the local MaaTouch file's metadata."
+    },
+    "maatouch_install_local_file_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the local MaaTouch file."
+    },
+    "maatouch_install_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the MaaTouch binary to the device."
+    },
+    "maatouch_operation_inactive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: an operation on a MaaTouch backend that is not connected."
+    },
+    "maatouch_process_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch process exited unexpectedly."
+    },
+    "maatouch_process_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch child process is missing."
+    },
+    "maatouch_process_poll": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: polling the MaaTouch process status."
+    },
+    "maatouch_process_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the MaaTouch process."
+    },
+    "maatouch_stdin_flush": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: flushing a MaaTouch command."
+    },
+    "maatouch_stdin_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch stdin is missing."
+    },
+    "maatouch_stdin_write": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing a MaaTouch command."
+    },
+    "minitouch_handshake_channel_receive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: receiving the minitouch handshake from its reader."
+    },
+    "minitouch_handshake_max_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the minitouch max line."
+    },
+    "minitouch_handshake_max_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch max line."
+    },
+    "minitouch_handshake_max_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch max line has an unexpected field count."
+    },
+    "minitouch_handshake_max_value_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing a minitouch max value."
+    },
+    "minitouch_handshake_max_value_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch handshake values are not positive."
+    },
+    "minitouch_handshake_pid_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the minitouch pid line."
+    },
+    "minitouch_handshake_pid_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch pid line."
+    },
+    "minitouch_handshake_pid_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch pid line is empty."
+    },
+    "minitouch_handshake_pressure_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the configured minitouch default pressure against the device range."
+    },
+    "minitouch_handshake_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch handshake did not arrive in time."
+    },
+    "minitouch_handshake_version_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch version line is invalid."
+    },
+    "minitouch_handshake_version_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch version line."
+    },
+    "minitouch_install_chmod": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: making the pushed minitouch binary executable."
+    },
+    "minitouch_install_local_file_metadata": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the local minitouch file's metadata."
+    },
+    "minitouch_install_local_file_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the local minitouch file."
+    },
+    "minitouch_install_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the minitouch binary to the device."
+    },
+    "minitouch_operation_inactive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: an operation on a minitouch backend that is not connected."
+    },
+    "minitouch_process_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch process exited unexpectedly."
+    },
+    "minitouch_process_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch child process is missing."
+    },
+    "minitouch_process_poll": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: polling the minitouch process status."
+    },
+    "minitouch_process_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the minitouch process."
+    },
+    "minitouch_stdin_flush": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: flushing a minitouch command."
+    },
+    "minitouch_stdin_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch stdin is missing."
+    },
+    "minitouch_stdin_write": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing a minitouch command."
+    },
+    "mumu_manager_control_errcode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager control exited 0 with an errcode envelope whose errcode is not 0."
+    },
+    "mumu_manager_control_exit": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager control exited non-zero."
+    },
+    "mumu_manager_decode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager stdout is not valid UTF-8."
+    },
+    "mumu_manager_discover": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager instance discovery."
+    },
+    "mumu_manager_entry": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager info entry carries an errcode envelope."
+    },
+    "mumu_manager_errcode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager exited 0 with an errcode envelope."
+    },
+    "mumu_manager_exit": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager read command exited non-zero."
+    },
+    "mumu_manager_json": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager stdout is not JSON."
+    },
+    "mumu_manager_launch_error": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager info reported a launch error code that is not 0."
+    },
+    "mumu_manager_output_bound": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager output passed its byte bound."
+    },
+    "mumu_manager_path": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MuMuManager path is not usable."
+    },
+    "mumu_manager_registry": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the uninstall registry to find the MuMu installation."
+    },
+    "mumu_manager_restart_refused": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a vendor restart verb refused before any command (a restart is a shutdown then a launch)."
+    },
+    "mumu_manager_run": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting or polling a MuMuManager process."
+    },
+    "mumu_manager_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager document has an unexpected shape."
+    },
+    "mumu_manager_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager command passed its time bound."
+    },
+    "mumu_manager_version": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager version is not a four-part numeric version."
+    },
+    "mumu_manager_version_floor": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager version is below the Runtime's minimum."
+    },
+    "mumu_manager_wait_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the emulator control's readiness wait passed its deadline."
+    },
+    "nemu_capture_identity": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: coordinating the Nemu capture identity with the target."
+    },
+    "nemu_installation_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: resolving the MuMu installation for Nemu."
+    },
+    "nemu_target_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: resolving the Nemu target instance."
+    },
+    "input_tap": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a tap."
+    },
+    "input_swipe": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a swipe (an adb long tap is delegated as one)."
+    },
+    "input_long_tap": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a long tap."
+    },
+    "input_key": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a key press."
+    },
+    "input_text": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: text input."
+    },
+    "input_reset": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: resetting the touch state."
+    },
+    "input_close": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: closing the backend."
     }
   }
 }

@@ -1748,9 +1748,10 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         .sanitize(&super::Sha256SecretFingerprinter::new(
             b"actingcommand-ledger-artifact-retention-v1",
         )?)
-        // The FATAL line prints only code and operation; they carry the refused rule.
+        // The refused field or rule stays in the developer detail; the operation is the
+        // registered retention location (Workflow #378 A2-P: it was the field's name).
         .map_err(|error| {
-            GlobalLedgerError::relayed_fatal(error.code().as_str(), error.field())
+            GlobalLedgerError::fatal(error.code(), LedgerLocation::ArtifactRetention.location())
                 .with_detail(error.to_string())
         })?;
         let draft = links

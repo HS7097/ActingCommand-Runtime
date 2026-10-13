@@ -803,15 +803,17 @@ pub(super) enum ConnectionFailureStage {
 }
 
 impl ConnectionFailureStage {
-    pub(super) const fn as_str(self) -> &'static str {
+    /// The stage's registered location, the stage of the connection failure's diagnostic
+    /// detail (Workflow #378 A2-P; it was a dotted `runtime.ipc.*` token).
+    pub(super) const fn location(self) -> HostLocation {
         match self {
-            Self::RequestRead => "runtime.ipc.request_read",
-            Self::RequestDecode => "runtime.ipc.request_decode",
-            Self::RequestCache => "runtime.ipc.request_cache",
-            Self::Dispatch => "runtime.ipc.dispatch",
-            Self::ReceiptBuild => "runtime.ipc.receipt_build",
-            Self::ReceiptWrite => "runtime.ipc.receipt_write",
-            Self::ConnectionPanic => "runtime.ipc.connection_panic",
+            Self::RequestRead => HostLocation::RuntimeIpcRequestRead,
+            Self::RequestDecode => HostLocation::RuntimeIpcRequestDecode,
+            Self::RequestCache => HostLocation::RuntimeIpcRequestCache,
+            Self::Dispatch => HostLocation::RuntimeIpcDispatch,
+            Self::ReceiptBuild => HostLocation::RuntimeIpcReceiptBuild,
+            Self::ReceiptWrite => HostLocation::RuntimeIpcReceiptWrite,
+            Self::ConnectionPanic => HostLocation::RuntimeIpcConnectionPanic,
         }
     }
 
@@ -1460,27 +1462,14 @@ pub(super) fn client_fact_conflict(
     )
 }
 
-/// The host's receipt-build failure keeps the spelling `runtime_receipt_invalid`, which the
-/// runtime client registered for a receipt it cannot read: one spelling, two meanings (M378:90).
-/// A2-P renames the host side; until then it travels as a relayed spelling.
+/// The host could not build a receipt: its own code `runtime_receipt_build_failed` (Workflow #378
+/// A2-P; it was the runtime client's `runtime_receipt_invalid`, a receipt the client cannot
+/// read, one spelling with two meanings, M378:90).
 pub(super) fn receipt_error() -> RuntimeHostError {
-    RuntimeHostError::relayed_fatal(
-        "runtime_receipt_invalid",
-        HostLocation::BuildRuntimeReceipt.as_str(),
+    RuntimeHostError::fatal(
+        HostCode::RuntimeReceiptBuildFailed,
+        HostLocation::BuildRuntimeReceipt,
         RuntimeErrorCode::RuntimeFatal,
-    )
-}
-
-/// A protocol refusal whose operation is spelled like a shared code (the material read's
-/// `material_read_deadline_overflow` and `material_read_length_overflow`: one spelling for a
-/// code and a location, M378:90). A2-P renames one side; then `protocol_error` takes it.
-pub(super) fn protocol_error_at_code_spelling(
-    code_spelled_operation: &'static str,
-) -> RuntimeHostError {
-    RuntimeHostError::relayed_request(
-        HostCode::RuntimeProtocolInvalid.as_str(),
-        code_spelled_operation,
-        RuntimeErrorCode::ProtocolInvalid,
     )
 }
 

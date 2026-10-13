@@ -2,6 +2,7 @@
 
 use super::*;
 use actingcommand_contract::OwnerUnlockActor;
+use actingcommand_runtime_host::HostLocation;
 use serde_json::json;
 
 const UNLOCK_OWNER_SCHEMA_VERSION: &str = "actingcommand.actingd.unlock-owner.v1";
@@ -70,6 +71,19 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     result
 }
 
+/// The unlock-owner v1 token of a runtime host unlock stage (decision D12, as
+/// [`v1_stage_token`]): `journal` up to and including the owner journal append, `ledger` for
+/// the fact. A6a's unlock-owner v2 replaces these texts.
+fn v1_unlock_stage_token(stage: Location) -> &'static str {
+    [
+        (HostLocation::UnlockOwnerFile, "journal"),
+        (HostLocation::UnlockOwnerLedger, "ledger"),
+    ]
+    .into_iter()
+    .find_map(|(location, token)| (location.location() == stage).then_some(token))
+    .unwrap_or(stage.as_str())
+}
+
 /// What refused an unlock: loading the configuration, or the runtime host.
 enum UnlockFailure<'a> {
     Load(Code),
@@ -82,7 +96,9 @@ fn failed(failure: UnlockFailure<'_>, journal_appended: bool) -> serde_json::Val
             code.as_str(),
             v1_stage_token(ActingdLocation::ConfigLoad.location()),
         ),
-        UnlockFailure::Host(failure) => (failure.error.code(), failure.stage),
+        UnlockFailure::Host(failure) => {
+            (failure.error.code(), v1_unlock_stage_token(failure.stage))
+        }
     };
     json!({
         "schema_version": UNLOCK_OWNER_SCHEMA_VERSION,

@@ -2,7 +2,7 @@
 
 mod retention;
 use crate::codes::{ContractCode, RuntimeContractCode, SanitizationCode, SharedCode};
-use crate::outcome::{CauseRelation, Code, IoKind, Outcome, RawSource};
+use crate::outcome::{CauseRelation, Code, IoKind, Location, Outcome, RawSource};
 pub use retention::*;
 mod ledger_migration;
 mod signature;
@@ -88,6 +88,8 @@ pub const MAX_CAPTURE_SUMMARY_COUNT: u64 = 1_000_000;
 pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
 pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
 const MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES: usize = 256;
+/// A detail's stage is a location: at most 64 bytes (M378 §3.2).
+const MAX_DIAGNOSTIC_DETAIL_STAGE_BYTES: usize = 64;
 const MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES: usize = 1_024;
 const MAX_MACHINE_PATH_BASENAME_BYTES: usize = 255;
 const LEGACY_REDACTED_MACHINE_PATH: &str = "[redacted]";
@@ -596,13 +598,14 @@ impl InputIntentPayload {
 /// Where a failure arose, as its producer names it: the category, the stage, the backend and
 /// the operation. Ledger revision 3 (Workflow #378 A3) persists no failure text: the failure
 /// itself is the record's `outcome`, foreign text rides on its `foreign_*` links, and text the
-/// Runtime made goes only to the developer log. These names stay typed context beside the
-/// outcome until they are registered (the dotted stage tokens in A2-P, the device stages and
-/// backends in B5).
+/// Runtime made goes only to the developer log. The stage is a registered location (Workflow
+/// #378 A2-P); the category, backend and operation stay typed context beside the outcome until
+/// they are registered (the device categories and backends in B5; the operation relays other
+/// crates' spellings until the A2b/A2c merge follow-up).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticDetailDraft {
     category: String,
-    stage: String,
+    stage: Location,
     backend: String,
     operation: String,
 }
@@ -610,7 +613,7 @@ pub struct DiagnosticDetailDraft {
 impl DiagnosticDetailDraft {
     pub fn new(
         category: impl Into<String>,
-        stage: impl Into<String>,
+        stage: impl Into<Location>,
         backend: impl Into<String>,
         operation: impl Into<String>,
     ) -> Self {
@@ -626,8 +629,8 @@ impl DiagnosticDetailDraft {
         &self.category
     }
 
-    pub fn stage(&self) -> &str {
-        &self.stage
+    pub const fn stage(&self) -> Location {
+        self.stage
     }
 
     pub fn backend(&self) -> &str {
@@ -639,10 +642,11 @@ impl DiagnosticDetailDraft {
     }
 
     fn sanitize(self) -> Result<DiagnosticDetailRecord, SanitizationError> {
-        validate_diagnostic_detail(&self.category, &self.stage, &self.backend, &self.operation)?;
+        let stage = self.stage.as_str();
+        validate_diagnostic_detail(&self.category, stage, &self.backend, &self.operation)?;
         Ok(DiagnosticDetailRecord {
             category: self.category,
-            stage: self.stage,
+            stage: stage.to_owned(),
             backend: self.backend,
             operation: self.operation,
         })
@@ -1571,20 +1575,22 @@ impl RuntimeLifecycleFailureRecord {
     }
 }
 
-/// A stage token: one to four dotted segments of lowercase letters, digits, `_` and `-` (the
-/// dotted producer stages, and registered locations).
+/// A stage: the form of a registered location, `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` and at most
+/// 64 bytes (Workflow #378 A2-P; the dotted producer stages are registered locations now).
 fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
-    let segments = value.split('.').collect::<Vec<_>>();
-    if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
-        || !(1..=4).contains(&segments.len())
-        || segments.iter().any(|segment| {
-            segment.is_empty()
-                || !segment.bytes().all(|byte| {
-                    byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || matches!(byte, b'_' | b'-')
-                })
-        })
+    let segment_valid = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    if value.len() > MAX_DIAGNOSTIC_DETAIL_STAGE_BYTES
+        || !value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        || !value.contains('_')
+        || !value.split('_').all(segment_valid)
     {
         Err(SanitizationError::new(
             SanitizationCode::InvalidDiagnosticDetailStage,
@@ -8220,7 +8226,7 @@ impl RuntimePayloadDraft {
                 .operation(crate::codes::ContractLocation::RunContainedTask),
             DiagnosticDetailDraft::new(
                 "resource_declaration",
-                "resource.declaration.prepare",
+                crate::codes::ContractLocation::ResourceDeclarationPrepare,
                 "pack_containment",
                 crate::codes::ContractLocation::RunContainedTask.as_str(),
             ),

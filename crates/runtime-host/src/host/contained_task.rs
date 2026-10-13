@@ -1736,9 +1736,7 @@ impl RuntimeContainedTask<'_> {
         })?;
         if bytes.len() as u64 > MAX_EFFECTIVE_CONFIGURATION_BYTES {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error_at_code_spelling(
-                    SharedCode::EffectiveConfigurationTooLarge.as_str(),
-                ),
+                artifact_store_error(HostLocation::EffectiveConfigurationSizeCheck),
             ));
         }
         let mut event_links = self
@@ -2057,7 +2055,7 @@ impl RuntimeContainedTask<'_> {
 
     /// Workflow #308: the interpreter returns the run-ending capture error, not the failure of
     /// a `run_ending` select record, so that failure is recorded here as it happens: one
-    /// `runtime.failed` lifecycle record (stage `runtime.lifecycle.selection_record`, the
+    /// `runtime.failed` lifecycle record (stage `runtime_lifecycle_selection_record`, the
     /// failure's own code and detail) linked to the run, before the run's terminal events and
     /// without touching the run's failure. When the ledger refuses that record as well, the
     /// failure is kept for the run to join to its own failure, which then poisons the runtime.
