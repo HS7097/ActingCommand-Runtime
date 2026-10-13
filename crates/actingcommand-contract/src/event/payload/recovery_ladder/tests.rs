@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #387 D1c, test row D1-L1 (frozen model M387 v1.2 §8.2): the ladder records describe
-//! themselves and validation checks only that each agrees with itself (§6.2). Every rule of the
-//! §6.2 table gets one record that keeps it and one that breaks it; any token code is accepted,
-//! since no code table is read any more.
+// Workflow #387 D1c, test row D1-L1 (frozen model M387 v1.2 §8.2): the ladder records describe
+// themselves and validation checks only that each agrees with itself (§6.2). Every rule of the
+// §6.2 table gets one record that keeps it and one that breaks it; any token code is accepted,
+// since no code table is read any more.
 
 use super::*;
 use serde_json::{Value, json};
