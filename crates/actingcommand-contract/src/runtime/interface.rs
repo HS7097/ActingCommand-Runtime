@@ -216,6 +216,7 @@ runtime_operation_kinds! {
     PromoteProposal,
     ApplyResourceTargets,
     ResourceTargetView,
+    ConfigureSettings,
     BindChannel,
     UpgradeState,
     UpgradeStateStatus,
@@ -256,6 +257,7 @@ impl RuntimeOperationKind {
             | Self::PublishFact
             | Self::PublishFacts
             | Self::ApplyResourceTargets
+            | Self::ConfigureSettings
             | Self::UpgradeState => GENERAL_INSTRUCTION,
             // Option one, authoring: the agent planning session and the packaging tools.
             Self::StartAgentSession
@@ -376,6 +378,7 @@ impl RuntimeOperation {
             Self::PromoteProposal { .. } => Kind::PromoteProposal,
             Self::ApplyResourceTargets { .. } => Kind::ApplyResourceTargets,
             Self::ResourceTargetView { .. } => Kind::ResourceTargetView,
+            Self::ConfigureSettings { .. } => Kind::ConfigureSettings,
             Self::BindChannel { .. } => Kind::BindChannel,
             Self::UpgradeState { .. } => Kind::UpgradeState,
             Self::UpgradeStateStatus { .. } => Kind::UpgradeStateStatus,
@@ -455,6 +458,9 @@ mod tests {
             K::PublishFacts => (General, Some(Instruction), true),
             // section 14.2: writing resource targets is a general instruction.
             K::ApplyResourceTargets => (General, Some(Instruction), true),
+            // Workflow #387 D1b (model v1.2 §5.6): changing a setting while running is a general
+            // instruction the three counters send, recorded through G14.
+            K::ConfigureSettings => (General, Some(Instruction), true),
             // section 2.2 option one, authoring.
             K::StartAgentSession => (Lab(Authoring), Some(Instruction), true),
             K::ResumeAgentSession => (Lab(Authoring), Some(Instruction), true),

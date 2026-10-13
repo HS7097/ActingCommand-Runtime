@@ -3483,18 +3483,15 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
         // The `config.subsystems` row (register E8): a runtime fact, its code a member.
         (
             RuntimePayloadDraft::fact_recorded(
-                {
-                    let [subsystems, _] = crate::RuntimeConfigManifest {
-                        subsystems: vec![crate::ConfigSubsystem {
-                            name: "frame_retention".to_owned(),
-                            enabled: true,
-                            outcome: Outcome::relayed("config_subsystem_configured"),
-                        }],
-                        parameters: Vec::new(),
-                    }
-                    .to_fact_records(1_752_147_200_000, OriginModule::Runtime);
-                    subsystems
-                },
+                crate::RuntimeConfigManifest {
+                    subsystems: vec![crate::ConfigSubsystem {
+                        name: "frame_retention".to_owned(),
+                        enabled: true,
+                        outcome: Outcome::relayed("config_subsystem_configured"),
+                    }],
+                    parameters: Vec::new(),
+                }
+                .subsystems_fact_record(1_752_147_200_000, OriginModule::Runtime),
                 AuditInput::new(),
             )
             .into(),

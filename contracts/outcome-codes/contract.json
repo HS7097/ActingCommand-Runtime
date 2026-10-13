@@ -11328,6 +11328,20 @@
       "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "invalid_configure_settings": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a ConfigureSettings request without changes, with more than 64, with an empty, overlong or repeated key or an oversized value, or a receipt of the wrong shape.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

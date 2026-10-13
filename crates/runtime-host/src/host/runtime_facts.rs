@@ -208,22 +208,6 @@ fn settlement_outcome_key(outcome_key: &str) -> String {
 }
 
 impl HostShared {
-    /// Records the in-memory runtime configuration manifest as its two
-    /// `config.*` facts, ledger-first through [`Self::record_runtime_fact`].
-    /// The clock is sampled once so both records share one observation time;
-    /// on a restart that time is newer than the replayed records, so they are
-    /// replaced rather than refused as stale. Any refusal fails startup.
-    pub(super) fn record_config_manifest(
-        &self,
-        manifest: &RuntimeConfigManifest,
-    ) -> RuntimeHostResult<()> {
-        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
-        for record in manifest.to_fact_records(observed_at_unix_ms, OriginModule::Runtime) {
-            self.record_runtime_fact(record)?;
-        }
-        Ok(())
-    }
-
     /// Records the four `backend.selfcheck.<entry>.*` facts of one recorded backend open
     /// (Workflow #317 slice sc1), ledger-first like [`Self::record_runtime_fact`]: instance
     /// scope, source `device-proxy` (input, nemu) or `capture`, no lifetime. One clock sample is
@@ -601,7 +585,8 @@ impl HostShared {
     /// memory. A record the store would reject is refused before the append;
     /// an identical record appends nothing. The host is the only writer; the
     /// producers are emulator instance control (`device.connected`) and the
-    /// startup configuration manifest (`config.subsystems`, `config.parameters`).
+    /// configuration facts (`config.subsystems`, `config.selection`,
+    /// `config.parameters.<section>`, `host.config_overrides`; Workflow #387 D1b).
     pub(super) fn record_runtime_fact(
         &self,
         record: RuntimeFactRecord,

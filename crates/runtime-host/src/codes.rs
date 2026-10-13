@@ -2004,6 +2004,7 @@ pub(crate) mod test_spellings {
             ReadReleasedOwner => "read_released_owner",
             ReadRetainedOwner => "read_retained_owner",
             ReadSchedulingPausesForTest => "read_scheduling_pauses_for_test",
+            ReadStuckRecoveryForTest => "read_stuck_recovery_for_test",
             ReadTestLeaseExpiryCheckpoint => "read_test_lease_expiry_checkpoint",
             ReadTestLeaseExpiryConnection => "read_test_lease_expiry_connection",
             ReadTestLeaseExpiryPosition => "read_test_lease_expiry_position",
@@ -2075,9 +2076,6 @@ actingcommand_contract::outcome_codes! {
         /// Error. A run still active when a blackout started was stopped at its next
         /// checkpoint (keys `blackout_id`, `blackout_start_unix_ms`; SR-4b).
         BlackoutRunStopped => "blackout_run_stopped": error / planned_stop,
-        /// Error. A host blackout entry of the configuration breaks a rule (keys `field`, and
-        /// `blackout_id` when the entry has one; SR-4a).
-        BlackoutConfigInvalid => "blackout_config_invalid": error / none,
         /// Error. A `session.feature.*` record breaks the feature-lock fact rules; the request
         /// is refused (keys `fact_key`; SR-5a).
         SessionFeatureFactInvalid => "session_feature_fact_invalid": error / none,
@@ -2094,3 +2092,36 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #386 SR-0 (scheduling rules): end ----
+
+// ---- Workflow #387 D1b (shared configuration mechanism): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the configuration in effect (Workflow #387 D1b, model v1.2 §5.6,
+    /// §5.7). The refusals of a `ConfigureSettings` change are the configuration crate's
+    /// (`actingcommand_runtime_config::ConfigCode`).
+    pub(crate) enum ConfigHostCode {
+        /// Error. At start the recorded `host.config_overrides` is not of the shape this build
+        /// writes; the start fails, and every later start until the ledger is repaired.
+        HostConfigOverridesFactInvalid => "host_config_overrides_fact_invalid": error / none,
+        /// Error. A `ConfigureSettings` change could not record `host.config_overrides`; nothing
+        /// changed and the request is refused (`caused_by`: the ledger's refusal).
+        HostConfigOverridesPersistFailed => "host_config_overrides_persist_failed": error / none,
+        /// Error. A configuration fact cannot be recorded after the previous one: its observation
+        /// time would overflow.
+        HostConfigOverridesFactClockOverflow => "host_config_overrides_fact_clock_overflow": error / none,
+        /// Error. A value the configuration in effect holds, or an identity a configuration
+        /// record needs, is not of the type the reader expects (an internal invariant).
+        HostConfigValueTypeInvalid => "host_config_value_type_invalid": error / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the configuration in effect (Workflow #387 D1b).
+    pub(crate) enum ConfigHostLocation {
+        ConfigureSettings => "configure_settings",
+        RestoreConfigOverrides => "restore_config_overrides",
+        PersistConfigOverrides => "persist_config_overrides",
+        ReadRuntimeConfig => "read_runtime_config",
+        RecordRuntimeConfig => "record_runtime_config",
+    }
+}
+// ---- Workflow #387 D1b (shared configuration mechanism): end ----

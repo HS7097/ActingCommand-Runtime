@@ -3168,6 +3168,65 @@ impl RuntimeEventBatch {
     }
 }
 
+/// Upper bound on the changes of one `ConfigureSettings` (Workflow #387 D1b).
+pub const MAX_CONFIG_SETTING_CHANGES: usize = 64;
+/// Upper bound on one changed value, serialized.
+pub const MAX_CONFIG_SETTING_VALUE_BYTES: usize = 8 * 1024;
+
+/// One change of a `ConfigureSettings` request (Workflow #387 D1b, model v1.2 §5.6): `key` as
+/// `config.parameters` names it, and its new value; without a value the key returns to its
+/// configuration-file value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSettingChange {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+}
+
+/// One setting a `ConfigureSettings` changed, as it is in effect afterwards (the receipt,
+/// Workflow #387 model v1.2 §5.6): its value and where the value comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfiguredSetting {
+    pub key: String,
+    pub value: crate::FactScalar,
+    pub source: crate::ConfigParameterSource,
+}
+
+/// `ConfigureSettings`'s shape: 1 to [`MAX_CONFIG_SETTING_CHANGES`] changes, each key named once,
+/// at most [`crate::MAX_CONFIG_MANIFEST_NAME_BYTES`] bytes of `a-z`, `0-9`, `_`, `.`, `:` and `-`
+/// (every configuration key's spelling, and the outcome key `config_key`'s), each value at most
+/// [`MAX_CONFIG_SETTING_VALUE_BYTES`] serialized. Whether a key exists, may change and takes the
+/// value is the Runtime's answer.
+fn validate_config_setting_changes(changes: &[ConfigSettingChange]) -> RuntimeContractResult<()> {
+    let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidConfigureSettings);
+    if changes.is_empty() || changes.len() > MAX_CONFIG_SETTING_CHANGES {
+        return Err(invalid());
+    }
+    let mut keys = BTreeSet::new();
+    for change in changes {
+        if change.key.is_empty()
+            || change.key.len() > crate::MAX_CONFIG_MANIFEST_NAME_BYTES
+            || !change.key.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'.' | b':' | b'-')
+            })
+            || !keys.insert(change.key.as_str())
+        {
+            return Err(invalid());
+        }
+        if let Some(value) = &change.value
+            && !serde_json::to_vec(value)
+                .is_ok_and(|bytes| bytes.len() <= MAX_CONFIG_SETTING_VALUE_BYTES)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
@@ -3388,6 +3447,13 @@ pub enum RuntimeOperation {
     ResourceTargetView {
         instance_alias: String,
     },
+    /// Changes settings the Runtime may change while it runs (Workflow #387 D1b, model v1.2
+    /// §5.6), all of them or none: a general instruction the three counters send, recorded as
+    /// a command with the new `host.config_overrides` and `config.parameters.<section>` facts.
+    /// A change without a value returns its key to the configuration-file value.
+    ConfigureSettings {
+        changes: Vec<ConfigSettingChange>,
+    },
     // Workflow #389 U-1: the shapes of the unified interface's new request kinds. Each slice
     // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
     /// Binds this connection to its channel, once, right after `Health` (section 3.2; U-2).
@@ -3564,6 +3630,7 @@ impl RuntimeOperation {
                 }
                 Ok(())
             }
+            Self::ConfigureSettings { changes } => validate_config_setting_changes(changes),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -3807,6 +3874,7 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::ApplyResourceTargets(<document>)"
             }
             Self::ResourceTargetView { .. } => "RuntimeOperation::ResourceTargetView(<redacted>)",
+            Self::ConfigureSettings { .. } => "RuntimeOperation::ConfigureSettings(<redacted>)",
             Self::BindChannel { .. } => "RuntimeOperation::BindChannel(<channel>)",
             Self::UpgradeState { .. } => "RuntimeOperation::UpgradeState(<transition>)",
             Self::UpgradeStateStatus { .. } => "RuntimeOperation::UpgradeStateStatus(<transition>)",
@@ -4645,6 +4713,11 @@ pub enum RuntimeResult {
     ResourceTargetView {
         view: Box<crate::ResourceTargetView>,
     },
+    /// `ConfigureSettings` changed every key it named (Workflow #387 D1b): each key as it is in
+    /// effect afterwards, in request order.
+    SettingsConfigured {
+        settings: Vec<ConfiguredSetting>,
+    },
     // Workflow #389 U-1: the results of the new request kinds; the slices that add their
     // behaviour answer with them.
     /// `BindChannel`: the connection's channel, as bound (U-2).
@@ -5248,6 +5321,17 @@ impl RuntimeReceipt {
                     ));
                 }
                 view.validate()?;
+            }
+            Some(RuntimeResult::SettingsConfigured { settings }) => {
+                if self.state != RuntimeReceiptState::Completed
+                    || self.terminal.is_none()
+                    || settings.is_empty()
+                    || settings.len() > MAX_CONFIG_SETTING_CHANGES
+                {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidConfigureSettings,
+                    ));
+                }
             }
             _ => {}
         }

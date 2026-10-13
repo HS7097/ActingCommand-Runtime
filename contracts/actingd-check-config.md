@@ -135,7 +135,7 @@ file without it keeps its revision.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"not_checked":["vision_model_content"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"config_selection":{"config_sha256":"sha256:<64 hex>","defaults_sha256":"sha256:<64 hex>"},"not_checked":["vision_model_content","instruction_values"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -246,9 +246,16 @@ revision.
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
   records it as the program facts `config.subsystems` and
-  `config.parameters`, which `actingctl facts --program` returns whole and
-  `actingctl status --config` returns on their own. Printing it here has no
-  side effect.
+  `config.parameters.<section>`, which `actingctl facts --program` returns
+  whole and `actingctl status --config` returns on their own. Every parameter
+  carries `settable` (Workflow #387 D1b). Printing it here has no side effect.
+- `config_selection` (Workflow #387 D1b): what startup records as the program
+  fact `config.selection`: `config_sha256` and `defaults_sha256`
+  (`sha256:<hex>`) and, for an installed Runtime, `config_generation`. The
+  exact-SHA build compares `defaults_sha256` with the shipped
+  `actingd.defaults.json`. This command reads only the files: the instruction
+  values a running Runtime holds are not read, and `not_checked` names
+  `instruction_values` ([runtime-config.md](runtime-config.md)).
   - `subsystems` (`name`, `enabled`, `outcome`): `outcome` says why the
     subsystem is on or off, as a registered code (ledger revision 3, Workflow
     #378 A3; it replaces the former prose `reason`, and the schema version stays
@@ -330,19 +337,26 @@ revision.
     `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer), keyed by
     the registry's bounded `instance_id` (`instance_<32 hex>`; an alias may
     exceed the 128-byte key bound), each `explicit` when the instance named
-    the field. The two keys per instance count against the 256-parameter
-    bound, so a configuration of more than about 100 instances fails with
-    `config_manifest_invalid`. Every
-    value is read back from the assembled `RuntimeHostConfig` (Workflow #318,
+    the field; since Workflow #387 D1b the configuration mechanism resolves
+    them (`instances[]` entry with the same `instance_id`) and they are the
+    only keys an instruction may change while the Runtime runs. They form the
+    section `instance`, which with every other section counts against its own
+    256-parameter bound ([runtime-config.md](runtime-config.md)). Every
+    value of the other keys is read back from the assembled `RuntimeHostConfig` (Workflow #318,
     cfg2), never copied from a library `Default`; a host that cannot report
     one (no performance monitor configuration installed) fails assembly with
-    `config_manifest_incomplete`. `source` is `explicit` when the file named
+    `config_manifest_incomplete`; a key the configuration key table does not
+    have fails it with `config_key_unknown`, and a section that fails its
+    whole-section check with `config_value_invalid`. `source` is `explicit` when the file named
     the value and `default` otherwise; `discovered` is reserved and not
-    produced yet. A `value` is a typed scalar (`string`, `integer`,
+    produced yet (`instruction` exists only in the running Runtime's facts).
+    `settable` says whether an instruction may change the key while the
+    Runtime runs. A `value` is a typed scalar (`string`, `integer`,
     `boolean`, `duration_ms`).
 - `not_checked` lists what this command did not validate. It always starts
   with `vision_model_content` (a model's files are read, hashed and loaded only
-  on its first use, see "Vision root"). `state_root_absent` is appended when
+  on its first use, see "Vision root") and `instruction_values` (the settings a
+  running Runtime holds by instruction; Workflow #387 D1b). `state_root_absent` is appended when
   the configured state root does not exist (see "Catalog plan"); an existing
   state root is read. Since Workflow #336 PKG-S1 every `resource_package` is
   admitted in full by its path (see "Instance resource package"), so no package

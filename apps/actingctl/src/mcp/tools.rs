@@ -20,7 +20,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 /// The `instructions` both clients read (§四 instructions).
-pub(super) const INSTRUCTIONS: &str = "ActingCommand local control (tools-only). Start with ac_overview. Long operations return a handle at once; a run's handle is its Runtime request_id and survives restarts, other job handles last only as long as this process; poll ac_get_run with wait_s. If an ac_run_pack call was interrupted before it returned, call ac_overview before submitting again. After an uncertain result call ac_get_run before anything else; never resend a write with new arguments. Approvals, actingd configuration edits and daemon restarts belong to the person. Tiers: observer (read), operator (device/scheduling), author (Lab recording); tools outside the enabled tiers answer tier_not_enabled. Manual: skill `actingcommand`.";
+pub(super) const INSTRUCTIONS: &str = "ActingCommand local control (tools-only). Start with ac_overview. Long operations return a handle at once; a run's handle is its Runtime request_id and survives restarts, other job handles last only as long as this process; poll ac_get_run with wait_s. If an ac_run_pack call was interrupted before it returned, call ac_overview before submitting again. After an uncertain result call ac_get_run before anything else; never resend a write with new arguments. Approvals, actingd configuration file edits and daemon restarts belong to the person; a setting the Runtime may change while running is set with ac_config_set, and every change is recorded. Tiers: observer (read), operator (device/scheduling), author (Lab recording); tools outside the enabled tiers answer tier_not_enabled. Manual: skill `actingcommand`.";
 
 /// The end of every Lab tool's description: its job handle lives in this process only.
 macro_rules! lab_job {
@@ -475,6 +475,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: targets_get_result,
         run: operator::targets_get,
     },
+    // ---- Workflow #387 D1b (begin): `ac_config_set` ↔ `actingctl config set|clear`; observer
+    // until U-3 (model v1.2 §5.6): changing a setting is not tiered, every change is recorded. ----
+    ToolDef {
+        name: "ac_config_set",
+        title: "Change settings",
+        tier: Tier::Observer,
+        description: "Changes settings the Runtime may change while it runs, as actingctl config set and config clear do. changes is a list of {key, value} (1-64): key as actingctl status --config reports it in the config.parameters.<section> rows (only rows with settable true), value its new JSON value; a change without value returns the key to its configuration-file value. All changes take effect at once, or none does: an unknown key answers config_key_unknown, a key the Runtime reads only at start config_key_not_settable (change it in the configuration file, commit it with acsetup and restart the daemon instead), a value of the wrong type or range config_value_invalid. Every change is recorded in the ledger and kept across restarts until the configuration file changes the same key. Answers {settings: [{key, value, source}]}, each changed key as it is in effect afterwards (source instruction, or explicit/default after a clear).",
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        input_schema: config_set_input,
+        result_schema: config_set_result,
+        run: super::settings::config_set,
+    },
+    // ---- Workflow #387 D1b (end) ----
     // ---- Workflow #389 MCP-11 (begin): `ac_packs` ↔ `actingctl packs`; observer before U-3,
     // a general read after it (command table §4.12). ----
     ToolDef {
@@ -1351,6 +1366,39 @@ fn job_result() -> Value {
             "handle": {"type": "string"},
             "job_phase": {"type": "string"},
         },
+    })
+}
+
+/// Workflow #387 D1b: `ac_config_set`'s arguments.
+fn config_set_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "changes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "minLength": 1},
+                        "value": {"description": "The new JSON value; absent or null returns the key to its configuration-file value."},
+                    },
+                    "required": ["key"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        "required": ["changes"],
+        "additionalProperties": false,
+    })
+}
+
+fn config_set_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"settings": {"type": "array", "items": {"type": "object"}}},
+        "required": ["settings"],
     })
 }
 

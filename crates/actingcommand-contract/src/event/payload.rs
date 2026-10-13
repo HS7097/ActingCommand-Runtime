@@ -8515,6 +8515,20 @@ impl CommandPayloadDraft {
             audit,
         )))
     }
+
+    /// `command.rejected` whose outcome is the refusal itself rather than the diagnostic code
+    /// (ledger revision 3; Workflow #387 D1b, a refused `ConfigureSettings`).
+    pub fn rejected_with_outcome(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        outcome: Outcome,
+        audit: AuditInput,
+    ) -> Self {
+        let mut draft = DiagnosticOutcomeDraft::new(action, diagnostic_code, effect, audit);
+        draft.outcome = Some(outcome);
+        Self(CommandDraftKind::Rejected(draft))
+    }
 }
 
 enum SchedulerDraftKind {

@@ -28,6 +28,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde",
@@ -50,6 +51,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-ppocr-onnx-json-provider",
  "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "actingcommand-vision-ffi",
@@ -339,6 +341,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-runtime-config"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "actingcommand-runtime-database"
 version = "0.1.0"
 dependencies = [
@@ -365,6 +377,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-recognition-pack",
  "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
  "actingcommand-runtime-database",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",

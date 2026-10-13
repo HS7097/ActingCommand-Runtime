@@ -3347,6 +3347,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: recent runs."
+    },
+    "runtime_configure_settings": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: runtime configure settings."
     }
   }
 }

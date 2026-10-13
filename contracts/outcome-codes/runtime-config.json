@@ -1,0 +1,151 @@
+{
+  "owner": "runtime-config",
+  "codes": {
+    "blackout_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "field": "required",
+        "blackout_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host blackout entry (scheduling.blackout.host) breaks a rule; field points at the member, blackout_id names the entry when it has one. check-config and startup refuse the configuration.",
+      "common_causes": "A duplicate id, a weekday outside 1 to 7, a minute of day outside 0 to 1439, or an offset outside the allowed range.",
+      "handling": "Fix the entry and commit the configuration again."
+    },
+    "config_key_not_settable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A ConfigureSettings change names a key the Runtime reads only at start; it cannot change while the Runtime runs, and the whole request is refused.",
+      "common_causes": "The key is read before the ledger opens or once by the start-up assembly.",
+      "handling": "Change the key in the configuration file, commit it with acsetup and restart the daemon."
+    },
+    "config_key_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A ConfigureSettings change names a key the configuration key table does not have, or a per-instance key of an instance that is not configured; the whole request is refused and nothing changes.",
+      "common_causes": "A misspelt key, a key of a later Runtime, or an instance id that is not in the configuration.",
+      "handling": "Read the keys in effect with actingctl status --config and send the change again with an existing key."
+    },
+    "config_override_base_changed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start an instruction value was kept although the default it overrode changed in this Runtime release; the file still does not name the key.",
+      "common_causes": "A new Runtime release changed the key's default.",
+      "handling": "Check whether the instruction value is still wanted; clear it to take the new default."
+    },
+    "config_override_dropped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start an instruction value was dropped because its key no longer exists, can no longer change while the Runtime runs, or its value no longer fits the key.",
+      "common_causes": "The instance was removed from the configuration, or a Runtime release changed the key.",
+      "handling": "Set the key again by instruction if it still applies."
+    },
+    "config_override_superseded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start an instruction value was dropped: the configuration file changed or removed the value it overrode, or now names a key whose default it overrode. The later change wins.",
+      "common_causes": "The configuration file was edited and committed after the setting was changed by instruction.",
+      "handling": "Nothing to repair; set the key by instruction again if the file value is not wanted."
+    },
+    "config_value_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required",
+        "config_value_problem": "optional",
+        "range_min": "optional",
+        "range_max": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A ConfigureSettings change carries a value of the wrong type or outside the key's range, names the same key twice, or leaves its section failing the section's whole-section check (config_value_problem says which); the whole request is refused and nothing changes.",
+      "common_causes": "A value of another JSON type, a number outside range_min..range_max, or a combination the section does not allow.",
+      "handling": "Send the change again with a value of the key's type and range."
+    },
+    "recovery_ladder_code_unclassified": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The recovery ladder met a code the embedded catalog does not list and read it as ladder class none. D1c, which emits it, fixes its values (the code met) and its layer.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The recovery_ladder section breaks a rule; startup and check-config refuse the configuration, an instruction is refused as config_value_invalid.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

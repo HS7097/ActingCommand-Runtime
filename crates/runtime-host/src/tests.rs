@@ -117,6 +117,8 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
+// Workflow #387 D1b: D1-M3 to D1-M7.
+mod gate_387_d1b;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_epoch_close;
