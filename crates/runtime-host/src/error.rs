@@ -700,6 +700,18 @@ impl RuntimeHostError {
         }
     }
 
+    /// [`Self::with_native_detail`] for MuMuManager's output from a command that exited: the
+    /// text becomes a `foreign_mumu_manager_error` link with the exit status as `exit_code`
+    /// (ledger revision 3). An exit status is never an OS error.
+    pub(crate) fn with_mumu_manager_output(self, output: &str, exit_code: i32) -> Self {
+        match actingcommand_contract::LifecycleNativeDetail::bounded(output) {
+            Some(native) => {
+                self.with_native_failure_detail(native.with_mumu_manager_exit_code(exit_code))
+            }
+            None => self,
+        }
+    }
+
     pub(crate) fn with_native_detail(self, detail: String) -> Self {
         let mut end = detail.len().min(1024);
         while !detail.is_char_boundary(end) {

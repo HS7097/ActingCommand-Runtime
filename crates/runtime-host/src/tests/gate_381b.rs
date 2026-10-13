@@ -380,11 +380,50 @@ fn gate_a_restart_whose_stop_wait_expired_still_starts_and_fails_in_the_stop_pha
             "adb_port_present=false",
             "device_process_present=true",
             "cause=emulator_control_wait_timeout",
+            "cause=foreign_mumu_manager_error",
         ],
     );
     for key in ["stop_elapsed_ms=", "start_elapsed_ms="] {
         assert!(recorded[0].1.contains(key), "{key} in {}", recorded[0].1);
     }
+    // #378 A3 acceptance H-M1: the failing phase's vendor output is MuMuManager's, with the
+    // control command's exit status (0 when the wait expired) as `exit_code`; an exit status
+    // is never an OS error, so no link of the record carries `foreign_os_error` or `os_error`.
+    let outcome = events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.lifecycle_failure().is_some() =>
+            {
+                Some(record.outcome())
+            }
+            _ => None,
+        })
+        .expect("the restart's runtime.failed record");
+    let vendor = outcome_links(
+        outcome,
+        actingcommand_contract::outcome::CauseRelation::CausedBy,
+    )
+    .into_iter()
+    .find(|link| link.code().as_str() == "foreign_mumu_manager_error")
+    .expect("the vendor output link");
+    assert_eq!(vendor.value("exit_code"), Some(&serde_json::json!(0)));
+    assert_eq!(
+        vendor.value("raw_source"),
+        Some(&serde_json::json!("mumu_manager"))
+    );
+    assert_eq!(
+        vendor.value("raw_text"),
+        Some(&serde_json::json!("scripted vendor output"))
+    );
+    assert!(vendor.value("os_error").is_none() && vendor.value("io_kind").is_none());
+    assert!(
+        outcome
+            .codes()
+            .iter()
+            .all(|code| code.as_str() != "foreign_os_error"),
+        "{outcome}"
+    );
     run.host.close().expect("close host");
 }
 

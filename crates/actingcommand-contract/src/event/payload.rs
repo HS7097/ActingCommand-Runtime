@@ -905,6 +905,22 @@ pub struct LifecycleNativeDetail {
     text: String,
     truncated: bool,
     declared_sensitivity: Sensitivity,
+    /// Which third party wrote the text: it picks the `foreign_*` link [`Self::outcome`]
+    /// builds. Not a record member; the typed ADB recovery evidence that keeps the text as a
+    /// member carries no other source.
+    #[serde(skip)]
+    source: NativeTextSource,
+}
+
+/// The third party behind a [`LifecycleNativeDetail`] (ledger revision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum NativeTextSource {
+    /// Any other third party: a `foreign_other_error` link.
+    #[default]
+    Other,
+    /// MuMuManager's output once its command exited: a `foreign_mumu_manager_error` link
+    /// with the exit status as `exit_code`, never an OS error.
+    MumuManager { exit_code: i32 },
 }
 
 impl std::fmt::Debug for LifecycleNativeDetail {
@@ -934,7 +950,14 @@ impl LifecycleNativeDetail {
             text: text.into(),
             truncated,
             declared_sensitivity: Sensitivity::Sensitive,
+            source: NativeTextSource::Other,
         }
+    }
+
+    /// This text as MuMuManager's output from a command that exited with `exit_code`.
+    pub fn with_mumu_manager_exit_code(mut self, exit_code: i32) -> Self {
+        self.source = NativeTextSource::MumuManager { exit_code };
+        self
     }
 
     /// Keeps a sensitivity its source declared above `sensitive` (a `secret` device text);
@@ -951,16 +974,27 @@ impl LifecycleNativeDetail {
         self.truncated
     }
 
-    /// The `foreign_other_error` link that carries this text verbatim as `raw_text`
-    /// (`raw_source` `other`; B5 names the device sources).
+    /// The link that carries this text verbatim as `raw_text`: `foreign_mumu_manager_error`
+    /// with `exit_code` for MuMuManager's output, else `foreign_other_error` (`raw_source`
+    /// `other`; B5 names the other device sources).
     pub fn outcome(&self) -> Outcome {
-        foreign_text_outcome(
-            ContractCode::ForeignOtherError,
-            RawSource::Other,
-            &self.text,
-            self.truncated,
-            self.declared_sensitivity,
-        )
+        match self.source {
+            NativeTextSource::Other => foreign_text_outcome(
+                ContractCode::ForeignOtherError,
+                RawSource::Other,
+                &self.text,
+                self.truncated,
+                self.declared_sensitivity,
+            ),
+            NativeTextSource::MumuManager { exit_code } => foreign_text_outcome(
+                ContractCode::ForeignMumuManagerError,
+                RawSource::MumuManager,
+                &self.text,
+                self.truncated,
+                self.declared_sensitivity,
+            )
+            .exit_code(exit_code),
+        }
     }
 
     /// The `foreign_os_error` link of an OS error number with this text as its `raw_text`.

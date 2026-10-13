@@ -36,8 +36,9 @@
 //!
 //! Every request is recorded intent -> result: `client.cli_command` / `client.ui_action` plus
 //! `command.received`, then `command.validated` (Performed) on success, or `command.rejected`
-//! plus one `runtime.failed` whose record carries the tool exit code (`raw_os_error`), the
-//! bounded Sensitive vendor output (`native_detail`) and a typed primary detail. Success also
+//! plus one `runtime.failed` whose outcome links the bounded Sensitive vendor output as
+//! `foreign_mumu_manager_error` with the tool's exit code (`exit_code`, never an OS error), and
+//! a typed primary detail. Success also
 //! records the instance program fact `device.connected` (and, after `Stop`, invalidates it
 //! with `device_closed`). Workflow #381 B F4 (review M3): after a failed provider control the
 //! instance's state is read once (bounded) and applied before the failure is recorded; a
@@ -1228,7 +1229,7 @@ impl HostShared {
         let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
         // Ledger revision 3: the report's tokens are the outcome's values and the failing
         // phase's control code its `caused_by` link (they were the detail's message).
-        let mut error = RuntimeHostError::request(
+        let error = RuntimeHostError::request(
             report.code,
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
@@ -1239,11 +1240,11 @@ impl HostShared {
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-        ))
-        .with_native_detail(provider.failure.output_summary.clone());
+        ));
+        // Acceptance H-M1: the control command's exit status is MuMuManager's, not an OS error.
+        let mut error = control_output(error, &provider.failure);
         error.lifecycle.caused_by =
             Some(Outcome::new(report.failure.code).operation(CONTROL_OPERATION));
-        error.lifecycle.raw_os_error = provider.failure.exit_code;
         error.lifecycle.instance_id = Some(instance_id);
         match self.emulator_control_failure(
             links.clone(),
@@ -1664,7 +1665,7 @@ fn emulator_control_error(
     // Ledger revision 3: the device failure's observations are the outcome's values (they were
     // the detail's `key=value` message); the stage stays the detail's, the vendor output the
     // native detail.
-    let mut error = RuntimeHostError::request(code, CONTROL_OPERATION, runtime_code)
+    let error = RuntimeHostError::request(code, CONTROL_OPERATION, runtime_code)
         .with_outcome_values(|outcome| {
             let outcome = outcome.elapsed_ms(failure.elapsed_ms);
             let outcome = match failure.exit_code {
@@ -1691,11 +1692,22 @@ fn emulator_control_error(
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-        ))
-        .with_native_detail(failure.output_summary.clone());
-    error.lifecycle.raw_os_error = failure.exit_code;
+        ));
+    let mut error = control_output(error, failure);
     error.lifecycle.instance_id = Some(instance_id);
     (error, state, effect)
+}
+
+/// The failure's text as the error's native detail (ledger revision 3, acceptance H-M1): once
+/// the control command exited, its output is a `foreign_mumu_manager_error` link with the exit
+/// status as `exit_code` (0 for an errcode envelope, a launch error or the wait deadline);
+/// without an exit the text is the device's, a `foreign_other_error` link. No exit status is
+/// recorded as an OS error.
+fn control_output(error: RuntimeHostError, failure: &EmulatorControlFailure) -> RuntimeHostError {
+    match failure.exit_code {
+        Some(exit_code) => error.with_mumu_manager_output(&failure.output_summary, exit_code),
+        None => error.with_native_detail(failure.output_summary.clone()),
+    }
 }
 
 /// The values of a failed restart's outcome (F4.1; ledger revision 3).
