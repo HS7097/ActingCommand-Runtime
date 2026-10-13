@@ -6385,9 +6385,9 @@ mod run_summary_settlement_tests {
             package_digest: format!("sha256:{}", "a".repeat(64)).into(),
             procedure_binding_digest: format!("sha256:{}", "b".repeat(64)),
             reason_chain_id: "reason:settlement".to_owned(),
-            reasons: vec![PolicyReasonRecord {
-                code: "scheduled".to_owned(),
-            }],
+            reasons: vec![PolicyReasonRecord(
+                actingcommand_contract::outcome::Outcome::relayed("placement_selected"),
+            )],
             catalog_hash: format!("sha256:{}", "c".repeat(64)),
             catalog_version: 1,
             input_ledger_position: 1,

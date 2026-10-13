@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, CodeStr, Outcome, VocabularyToken};
 use actingcommand_selection_policy::{
     Candidate, CollectedVerdict, ScalarValue, SelectionFactEntry, SelectionFactSnapshot,
     SelectionPolicy, UnknownInput, UnknownReason, ValueRef,
@@ -313,10 +313,13 @@ pub struct DetectionSuggestion {
     pub reason: String,
 }
 
+/// One reason of a scheduling decision: a registered code with its values (Workflow #378
+/// A2-P), which a selected chain persists as its `PolicyReasonRecord`, and developer text that
+/// is never persisted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionReason {
-    pub code: String,
+    pub outcome: Outcome,
     pub detail: String,
 }
 
@@ -784,7 +787,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             work.push(TaskWork::blocked_without_instance(
                 task.id.clone(),
                 reason(
-                    PolicyCode::ScopeWithoutInstance.as_str(),
+                    PolicyCode::ScopeWithoutInstance,
                     "no runtime instance matches the task scope",
                 ),
             ));
@@ -819,7 +822,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 trigger.truth = PredicateTruth::True;
                 trigger.suggestions.clear();
                 task_work.reasons.push(reason(
-                    PolicyCode::FailureRetryImmediate.as_str(),
+                    PolicyCode::FailureRetryImmediate,
                     "the latest failure is rerun at once: its trigger and cooldown are not awaited",
                 ));
             }
@@ -845,14 +848,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                     task_work.eligibility = EligibilityState::False;
                     task_work.state = SchedulingDecisionState::Blocked;
                     task_work.reasons.push(reason(
-                        PolicyCode::TriggerFalse.as_str(),
+                        PolicyCode::TriggerFalse,
                         "the task trigger evaluated to false for this instance",
                     ));
                 }
                 PredicateTruth::Unknown => {
                     task_work.suggestions = trigger.suggestions;
                     task_work.reasons.push(reason(
-                        PolicyCode::TriggerUnknown.as_str(),
+                        PolicyCode::TriggerUnknown,
                         "the task trigger requires additional observations",
                     ));
                 }
@@ -941,14 +944,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             task_work.eligibility = EligibilityState::False;
                             task_work.state = SchedulingDecisionState::Blocked;
                             task_work.reasons.push(reason(
-                                PolicyCode::FeedbackStopTrue.as_str(),
+                                PolicyCode::FeedbackStopTrue,
                                 "the feedback stop predicate evaluated to true for this instance",
                             ));
                         }
                         PredicateTruth::Unknown => {
                             task_work.suggestions = stop.suggestions;
                             task_work.reasons.push(reason(
-                                PolicyCode::FeedbackStopUnknown.as_str(),
+                                PolicyCode::FeedbackStopUnknown,
                                 "the feedback stop predicate requires additional observations",
                             ));
                         }
@@ -956,7 +959,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             task_work.eligibility = EligibilityState::True;
                             task_work.state = SchedulingDecisionState::Eligible;
                             task_work.reasons.push(reason(
-                                "eligible",
+                                PolicyCode::TaskEligible,
                                 "trigger passed and feedback stop did not fire",
                             ));
                             let facts_fresh_until_unix_ms = min_wake(
@@ -978,7 +981,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             if cooldown_until.is_some_and(|until| time.unix_ms < until) {
                                 task_work.state = SchedulingDecisionState::Deferred;
                                 task_work.reasons.push(reason(
-                                    PolicyCode::TaskCooldownActive.as_str(),
+                                    PolicyCode::TaskCooldownActive,
                                     "the task-specific dispatch cooldown has not elapsed",
                                 ));
                                 task_work.next_wake_unix_ms =
@@ -1049,7 +1052,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     for candidate in candidates {
         if selected_instances.contains(candidate.instance_id.as_str()) {
             work[candidate.work_index].reasons.push(reason(
-                PolicyCode::InstanceAlreadySelected.as_str(),
+                PolicyCode::InstanceAlreadySelected,
                 "a higher-ranked task already owns this instance for the evaluation round",
             ));
             continue;
@@ -1067,12 +1070,12 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 && host.active_heavy_dispatches >= host.heavy_dispatch_limit
             {
                 (
-                    PolicyCode::HeavySceneBudgetDeferred.as_str(),
+                    PolicyCode::HeavySceneBudgetDeferred,
                     "the shared host heavy-scene concurrency budget was consumed by higher-ranked dispatches",
                 )
             } else {
                 (
-                    PolicyCode::HostBudgetDeferred.as_str(),
+                    PolicyCode::HostBudgetDeferred,
                     "the shared host budget was consumed by higher-ranked dispatches",
                 )
             };
@@ -1094,14 +1097,14 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         let mut reasons = work[candidate.work_index].reasons.clone();
         reasons.extend([
             reason(
-                PolicyCode::PlacementSelected.as_str(),
+                PolicyCode::PlacementSelected,
                 format!(
                     "instance '{}' satisfies scope, capability, affinity, and host budget",
                     candidate.instance_id
                 ),
             ),
             reason(
-                "ranked",
+                PolicyCode::RankAssigned,
                 format!("deterministic total score {}", candidate.rank.total_score),
             ),
         ]);
@@ -1298,11 +1301,12 @@ const TRUNCATION_MARK: &str = "…[truncated]";
 
 /// Closes the round's explanations. First every decision left without a reason is settled with
 /// `decision_reason_missing` (Workflow #386 SR-6a), so no record below names `none`. Then the
-/// dispatch decision record is appended after `ranked` on every selected chain (Workflow #308
-/// RT-S1c), and each selected decision's reasons are kept equal to its chain: `rank_breakdown`,
-/// `decision_record`, then `candidate_not_selected:<task>` for at most eight related
-/// candidates. A chain without room for the first two appends nothing and says so in `ranked`.
-/// No other decision gains a reason.
+/// dispatch decision record is appended after `rank_assigned` on every selected chain (Workflow
+/// #308 RT-S1c), and each selected decision's reasons are kept equal to its chain:
+/// `rank_breakdown`, `decision_record`, then `decision_candidate_not_selected` (with the
+/// candidate's `task_id`) for at most eight related candidates. A chain without room for the
+/// first two appends nothing and says so in `rank_assigned`'s detail. No other decision gains a
+/// reason.
 fn append_decision_records(
     work: &mut [TaskWork],
     reason_chains: &mut [DecisionReasonChain],
@@ -1335,10 +1339,10 @@ fn append_decision_records(
             None => {
                 let ranked = chain
                     .last_mut()
-                    .filter(|reason| reason.code == "ranked")
+                    .filter(|reason| reason.outcome.is(PolicyCode::RankAssigned))
                     .ok_or_else(|| {
                         PolicyEvaluationError::invalid(
-                            "a selected reason chain does not end with ranked",
+                            "a selected reason chain does not end with rank_assigned",
                         )
                     })?;
                 ranked.detail = bounded_detail(format!(
@@ -1369,10 +1373,10 @@ fn settle_decisions_left_without_reason(work: &mut [TaskWork]) {
             continue;
         };
         let detail = format!("task_id={} instance_id={instance_id}", entry.task_id);
-        entry.reasons.push(reason(
-            SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
-            detail,
-        ));
+        let outcome = Outcome::new(SchedulingRulePolicyCode::DecisionReasonMissing)
+            .task_id(entry.task_id.as_str())
+            .instance_id(instance_id);
+        entry.reasons.push(reason_with(outcome, detail));
         if entry.state == SchedulingDecisionState::Eligible {
             entry.state = SchedulingDecisionState::Deferred;
         }
@@ -1439,17 +1443,17 @@ fn decision_record(
         .len()
         .min(MAX_DECISION_RECORD_CANDIDATES)
         .min(candidate_room);
-    let mut omitted_why = BTreeMap::<&str, usize>::new();
+    let mut omitted_why = BTreeMap::<CodeStr, usize>::new();
     for (entry, _) in &related[shown..] {
         *omitted_why.entry(last_reason_code(entry)).or_default() += 1;
     }
     let mut reasons = Vec::with_capacity(2 + shown);
     reasons.push(reason(
-        PolicyCode::RankBreakdown.as_str(),
+        PolicyCode::RankBreakdown,
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
     reasons.push(reason(
-        PolicyCode::DecisionRecord.as_str(),
+        PolicyCode::DecisionRecord,
         bounded_detail(decision_record_detail(
             &target_policy_field(target_policies.get(instance_id)),
             related.len(),
@@ -1478,8 +1482,8 @@ fn decision_record(
                 eligibility_name(entry.eligibility)
             ),
         };
-        reasons.push(reason(
-            format!("candidate_not_selected:{}", entry.task_id),
+        reasons.push(reason_with(
+            Outcome::new(PolicyCode::DecisionCandidateNotSelected).task_id(entry.task_id.as_str()),
             bounded_detail(detail),
         ));
     }
@@ -1489,15 +1493,15 @@ fn decision_record(
 /// Every path that leaves a candidate unselected ends with the reason that settled it, and a
 /// decision left without one has been given `decision_reason_missing` before any record names it
 /// (`settle_decisions_left_without_reason`), so `why` is never `none` (Workflow #386 SR-6a).
-fn last_reason_code(entry: &TaskWork) -> &str {
-    entry.reasons.last().map_or(
-        SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
-        |reason| reason.code.as_str(),
+fn last_reason_code(entry: &TaskWork) -> CodeStr {
+    entry.reasons.last().map_or_else(
+        || CodeStr::from(SchedulingRulePolicyCode::DecisionReasonMissing.code()),
+        |reason| reason.outcome.code().clone(),
     )
 }
 
-/// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`. Under an
-/// active v2 policy `target` is the candidate's resource term `R`.
+/// The ranking terms shared by `rank_breakdown` and a ranked `decision_candidate_not_selected`.
+/// Under an active v2 policy `target` is the candidate's resource term `R`.
 fn rank_terms(
     rank: &TaskRank,
     stage: Option<&StageRecord>,
@@ -1606,7 +1610,7 @@ fn decision_record_detail(
     targets: &str,
     related: usize,
     shown: usize,
-    omitted_why: &BTreeMap<&str, usize>,
+    omitted_why: &BTreeMap<CodeStr, usize>,
 ) -> String {
     let mut detail = format!(
         "targets={targets} related={related} shown={shown} omitted={} omitted_why=",
@@ -1728,7 +1732,7 @@ fn build_candidate(
 ) -> PolicyEvaluationResult<PlacementResult> {
     if !instance.available {
         return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::InstanceUnavailable.as_str(),
+            PolicyCode::InstanceUnavailable,
             "the instance is unavailable",
         )));
     }
@@ -1738,7 +1742,7 @@ fn build_candidate(
         .any(|operation| operation == &task.entrypoint.operation_id)
     {
         return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::CapabilityMissing.as_str(),
+            PolicyCode::CapabilityMissing,
             format!(
                 "instance '{}' does not provide operation '{}'",
                 instance.instance_id, task.entrypoint.operation_id
@@ -1755,14 +1759,14 @@ fn build_candidate(
         .is_some_and(|enabled| !enabled)
     {
         return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::InstanceOverrideDisabled.as_str(),
+            PolicyCode::InstanceOverrideDisabled,
             "the task is disabled by its instance override",
         )));
     }
 
     let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
         return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::ActivityProfileMissing.as_str(),
+            PolicyCode::ActivityProfileMissing,
             format!(
                 "instance '{}' has no matching activity profile",
                 instance.instance_id
@@ -1787,7 +1791,7 @@ fn build_candidate(
         let (code, detail) =
             if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
                 (
-                    PolicyCode::HeavySceneBudgetExhausted.as_str(),
+                    PolicyCode::HeavySceneBudgetExhausted,
                     format!(
                         "host '{}' has no remaining heavy-scene concurrency budget",
                         instance.host_id
@@ -1795,7 +1799,7 @@ fn build_candidate(
                 )
             } else {
                 (
-                    PolicyCode::HostCapacityInsufficient.as_str(),
+                    PolicyCode::HostCapacityInsufficient,
                     format!(
                         "host '{}' cannot satisfy the task load profile",
                         instance.host_id
@@ -2091,8 +2095,8 @@ fn apply_priority_selection(
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     let policy = catalog.selection_policy();
-    // The utility fields join the `scored` detail only once the catalog can score or value a
-    // task, so an offset-only evaluation keeps its detail byte for byte.
+    // The utility fields join the `score_computed` detail only once the catalog can score or
+    // value a task, so an offset-only evaluation keeps its detail byte for byte.
     let utility_fields = policy.is_some()
         || catalog
             .catalog()
@@ -2376,10 +2380,12 @@ fn apply_priority_selection(
             disposition,
             ScoreDisposition::Promoted { .. } | ScoreDisposition::AgingCap { .. }
         );
-        task_work.reasons.push(reason("scored", detail));
+        task_work
+            .reasons
+            .push(reason(PolicyCode::ScoreComputed, detail));
         if let Some(rule) = unknown_rule {
-            task_work.reasons.push(reason(
-                format!("score_unknown:{rule}"),
+            task_work.reasons.push(reason_with(
+                Outcome::new(PolicyCode::ScoreUnknown).rule_id(rule.as_str()),
                 match applied.map(|applied| applied.mode) {
                     Some(TargetMode::Adjust) => {
                         "the selection document could not score this candidate; the utility term, the manual offset and the applied resource target apply"
@@ -2398,7 +2404,7 @@ fn apply_priority_selection(
         }
         if utility.cost_unknown {
             task_work.reasons.push(reason(
-                "score_unknown:cost",
+                PolicyCode::ScoreCostUnknown,
                 "neither the last run duration nor the declared expected duration is above zero; the utility term is dropped",
             ));
         }
@@ -2458,7 +2464,7 @@ fn apply_priority_selection(
             } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(reason(
-                    PolicyCode::ScoreDeferred.as_str(),
+                    PolicyCode::ScoreDeferred,
                     format!("{detail}; reevaluation at {wake_unix_ms}"),
                 ));
                 task_work.next_wake_unix_ms =
@@ -2468,13 +2474,13 @@ fn apply_priority_selection(
                 candidate.promoted = true;
                 task_work
                     .reasons
-                    .push(reason(PolicyCode::ScorePromoted.as_str(), detail));
+                    .push(reason(PolicyCode::ScorePromoted, detail));
                 ranked.push(candidate);
             }
             ScoreDisposition::AgingCap { aging_ms, cap_ms } => {
                 candidate.promoted = true;
                 task_work.reasons.push(reason(
-                    PolicyCode::ScoreAgingCap.as_str(),
+                    PolicyCode::ScoreAgingCap,
                     format!("aging_ms={aging_ms} cap_ms={cap_ms}"),
                 ));
                 ranked.push(candidate);
@@ -2620,8 +2626,11 @@ fn unknown_input_reasons(
             .iter()
             .filter(|(_, key, _)| seen.insert(*key))
             .map(|(_, key, unknown_reason)| {
-                reason(
-                    PolicyCode::FactRefreshUnbound.as_str(),
+                reason_with(
+                    Outcome::new(PolicyCode::FactRefreshUnbound)
+                        .instance_id(instance_id)
+                        .fact_key(*key)
+                        .unknown_reason(UnknownReasonToken(*unknown_reason)),
                     format!(
                         "instance_id={instance_id} fact_key={key} unknown_reason={}",
                         unknown_token(*unknown_reason)
@@ -2635,8 +2644,11 @@ fn unknown_input_reasons(
             .filter(|(_, key, unknown_reason)| !is_realistic(key, *unknown_reason))
             .filter(|(rule_id, _, _)| seen.insert(*rule_id))
             .map(|(rule_id, _, unknown_reason)| {
-                reason(
-                    PolicyCode::SelectionInputUnknown.as_str(),
+                reason_with(
+                    Outcome::new(PolicyCode::SelectionInputUnknown)
+                        .instance_id(instance_id)
+                        .rule_id(*rule_id)
+                        .unknown_reason(UnknownReasonToken(*unknown_reason)),
                     format!(
                         "instance_id={instance_id} rule_id={rule_id} unknown_reason={}",
                         unknown_token(*unknown_reason)
@@ -2654,6 +2666,19 @@ fn is_realistic(key: &str, unknown_reason: UnknownReason) -> bool {
         && REALISTIC_FACT_PREFIXES
             .iter()
             .any(|prefix| key.starts_with(prefix))
+}
+
+/// A selection-policy reason as a token of the catalog vocabulary `unknown_reason`, so a reason's
+/// outcome can carry it (Workflow #378 A2-P).
+#[derive(Clone, Copy)]
+struct UnknownReasonToken(UnknownReason);
+
+impl VocabularyToken for UnknownReasonToken {
+    const VOCABULARY: &'static str = "unknown_reason";
+
+    fn token(self) -> &'static str {
+        unknown_token(self.0)
+    }
 }
 
 /// The token of the `unknown_reason` vocabulary for one selection-policy reason.
@@ -3270,7 +3295,7 @@ fn evaluate_predicate(
             let availability = timeline_availability(event, time, applicable)?;
             if availability.state == EligibilityState::Unknown {
                 reasons.push(reason(
-                    PolicyCode::TimelineUnavailable.as_str(),
+                    PolicyCode::TimelineUnavailable,
                     format!("event '{event_id}' has no positive applicable interval"),
                 ));
                 let mut result = PredicateEvaluation::known(false, None);
@@ -3280,7 +3305,7 @@ fn evaluate_predicate(
             let window = availability.active_interval;
             let next = availability.next_wake_unix_ms;
             reasons.push(reason(
-                PolicyCode::TimelineActive.as_str(),
+                PolicyCode::TimelineActive,
                 format!(
                     "event '{event_id}' at {}: interval {window:?}; next boundary {next:?}",
                     time.unix_ms
@@ -4255,9 +4280,15 @@ fn hash_part(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn reason(code: impl Into<String>, detail: impl Into<String>) -> DecisionReason {
+/// A reason whose code carries no values.
+fn reason(code: impl Into<Code>, detail: impl Into<String>) -> DecisionReason {
+    reason_with(Outcome::new(code), detail)
+}
+
+/// A reason with its outcome built, values included.
+fn reason_with(outcome: Outcome, detail: impl Into<String>) -> DecisionReason {
     DecisionReason {
-        code: code.into(),
+        outcome,
         detail: detail.into(),
     }
 }
@@ -5203,7 +5234,7 @@ pub(crate) mod tests {
             result.reason_chains[0]
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "timeline_active"
+                .any(|reason| reason.outcome.code().as_str() == "timeline_active"
                     && reason.detail.contains("neutral.window"))
         );
         docs.3["events"][0]["validity"]["from_unix_ms"] = serde_json::json!(NOW + 1);
@@ -5651,11 +5682,19 @@ pub(crate) mod tests {
             )
             .clone()
         };
-        let reason_detail = |evaluation: &PolicyEvaluation, code: &str| {
+        // A resource target reason names its target by its `resource_target_id` value.
+        let reason_detail = |evaluation: &PolicyEvaluation, code: &str, target_id: &str| {
             secondary(evaluation)
                 .reasons
                 .into_iter()
-                .find(|reason| reason.code == code)
+                .find(|reason| {
+                    reason.outcome.code().as_str() == code
+                        && reason
+                            .outcome
+                            .value("resource_target_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(target_id)
+                })
                 .map(|reason| reason.detail)
         };
         // The decision record names the stored policy; every other record reason must match.
@@ -5673,7 +5712,8 @@ pub(crate) mod tests {
                 )
             {
                 reasons.retain(|reason| {
-                    !reason.code.starts_with("resource_target_") && reason.code != "decision_record"
+                    let code = reason.outcome.code().as_str();
+                    !code.starts_with("resource_target_") && code != "decision_record"
                 });
             }
             serde_json::to_vec(&evaluation).expect("evaluation bytes")
@@ -5715,7 +5755,7 @@ pub(crate) mod tests {
             assert!(rank.effective_milli <= previous);
             previous = rank.effective_milli;
             assert_eq!(winner_on_a(&scored), winner, "current={current}");
-            assert!(reason_detail(&scored, "resource_target_applied:primary-floor").is_some());
+            assert!(reason_detail(&scored, "resource_target_applied", "primary-floor").is_some());
             assert_eq!(
                 instance_b(&scored),
                 instance_b(&evaluate_at(current, None, None))
@@ -5742,22 +5782,27 @@ pub(crate) mod tests {
         let tail = &chain[chain.len() - 5..];
         assert_eq!(
             tail.iter()
-                .map(|reason| reason.code.as_str())
+                .map(|reason| reason.outcome.code().as_str())
                 .collect::<Vec<_>>(),
             [
                 "placement_selected",
-                "ranked",
+                "rank_assigned",
                 "rank_breakdown",
                 "decision_record",
-                "candidate_not_selected:fixture.observe"
+                "decision_candidate_not_selected"
             ]
+        );
+        assert_eq!(
+            tail[4].outcome.value("task_id"),
+            Some(&serde_json::json!("fixture.observe"))
         );
         assert!(tail[2].detail.contains(" target=200000 "));
         assert!(tail[3].detail.starts_with("targets=active:"));
         assert!(tail[4].detail.starts_with("why=instance_already_selected "));
         assert_eq!(secondary(&scored).reasons, chain);
         assert!(selected_chain("fixture-instance-b").iter().any(|reason| {
-            reason.code == "decision_record" && reason.detail.starts_with("targets=none ")
+            reason.outcome.code().as_str() == "decision_record"
+                && reason.detail.starts_with("targets=none ")
         }));
 
         // Release: a closed gap decides exactly as no policy, apart from its own reasons.
@@ -5766,7 +5811,7 @@ pub(crate) mod tests {
             without_target_reasons(&released),
             without_target_reasons(&evaluate_at(100, None, None))
         );
-        assert!(reason_detail(&released, "resource_target_satisfied:primary-floor").is_some());
+        assert!(reason_detail(&released, "resource_target_satisfied", "primary-floor").is_some());
         assert_eq!(
             instance_b(&released),
             instance_b(&evaluate_at(100, None, None))
@@ -5785,14 +5830,14 @@ pub(crate) mod tests {
             secondary(&overridden).rank.expect("rank").effective_milli,
             200_000
         );
-        assert!(reason_detail(&overridden, "resource_target_override:primary-floor").is_some());
+        assert!(reason_detail(&overridden, "resource_target_override", "primary-floor").is_some());
         let released = evaluate_at(100, Some(&overriding), Some(-300_000));
         assert_eq!(
             without_target_reasons(&released),
             without_target_reasons(&evaluate_at(100, None, Some(-300_000)))
         );
         assert!(
-            reason_detail(&released, "resource_target_satisfied:primary-floor")
+            reason_detail(&released, "resource_target_satisfied", "primary-floor")
                 .is_some_and(|detail| detail.ends_with("; override released"))
         );
         for (evaluation, current) in [(adjusted, 0), (overridden, 0), (released, 100)] {
@@ -5910,8 +5955,10 @@ pub(crate) mod tests {
                     decision
                         .reasons
                         .iter()
-                        .any(|reason| reason.code == "resource_weights"
-                            && reason.detail.contains(&format!(" term={score} items=")))
+                        .any(
+                            |reason| reason.outcome.code().as_str() == "resource_weights"
+                                && reason.detail.contains(&format!(" term={score} items="))
+                        )
                 );
             }
         }
@@ -6035,7 +6082,7 @@ pub(crate) mod tests {
             result.decisions[0]
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "heavy_scene_budget_exhausted")
+                .any(|reason| reason.outcome.code().as_str() == "heavy_scene_budget_exhausted")
         );
     }
 
@@ -6287,7 +6334,10 @@ pub(crate) mod tests {
 
         assert_eq!(result.decisions[0].eligibility, EligibilityState::True);
         assert_eq!(result.decisions[0].state, SchedulingDecisionState::Blocked);
-        assert_eq!(result.decisions[0].reasons[1].code, "instance_unavailable");
+        assert_eq!(
+            result.decisions[0].reasons[1].outcome.code().as_str(),
+            "instance_unavailable"
+        );
         assert!(result.dispatch_intents.is_empty());
     }
 
@@ -7063,12 +7113,18 @@ pub(crate) mod tests {
         selected.eligibility = EligibilityState::True;
         selected.state = SchedulingDecisionState::Selected;
         selected.reasons = vec![
-            reason("eligible", "trigger passed and feedback stop did not fire"),
             reason(
-                PolicyCode::PlacementSelected.as_str(),
+                PolicyCode::TaskEligible,
+                "trigger passed and feedback stop did not fire",
+            ),
+            reason(
+                PolicyCode::PlacementSelected,
                 "instance 'fixture-instance-a' satisfies scope, capability, affinity, and host budget",
             ),
-            reason("ranked", "deterministic total score 101000000"),
+            reason(
+                PolicyCode::RankAssigned,
+                "deterministic total score 101000000",
+            ),
         ];
         selected.record = Some(RankRecord {
             base_total: rank.total_score,

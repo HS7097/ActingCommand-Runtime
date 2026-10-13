@@ -1335,7 +1335,7 @@ mod tests {
                 input_ledger_position: 6,
                 fact_snapshot_id: "snapshot-neutral".to_owned(),
                 approval_fact_ids: vec!["approval:neutral".to_owned()],
-                reason_codes: vec!["eligible".to_owned()],
+                reason_codes: vec!["task_eligible".to_owned()],
                 urgency_milli: 500,
             }],
             decision_page: Some(

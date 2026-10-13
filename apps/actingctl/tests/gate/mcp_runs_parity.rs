@@ -507,9 +507,7 @@ fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventDat
         package_digest: placeholder('a').into(),
         procedure_binding_digest: placeholder('b'),
         reason_chain_id: "reasons.runs.scheduled".to_owned(),
-        reasons: vec![PolicyReasonRecord {
-            code: "scheduled".to_owned(),
-        }],
+        reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],
         catalog_hash: placeholder('c'),
         catalog_version: 1,
         input_ledger_position: 1,

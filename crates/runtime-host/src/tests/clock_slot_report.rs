@@ -12,6 +12,7 @@ use super::*;
 use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal, signal_id};
 use crate::suspension_report::{SlotDispatch, SlotSignal, clock_slot_entry};
 use actingcommand_contract::PolicyBudgetDimension;
+use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 
 /// `actingd suspended` on a closed state root, with the catalog the scenario activated.
@@ -335,8 +336,9 @@ fn appended(signals: Vec<PolicyPlanningSignalEventData>) -> Value {
     report(&slots.close_keeping_root(), &sources)
 }
 
-/// A clock-slot record whose token does not read back, here one with a key this reader does
-/// not know, as a later writer may add, is an unparsed entry and adds no report warning.
+/// A clock-slot record whose outcome does not read back, here one whose code is not a
+/// clock-slot code (Workflow #378 A2-P: the record carries an outcome, not a token), is an
+/// unparsed entry naming that code and adds no report warning.
 #[test]
 fn a_clock_slot_token_that_does_not_read_back_is_unparsed_without_a_warning() {
     let mut signal = clock_slot_signal(
@@ -344,7 +346,7 @@ fn a_clock_slot_token_that_does_not_read_back_is_unparsed_without_a_warning() {
         SLOT_TASK,
         POLICY_INSTANCE_ALIAS,
         &SlotValues {
-            gate_code: Some("policy_budget_exhausted".to_owned()),
+            gate_code: Some(HostCode::PolicyBudgetExhausted.code()),
             budget_dimension: Some(PolicyBudgetDimension::TaskDaily),
             occurrence_unix_ms: at(1, 10, 0),
             window_end_unix_ms: Some(at(1, 23, 30)),
@@ -354,14 +356,18 @@ fn a_clock_slot_token_that_does_not_read_back_is_unparsed_without_a_warning() {
         },
         at(1, 12, 0),
     );
-    signal.fact_code.push_str(":grace_ms=600000");
-    let (id, token) = (signal.signal_id.clone(), signal.fact_code.clone());
+    signal.outcome = Outcome::new(HostCode::MaintenanceRecheckSuggested);
+    let id = signal.signal_id.clone();
 
     let without = appended(Vec::new());
     let report = appended(vec![signal]);
     assert_eq!(
         report["clock_slots"],
-        json!([{"parse_state": "unparsed", "signal_id": id, "raw_token": token}]),
+        json!([{
+            "parse_state": "unparsed",
+            "signal_id": id,
+            "code": "maintenance_recheck_suggested"
+        }]),
         "{report:#}"
     );
     assert_eq!(report["warnings"], without["warnings"], "{report:#}");
@@ -381,7 +387,7 @@ fn clock_slots_keep_the_200_newest_and_count_them_all() {
                 SLOT_TASK,
                 POLICY_INSTANCE_ALIAS,
                 &SlotValues {
-                    gate_code: Some("policy_budget_exhausted".to_owned()),
+                    gate_code: Some(HostCode::PolicyBudgetExhausted.code()),
                     budget_dimension: Some(PolicyBudgetDimension::TaskDaily),
                     occurrence_unix_ms: *occurrence,
                     ..SlotValues::default()
@@ -407,8 +413,8 @@ fn clock_slots_keep_the_200_newest_and_count_them_all() {
     assert_eq!(report["clock_slots_total"], json!(201));
 }
 
-/// The golden JSON of one entry of each code, from K2's own token: a refused record settled by
-/// the next morning's run, a deferred record not yet settled, an owed first run served.
+/// The golden JSON of one entry of each code, from K2's own outcome: a refused record settled
+/// by the next morning's run, a deferred record not yet settled, an owed first run served.
 #[test]
 fn clock_slot_entries_of_each_code_match_their_golden_json() {
     let entry = |kind, values: SlotValues, recorded: (u64, u64), dispatch, reference| {
@@ -420,7 +426,7 @@ fn clock_slot_entries_of_each_code_match_their_golden_json() {
                 signal_id: &signal.signal_id,
                 task_id: signal.task_id.as_deref(),
                 instance_id: &signal.instance_id,
-                token: &signal.fact_code,
+                outcome: &signal.outcome,
             },
             dispatch,
             reference,
@@ -429,7 +435,7 @@ fn clock_slot_entries_of_each_code_match_their_golden_json() {
     };
 
     let refused = SlotValues {
-        gate_code: Some("policy_budget_exhausted".to_owned()),
+        gate_code: Some(HostCode::PolicyBudgetExhausted.code()),
         budget_dimension: Some(PolicyBudgetDimension::TaskDaily),
         occurrence_unix_ms: at(1, 19, 0),
         window_end_unix_ms: Some(at(1, 23, 30)),
@@ -452,7 +458,7 @@ fn clock_slot_entries_of_each_code_match_their_golden_json() {
     );
 
     let deferred = SlotValues {
-        gate_code: Some("dispatch_paused_instance".to_owned()),
+        gate_code: Some(HostCode::DispatchPausedInstance.code()),
         occurrence_unix_ms: at(0, 10, 0),
         window_end_unix_ms: Some(at(0, 23, 30)),
         next_occurrence_unix_ms: Some(at(1, 10, 0)),

@@ -298,7 +298,7 @@ fn gate_d2_t7_an_expired_field_is_never_scored_with_its_old_value() {
         !deferred
             .reasons
             .iter()
-            .any(|reason| reason.code == "scored"),
+            .any(|reason| reason.outcome.code().as_str() == "score_computed"),
         "the expired value is never scored: {:?}",
         deferred.reasons
     );
@@ -415,7 +415,7 @@ fn values<'a>(decision: &'a TaskDecision, code: &str) -> Vec<BTreeMap<&'a str, &
     decision
         .reasons
         .iter()
-        .filter(|reason| reason.code == code)
+        .filter(|reason| reason.outcome.code().as_str() == code)
         .map(|reason| {
             reason
                 .detail

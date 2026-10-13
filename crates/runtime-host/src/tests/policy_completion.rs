@@ -31,33 +31,25 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     assert!(budget_record.activity.seed > 0);
 
     let signals = [
-        (
-            "signal:goal-missed-a",
-            PolicyPlanningSignalKind::GoalMissed,
-            "goal.primary.missed",
-        ),
+        ("signal:goal-missed-a", PolicyPlanningSignalKind::GoalMissed),
         (
             "signal:feasibility-red-a",
             PolicyPlanningSignalKind::FeasibilityRed,
-            "goal.primary.feasibility_red",
         ),
         (
             "signal:drift-predicted-a",
             PolicyPlanningSignalKind::DriftPredicted,
-            "goal.primary.drift_predicted",
         ),
     ]
-    .map(
-        |(signal_id, kind, fact_code)| PolicyPlanningSignalEventData {
-            signal_id: signal_id.to_owned(),
-            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
-            task_id: Some(intent.task_id.clone()),
-            kind,
-            fact_code: fact_code.to_owned(),
-            observed_at_unix_ms: POLICY_NOW_UNIX_MS + 50,
-            detection_budget: None,
-        },
-    );
+    .map(|(signal_id, kind)| PolicyPlanningSignalEventData {
+        signal_id: signal_id.to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: Some(intent.task_id.clone()),
+        kind,
+        outcome: planning_signal_outcome(kind),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS + 50,
+        detection_budget: None,
+    });
     for signal in &signals {
         host.record_policy_planning_signal(signal.clone())
             .expect("planning signal");

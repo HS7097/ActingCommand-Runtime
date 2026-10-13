@@ -380,4 +380,6 @@ outcome_keys! {
     device_state_probe: vocab(device_state_probe),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
+    // Workflow #378 A2-P: a resource target of an instance's resource-targets document.
+    resource_target_id: token,
 }

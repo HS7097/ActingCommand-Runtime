@@ -570,7 +570,7 @@ actingcommand_contract::outcome_codes! {
         MaintenanceLedgerQueryFailed => "maintenance_ledger_query_failed": error / none,
         MaintenanceLedgerQueryInvalid => "maintenance_ledger_query_invalid": error / none,
         MaintenancePathMissing => "maintenance_path_missing": error / none,
-        MaintenanceRecheckSuggested => "maintenance_recheck_suggested": error / none,
+        MaintenanceRecheckSuggested => "maintenance_recheck_suggested": info / none,
         MigrationBackupSourceMismatch => "migration_backup_source_mismatch": error / none,
         MigrationCurrentStateConflict => "migration_current_state_conflict": error / none,
         MonitorCommittedStateMissing => "monitor_committed_state_missing": error / none,
@@ -1133,6 +1133,18 @@ actingcommand_contract::outcome_codes! {
         /// optional `request_id`, `instance_id`).
         PackRegistryDispatchWithdrawn => "pack_registry_dispatch_withdrawn": info / none,
         // ---- end of #389 U-0 registrations
+        /// Info. Workflow #378 A2-P (keys `fact_key`, `unknown_reason`).
+        PlanningFactUnknown => "planning_fact_unknown": info / none,
+        /// Info. Workflow #378 A2-P.
+        StrategicFeasibilityRed => "strategic_feasibility_red": info / none,
+        /// Info. Workflow #378 A2-P.
+        StrategicTimelineReached => "strategic_timeline_reached": info / none,
+        /// Warning. Workflow #378 A2-P (keys `fact_key`).
+        PolicyInstanceFactMissing => "policy_instance_fact_missing": warning / none,
+        /// Warning. Workflow #378 A2-P (keys `task_id`).
+        PriorityOffsetUnknownTask => "priority_offset_unknown_task": warning / none,
+        /// Error. Workflow #378 A2-P.
+        PolicyDetectionReasonUnknown => "policy_detection_reason_unknown": error / none,
     }
 }
 

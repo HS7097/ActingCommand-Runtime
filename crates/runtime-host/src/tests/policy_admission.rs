@@ -1637,7 +1637,7 @@ fn a_held_instance_defers_its_candidates_while_another_instance_dispatches() {
     let held = deferred
         .reasons
         .iter()
-        .find(|reason| reason.code == "dispatch_instance_held")
+        .find(|reason| reason.outcome.code().as_str() == "dispatch_instance_held")
         .expect("held deferral reason");
     assert_eq!(held.detail, "holder_kind=client_lease count=0");
     assert!(
@@ -1915,7 +1915,7 @@ fn a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end() {
         .decisions
         .iter()
         .flat_map(|decision| decision.reasons.iter())
-        .find(|reason| reason.code == "dispatch_instance_cooldown")
+        .find(|reason| reason.outcome.code().as_str() == "dispatch_instance_cooldown")
         .unwrap_or_else(|| panic!("cooldown deferral: {evaluation:#?}"));
     let wake = reason
         .detail

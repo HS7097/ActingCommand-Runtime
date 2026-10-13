@@ -359,9 +359,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         package_digest: format!("sha256:{}", "1".repeat(64)).into(),
         procedure_binding_digest: format!("sha256:{}", "2".repeat(64)),
         reason_chain_id: "reason:recovery-fixture".to_owned(),
-        reasons: vec![PolicyReasonRecord {
-            code: "scheduled".to_owned(),
-        }],
+        reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],
         catalog_hash: format!("sha256:{}", "3".repeat(64)),
         catalog_version: 1,
         input_ledger_position: 1,

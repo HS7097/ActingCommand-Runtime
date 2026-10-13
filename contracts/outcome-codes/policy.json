@@ -976,6 +976,174 @@
       "description": "A session.pack.schedule row names a package that no task of the active catalog uses. Reported once per evaluation cycle; the row is kept and has no effect until a catalog uses the package. Not an error.",
       "common_causes": "A row written for a package of another standard package or catalog generation.",
       "handling": "Nothing to repair; remove the row if it is no longer wanted."
+    },
+    "task_eligible": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling candidate's trigger passed and its feedback stop did not fire: the task is eligible on the instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "rank_assigned": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selected scheduling candidate's deterministic total score ranked it first on its instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "score_computed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The score stage computed a scheduling candidate's effective score from its selection score, utility term, manual offset and applied resource target.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "score_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The selection document could not score a scheduling candidate because one of its gates rejected it (rule_id); only the utility term, the manual offset and any applied resource target apply.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "score_cost_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Neither a scheduling candidate's last run duration nor its declared expected duration is above zero, so its utility term is dropped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "decision_candidate_not_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_unmapped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) of the instance's resource-targets policy cannot be mapped to the candidate's task or resource.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_override": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An override resource target (resource_target_id) supersedes the candidate's selection score and, unless it keeps it, its manual offset.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) is configured but waits for a valid observation of its resource.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_satisfied": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) is met: its gap is closed and it no longer moves the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_applied": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) with an open gap is applied to the candidate's effective score.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

@@ -111,7 +111,7 @@ fn detachable_agent_sidecar_recovers_and_escalates_without_device_authority() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::TimelineReached,
-        fact_code: "timeline.review.due".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::TimelineReached),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -224,7 +224,7 @@ fn detachable_agent_sidecar_recovers_and_escalates_without_device_authority() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::DriftPredicted,
-        fact_code: "goal.primary.drift_predicted".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::DriftPredicted),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     };
@@ -276,7 +276,7 @@ fn agent_session_start_and_completion_are_idempotent() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::TimelineReached,
-        fact_code: "timeline.review.due".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::TimelineReached),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -382,7 +382,7 @@ fn agent_terminal_history_allows_restart_without_dispatcher_config() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::TimelineReached,
-        fact_code: "timeline.review.due".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::TimelineReached),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -482,7 +482,7 @@ fn agent_resume_request_replays_across_reconnect_and_restart() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::DriftPredicted,
-        fact_code: "goal.primary.drift_predicted".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::DriftPredicted),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -577,7 +577,7 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::DriftPredicted,
-        fact_code: "goal.primary.drift_predicted".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::DriftPredicted),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -764,7 +764,7 @@ fn agent_session_timeout_escalates_to_human() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::DriftPredicted,
-        fact_code: "goal.primary.drift_predicted".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::DriftPredicted),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -843,7 +843,7 @@ fn agent_wake_is_reconciled_from_a_committed_planning_signal() {
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::DriftPredicted,
-        fact_code: "goal.primary.drift_predicted".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::DriftPredicted),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     })
@@ -904,7 +904,7 @@ fn wake_signal(index: u64, kind: PolicyPlanningSignalKind) -> PolicyPlanningSign
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind,
-        fact_code: format!("goal.fixture.paged-recovery-{index}"),
+        outcome: planning_signal_outcome(kind),
         observed_at_unix_ms: unix_ms_now().expect("wall clock"),
         detection_budget: None,
     }

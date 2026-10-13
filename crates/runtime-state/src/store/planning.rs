@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     EventActor, EventPayload, EventSource, EventType, OriginModule, PolicyDetectionBudgetRecord,
     PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub const PLANNING_SIGNAL_PROJECTION_NAMESPACE: &str = "policy.planning-signal.v1";
 pub const DETECTION_QUOTA_PROJECTION_NAMESPACE: &str = "policy.detection-quota.v1";
 const CHECKPOINT_KEY: &str = "checkpoint";
-const SIGNAL_SCHEMA: &str = "actingcommand.policy-planning-signal.v1";
+const SIGNAL_SCHEMA: &str = "actingcommand.policy-planning-signal.v2";
 const QUOTA_SCHEMA: &str = "actingcommand.policy-detection-quota.v1";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,7 +30,7 @@ struct StoredPlanningSignal {
     instance_id: String,
     task_id: Option<String>,
     kind: PolicyPlanningSignalKind,
-    fact_code: String,
+    outcome: Outcome,
     observed_at_unix_ms: u64,
     detection_budget: Option<PolicyDetectionBudgetRecord>,
 }
@@ -42,7 +43,7 @@ impl StoredPlanningSignal {
             instance_id: data.instance_id.clone(),
             task_id: data.task_id.clone(),
             kind: data.kind,
-            fact_code: data.fact_code.clone(),
+            outcome: data.outcome.clone(),
             observed_at_unix_ms: data.observed_at_unix_ms,
             detection_budget: data.detection_budget.clone(),
         }
@@ -54,7 +55,7 @@ impl StoredPlanningSignal {
             instance_id: self.instance_id,
             task_id: self.task_id,
             kind: self.kind,
-            fact_code: self.fact_code,
+            outcome: self.outcome,
             observed_at_unix_ms: self.observed_at_unix_ms,
             detection_budget: self.detection_budget,
         }
@@ -651,7 +652,7 @@ fn planning_event_data(
         instance_id: payload.instance_id().to_owned(),
         task_id: payload.task_id().map(str::to_owned),
         kind: payload.kind(),
-        fact_code: payload.fact_code().to_owned(),
+        outcome: payload.outcome().clone(),
         observed_at_unix_ms: payload.observed_at_unix_ms(),
         detection_budget: payload.detection_budget().cloned(),
     })

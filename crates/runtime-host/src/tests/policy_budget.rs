@@ -79,7 +79,7 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
         evaluation.decisions[0]
             .reasons
             .iter()
-            .any(|reason| reason.code == "policy_budget_exhausted")
+            .any(|reason| reason.outcome.code().as_str() == "policy_budget_exhausted")
     );
     assert!(
         evaluation
@@ -339,7 +339,7 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
             evaluation.decisions[0]
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "policy_budget_exhausted")
+                .any(|reason| reason.outcome.code().as_str() == "policy_budget_exhausted")
         );
         host.close()
             .expect("close accelerated exhausted budget runtime");
