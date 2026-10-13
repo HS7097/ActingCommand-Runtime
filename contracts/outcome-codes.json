@@ -17691,7 +17691,9 @@
         "count": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -55937,7 +55939,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -55975,7 +55979,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -78081,12 +78087,12 @@
       "description": "A runtime client operation: connect runtime input proxy."
     },
     "connection_preparation": {
-      "owner": "runtime-client",
-      "layer": "client",
+      "owner": "contract",
+      "layer": "contract",
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A runtime client operation: connection preparation."
+      "description": "An operation and a stage several owners name with one meaning (contract-owned, Workflow #387 D1c): an instance's connection preparation, the client's operation that waits for it and the stage a recovery ladder trigger names."
     },
     "contained_run_status": {
       "owner": "runtime-client",
