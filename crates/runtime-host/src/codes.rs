@@ -147,6 +147,21 @@ actingcommand_contract::outcome_codes! {
         /// `cause=<code>`.
         InstallPreparationInstanceUnavailable => "install_preparation_instance_unavailable": warning / none,
         // INST-1 (Workflow #390) end
+        // Workflow #403 begin
+        /// Error. An unconfirmed close of one instance's own resources fenced that instance
+        /// instead of the whole Runtime: no new dispatch, its key goes to the recovery ladder
+        /// only, and a person after an unproven ladder. One `runtime.failed` record when
+        /// fenced (keys `instance_id`; `caused_by` the unconfirmed failure); also the code of
+        /// the non-fatal failure of the work that met it and of a refusal while fenced.
+        InstanceResourcesFenced => "instance_resources_fenced": error / environment_fault,
+        /// Info. A preparation of a fenced instance passed its self-check after the unconfirmed
+        /// close, which proves the close: the fence is lifted and the instance schedules again.
+        /// One `resource_fence_lifted` lifecycle record (keys `instance_id`).
+        InstanceResourcesFenceLifted => "instance_resources_fence_lifted": info / none,
+        /// Info. A resource fence's ladder skipped a rung that cannot prove the close (the
+        /// rung's `recovery_rung_finished` outcome).
+        RecoveryRungSkippedResourceFence => "recovery_rung_skipped_resource_fence": info / none,
+        // Workflow #403 end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -1328,6 +1343,7 @@ actingcommand_contract::outcome_locations! {
         ExecuteInputBackend => "execute_input_backend",
         ExecuteSafeReset => "execute_safe_reset",
         ExpireAgentSessions => "expire_agent_sessions",
+        FenceInstanceResources => "fence_instance_resources",
         ExpireOperatorClaim => "expire_operator_claim",
         ExpireQueuedRequests => "expire_queued_requests",
         ExportRuntimeEvidence => "export_runtime_evidence",
@@ -1358,6 +1374,7 @@ actingcommand_contract::outcome_locations! {
         // Workflow #369 S6b.
         HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
+        HandResourceFencesToLadders => "hand_resource_fences_to_ladders",
         HashFactSnapshot => "hash_fact_snapshot",
         HashPolicyFactSnapshot => "hash_policy_fact_snapshot",
         HoldStartInstancePause => "hold_start_instance_pause",
@@ -1393,6 +1410,7 @@ actingcommand_contract::outcome_locations! {
         JoinRuntimePerformance => "join_runtime_performance",
         JoinRuntimeSweeper => "join_runtime_sweeper",
         LiftFailedInstancePause => "lift_failed_instance_pause",
+        LiftInstanceResourceFence => "lift_instance_resource_fence",
         ListConnectionLeases => "list_connection_leases",
         ListConnectionQueues => "list_connection_queues",
         ListPhysicalInstances => "list_physical_instances",
@@ -1579,6 +1597,7 @@ actingcommand_contract::outcome_locations! {
         ReadInstanceFactSnapshot => "read_instance_fact_snapshot",
         ReadInstanceQueueOrder => "read_instance_queue_order",
         ReadInstanceRegistry => "read_instance_registry",
+        ReadInstanceResourceFence => "read_instance_resource_fence",
         ReadInstanceStringFact => "read_instance_string_fact",
         ReadLabOperationCleanupLease => "read_lab_operation_cleanup_lease",
         ReadLabOperationRun => "read_lab_operation_run",

@@ -41,7 +41,7 @@ Writers, all through the handle that holds the lock:
 | startup acquire | a new epoch's first record: active, the taken-over instances, `none` |
 | active-instance change | same epoch, new instance set; an unchanged value writes nothing |
 | resource disposition | same epoch, `in_use` or `confirmed_closed`; unchanged writes nothing |
-| retention | same epoch, `unconfirmed`; the lock stays held until process exit |
+| retention | same epoch, `unconfirmed`; the lock stays held until process exit. Since Workflow #403 only for unconfirmed resources that no single registered instance owns: one instance's unconfirmed close fences that instance instead, and the disposition stays `in_use` while any fence holds |
 | close | same epoch, inactive, `closed_at_unix_ms`, `none`; then unlock (no `closed_by` until #389 U-4) |
 | `actingd unlock-owner` | the last epoch again, `confirmed_closed` (`contracts/actingd-unlock-owner.md`) |
 

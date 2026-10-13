@@ -51,7 +51,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
 use crate::failure_identity::identifier_text;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, CodeStr, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
     EmulatorInstanceAction, HolderId, InstanceStuckRecovery, IssuedCausationId,
@@ -401,6 +401,79 @@ impl HostShared {
         ))
     }
 
+    /// Workflow #403: the ladder of a fenced instance (trigger stage `resource_fence`, naming
+    /// the unconfirmed failure's code), admitted as every ladder is: `None` when stuck recovery
+    /// is off for the instance, it is not a physical one, or its admission is refused or
+    /// suppressed (recorded as for every ladder). Its claim waits for the instance's key.
+    pub(super) fn resource_fence_ladder(
+        &self,
+        instance_id: InstanceId,
+        cause: CodeStr,
+    ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
+        let settings = self
+            .stuck_recovery()?
+            .get(&instance_id)
+            .copied()
+            .unwrap_or_default();
+        let resolved = lock(
+            &self.registered_instances,
+            HostLocation::ReadRecoveryLadderInstance,
+        )?
+        .get(&instance_id)
+        .cloned()
+        .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
+        if !settings.enabled || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
+        {
+            return Ok(None);
+        }
+        let issuer = self.events.issuer();
+        let request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let correlation_id = issuer
+            .mint_correlation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let claim = self.ladder_claim_request(
+            &resolved,
+            request_id,
+            correlation_id,
+            causation_id,
+            holder_id,
+        )?;
+        let pending = PendingRecoveryLadder {
+            instance_id,
+            instance_alias: resolved.instance_alias,
+            trigger: RecoveryLadderTrigger {
+                stage: RecoveryTriggerStage::ResourceFence,
+                run_id: None,
+                task_id: None,
+                preparation: None,
+                failure_code: cause,
+            },
+            recovery: None,
+            recovery_configured: None,
+            links: EventLinksDraft::default()
+                .with_instance_id(issuer.issue_registered_instance(instance_id))
+                .with_request_id(request_id)
+                .with_correlation_id(correlation_id)
+                .with_causation_id(causation_id),
+            request_id: *request_id.transport(),
+            correlation_id,
+            causation_id,
+            cooldown_ms: u64::from(settings.cooldown_secs) * 1_000,
+            claim,
+            holder_id,
+        };
+        Ok(self.admit_recovery_ladder(&pending)?.then_some(pending))
+    }
+
     /// Workflow #369 H-1: the ladder claim's own synthetic request.
     fn ladder_claim_request(
         &self,
@@ -712,8 +785,11 @@ impl HostShared {
         mut key: HostKey,
     ) -> RuntimeHostResult<()> {
         let climbed = self.climb_recovery_ladder(pending, &mut key);
+        // Workflow #403: a ladder that ends with its instance still fenced did not prove the
+        // close; the instance waits for a person (set before the key is released).
+        let awaited = self.resource_fence_awaits_person(pending.instance_id);
         let released = self.release_host_key(&key);
-        climbed.and(released)
+        climbed.and(awaited).and(released)
     }
 
     fn climb_recovery_ladder(
@@ -721,6 +797,12 @@ impl HostShared {
         pending: &PendingRecoveryLadder,
         key: &mut HostKey,
     ) -> RuntimeHostResult<()> {
+        let fence_ladder = pending.trigger.stage == RecoveryTriggerStage::ResourceFence;
+        // Workflow #403: a person's passing preparation lifted the fence while its ladder
+        // waited: nothing is left to prove.
+        if fence_ladder && !self.resource_fenced(pending.instance_id)? {
+            return Ok(());
+        }
         if !self.recovery_admitted(pending)? {
             return Ok(());
         }
@@ -805,8 +887,14 @@ impl HostShared {
             .and_then(ResolvedInstanceEndpoint::discovered_binding)
             .is_some();
         let skipped = [
-            (pending.recovery.is_none() && recovery_resolution_error.is_none())
-                .then_some(RecoveryRungSkipReason::NoRecoveryPackage),
+            // Workflow #403: the return-home rung never prepares the instance again, so it
+            // cannot prove a fenced instance's close.
+            if fence_ladder {
+                Some(RecoveryRungSkipReason::ResourceFence)
+            } else {
+                (pending.recovery.is_none() && recovery_resolution_error.is_none())
+                    .then_some(RecoveryRungSkipReason::NoRecoveryPackage)
+            },
             (!startup_package).then_some(RecoveryRungSkipReason::NoStartupPackage),
             (!emulator_control).then_some(RecoveryRungSkipReason::NoEmulatorControl),
         ];
@@ -1130,6 +1218,30 @@ impl HostShared {
                 reason,
             });
         }
+        // Workflow #403: after the stop, a fenced instance is prepared again on the key; only a
+        // passing self-check proves the close (the preparation lifts the fence) and lets the rung
+        // go on to its startup run.
+        if stops && self.resource_fenced(pending.instance_id)? {
+            if let Some(failed) = self.ladder_step_renewal(
+                key,
+                APPLICATION_RESTART_ENTRY_BOUND_MS.saturating_add(HOLD_MARGIN_MS),
+            )? {
+                return Ok(failed);
+            }
+            let instance_guard = self
+                .instance_guard(pending.instance_id)
+                .map_err(|failure| *failure.error)?;
+            let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
+            let (check, _, _) =
+                self.prepare_recovery_connection(resolved, pending.links.clone(), &admission, key)?;
+            drop(admission);
+            if !(check.capture.ok && check.touch.ok && check.failure_code.is_none()) {
+                return Ok(RungAttempt::Failed {
+                    run_id: None,
+                    reason: HostCode::RecoveryEnvironmentNotReady.as_str(),
+                });
+            }
+        }
         let mut startup = self
             .prepare_startup_package(resolved, pending.links.clone(), pending.request_id)
             .map_err(|failure| *failure.error)?
@@ -1258,10 +1370,20 @@ impl HostShared {
         }
         match self.application_control(&validated, &key.token, action, key.connection_id, None) {
             Ok(_) => Ok(Ok(())),
-            Err(failure) => {
-                // An unconfirmed close is retained and marks the Runtime fatal, as on every
-                // failed device path; the key itself stays with the ladder.
-                self.retain_unconfirmed_resources(&failure.error, EventLinksDraft::default())?;
+            Err(mut failure) => {
+                // Workflow #403: an unconfirmed close fences the instance (or, when no single
+                // instance owns it, retains the owner and marks the Runtime fatal, as on every
+                // failed device path); the key itself stays with the ladder.
+                if let super::resource_fence::UnconfirmedResources::Fenced(fence) = self
+                    .settle_unconfirmed_resources(
+                        &failure.error,
+                        Some(pending.instance_id),
+                        EventLinksDraft::default(),
+                    )?
+                {
+                    failure.error = Box::new(fence);
+                    failure.poison_runtime = false;
+                }
                 if failure.poison_runtime || failure.error.is_fatal() {
                     return Err(*failure.error);
                 }
@@ -1812,6 +1934,7 @@ fn rung_skip_outcome(reason: RecoveryRungSkipReason) -> Outcome {
         }
         RecoveryRungSkipReason::InputUnavailable => HostCode::RecoveryRungSkippedInputUnavailable,
         RecoveryRungSkipReason::AdbUnavailable => HostCode::RecoveryRungSkippedAdbUnavailable,
+        RecoveryRungSkipReason::ResourceFence => HostCode::RecoveryRungSkippedResourceFence,
     })
 }
 

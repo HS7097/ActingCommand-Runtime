@@ -40,6 +40,9 @@ pub enum RecoveryTriggerStage {
     StartupPreparation,
     ConnectionPreparation,
     RecoveryPreparation,
+    /// Workflow #403: an unconfirmed close of the instance's own resources fenced it; the
+    /// ladder may lift the fence only through a rung whose preparation proves the close.
+    ResourceFence,
 }
 
 /// The rungs of the ladder; `LADDER` is the fixed default order.
@@ -77,6 +80,8 @@ pub enum RecoveryRungSkipReason {
     CaptureUnavailable,
     InputUnavailable,
     AdbUnavailable,
+    /// Workflow #403: the ladder is a resource fence's, and this rung cannot prove the close.
+    ResourceFence,
 }
 
 impl RecoveryRungSkipReason {
@@ -88,6 +93,7 @@ impl RecoveryRungSkipReason {
             Self::CaptureUnavailable => "capture_unavailable",
             Self::InputUnavailable => "input_unavailable",
             Self::AdbUnavailable => "adb_unavailable",
+            Self::ResourceFence => "resource_fence",
         }
     }
 }
@@ -171,6 +177,13 @@ pub(super) fn validate_recovery_ladder_phase(
                         && is_preparation_recovery_trigger(&trigger.failure_code)
                 }
                 RecoveryTriggerStage::RecoveryPreparation => false,
+                // Workflow #403: a fence names the unconfirmed failure's code; a run or a
+                // preparation it arose in is not its trigger.
+                RecoveryTriggerStage::ResourceFence => {
+                    trigger.run_id.is_none()
+                        && trigger.task_id.is_none()
+                        && trigger.preparation.is_none()
+                }
             };
             if !valid_trigger
                 || rungs.len() != RecoveryRung::LADDER.len()

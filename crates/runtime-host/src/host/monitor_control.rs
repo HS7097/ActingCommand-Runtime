@@ -283,9 +283,16 @@ impl HostShared {
                 let error =
                     self.finish_capture_failure_while_guarded(error, links.clone(), &admission)?;
                 let error = RuntimeHostError::execution(HostLocation::RunMonitorCapture, &error);
-                if self.retain_unconfirmed_resources(&error, links.clone())? {
-                    return Err(error);
-                }
+                let error = match self.settle_unconfirmed_resources(
+                    &error,
+                    Some(instance.instance_id()),
+                    links.clone(),
+                )? {
+                    super::resource_fence::UnconfirmedResources::Confirmed => error,
+                    // Workflow #403: the instance is fenced; the probe fails non-fatally.
+                    super::resource_fence::UnconfirmedResources::Fenced(fence) => fence,
+                    super::resource_fence::UnconfirmedResources::Retained => return Err(error),
+                };
                 return self.finish_monitor_failure(
                     probe,
                     &links,

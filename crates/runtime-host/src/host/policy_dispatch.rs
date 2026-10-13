@@ -1456,6 +1456,16 @@ impl HostShared {
                     }
                 },
             };
+            // Workflow #403: a fenced instance gets no new dispatch, whatever an intent
+            // evaluated before its fence says (a ladder holding it already refuses at Info).
+            if gate_error.is_none()
+                && let Some(fenced) = self.resource_fenced_alias(&intent.instance_id)?
+            {
+                gate_error = Some(super::resource_fence::resource_fence_error(
+                    fenced,
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
             if gate_error.is_none()
                 && let Err(error) = self.admit_capacity()
             {
@@ -2247,11 +2257,14 @@ impl HostShared {
                     &admission,
                 ) {
                     Ok(Ok(())) => Ok(()),
+                    // Workflow #403: an unconfirmed close fenced the instance; the pause fails
+                    // with the fence's non-fatal failure.
                     Ok(Err(close_error)) => Err(scheduling_pause_release_failure(
-                        RuntimeHostError::execution(
+                        self.retained_close_failure(
                             HostLocation::ClosePausedInstanceSession,
+                            instance_id,
                             &close_error,
-                        ),
+                        )?,
                     )),
                     Err(error) => Err(scheduling_pause_release_failure(error)),
                 };
@@ -2348,7 +2361,10 @@ impl HostShared {
             });
         };
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
-        self.resumable_instance_pauses(instance_alias, expected)?;
+        // Workflow #403: a fenced instance resumes even when it is not paused: the resume is a
+        // person's re-proof of its close (the reconnect's preparation and self-check).
+        let fenced = self.resource_fenced(instance_id)?;
+        self.resumable_instance_pauses(instance_alias, expected, fenced)?;
         let token = self.await_preparation_claim(
             original,
             instance_alias,
@@ -2360,7 +2376,8 @@ impl HostShared {
                 &self.scheduling_pause_persist_gate,
                 HostLocation::PersistInstanceSchedulingResume,
             )?;
-            let mut prospective = self.resumable_instance_pauses(instance_alias, expected)?;
+            let mut prospective =
+                self.resumable_instance_pauses(instance_alias, expected, fenced)?;
             prospective.lift_instance(instance_alias)?;
             self.persist_scheduling_pauses(&prospective)?;
             Ok(
@@ -2405,12 +2422,14 @@ impl HostShared {
     }
 
     /// The pause table an instance resume would lift: the expectation (Workflow #338 R4) holds
-    /// and the instance's pause is `Released`. Otherwise today's refusal:
-    /// `scheduling_not_paused`, `scheduling_pause_draining` or `scheduling_pause_releasing`.
+    /// and the instance's pause is `Released`, or (Workflow #403) the instance is `fenced` and
+    /// not paused. Otherwise today's refusal: `scheduling_not_paused`,
+    /// `scheduling_pause_draining` or `scheduling_pause_releasing`.
     fn resumable_instance_pauses(
         &self,
         instance_alias: &str,
         expected: Option<&SchedulingPauseExpectation>,
+        fenced: bool,
     ) -> Result<SchedulingPauseTable, RequestFailure> {
         let table = lock(&self.scheduling_pause, ContractLocation::ResumeScheduling)?;
         check_scheduling_pause_expectation(
@@ -2423,6 +2442,7 @@ impl HostShared {
                 .unwrap_or(0),
         )?;
         match table.instances.get(instance_alias).map(|state| state.stage) {
+            None if fenced => Ok(table.clone()),
             None => Err(scheduling_pause_denied(
                 HostCode::SchedulingNotPaused,
                 ContractLocation::ResumeScheduling,

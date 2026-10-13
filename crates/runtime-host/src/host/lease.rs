@@ -3363,9 +3363,14 @@ impl HostShared {
         )?
         .get(&instance_id)
         .map(|instance| instance.instance_alias.clone());
-        let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
-        let held = pauses.holds_global()
-            || alias.is_some_and(|instance_alias| pauses.holds_instance(&instance_alias));
+        let held = {
+            let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
+            pauses.holds_global()
+                || alias.is_some_and(|instance_alias| pauses.holds_instance(&instance_alias))
+        };
+        // Workflow #403: a resource fence holds the instance's routine claims until it is
+        // handed to a ladder, whose claim it lets through, and again once it waits for a person.
+        let held = held || self.resource_fence_holds_routine(instance_id)?;
         Ok(if held {
             ClaimGate::RoutineHeld
         } else {

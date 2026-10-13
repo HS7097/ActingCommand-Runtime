@@ -199,6 +199,22 @@ Each slice brings its own shape, written by the slice that brings it.
 |---|---|---|---|---|---|
 | T1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTargetData.uniqueness` (`TaskDiagnosticUniquenessData`) | new optional member, absent when unused | REC-2 (#396, REC-M v1.2.1 §2, §4) | REC-2 | present on the row of a target that declares `unique` and otherwise passed: `TaskDiagnosticUniquenessData {score_milli, margin_milli, second_score_milli?, second_rect?}` (`deny_unknown_fields`; `second_rect` an `OcrRegionRect`), the two optional members present exactly when a second place lies within the margin; REC-1's `failure` (V3) then carries `target_match_not_unique`, and a unique search past its limit is a recognition error row (`InvalidPackage`, with its timing) whose REC-1 `outcome` (V3) carries `target_match_search_incomplete`; no new member beyond `uniqueness`, no ledger record type is added; [resource-declarations.md](resource-declarations.md), section Task schema `0.9` unique matches |
 
+### 1.12 Resource fence (#403, approved 2026-10-13)
+
+An unconfirmed close of one instance's own resources fences that instance instead of ending the
+whole Runtime. The slice brings its own shapes and writes them. The fence itself is memory only
+(a restart prepares and self-checks every instance again, as every start does), and the owner
+journal's record shape does not change: while any fence holds the owner's disposition stays
+`in_use`, and only unconfirmed resources that no single instance owns still write `unconfirmed`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| F1 | `runtime.failed` of `instance_resources_fenced` | existing record type and lifecycle failure, new code | #403 | #403 | one record when an instance is fenced: stage `session_close`, linked to the instance and to the request whose work met the failure; outcome `instance_resources_fenced` (error) with `instance_id`, `caused_by` the unconfirmed failure; no resource dispositions of its own (the close's own `runtime.failed` before it carries them) |
+| F2 | `runtime.lifecycle_observed` phase `resource_fence_lifted` | new phase | #403 | #403 | `{instance_id, preparation, outcome}`: `preparation` is the `instance_preparation_finished` whose passing self-check proved the close, `outcome` is `instance_resources_fence_lifted` (info) with `instance_id`; one record when the fence is lifted |
+| F3 | `RecoveryTriggerStage::ResourceFence` (`resource_fence`) | new enum value of `recovery_ladder_started.trigger.stage` | #403 | #403 | a fence's ladder: no `run_id`, `task_id` or `preparation`; `failure_code` is the unconfirmed failure's code |
+| F4 | `RecoveryRungSkipReason::ResourceFence` (`resource_fence`) | new enum value of the rung plan's skip reason | #403 | #403 | the return-home rung of a fence's ladder, which never re-prepares the instance; its `recovery_rung_finished` outcome is `recovery_rung_skipped_resource_fence` (info) |
+| F5 | `RuntimeInstanceStatus.resource_fence` (`InstanceResourceFence`) | new optional member of the status projection (also in the runtime state observation of `command.validated`) | #403 | #403 | `{cause, since_unix_ms, awaiting_person}` (`deny_unknown_fields`), absent when the instance is not fenced; `cause` is the unconfirmed failure's code; `awaiting_person` once the fence's ladder ended without proof or none could start; `ac_overview` shows it as the row's `resource_fence` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

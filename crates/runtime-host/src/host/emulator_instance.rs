@@ -856,10 +856,15 @@ impl HostShared {
         ) {
             Ok(Ok(())) => {}
             Ok(Err(close_error)) => {
-                let mut error = RuntimeHostError::execution(
-                    HostLocation::CloseEmulatorDeviceSession,
-                    &close_error,
-                );
+                // Workflow #403: an unconfirmed close fenced the instance; the control fails
+                // with the fence's non-fatal failure.
+                let mut error = self
+                    .retained_close_failure(
+                        HostLocation::CloseEmulatorDeviceSession,
+                        instance_id,
+                        &close_error,
+                    )
+                    .map_err(RequestFailure::poison_without_terminal)?;
                 error.lifecycle.instance_id = Some(instance_id);
                 return Err(self.control_failed(
                     mode,

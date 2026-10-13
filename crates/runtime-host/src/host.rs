@@ -193,6 +193,8 @@ mod read_events;
 mod recovery_ladder;
 mod requests;
 mod resource_close;
+// Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
+mod resource_fence;
 mod resource_targets;
 mod runtime_facts;
 mod saved_artifact_ocr;
@@ -1511,6 +1513,7 @@ impl RuntimeHost {
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
+            resource_fences: Mutex::new(BTreeMap::new()),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
@@ -3950,6 +3953,9 @@ struct HostShared {
     // per-instance ladder window.
     stuck_recovery: OnceLock<BTreeMap<InstanceId, actingcommand_contract::InstanceStuckRecovery>>,
     recovery_ladders: Mutex<BTreeMap<InstanceId, recovery_ladder::RecoveryLadderWindow>>,
+    // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
+    // only; a restart prepares and self-checks every instance again). A leaf lock.
+    resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
@@ -4128,19 +4134,23 @@ impl HostShared {
                                 .map_err(|failure| *failure.error)?;
                             let admission =
                                 lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-                            self.close_retained_instance_while_guarded(
+                            // Workflow #403: an unconfirmed close at shutdown fences its
+                            // instance; the close reports the fence's non-fatal failure and
+                            // the next start prepares the instance again.
+                            match self.close_retained_instance_while_guarded(
                                 instance_id,
                                 EventLinksDraft::default(),
                                 false,
                                 LeaseReleaseReason::HostShutdown,
                                 &admission,
-                            )?
-                            .map_err(|error| {
-                                RuntimeHostError::execution(
+                            )? {
+                                Ok(()) => Ok(()),
+                                Err(error) => Err(self.retained_close_failure(
                                     HostLocation::CloseExecutionSession,
+                                    instance_id,
                                     &error,
-                                )
-                            })
+                                )?),
+                            }
                         })();
                         self.record_lifecycle_result(
                             RuntimeLifecycleFailureStage::SessionClose,
@@ -4433,6 +4443,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             && let Err(error) = shared.cancel_queues_for_drain()
         {
             shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // Workflow #403: every new resource fence goes to a recovery ladder or a person before
+        // the sweep's pump grants anything.
+        if let Err(error) = shared.hand_resource_fences_to_ladders() {
+            shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }
         if let Err(error) = shared.expire_due_leases() {
