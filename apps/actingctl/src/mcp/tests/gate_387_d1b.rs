@@ -53,11 +53,12 @@ fn d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_se
         &[format!("{cooldown}=120"), format!("{enabled}=false")],
     )
     .expect("the CLI changes");
-    let through_mcp = mcp_changes(Some(&json!([
+    let Ok(through_mcp) = mcp_changes(Some(&json!([
         {"key": cooldown, "value": 120},
         {"key": enabled, "value": false},
-    ])))
-    .expect("the MCP changes");
+    ]))) else {
+        panic!("the MCP changes are refused");
+    };
     let set_by_cli = file_layer
         .apply(&through_cli, &stamp, &context)
         .expect("the CLI set applies")
@@ -76,7 +77,9 @@ fn d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_se
     // `actingctl config clear <key>` and `ac_config_set {changes: [{key}]}`.
     let clear_by_cli =
         crate::config_changes("clear", std::slice::from_ref(&cooldown)).expect("the CLI clear");
-    let clear_by_mcp = mcp_changes(Some(&json!([{"key": cooldown}]))).expect("the MCP clear");
+    let Ok(clear_by_mcp) = mcp_changes(Some(&json!([{"key": cooldown}]))) else {
+        panic!("the MCP clear is refused");
+    };
     let cleared_by_cli = set_by_cli
         .apply(&clear_by_cli, &stamp, &context)
         .expect("the CLI clear applies")

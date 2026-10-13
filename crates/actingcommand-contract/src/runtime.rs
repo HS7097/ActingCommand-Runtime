@@ -5322,16 +5322,15 @@ impl RuntimeReceipt {
                 }
                 view.validate()?;
             }
-            Some(RuntimeResult::SettingsConfigured { settings }) => {
+            Some(RuntimeResult::SettingsConfigured { settings })
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal.is_none()
                     || settings.is_empty()
-                    || settings.len() > MAX_CONFIG_SETTING_CHANGES
-                {
-                    return Err(RuntimeContractError::new(
-                        RuntimeContractCode::InvalidConfigureSettings,
-                    ));
-                }
+                    || settings.len() > MAX_CONFIG_SETTING_CHANGES =>
+            {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidConfigureSettings,
+                ));
             }
             _ => {}
         }
