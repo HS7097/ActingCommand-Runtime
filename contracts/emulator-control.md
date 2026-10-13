@@ -417,7 +417,7 @@ that belongs to emulator control:
 
 A scheduled (policy) contained task run on a physical instance whose
 `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`
-for `outcome_relay_unregistered`, `scheduled_failure_code`) is `contained_task_page_unknown`, any
+for `outcome_relay_unregistered`, `scheduled_failure_code_str`) is `contained_task_page_unknown`, any
 `contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
 return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
 recovery ladder for the instance, unless the

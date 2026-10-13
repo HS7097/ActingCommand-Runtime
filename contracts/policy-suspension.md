@@ -4,9 +4,10 @@ A scheduled `linear_steps` task that fails mid-run is recorded, rerun at once, a
 the same problem happens again; the pause is lifted automatically once its package (or a
 package its run went through) is updated (Workflow #336, R17-R19, R21, R22, R25). Everything
 here uses the existing policy `on_failure`, the existing `policy.execution_recorded` and
-`runtime.failed` records and the existing `paused_task` disposition: no ledger event type,
-payload field or enum value is added, and a ledger written this way is read and replayed by
-older builds.
+`runtime.failed` records and the existing `paused_task` disposition: no ledger event type or
+enum value is added. Since Workflow #378 A2-P the failure part of `policy.execution_recorded`
+carries the run's failure as `outcome` and the failure identity as `failure_identity` (one
+`error_code` string before); a ledger is read and replayed by the build that wrote it.
 
 The last three sections ("Task package suspension", "Condition termination and owed reruns" and
 their configuration) are the scheduling rules of Workflow #386, specified ahead of their code;
@@ -21,11 +22,12 @@ The recommended `on_failure` of a linear task is
 ```
 
 The first failure is recorded and scheduled for a retry; a second failure with the same
-failure identity reaches the escalation threshold and pauses the task (`paused_task`, Error
-severity). Under performance pressure a recoverable failure does not escalate, and the second
-failure is paused by `retry_limit` with `action` `pause` instead (Warning severity). Nothing is
-applied automatically: `on_failure` is part of the approved catalog, and a change of it is a
-catalog change to be approved again.
+failure identity reaches the escalation threshold and pauses the task (`paused_task`). Under
+performance pressure a recoverable failure does not escalate, and the second failure is paused
+by `retry_limit` with `action` `pause` instead. Either record's severity is its failure's
+category (Workflow #378 A2-P), whatever the class. Nothing is applied automatically:
+`on_failure` is part of the approved catalog, and a change of it is a catalog change to be
+approved again.
 
 `record stop` of a Lab recording prints this value as `catalog_on_failure_example`
 (`lab-recording.md`, "Output").
@@ -39,8 +41,8 @@ next evaluation, instead of at the next clock occurrence. `actingd` evaluates ag
 a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
 run, sets the next wake (the end of the backoff). The feedback stop, placement, the
 loop and activity budgets and the activity windows still apply, and every rerun consumes the
-budgets like any dispatch. A page-graph task and a failure recorded with its original code
-keep waiting for their trigger and cooldown.
+budgets like any dispatch. A page-graph task and a failure recorded without a failure
+identity keep waiting for their trigger and cooldown.
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -72,7 +74,8 @@ do not create a fresh origin after the original round ended.
 ## Failure identity
 
 The live settlement of a scheduled run whose main package was admitted as `linear_steps`
-writes the failure identity as `failure.error_code` of its `policy.execution_recorded`:
+writes the failure identity as `failure.failure_identity` of its `policy.execution_recorded`,
+beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
 
 ```text
 <base>~v1~k<K>~m<M>[~p<I><D>]{0,3}[~r<G><I><D>]{0,1}~f<F>
@@ -90,8 +93,15 @@ writes the failure identity as `failure.error_code` of its `policy.execution_rec
 The identity prefix is everything before `~f`. At most 206 bytes, without whitespace or
 control characters.
 
-Every other run writes its original code: a main package that was not admitted (its mode is
+Every other run writes no failure identity: a main package that was not admitted (its mode is
 unknown), a page-graph package, and the startup reconciliation of an interrupted settlement.
+
+Every failed run records its failure as `failure.outcome`: the top node of its terminal's
+outcome (code, category and values, without its links), the top node of its request error when
+it has no terminal, `policy_runtime_budget_exceeded` when it ran over its runtime budget, or
+`policy_settlement_interrupted` for an interrupted settlement. The record's severity is that
+outcome's category. The failure's code is the outcome's code, or for
+`outcome_relay_unregistered` the spelling it keeps as `raw_code`.
 
 ### Scope and step
 
@@ -166,8 +176,9 @@ In the `main` scope it also writes, before the execution record, a Warning `runt
 detail is `reason=<frame_missing|artifact_unreadable|png_invalid> previous_run=<run>
 current_run=<run>`. The `prepare` scope has no frames and writes nothing.
 
-When the scheduled path's record of the run is missing (an internal error), the original code
-is written together with a Warning `runtime.failed` `policy_failure_identity_unavailable`.
+When the scheduled path's record of the run is missing (an internal error), no failure
+identity is written, together with a Warning `runtime.failed`
+`policy_failure_identity_unavailable`.
 
 ### Error frames
 
@@ -184,11 +195,13 @@ similar. The digest mean distance and the template correlation coefficient are o
 
 ## Replay
 
-The count is unchanged: two failures share a streak only when their codes and classes are
-equal. Replay hands the recorded code to that count and requires the recorded execution to come
+The count is unchanged: two failures share a streak only when their failure codes, failure
+identities and classes are equal (the outcomes' other values are not compared). Replay hands
+the recorded outcome and identity to that count and requires the recorded execution to come
 out again; it never compares frames. A settlement that finds an execution already recorded for
-its dispatch writes nothing new and keeps the recorded identity, after checking that its base
-is the base of the terminal's code (`policy_execution_identity_conflict` otherwise).
+its dispatch writes nothing new and keeps the recorded failure, after checking that its code is
+the terminal's and its identity's base is the base of the terminal's code
+(`policy_execution_identity_conflict` otherwise).
 
 ## Lifting (R19)
 
@@ -209,8 +222,8 @@ within its loop and activity budgets (the interrupted admission already counted 
 A second one in a row is lifted by a package update only. The count is rebuilt from the
 execution records, so nothing persisted changes. The next dispatch is admitted as usual;
 a linear task that fails again starts a new streak, since `M` or a layer changed. A page-graph
-task keeps its code, so the same failure pauses it again at once. A suspension in an older
-ledger, including an exceeded budget, is lifted by a changed main package digest too; the first
+task records no failure identity, so the same failure pauses it again at once. A suspension in
+an older ledger, including an exceeded budget, is lifted by a changed main package digest too; the first
 interrupted settlement in a row in an older ledger is lifted at the next start of this Runtime. There is
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.
@@ -259,8 +272,9 @@ stdout is one JSON object:
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
   failed execution it repeats, `null` when it paused at its first failure. `step` is re-derived
-  from the run's rows for a failure identity (`null` for another code). `detail` is the native
-  detail of the run's lifecycle failure record of the failure code, or `null`. The frames are
+  from the run's rows for a failure identity (`null` for another code). `error_code` is the
+  execution's `failure_identity`, else its failure's code. `detail` is the native detail of the
+  run's lifecycle failure record of the failure code, or `null`. The frames are
   compared again (`source` `recomputed`); a recomputed `different` for an accumulating identity
   adds the warning `comparison_disagrees_with_record:<task>/<instance>`. A missing frame or an
   unreadable artifact gives `status` `unavailable` with its reason.
@@ -275,7 +289,7 @@ stdout is one JSON object:
 - `daemon_started_at_unix_ms`: the observation time of the ledger's latest `config.parameters`
   fact, recorded at every start. Warnings: `config_newer_than_daemon_start` when the
   configuration file changed after it, `daemon_start_unknown` without it,
-  `error_code_unparsed:<task>/<instance>` for a code that looks like an identity and does not
+  `error_code_unparsed:<task>/<instance>` for a failure identity that does not
   parse (judged on its main digest only), `task_not_in_catalog:<task>/<instance>`.
 - `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
   records") whose event time is within 48 h of the ledger's latest event, newest first, at most
@@ -317,7 +331,7 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
   package shows only in `repeating`, and is rerun within its original window and budget cycle.
 - The same cause can give a different `K` on days with and without an optional popup (the last
   `StepStarted` differs), which delays the pause by one more rerun.
-- The startup reconciliation records the original code, so the next failure starts a new
+- The startup reconciliation records no failure identity, so the next failure starts a new
   streak and is rerun once more; an interrupted settlement is recorded as a pause and, when it is
   the first of its pair in a row, lifted by the same restart (Workflow #361 M6).
 
