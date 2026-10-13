@@ -89,9 +89,15 @@ Records: `cli.command` (or the counter's own) and `command.received`; on a refus
 `command.rejected` carrying the refusal as its outcome, and nothing else; otherwise the whole new
 `host.config_overrides`, each changed `config.parameters.<section>`, then `command.validated`
 (action `runtime.action`), and the values take effect. Receipt Completed with
-`{settings: [{key, value, source}]}`, each changed key as it is in effect afterwards. A
+`{settings: [{key, value, source}]}`, each changed key as it is in effect afterwards, and the
+outcome `request_configure_settings_completed` (success; receipt v2, Workflow #378 A4). A
 `host.config_overrides` the ledger refuses changes nothing: `command.rejected` carries
 `host_config_overrides_persist_failed` with the ledger's refusal as its `caused_by` (Failed).
+The receipt of a refusal in the table above, or of that failure, carries the outcome its
+`command.rejected` carries on top, with `operation` (`configure_settings`,
+`persist_config_overrides`), `runtime_code` (`invalid_request`, `ledger_failure`) and
+`host_halted` added as values; `invalid_configure_settings` tops its Denied receipt with
+`runtime_code` `invalid_request`.
 Once it is recorded, a refused section record stops the Runtime; the next start restores the
 recorded values, so the ledger and the values in effect never part.
 

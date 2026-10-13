@@ -248,6 +248,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
             result: RuntimeResult::SettingsConfigured { settings },
+            failure_outcome: None,
         })
     }
 

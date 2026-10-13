@@ -168,6 +168,7 @@ crate::outcome_codes! {
         PromoteProposalCompleted => "request_promote_proposal_completed": success / none,
         ApplyResourceTargetsCompleted => "request_apply_resource_targets_completed": success / none,
         ResourceTargetViewCompleted => "request_resource_target_view_completed": success / none,
+        ConfigureSettingsCompleted => "request_configure_settings_completed": success / none,
     }
 }
 

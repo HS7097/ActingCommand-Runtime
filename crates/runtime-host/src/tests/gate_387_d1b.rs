@@ -9,7 +9,7 @@
 use super::*;
 use actingcommand_contract::{
     CONFIG_OVERRIDES_FACT_KEY, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    ConfiguredSetting, FactScalar, RuntimeConfigManifest, RuntimeErrorProjection, RuntimePayload,
+    ConfiguredSetting, FactScalar, RuntimeConfigManifest, RuntimeOperationKind, RuntimePayload,
     config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
@@ -215,6 +215,13 @@ fn d1_m3_a_settable_key_changes_at_once_with_its_command_and_two_value_records()
 
     let (request, receipt) = configure(&mut client, vec![set(&cooldown, json!(120))]);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    // Receipt v2 (Workflow #378 A4, train 5): a completed receipt carries its kind's success code.
+    assert_eq!(
+        Some(receipt.outcome().code().as_str()),
+        RuntimeOperationKind::ConfigureSettings
+            .success_code()
+            .map(|code| code.as_str())
+    );
     assert_eq!(
         receipt.result(),
         Some(&RuntimeResult::SettingsConfigured {
@@ -322,11 +329,22 @@ fn d1_m4_one_invalid_change_refuses_the_whole_request_with_one_rejected_command(
         let (request, receipt) = configure(&mut client, vec![set(&cooldown, json!(120)), invalid]);
         assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
         assert_eq!(
-            receipt
-                .error_projection()
-                .and_then(RuntimeErrorProjection::host_code),
+            Some(receipt.outcome().code().as_str()),
             Some(ConfigCode::ConfigValueInvalid.as_str())
         );
+        // Receipt v2 (Workflow #378 A4, train 5): the refusal tops the receipt with its own
+        // values, its Runtime error code, its operation and the halt.
+        let outcome = receipt.outcome();
+        assert_eq!(outcome.value("config_key"), Some(&json!(enabled)));
+        assert_eq!(
+            outcome.value("runtime_code"),
+            Some(&json!("invalid_request"))
+        );
+        assert_eq!(
+            outcome.value("operation"),
+            Some(&json!("configure_settings"))
+        );
+        assert_eq!(outcome.value("host_halted"), Some(&json!(false)));
         let commands = command_records(projected_events(
             &mut client,
             EventQuery {
@@ -347,9 +365,7 @@ fn d1_m4_one_invalid_change_refuses_the_whole_request_with_one_rejected_command(
         vec![set(&enabled, json!(false)), set(&cooldown, json!(0))],
     );
     assert_eq!(
-        receipt
-            .error_projection()
-            .and_then(RuntimeErrorProjection::host_code),
+        Some(receipt.outcome().code().as_str()),
         Some(ConfigCode::ConfigValueInvalid.as_str())
     );
     // Neither key changed, and no value record was written.
@@ -419,12 +435,7 @@ fn d1_m5_a_key_read_only_at_start_and_an_unknown_key_are_refused() {
     ] {
         let (_, receipt) = configure(&mut client, changes);
         assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-        assert_eq!(
-            receipt
-                .error_projection()
-                .and_then(RuntimeErrorProjection::host_code),
-            Some(code.as_str())
-        );
+        assert_eq!(Some(receipt.outcome().code().as_str()), Some(code.as_str()));
     }
     assert_eq!(
         reported(&mut client, &cooldown),

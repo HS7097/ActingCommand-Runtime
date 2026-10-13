@@ -15407,6 +15407,20 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
+    "request_configure_settings_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a ConfigureSettings request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #387 D1b adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

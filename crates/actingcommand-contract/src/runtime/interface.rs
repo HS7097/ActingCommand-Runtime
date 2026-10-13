@@ -388,6 +388,7 @@ impl RuntimeOperationKind {
             Self::PromoteProposal => Some(ReceiptCode::PromoteProposalCompleted.code()),
             Self::ApplyResourceTargets => Some(ReceiptCode::ApplyResourceTargetsCompleted.code()),
             Self::ResourceTargetView => Some(ReceiptCode::ResourceTargetViewCompleted.code()),
+            Self::ConfigureSettings => Some(ReceiptCode::ConfigureSettingsCompleted.code()),
             Self::RequestShutdown
             | Self::AcquireLease
             | Self::QueueLease
