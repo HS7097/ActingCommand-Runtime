@@ -11,11 +11,18 @@
 //! `policy_monitor_request_retried`; the next one is reported as
 //! `policy_monitor_retries_exhausted` and ends actingd with the request's failure. Every other
 //! failure, and a request that went to another owner epoch or process, ends actingd at once.
+//!
+//! Workflow #383 AO-7: the policy monitor now wakes the driver from the host's business
+//! notifications and sends no request to its Runtime, so nothing outside the tests (`gate_397`)
+//! calls the retry. Its readers of a client failure and of the Runtime's info
+//! (`MonitorRequestFailure::of`, `RuntimeIdentity::of`) went with the monitor's requests.
+//! `policy.monitor` is still read, checked and reported; retiring it with this retry, its codes
+//! and its tests is left to the coordinator (ORD 376-B2).
+#![cfg_attr(not(test), allow(dead_code))]
 
 use crate::codes::ActingdCode;
+use actingcommand_contract::OwnerEpoch;
 use actingcommand_contract::outcome::{IoKind, Location, Outcome};
-use actingcommand_contract::{OwnerEpoch, RuntimeInfo};
-use actingcommand_runtime_client::{ClientCode, RuntimeClientError};
 use std::io::ErrorKind;
 use std::time::Duration;
 
@@ -75,15 +82,6 @@ pub(super) struct RuntimeIdentity {
     pub(super) pid: u32,
 }
 
-impl RuntimeIdentity {
-    pub(super) fn of(info: &RuntimeInfo) -> Self {
-        Self {
-            owner_epoch: info.owner_epoch(),
-            pid: info.pid(),
-        }
-    }
-}
-
 /// What the monitor's answer reads from one failed request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct MonitorRequestFailure {
@@ -100,29 +98,6 @@ pub(super) struct ReceiptHeaderFailure {
     pub(super) os_error: Option<i32>,
     /// The Runtime the request was sent to, as the client knew it.
     pub(super) sent_to: Option<RuntimeIdentity>,
-}
-
-impl MonitorRequestFailure {
-    pub(super) fn of(error: &RuntimeClientError) -> Self {
-        let receipt_header = error
-            .receipt_header_io()
-            .filter(|_| error.code() == ClientCode::RuntimeReceiptHeaderFailed.code())
-            .map(|io| ReceiptHeaderFailure {
-                kind: io.kind(),
-                os_error: io.raw_os_error(),
-                sent_to: io
-                    .expected_owner_epoch()
-                    .zip(io.expected_runtime_pid())
-                    .map(|(owner_epoch, pid)| RuntimeIdentity {
-                        owner_epoch: *owner_epoch,
-                        pid,
-                    }),
-            });
-        Self {
-            operation: error.operation(),
-            receipt_header,
-        }
-    }
 }
 
 /// What the monitor does after one of its own requests failed.

@@ -145,6 +145,7 @@ rule or an operation guard references as one target. The page matches only when 
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
+| Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text) |
 | Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
 
 ### Pack schema `0.7` declarations
@@ -164,8 +165,21 @@ uses none of them derives every document byte for byte as before.
 
 A check, like a color digest, is never clicked and never locates anything. `guard.check`
 requires the guard target to be a `composite` target. `guard.color_probe` accepts a color or a
-color digest target. A `target`, `target_center` or `offset` click still requires a template
-guard (`guard.verify_template`).
+color digest target. A `target` or `offset` click requires a template guard
+(`guard.verify_template`) or a located-text guard (`guard.verify_text`, below); a
+`target_center` click requires a template guard.
+
+### Task schema `0.9` located text
+
+Workflow #396 REC-1. Task schema `0.9` accepts the following declarations; an older task
+schema refuses each with `UnconsumedField` at its pointer. A source that uses neither
+derives every document byte for byte as before; one that uses `locate` derives pack schema
+`0.7`.
+
+| Declaration | Rule |
+| --- | --- |
+| `ocr_targets[].locate` | `{"normalize": "identity_v1", "blocks": "detect" \| "region", "line_merge"?, "cells"?}` (`ocr-fields.md`, section Located text). The target is never an OCR field or reading target, an OCR relative anchor, a candidate layout slot target or feature, nor declares `target_consensus`. |
+| `operations[].guard.verify_text` | A string naming the guard's own `target_id`, a locate OCR target. The guard evaluates that target; a `target` or `offset` click takes the found cell, or block, as its box; `target_center` is refused. |
 
 Color digest and check IDs share one namespace with every other target ID. The same ID with
 an identical definition, repeated by several tasks, is kept once; any other reuse of the ID

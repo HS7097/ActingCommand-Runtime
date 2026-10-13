@@ -37,9 +37,9 @@
       "type": "integer",
       "description": "An emulator instance index."
     },
-    "adb_serial": {
+    "device_label": {
       "type": "name",
-      "description": "An adb device serial (host:port or a device name)."
+      "description": "The label of an adb target: HOST:PORT for an emulator, handset:<alias> for a device addressed by its serial. Never the serial itself (Workflow #398)."
     },
     "path": {
       "type": "path",
@@ -157,6 +157,10 @@
     "raw_text_sensitivity": {
       "type": "vocab:sensitivity",
       "description": "How sensitive raw_text is; readers redact by it."
+    },
+    "raw_text_redacted": {
+      "type": "boolean",
+      "description": "Every device serial the Runtime holds a binding for was replaced in raw_text by its token [device:<label>] (Workflow #398); the only edit of foreign text."
     },
     "os_error": {
       "type": "integer",
@@ -554,6 +558,14 @@
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
     },
+    "target_id": {
+      "type": "id",
+      "description": "A recognition target's ID in its recognition pack."
+    },
+    "text_read_budget": {
+      "type": "vocab:text_read_budget",
+      "description": "Which per-consumer text read budget ran out."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -569,6 +581,10 @@
     "reader_problem": {
       "type": "vocab:reader_problem",
       "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
+    },
+    "entry_problem": {
+      "type": "vocab:entry_problem",
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
     },
     "pause_reason": {
       "type": "name",
@@ -2451,6 +2467,32 @@
         }
       }
     },
+    "entry_problem": {
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b).",
+      "tokens": {
+        "empty": {
+          "description": "The entry page set names no page."
+        },
+        "too_many": {
+          "description": "The entry page set names more than 16 pages."
+        },
+        "duplicate": {
+          "description": "The entry page set names one page twice."
+        },
+        "any_in_set": {
+          "description": "The entry page set names any, which only a single entry page may be."
+        },
+        "unresolved": {
+          "description": "A page of the entry page set is blank or is not exactly one page of the package's page set."
+        },
+        "phase_start_missing": {
+          "description": "No stage of the phased route lists an operation from a page of the entry page set."
+        },
+        "phase_start_ambiguous": {
+          "description": "More than one stage of the phased route lists an operation from a page of the entry page set."
+        }
+      }
+    },
     "evidence_completeness": {
       "description": "How complete evidence is.",
       "source": {
@@ -3182,6 +3224,21 @@
         },
         "activity_runtime": {
           "description": "Activity runtime."
+        }
+      }
+    },
+    "text_read_budget": {
+      "description": "Which per-consumer text read budget of located OCR text ran out (Workflow #396 REC-1).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TextReadBudget"
+      },
+      "tokens": {
+        "calls": {
+          "description": "The provider calls of one consumer."
+        },
+        "area": {
+          "description": "The summed region area of one consumer, in pixels."
         }
       }
     },
@@ -6770,6 +6827,12 @@
     ],
     "text_": [
       "pack-containment"
+    ],
+    "text_locate_": [
+      "recognition-pack"
+    ],
+    "text_read_": [
+      "recognition-pack"
     ],
     "third_": [
       "contract"
@@ -10978,7 +11041,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "No candidate projection: the recognition pack declares no fixed_slots candidate layout with the requested ID.",
+      "description": "No candidate projection: the recognition pack declares no candidate layout with the requested ID.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -11139,6 +11202,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The runtime cannot take the candidate samples a select step needs.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_search_incomplete": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "timeout_ms": "required",
+        "count": "required",
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The anchor search of a repeated_anchor candidate layout reached its time limit (timeout_ms, 5000) before it had scored every row of the anchor's search region; count is the number of positions that had passed the threshold and the relative color check by then. No partial candidate set is returned, so the projection, and the select step or observation that asked for it, fails. operation, optional, is the caller's location; A2d left the callers' failure detail as text, so none adds it yet.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -13531,6 +13613,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_entry_pages_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "entry_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admission refuses a contained task's entry page set (Workflow #373 NAV-3b): it is empty, names more than 16 pages, names a page twice, names any, names a page that is not exactly one page of the package, or a page of a phased route starts no stage or more than one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_error_page_reached": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -13626,11 +13724,13 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry aspect mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "contained_task_geometry_frame_display_mismatch",
+      "description": "Retired (Workflow #392 DA-A). A contained task's first frame was not 16:9, or its aspect ratio differed from the logical display it was captured from, and the run was refused before any input. Since 0.12.0 the frame's own aspect ratio is recorded and never refused; the remaining mismatch is contained_task_geometry_frame_display_mismatch.",
+      "common_causes": "A device or emulator display that is not 16:9, or a capture backend whose frame did not match its display.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_geometry_budget_unavailable": {
       "category": "error",
@@ -13643,6 +13743,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task geometry budget unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_geometry_frame_display_mismatch": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task's frame and the logical display it was captured from have different aspect ratios (the task geometry conclusion aspect_mismatch, reason frame_and_logical_display_differ), so the run is refused before any input. The frame's own aspect ratio is never checked (Workflow #392 DA-A): any ratio is recorded in the instance's display facts and passes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20127,13 +20241,14 @@
         "raw_code": "optional",
         "raw_text_truncated": "optional",
         "raw_text_sensitivity": "optional",
+        "raw_text_redacted": "optional",
         "exit_code": "optional",
-        "adb_serial": "optional"
+        "device_label": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "description": "adb failed or printed a failure; raw_text keeps its output, with every bound device serial replaced by its label token (raw_text_redacted).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -28830,7 +28945,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -28888,7 +29003,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -28962,7 +29077,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), and a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted), and since 0.12.0 an emulator control (CLI, console, MCP ac_emulator; 5 s, once for a restart; nothing is driven). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
       "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
@@ -32209,6 +32324,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports observation verified event missing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ocr_field_low_confidence": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52684,6 +52813,80 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "text_locate_not_found": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target did not pass: no block read in its region matches an expected value with at least the target's minimum confidence (Workflow #396 REC-1). count is the number of blocks read. Carried as the target evaluation's failure; a guard refuses its input with it as the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_locate_outside_cells": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target did not pass: the matching block's center lies in none of the target's declared cells (Workflow #396 REC-1). Carried as the target evaluation's failure.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_read_blocks_truncated": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "text_read_budget_exceeded": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "text_read_budget": "required",
+        "count": "required",
+        "limit_count": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A text read was refused before calling the OCR provider: one consumer (one page recognition or one guard evaluation) would exceed its budget of provider calls or of summed region area in pixels (Workflow #396 REC-1). count is the amount already used, limit_count the budget. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "tier_not_enabled": {
       "category": "error",
       "ladder_class": "none",
@@ -55486,6 +55689,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: cancel queues for drain."
     },
+    "candidate_search_repeated_anchor": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Enumerating the anchor matches of a repeated_anchor candidate layout (SceneEvaluation::evaluate_target_all)."
+    },
     "canonicalize_artifact_root": {
       "owner": "artifact-store",
       "layer": "store",
@@ -57438,6 +57649,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
     },
+    "hand_off_to_claim": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand off to claim."
+    },
     "hand_off_to_ladder": {
       "owner": "runtime-host",
       "layer": "host",
@@ -58630,6 +58849,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: open owner file."
     },
+    "open_policy_wakes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: open the host's business notifications that wake the policy driver (Workflow #383 AO-7)."
+    },
     "open_read_only_segment": {
       "owner": "ledger",
       "layer": "store",
@@ -59093,6 +59320,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The runtime state store's operation or stage: prepare catalog state."
+    },
+    "prepare_claim_hand_off": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: prepare claim hand off."
     },
     "prepare_cleanup_transfer": {
       "owner": "runtime-host",
@@ -60246,6 +60481,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read due monitors."
     },
+    "read_emulator_control_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read emulator control claim ttl."
+    },
     "read_evidence_archive": {
       "owner": "artifact-store",
       "layer": "store",
@@ -61246,6 +61489,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read runtime debug run."
     },
+    "read_runtime_fact_changes": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 3 of an offline runtime fact read (Workflow #395): apply the runtime fact events after that set through the position. A failure whose deadline ran out in this phase names it."
+    },
     "read_runtime_fact_position": {
       "owner": "runtime-host",
       "layer": "host",
@@ -61262,6 +61513,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read runtime fact snapshot."
     },
+    "read_runtime_fact_snapshot_set": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 2 of an offline runtime fact read (Workflow #395): find the newest complete runtime fact snapshot set at or before the position. A failure whose deadline ran out in this phase names it."
+    },
     "read_runtime_facts_at": {
       "owner": "ledger-forensics",
       "layer": "store",
@@ -61269,6 +61528,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Ledger forensics' operation or stage: read runtime facts at."
+    },
+    "read_runtime_facts_position": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 1 of an offline runtime fact read (Workflow #395): open the read-only metadata snapshot and read the event at the position. A failure whose deadline ran out in this phase names it."
     },
     "read_runtime_fatal": {
       "owner": "runtime-host",
@@ -61541,6 +61808,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read unsettled dispatch instance."
+    },
+    "read_verified_material": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 3 of an offline material read (Workflow #395): read and verify the material and encode the reply. A failure whose deadline ran out in this phase names it."
     },
     "read_writer_health": {
       "owner": "ledger",
@@ -62750,6 +63025,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: resolve current lab operation."
     },
+    "resolve_current_material_reference": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 2 of an offline material read (Workflow #395): under the reader's use guard, reopen the ledger metadata and confirm the same reference and its current retention. A failure whose deadline ran out in this phase names it."
+    },
     "resolve_database_root": {
       "owner": "ledger",
       "layer": "store",
@@ -62853,6 +63136,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The runtime database's operation or stage: resolve maintenance target parent."
+    },
+    "resolve_material_reference": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Phase 1 of an offline material read (Workflow #395): open the ledger metadata and resolve the selected reference and its retention. A failure whose deadline ran out in this phase names it."
     },
     "resolve_monitor_instance": {
       "owner": "runtime-host",
@@ -64085,6 +64376,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Ledger forensics' operation or stage: task evidence."
+    },
+    "text_locate_evaluate": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Comparing a locate OCR target's blocks with its expected values and declared cells (Workflow #396 REC-1)."
+    },
+    "text_read_request": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking one consumer's text read budget before calling the OCR provider (Workflow #396 REC-1)."
     },
     "transition_performance_control": {
       "owner": "runtime-host",

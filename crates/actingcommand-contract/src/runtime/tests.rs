@@ -192,6 +192,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
                 stdout_lossy_decode: false,
                 stderr_lossy_decode: false,
                 state: crate::AdbTransportState::Offline,
+                raw_text_redacted: false,
             }),
             error: Some(LifecycleNativeDetail::new(
                 "original verification failure",

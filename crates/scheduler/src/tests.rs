@@ -1364,7 +1364,7 @@ fn claim_queue_orders_the_continuation_first_then_priority_then_arrival() {
 }
 
 #[test]
-fn closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuation() {
+fn closed_gate_skips_routine_entries_and_the_startup_claim_and_passes_operator_and_continuation() {
     let issuer = ids();
     let mut scheduler =
         SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
@@ -1434,8 +1434,9 @@ fn closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuatio
     );
     assert_eq!(scheduler.queued_count(instance_id), 1);
 
-    // Until S6b the startup claim is not gated (H-6); the continuation never is (Q-3 (0)).
-    assert!(!ClaimKind::StartupPackage.gated_by_pause());
+    // Since #369 S6b the startup claim is a gated routine entry (H-4, M6); the continuation
+    // never is (Q-3 (0)).
+    assert!(ClaimKind::StartupPackage.gated_by_pause());
     assert!(!ClaimKind::LadderContinuation.gated_by_pause());
     assert!(ClaimKind::Ladder.gated_by_pause());
     assert!(ClaimKind::PolicyDispatch.gated_by_pause());
@@ -1450,8 +1451,9 @@ fn closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuatio
     scheduler.enqueue_claim(startup, 5).expect("startup");
     assert_eq!(
         scheduler.eligible_count(instance_id, ClaimGate::RoutineHeld, 6),
-        1
+        0
     );
+    assert_eq!(scheduler.eligible_count(instance_id, ClaimGate::Open, 6), 2);
 }
 
 #[test]

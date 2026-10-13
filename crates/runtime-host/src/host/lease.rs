@@ -1691,8 +1691,9 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
+        // Workflow #383 AO-7: the committed `lease.released` wakes the policy driver.
         let result = execute_critical(
-            &self.ledger,
+            &self.policy_waking_ledger(),
             self.events.fingerprinter(),
             plan,
             || match self.complete_explicit_release(request_id, token, connection_id) {
@@ -2151,6 +2152,98 @@ impl HostShared {
         )
     }
 
+    // ---- Workflow #369 S6b: the explicit release of a held key that hands it to a claim ----
+
+    /// Workflow #369 H-4, Q-3 (1) (S6b): the explicit release `request_id` of the held `token`
+    /// that hands the key to `claim` on the way, bypassing the queue. A claim of a kind that
+    /// takes today's admission checks passes them first (Q-2a). Then, under the instance's
+    /// admission guard and queue-order lock: the claim's own `lease.requested` and
+    /// `scheduler.queued` (high, no deadline, under its links), its context and payload, and the
+    /// release's records with the transfer to the claim (`release_via_transfer`; the payload
+    /// goes to the instance's worker with the key). Returns `false`, having handed nothing on,
+    /// when there is no hand-off: a routine claim behind a closed gate, or a destructive step
+    /// still open on the key. The caller then releases the key itself.
+    pub(super) fn release_lease_to_claim(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        claim: HostClaim<'_>,
+        work: HostClaimWork,
+    ) -> Result<bool, RequestFailure> {
+        let validated_claim = claim.request.validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                HostCode::QueuedRequestContextInvalid,
+                HostLocation::HandOffToClaim,
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let resolved = self.validated_instance(request, token, connection_id)?;
+        let instance_id = token.instance_id();
+        if claim.kind.takes_admission_checks() {
+            self.require_bound_endpoint(
+                &resolved,
+                self.events
+                    .request_links(&validated_claim, Some(instance_id), None, None),
+                EventAction::LeaseAcquire,
+            )?;
+            self.require_performance_control_lease(
+                &validated_claim,
+                &resolved,
+                claim.instance_alias,
+            )?;
+        }
+        let instance_guard = self.instance_guard(instance_id)?;
+        let _admission = self.lock_admission(&instance_guard, instance_id)?;
+        self.expire_queued_for_instance(instance_id)?;
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
+        let gate = self.routine_gate(instance_id)?;
+        let order_lock = self.queue_order_lock(instance_id)?;
+        let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
+        let prepared = lock(&self.scheduler, HostLocation::PrepareClaimHandOff)?
+            .prepare_release_hand_off(
+                token,
+                connection_id,
+                request_id,
+                ClaimRequest {
+                    request_id: validated_claim.request_id(),
+                    instance_id,
+                    holder_id: claim.holder_id,
+                    connection_id: claim.connection_id,
+                    kind: claim.kind,
+                    priority: claim.priority,
+                    lease_ttl_ms: claim.lease_ttl_ms,
+                },
+                gate,
+                self.monotonic_ms()?,
+            )
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    HostLocation::PrepareClaimHandOff,
+                    &error,
+                ))
+            })?;
+        let TransferPreparation::Ready(prepared) = prepared else {
+            return Ok(false);
+        };
+        self.append_lease_requested(&validated_claim, &resolved)?;
+        self.append_scheduler_queued_hand_off(&validated_claim, &resolved)?;
+        self.register_queued_context(QueuedRequestContext {
+            request: claim.request.clone(),
+            instance: resolved.clone(),
+            connection_id: claim.connection_id,
+            grant: None,
+        })?;
+        lock(&self.host_claim_work, HostLocation::RegisterHostClaimWork)?
+            .insert(validated_claim.request_id(), work);
+        self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
+        self.release_via_transfer(request, token, &resolved, prepared, None)?;
+        Ok(true)
+    }
+
+    // ---- end Workflow #369 S6b ----
+
     pub(super) fn cleanup_token_inner(
         &self,
         token: &LeaseToken,
@@ -2355,8 +2448,10 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let outcome_links = links.clone();
         let failure_links = links;
+        // Workflow #383 AO-7: the committed `lease.released` or `lease.expired` wakes the
+        // policy driver.
         let result = execute_critical(
-            &self.ledger,
+            &self.policy_waking_ledger(),
             self.events.fingerprinter(),
             plan,
             || {
@@ -3873,10 +3968,10 @@ impl HostShared {
 const ADMISSION_CONTENTION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Whether business capacity holds a claim of `kind` back from its grant (the pump, the
-/// immediate path and a transfer). Review C-1 (#666), model H-6: until S6b a startup claim is
-/// not held back, so it never waits while capacity refuses; the startup run's own capacity
-/// check (`prepare_package_run`) refuses it, records the refusal and releases the key, as a
-/// refused startup run did before.
+/// immediate path and a transfer). Review C-1 (#666), model H-6: a startup claim is not held
+/// back (nor is the emulator control's hand-off to it since #369 S6b), so it never waits while
+/// capacity refuses; the startup run's own capacity check (`prepare_package_run`) refuses it,
+/// records the refusal and releases the key, as a refused startup run did before.
 const fn waits_for_business_capacity(kind: ClaimKind) -> bool {
     !kind.skips_business_capacity() && !matches!(kind, ClaimKind::StartupPackage)
 }
