@@ -55,6 +55,7 @@ impl HostShared {
             result: RuntimeResult::SignatureRegistered {
                 registration: registration_ref(&event, definition),
             },
+            failure_outcome: None,
         })
     }
 
@@ -90,6 +91,7 @@ impl HostShared {
             result: RuntimeResult::SignatureRetired {
                 registration: registration.clone(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -138,6 +140,7 @@ impl HostShared {
             result: RuntimeResult::SignaturesMatched {
                 page: Box::new(page),
             },
+            failure_outcome: None,
         })
     }
 }

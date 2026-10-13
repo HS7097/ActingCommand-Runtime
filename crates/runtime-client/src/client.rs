@@ -4,7 +4,7 @@ use crate::codes::{ClientCode, ClientLocation};
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Detail, Location};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
@@ -132,6 +132,7 @@ pub struct RuntimeClientConfig {
     backend_open_timeout: Duration,
     maximum_frame_bytes: usize,
     deadline: Option<Instant>,
+    detail: Option<Detail>,
 }
 
 impl RuntimeClientConfig {
@@ -144,7 +145,16 @@ impl RuntimeClientConfig {
             backend_open_timeout: DEFAULT_BACKEND_OPEN_TIMEOUT,
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             deadline: None,
+            detail: None,
         }
+    }
+
+    /// Workflow #378 A4 (request v4): every request of the session asks for this receipt detail
+    /// instead of the class default of its source (codes only for `source: ui`, the full outcome
+    /// for every other source).
+    pub fn with_detail(mut self, detail: Detail) -> Self {
+        self.detail = Some(detail);
+        self
     }
 
     /// Workflow #381 A R1′: one deadline for the whole session. The connect and every later
@@ -211,6 +221,7 @@ impl fmt::Debug for RuntimeClientConfig {
             .field("backend_open_timeout", &self.backend_open_timeout)
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
             .field("deadline", &self.deadline)
+            .field("detail", &self.detail)
             .finish()
     }
 }
@@ -224,6 +235,7 @@ struct RuntimeConnection {
     backend_open_timeout: Duration,
     maximum_frame_bytes: usize,
     deadline: Option<Instant>,
+    detail: Option<Detail>,
     terminal_error: Option<RuntimeClientError>,
 }
 
@@ -870,6 +882,7 @@ impl RuntimeClient {
                     backend_open_timeout: config.backend_open_timeout,
                     maximum_frame_bytes: config.maximum_frame_bytes,
                     deadline: config.deadline,
+                    detail: config.detail,
                     terminal_error: None,
                 }),
             }),
@@ -2031,7 +2044,9 @@ impl RuntimeClient {
                     ));
                 }
                 ContainedTaskCancellationStatus::Terminal {
-                    outcome, reason, ..
+                    task_result: outcome,
+                    reason,
+                    ..
                 } => {
                     let reset = if saw_pending
                         && outcome == TaskOutcome::Cancelled
@@ -3309,7 +3324,8 @@ impl RuntimeClient {
                     // The dedicated verifier consumes the failed operation's committed evidence.
                     return Ok(receipt);
                 }
-                let mut error = RuntimeClientError::rejected(operation_name, error.clone());
+                let mut error =
+                    RuntimeClientError::rejected(operation_name, error, receipt.outcome().clone());
                 if matches!(
                     operation,
                     RuntimeOperation::RunContainedTask { .. }
@@ -3556,7 +3572,7 @@ fn receipt_ocr_run(
         Some(RuntimeResult::ContainedTaskCompleted {
             run_id,
             task_id,
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         }) => (*run_id, *task_id),
         _ if receipt.error_projection().is_some() => {
@@ -5363,6 +5379,10 @@ impl RuntimeConnection {
         .map_err(|_| {
             RuntimeClientError::fatal(ClientCode::RuntimeRequestInvalid, operation_name)
         })?;
+        let request = match self.detail {
+            Some(detail) => request.with_detail(detail),
+            None => request,
+        };
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::ClientRequestCreated,

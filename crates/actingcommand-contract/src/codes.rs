@@ -106,6 +106,72 @@ crate::outcome_codes! {
 }
 
 crate::outcome_codes! {
+    /// Workflow #378 A4 (model section 7.2): what a receipt carries when its request did not
+    /// fail. A receipt in state admitted, observed, queued or cancelled carries its state's info
+    /// code; a completed receipt carries the success code of its request kind, one per kind
+    /// ([`crate::RuntimeOperationKind::success_code`]). A denied or failed receipt carries its
+    /// refusal or failure instead.
+    pub enum ReceiptCode {
+        RequestAdmitted => "request_admitted": info / none,
+        RequestObserved => "request_observed": info / none,
+        RequestQueued => "request_queued": info / none,
+        RequestCancelled => "request_cancelled": info / none,
+        HealthCompleted => "request_health_completed": success / none,
+        InstallTransitionCompleted => "request_install_transition_completed": success / none,
+        StatusCompleted => "request_status_completed": success / none,
+        ProjectInterfaceCompleted => "request_project_interface_completed": success / none,
+        ProjectPolicyInputIdentityCompleted => "request_project_policy_input_identity_completed": success / none,
+        MonitorStatusCompleted => "request_monitor_status_completed": success / none,
+        RuntimeFactSnapshotCompleted => "request_runtime_fact_snapshot_completed": success / none,
+        ConfigureMonitorCompleted => "request_configure_monitor_completed": success / none,
+        ClearMonitorCompleted => "request_clear_monitor_completed": success / none,
+        CancelContainedTaskCompleted => "request_cancel_contained_task_completed": success / none,
+        RenewLeaseCompleted => "request_renew_lease_completed": success / none,
+        ReleaseLeaseCompleted => "request_release_lease_completed": success / none,
+        ObserveReadonlyCompleted => "request_observe_readonly_completed": success / none,
+        RecognizeArtifactCompleted => "request_recognize_artifact_completed": success / none,
+        RunContainedLabOperationCompleted => "request_run_contained_lab_operation_completed": success / none,
+        CaptureSequenceCompleted => "request_capture_sequence_completed": success / none,
+        SafeResetCompleted => "request_safe_reset_completed": success / none,
+        ApplicationLifecycleCompleted => "request_application_lifecycle_completed": success / none,
+        ControlEmulatorInstanceCompleted => "request_control_emulator_instance_completed": success / none,
+        DiscoverInstancesCompleted => "request_discover_instances_completed": success / none,
+        PauseSchedulingCompleted => "request_pause_scheduling_completed": success / none,
+        ResumeSchedulingCompleted => "request_resume_scheduling_completed": success / none,
+        SelfCheckInstanceCompleted => "request_self_check_instance_completed": success / none,
+        RunContainedTaskCompleted => "request_run_contained_task_completed": success / none,
+        InputCompleted => "request_input_completed": success / none,
+        PublishFactCompleted => "request_publish_fact_completed": success / none,
+        PublishFactsCompleted => "request_publish_facts_completed": success / none,
+        QueryEventsCompleted => "request_query_events_completed": success / none,
+        ReadMaterialCompleted => "request_read_material_completed": success / none,
+        SubscribeEventsCompleted => "request_subscribe_events_completed": success / none,
+        RegisterDiagnosticSignatureCompleted => "request_register_diagnostic_signature_completed": success / none,
+        MatchDiagnosticSignaturesCompleted => "request_match_diagnostic_signatures_completed": success / none,
+        RetireDiagnosticSignatureCompleted => "request_retire_diagnostic_signature_completed": success / none,
+        DebugPackageCompleted => "request_debug_package_completed": success / none,
+        ExportEvidenceCompleted => "request_export_evidence_completed": success / none,
+        RecordAuthoringEventCompleted => "request_record_authoring_event_completed": success / none,
+        RecordDebugEventCompleted => "request_record_debug_event_completed": success / none,
+        ReleaseLabPinCompleted => "request_release_lab_pin_completed": success / none,
+        RecordClientActionCompleted => "request_record_client_action_completed": success / none,
+        DeclareGovernanceIdentityCompleted => "request_declare_governance_identity_completed": success / none,
+        RecordApprovalDecisionCompleted => "request_record_approval_decision_completed": success / none,
+        StartAgentSessionCompleted => "request_start_agent_session_completed": success / none,
+        ResumeAgentSessionCompleted => "request_resume_agent_session_completed": success / none,
+        AgentSessionStatusCompleted => "request_agent_session_status_completed": success / none,
+        RecordAgentResponseCompleted => "request_record_agent_response_completed": success / none,
+        PrepareStrategicReportCompleted => "request_prepare_strategic_report_completed": success / none,
+        ProjectPolicyForwardCompleted => "request_project_policy_forward_completed": success / none,
+        AssessPredictiveMaintenanceCompleted => "request_assess_predictive_maintenance_completed": success / none,
+        CompileProposalCompleted => "request_compile_proposal_completed": success / none,
+        PromoteProposalCompleted => "request_promote_proposal_completed": success / none,
+        ApplyResourceTargetsCompleted => "request_apply_resource_targets_completed": success / none,
+        ResourceTargetViewCompleted => "request_resource_target_view_completed": success / none,
+    }
+}
+
+crate::outcome_codes! {
     /// Why the Runtime refused a governance identity card (Workflow #318 cfg4): the
     /// `governance.identity_declared` verdict and the Denied receipt's host code carry it.
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -434,7 +500,6 @@ crate::outcome_codes! {
         FactOriginMixed => "fact_origin_mixed": error / none,
         InvalidAgentDispatcherOrigin => "invalid_agent_dispatcher_origin": error / none,
         InvalidContainedTaskCancellationStatus => "invalid_contained_task_cancellation_status": error / none,
-        InvalidHostFailure => "invalid_host_failure": error / none,
         MaterialReadResultMissing => "material_read_result_missing": error / none,
         MaterialReadFailureAlreadyRecorded => "material_read_failure_already_recorded": error / none,
         MaterialReadRequestMismatch => "material_read_request_mismatch": error / none,

@@ -12,8 +12,8 @@
 //! }
 //! ```
 
-use crate::codes::{RuntimeContractCode, SharedCode};
-use crate::outcome::Code;
+use crate::codes::{ReceiptCode, RuntimeContractCode, SharedCode};
+use crate::outcome::{Category, Code, Detail, Location, Outcome, OutcomeEnvelope};
 use crate::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
@@ -54,8 +54,12 @@ use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer use these two.
-pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
-pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v1";
+// Revision 2 (Workflow #378 A4 with #389 U-1): request v4 adds the optional `detail`, receipt v2
+// carries `outcome` on every receipt instead of the error projection, and the request kinds of
+// #389 section 2.3 (`BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`,
+// `UnloadPack`) belong to it. Slice A8 declares the revision for v0.12.0 in one step.
+pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
+pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
 pub const RUNTIME_INFO_FILE: &str = "runtime-info.json";
 pub const MAX_INSTANCE_ALIAS_BYTES: usize = 256;
@@ -3858,6 +3862,11 @@ pub struct RuntimeRequest {
     source: EventSource,
     submitted_at_unix_ms: u64,
     operation: RuntimeOperation,
+    /// Workflow #378 A4 (request v4, model section 7.1): how much of the receipt's outcome the
+    /// client wants, `codes` or `full`; absent, the class default of its source applies
+    /// ([`Self::receipt_detail`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<Detail>,
 }
 
 impl RuntimeRequest {
@@ -3879,9 +3888,35 @@ impl RuntimeRequest {
             source,
             submitted_at_unix_ms,
             operation,
+            detail: None,
         };
         request.validate()?;
         Ok(request)
+    }
+
+    /// This request asking for the given receipt detail (Workflow #378 A4): it overrides the
+    /// class default of the request's source.
+    #[must_use]
+    pub const fn with_detail(mut self, detail: Detail) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
+    /// The receipt detail this request asks for, if it names one.
+    pub const fn detail(&self) -> Option<Detail> {
+        self.detail
+    }
+
+    /// The detail its receipt is written with (model section 7.1): the request's own, else the
+    /// class default of its source, codes only for the console (`source: ui`) and the full
+    /// outcome for every other client.
+    pub fn receipt_detail(&self) -> Detail {
+        let class_default = if self.source == EventSource::Ui {
+            Detail::Codes
+        } else {
+            Detail::Full
+        };
+        self.detail.unwrap_or(class_default)
     }
 
     pub fn validate(&self) -> RuntimeContractResult<ValidatedRuntimeRequest<'_>> {
@@ -4107,6 +4142,7 @@ impl fmt::Debug for RuntimeRequest {
             .field("source", &self.source)
             .field("submitted_at_unix_ms", &self.submitted_at_unix_ms)
             .field("operation", &self.operation)
+            .field("detail", &self.detail)
             .finish()
     }
 }
@@ -4259,7 +4295,9 @@ pub enum ContainedTaskCancellationStatus {
     Terminal {
         #[serde(skip_serializing_if = "Option::is_none")]
         deadline_monotonic_ms: Option<u64>,
-        outcome: TaskOutcome,
+        /// How the cancelled run ended (Workflow #378 A4: receipt v2 reserves `outcome` for the
+        /// envelope, model section 8.1).
+        task_result: TaskOutcome,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<ContainedTaskCancellationReason>,
         task_terminal: TerminalEvent,
@@ -4283,7 +4321,7 @@ impl ContainedTaskCancellationStatus {
             )),
             Self::Terminal {
                 deadline_monotonic_ms,
-                outcome,
+                task_result,
                 reason,
                 task_terminal,
                 lease_terminal,
@@ -4292,7 +4330,7 @@ impl ContainedTaskCancellationStatus {
                 || task_terminal.sequence == 0
                 || lease_terminal.sequence == 0
                 || task_terminal == lease_terminal
-                || (*outcome == TaskOutcome::Cancelled) != reason.is_some() =>
+                || (*task_result == TaskOutcome::Cancelled) != reason.is_some() =>
             {
                 Err(RuntimeContractError::new(
                     RuntimeContractCode::InvalidContainedTaskCancellationStatus,
@@ -4307,6 +4345,11 @@ impl ContainedTaskCancellationStatus {
 /// `crate::codes`); this path keeps naming them.
 pub use crate::codes::RuntimeErrorCode;
 
+/// The Runtime's typed view of a refusal or failure: its closed error code, whether the host is
+/// halted (`fatal`), the current holder of a busy instance and when to retry. Receipt v2
+/// (Workflow #378 A4) carries it inside its `outcome` ([`Self::receipt_outcome`],
+/// [`Self::from_receipt_outcome`]); the lab operation and material read failure records keep it
+/// as their own member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeErrorProjection {
@@ -4318,13 +4361,14 @@ pub struct RuntimeErrorProjection {
     pub current_lease_id: Option<LeaseId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
-    /// The Runtime's closed static failure code behind `code`; never native text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    host_code: Option<String>,
-    /// The Runtime operation that produced `host_code`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    host_operation: Option<String>,
 }
+
+/// The outcome keys of a receipt's projection values (Workflow #378 model section 7.2).
+const RUNTIME_CODE_KEY: &str = "runtime_code";
+const HOST_HALTED_KEY: &str = "host_halted";
+const HOLDER_ID_KEY: &str = "holder_id";
+const LEASE_ID_KEY: &str = "lease_id";
+const RETRY_AFTER_MS_KEY: &str = "retry_after_ms";
 
 impl RuntimeErrorProjection {
     pub const fn new(code: RuntimeErrorCode, fatal: bool) -> Self {
@@ -4334,8 +4378,6 @@ impl RuntimeErrorProjection {
             current_holder_id: None,
             current_lease_id: None,
             retry_after_ms: None,
-            host_code: None,
-            host_operation: None,
         }
     }
 
@@ -4350,37 +4392,110 @@ impl RuntimeErrorProjection {
         self
     }
 
-    pub fn with_host_failure(mut self, code: &str, operation: &str) -> Self {
-        self.host_code = Some(code.to_owned());
-        self.host_operation = Some(operation.to_owned());
-        self
-    }
-
-    pub fn host_code(&self) -> Option<&str> {
-        self.host_code.as_deref()
-    }
-
-    pub fn host_operation(&self) -> Option<&str> {
-        self.host_operation.as_deref()
-    }
-
-    fn validate(&self) -> RuntimeContractResult<()> {
-        for value in [&self.host_code, &self.host_operation]
-            .into_iter()
-            .flatten()
-        {
-            if value.is_empty()
-                || value.len() > 128
-                || !value.bytes().all(|byte| {
-                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
-                })
-            {
-                return Err(RuntimeContractError::new(
-                    RuntimeContractCode::InvalidHostFailure,
-                ));
-            }
+    /// This projection as the outcome of a denied or failed receipt (Workflow #378 A4, model
+    /// section 7.2). The Runtime's specific code `top` is the top code, and the projection's
+    /// Runtime error code its `runtime_code` value; without a specific code (or when it is the
+    /// Runtime error code itself) the Runtime error code is the top. `operation` says where the
+    /// request failed, `fatal` travels as `host_halted`, the current holder as `holder_id` and
+    /// `lease_id`, and `retry_after_ms` stays.
+    pub fn receipt_outcome(&self, top: Option<Code>, operation: Option<Location>) -> Outcome {
+        let runtime_code = self.code.code();
+        let mut outcome = match top {
+            Some(top) if top != runtime_code => Outcome::new(top).runtime_code(runtime_code),
+            _ => Outcome::new(runtime_code),
+        };
+        if let Some(operation) = operation {
+            outcome = outcome.operation(operation);
         }
-        Ok(())
+        self.receipt_state_values(outcome)
+    }
+
+    /// The receipt values of this projection on `outcome`, which its producer built with the
+    /// values its code declares (Workflow #378 A4): a code whose catalog entry requires values
+    /// tops a denied or failed receipt only with them. The projection's Runtime error code is
+    /// the `runtime_code` value unless it is the outcome's own code; `host_halted`, the holder
+    /// and `retry_after_ms` follow as in [`Self::receipt_outcome`].
+    pub fn with_receipt_values(&self, outcome: Outcome) -> Outcome {
+        let runtime_code = self.code.code();
+        let outcome = if outcome.code().as_str() == runtime_code.as_str() {
+            outcome
+        } else {
+            outcome.runtime_code(runtime_code)
+        };
+        self.receipt_state_values(outcome)
+    }
+
+    /// `fatal` as `host_halted`, the current holder as `holder_id` and `lease_id`, and
+    /// `retry_after_ms`.
+    fn receipt_state_values(&self, outcome: Outcome) -> Outcome {
+        let mut outcome = outcome.host_halted(self.fatal);
+        if let Some(holder_id) = self.current_holder_id.as_ref().and_then(id_text) {
+            outcome = outcome.holder_id(holder_id);
+        }
+        if let Some(lease_id) = self.current_lease_id.as_ref().and_then(id_text) {
+            outcome = outcome.lease_id(lease_id);
+        }
+        if let Some(retry_after_ms) = self.retry_after_ms {
+            outcome = outcome.retry_after_ms(retry_after_ms);
+        }
+        outcome
+    }
+
+    /// The projection a denied or failed receipt's outcome carries (Workflow #378 A4): its
+    /// Runtime error code is the `runtime_code` value, or the top code when that is a Runtime
+    /// error code itself; `None` when neither names one. `fatal` is `host_halted` as sent, which
+    /// every denied or failed receipt carries in every detail mode (coordinator ruling A-M1). A
+    /// receipt written in codes mode withholds the other data values, so the holder and
+    /// `retry_after_ms` read as absent.
+    pub fn from_receipt_outcome(outcome: &Outcome) -> Option<Self> {
+        let code = match outcome.value(RUNTIME_CODE_KEY) {
+            Some(value) => runtime_error_code(value.as_str()?)?,
+            None => runtime_error_code(outcome.code().as_str())?,
+        };
+        let fatal = outcome
+            .value(HOST_HALTED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let mut projection = Self::new(code, fatal);
+        let holder_id = outcome
+            .value(HOLDER_ID_KEY)
+            .and_then(|value| HolderId::deserialize(value).ok());
+        let lease_id = outcome
+            .value(LEASE_ID_KEY)
+            .and_then(|value| LeaseId::deserialize(value).ok());
+        if let (Some(holder_id), Some(lease_id)) = (holder_id, lease_id) {
+            projection = projection.with_holder(holder_id, lease_id);
+        }
+        if let Some(retry_after_ms) = outcome
+            .value(RETRY_AFTER_MS_KEY)
+            .and_then(serde_json::Value::as_u64)
+        {
+            projection = projection.with_retry_after(retry_after_ms);
+        }
+        Some(projection)
+    }
+}
+
+/// A receipt's outcome envelope for `detail`. Codes mode withholds the data values (model section
+/// 4.3) except a denied or failed receipt's `host_halted`, which travels in every detail mode
+/// (Workflow #378 A4, coordinator ruling A-M1): the client's own fatal handling runs on it.
+fn receipt_envelope(outcome: &Outcome, detail: Detail) -> OutcomeEnvelope {
+    OutcomeEnvelope::keeping_top_values(outcome, detail, &[HOST_HALTED_KEY])
+}
+
+/// The registered Runtime error code a received spelling names, if any.
+fn runtime_error_code(spelling: &str) -> Option<RuntimeErrorCode> {
+    RuntimeErrorCode::ALL
+        .iter()
+        .copied()
+        .find(|code| code.as_str() == spelling)
+}
+
+/// The canonical text of a typed identifier, as it travels on the wire.
+fn id_text<T: Serialize>(id: &T) -> Option<String> {
+    match serde_json::to_value(id) {
+        Ok(serde_json::Value::String(text)) => Some(text),
+        _ => None,
     }
 }
 
@@ -4578,7 +4693,9 @@ pub enum RuntimeResult {
         task_request_id: RequestId,
         #[serde(skip_serializing_if = "Option::is_none")]
         response_deadline_monotonic_ms: Option<u64>,
-        outcome: TaskOutcome,
+        /// How the run ended (Workflow #378 A4: receipt v2 reserves `outcome` for the envelope,
+        /// model section 8.1).
+        task_result: TaskOutcome,
         #[serde(skip_serializing_if = "Option::is_none")]
         final_page: Option<String>,
         executed_steps: u32,
@@ -4710,6 +4827,12 @@ pub enum RuntimeResult {
     },
 }
 
+/// A Runtime's answer to one request (receipt v2, Workflow #378 A4). Every receipt carries
+/// `outcome`: the info code of its state when admitted, observed, queued or cancelled; the
+/// success code of its request kind when completed ([`RuntimeOperationKind::success_code`]); its
+/// refusal or failure when denied or failed, with the Runtime error code as the `runtime_code`
+/// value ([`RuntimeErrorProjection::receipt_outcome`]). The Runtime writes it with the detail the
+/// request asks for ([`RuntimeRequest::receipt_detail`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeReceipt {
@@ -4721,8 +4844,7 @@ pub struct RuntimeReceipt {
     terminal: Option<TerminalEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<RuntimeResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<RuntimeErrorProjection>,
+    outcome: OutcomeEnvelope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4733,12 +4855,42 @@ pub struct RuntimeReceipt {
     resource_targets_rejection: Option<Box<crate::ResourceTargetsRejection>>,
 }
 
+/// The outcome of a receipt whose request did not fail (Workflow #378 A4): the info code of its
+/// state, or the success code of the request's kind when completed. A denied or failed state, or
+/// a completed kind without a success code, has none.
+fn receipt_state_outcome(
+    request: &RuntimeRequest,
+    state: RuntimeReceiptState,
+) -> RuntimeContractResult<Outcome> {
+    let code = match state {
+        RuntimeReceiptState::Admitted => ReceiptCode::RequestAdmitted.code(),
+        RuntimeReceiptState::Observed => ReceiptCode::RequestObserved.code(),
+        RuntimeReceiptState::Queued => ReceiptCode::RequestQueued.code(),
+        RuntimeReceiptState::Cancelled => ReceiptCode::RequestCancelled.code(),
+        RuntimeReceiptState::Completed => {
+            request.operation().kind().success_code().ok_or_else(|| {
+                RuntimeContractError::new(RuntimeContractCode::InvalidReceiptOutcome)
+            })?
+        }
+        RuntimeReceiptState::Denied | RuntimeReceiptState::Failed => {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidReceiptOutcome,
+            ));
+        }
+    };
+    Ok(Outcome::new(code))
+}
+
 impl RuntimeReceipt {
+    /// Turns a material read's receipt into a failure after its reply was measured: `outcome` is
+    /// the host's failure as the receipt outcome (Workflow #378 A4, coordinator ruling A-M2), and
+    /// tops the receipt as [`Self::failure`]'s does.
     pub fn fail_material_read(
         &mut self,
         state: RuntimeMaterialReadState,
         limit: Option<RuntimeMaterialReadLimit>,
         failure: RuntimeMaterialReadFailure,
+        outcome: Outcome,
     ) -> RuntimeContractResult<()> {
         let Some(RuntimeResult::MaterialRead { result }) = &mut self.result else {
             return Err(RuntimeContractError::new(
@@ -4753,16 +4905,20 @@ impl RuntimeReceipt {
         result.chunk = None;
         result.state = state;
         result.limit = limit;
-        result.failure = Some(failure.clone());
+        result.failure = Some(failure);
         self.state = result.receipt_state();
-        self.error = Some(failure.error);
+        self.outcome = receipt_envelope(&outcome, self.outcome.detail());
         self.validate()
     }
 
+    /// A material read's receipt. A read that failed carries `failure_outcome`, the host's
+    /// failure as the receipt outcome, on top (Workflow #378 A4, coordinator ruling A-M2); one
+    /// that did not fail carries none.
     pub fn material_read(
         request: &RuntimeRequest,
         terminal: Option<TerminalEvent>,
         result: Box<RuntimeMaterialReadResult>,
+        failure_outcome: Option<Outcome>,
     ) -> RuntimeContractResult<Self> {
         if !matches!(request.operation(), RuntimeOperation::ReadMaterial { request } if request.as_ref() == &result.request)
         {
@@ -4770,14 +4926,24 @@ impl RuntimeReceipt {
                 RuntimeContractCode::MaterialReadRequestMismatch,
             ));
         }
+        let state = result.receipt_state();
+        let outcome = match (&result.failure, failure_outcome) {
+            (Some(_), Some(outcome)) => outcome,
+            (None, None) => receipt_state_outcome(request, state)?,
+            _ => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidReceiptOutcome,
+                ));
+            }
+        };
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
             request_id: request.request_id,
             correlation_id: request.correlation_id,
-            state: result.receipt_state(),
+            state,
             terminal,
-            error: result.failure.as_ref().map(|failure| failure.error.clone()),
             result: Some(RuntimeResult::MaterialRead { result }),
+            outcome: OutcomeEnvelope::new(&outcome, Detail::Full),
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
@@ -4786,28 +4952,35 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// A contained Lab operation's receipt. An operation that failed carries `failure_outcome`,
+    /// the host's failure as the receipt outcome, on top (Workflow #378 A4, coordinator ruling
+    /// A-M2); one that did not fail carries none.
     pub fn contained_lab_operation(
         request: &RuntimeRequest,
         terminal: TerminalEvent,
         operation: Box<ContainedLabOperationResult>,
+        failure_outcome: Option<Outcome>,
     ) -> RuntimeContractResult<Self> {
-        let error = operation
-            .record
-            .failure
-            .as_ref()
-            .map(|failure| failure.error.clone());
+        let (state, outcome) = match (&operation.record.failure, failure_outcome) {
+            (Some(_), Some(outcome)) => (RuntimeReceiptState::Failed, outcome),
+            (None, None) => (
+                RuntimeReceiptState::Completed,
+                receipt_state_outcome(request, RuntimeReceiptState::Completed)?,
+            ),
+            _ => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidReceiptOutcome,
+                ));
+            }
+        };
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
             request_id: request.request_id,
             correlation_id: request.correlation_id,
-            state: if error.is_some() {
-                RuntimeReceiptState::Failed
-            } else {
-                RuntimeReceiptState::Completed
-            },
+            state,
             terminal: Some(terminal),
             result: Some(RuntimeResult::ContainedLabOperation { operation }),
-            error,
+            outcome: OutcomeEnvelope::new(&outcome, Detail::Full),
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
@@ -4816,12 +4989,15 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// A receipt whose request did not fail: admitted, observed, queued, completed or cancelled,
+    /// with its result and the outcome of its state.
     pub fn success(
         request: &RuntimeRequest,
         state: RuntimeReceiptState,
         terminal: Option<TerminalEvent>,
         result: RuntimeResult,
     ) -> RuntimeContractResult<Self> {
+        let outcome = receipt_state_outcome(request, state)?;
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
             request_id: request.request_id,
@@ -4829,7 +5005,7 @@ impl RuntimeReceipt {
             state,
             terminal,
             result: Some(result),
-            error: None,
+            outcome: OutcomeEnvelope::new(&outcome, Detail::Full),
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
@@ -4838,11 +5014,25 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// A denied or failed receipt whose outcome is the Runtime error code itself with the
+    /// projection's values: a refusal that names no more specific code.
     pub fn error(
         request: &RuntimeRequest,
         state: RuntimeReceiptState,
         terminal: Option<TerminalEvent>,
         error: RuntimeErrorProjection,
+    ) -> RuntimeContractResult<Self> {
+        Self::failure(request, state, terminal, error.receipt_outcome(None, None))
+    }
+
+    /// A denied or failed receipt carrying its refusal or failure as `outcome` (Workflow #378
+    /// A4): the Runtime's specific code on top with the Runtime error code as its `runtime_code`
+    /// value ([`RuntimeErrorProjection::receipt_outcome`]).
+    pub fn failure(
+        request: &RuntimeRequest,
+        state: RuntimeReceiptState,
+        terminal: Option<TerminalEvent>,
+        outcome: Outcome,
     ) -> RuntimeContractResult<Self> {
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
@@ -4851,13 +5041,24 @@ impl RuntimeReceipt {
             state,
             terminal,
             result: None,
-            error: Some(error),
+            outcome: OutcomeEnvelope::new(&outcome, Detail::Full),
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
         };
         receipt.validate()?;
         Ok(receipt)
+    }
+
+    /// This receipt as the Runtime writes it for its request (model section 7.1): the outcome is
+    /// filtered once, here, to the detail the request asks for.
+    #[must_use]
+    pub fn for_request_detail(mut self, request: &RuntimeRequest) -> Self {
+        let detail = request.receipt_detail();
+        if detail != self.outcome.detail() {
+            self.outcome = receipt_envelope(self.outcome.outcome(), detail);
+        }
+        self
     }
 
     pub fn with_resource_declaration(
@@ -4900,35 +5101,43 @@ impl RuntimeReceipt {
                 RuntimeContractCode::UnsupportedReceiptSchema,
             ));
         }
-        let success_state = matches!(
+        // Workflow #378 A4: the outcome matches the state. A denied or failed receipt names its
+        // Runtime error code (the `runtime_code` value, or the top code itself), so it reads the
+        // same in codes mode; every other state carries its own info code, or a success code when
+        // completed.
+        let runtime_code = self.runtime_code();
+        let outcome = self.outcome.outcome();
+        let failure_state = matches!(
             self.state,
-            RuntimeReceiptState::Admitted
-                | RuntimeReceiptState::Observed
-                | RuntimeReceiptState::Queued
-                | RuntimeReceiptState::Completed
-                | RuntimeReceiptState::Cancelled
+            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
         );
-        let recorded_lab_failure = matches!(&self.result,
-            Some(RuntimeResult::ContainedLabOperation { operation })
-                if self.state == RuntimeReceiptState::Failed
-                    && operation.record.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
-        let recorded_material_failure = matches!(&self.result,
-            Some(RuntimeResult::MaterialRead { result })
-                if matches!(self.state, RuntimeReceiptState::Denied | RuntimeReceiptState::Failed)
-                    && self.state == result.receipt_state()
-                    && result.failure.as_ref().is_some_and(|failure| Some(&failure.error) == self.error.as_ref()));
-        if !recorded_lab_failure
-            && !recorded_material_failure
-            && success_state != (self.result.is_some() && self.error.is_none())
-        {
+        let outcome_matches_state = match self.state {
+            RuntimeReceiptState::Admitted => outcome.is(ReceiptCode::RequestAdmitted),
+            RuntimeReceiptState::Observed => outcome.is(ReceiptCode::RequestObserved),
+            RuntimeReceiptState::Queued => outcome.is(ReceiptCode::RequestQueued),
+            RuntimeReceiptState::Cancelled => outcome.is(ReceiptCode::RequestCancelled),
+            RuntimeReceiptState::Completed => outcome.category() == Category::Success,
+            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed => runtime_code.is_some(),
+        };
+        if !outcome_matches_state {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidReceiptOutcome,
             ));
         }
+        let recorded_lab_failure = matches!(&self.result,
+            Some(RuntimeResult::ContainedLabOperation { operation })
+                if self.state == RuntimeReceiptState::Failed
+                    && operation.record.failure.as_ref().is_some_and(|failure| Some(failure.error.code) == runtime_code));
+        let recorded_material_failure = matches!(&self.result,
+            Some(RuntimeResult::MaterialRead { result })
+                if failure_state
+                    && self.state == result.receipt_state()
+                    && result.failure.as_ref().is_some_and(|failure| Some(failure.error.code) == runtime_code));
+        // A request that did not fail answers with its result; a refusal or failure with none,
+        // except the lab operation and the material read, whose results record their failure.
         if !recorded_lab_failure
             && !recorded_material_failure
-            && !success_state
-            && (self.error.is_none() || self.result.is_some())
+            && failure_state == self.result.is_some()
         {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidReceiptOutcome,
@@ -4949,9 +5158,6 @@ impl RuntimeReceipt {
                 RuntimeContractCode::InvalidTerminalEvent,
             ));
         }
-        if let Some(error) = &self.error {
-            error.validate()?;
-        }
         if let Some(rejection) = &self.resource_declaration {
             if !matches!(
                 self.state,
@@ -4963,10 +5169,7 @@ impl RuntimeReceipt {
                             .terminal
                             .is_none_or(|terminal| terminal.sequence < event.sequence)
                 })
-                || self
-                    .error
-                    .as_ref()
-                    .is_none_or(|error| error.code != RuntimeErrorCode::PackageInvalid)
+                || runtime_code != Some(RuntimeErrorCode::PackageInvalid)
                 || self.result.is_some()
             {
                 return Err(RuntimeContractError::new(
@@ -4984,10 +5187,7 @@ impl RuntimeReceipt {
             if self.state != RuntimeReceiptState::Denied
                 || self.terminal.is_some()
                 || self.result.is_some()
-                || self
-                    .error
-                    .as_ref()
-                    .is_none_or(|error| error.code != RuntimeErrorCode::InvalidRequest)
+                || runtime_code != Some(RuntimeErrorCode::InvalidRequest)
                 || self.resource_declaration.is_some()
             {
                 return Err(RuntimeContractError::new(
@@ -5005,7 +5205,7 @@ impl RuntimeReceipt {
             Some(RuntimeResult::MaterialRead { result }) => {
                 result.validate()?;
                 if self.state != result.receipt_state()
-                    || result.failure.as_ref().map(|failure| &failure.error) != self.error.as_ref()
+                    || result.failure.as_ref().map(|failure| failure.error.code) != runtime_code
                 {
                     return Err(RuntimeContractError::new(
                         RuntimeContractCode::InvalidMaterialReadReceipt,
@@ -5191,12 +5391,12 @@ impl RuntimeReceipt {
             Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::ContainedTaskCompleted {
                 response_deadline_monotonic_ms,
-                outcome,
+                task_result,
                 final_page,
                 executed_steps,
                 ..
             }) if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0)
-                || *outcome != TaskOutcome::Success
+                || *task_result != TaskOutcome::Success
                 || *executed_steps > 1_000
                 || final_page
                     .as_deref()
@@ -5304,8 +5504,33 @@ impl RuntimeReceipt {
         self.result.as_ref()
     }
 
-    pub const fn error_projection(&self) -> Option<&RuntimeErrorProjection> {
-        self.error.as_ref()
+    /// The receipt's outcome (Workflow #378 A4): the state's info code, the request kind's
+    /// success code, or the refusal or failure.
+    pub fn outcome(&self) -> &Outcome {
+        self.outcome.outcome()
+    }
+
+    /// The receipt's outcome in its interface form, with the detail it was written with.
+    pub const fn outcome_envelope(&self) -> &OutcomeEnvelope {
+        &self.outcome
+    }
+
+    /// The projection a denied or failed receipt's outcome carries
+    /// ([`RuntimeErrorProjection::from_receipt_outcome`]); `None` for every other state.
+    pub fn error_projection(&self) -> Option<RuntimeErrorProjection> {
+        if matches!(
+            self.state,
+            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
+        ) {
+            RuntimeErrorProjection::from_receipt_outcome(self.outcome.outcome())
+        } else {
+            None
+        }
+    }
+
+    /// The Runtime error code of a denied or failed receipt.
+    fn runtime_code(&self) -> Option<RuntimeErrorCode> {
+        self.error_projection().map(|projection| projection.code)
     }
 }
 

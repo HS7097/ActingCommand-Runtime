@@ -7,6 +7,7 @@ use super::online_observation::{
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::page_projection::{FrameIdentity, FrameKind};
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, ContainedObservationEvidence,
@@ -174,10 +175,13 @@ impl HostShared {
             prepared.action = Some(selected.2);
             Ok(())
         })();
-        let failure = match preparation {
+        // Workflow #378 A4 (coordinator ruling A-M2): the receipt outcome of the operation's
+        // failure, which tops its receipt.
+        let (failure, mut failure_outcome) = match preparation {
             Ok(()) => None,
             Err(failure) => Some(lab_operation_failure(stage, failure)?),
-        };
+        }
+        .unzip();
         let mut links = request.event_links(Some(resolved.instance_id()), prepared.lease_id, None);
         let mut artifact_links = request.artifact_links();
         if let Some(run_links) = run_links {
@@ -268,7 +272,7 @@ impl HostShared {
                 }
                 return Err(evidence_failure);
             }
-            record.failure = match input_failure {
+            (record.failure, failure_outcome) = match input_failure {
                 Some(failure) => Some(lab_operation_failure(LabOperationStage::Input, failure)?),
                 None if record.input_event.is_none() => Some(lab_operation_failure(
                     LabOperationStage::Input,
@@ -283,7 +287,8 @@ impl HostShared {
                     ),
                 )?),
                 None => None,
-            };
+            }
+            .unzip();
             if record.failure.is_none() {
                 let started = self.monotonic_ms()?;
                 let elapsed = |now: u64| {
@@ -425,7 +430,9 @@ impl HostShared {
                     {
                         arrival.elapsed_ms = elapsed(self.monotonic_ms()?)?;
                     }
-                    record.failure = Some(lab_operation_failure(stage, failure)?);
+                    let (failure, outcome) = lab_operation_failure(stage, failure)?;
+                    record.failure = Some(failure);
+                    failure_outcome = Some(outcome);
                 }
             }
         }
@@ -443,9 +450,11 @@ impl HostShared {
                     run_links,
                 )
             {
-                let cleanup = lab_operation_failure(LabOperationStage::Release, failure)?;
+                let (cleanup, outcome) =
+                    lab_operation_failure(LabOperationStage::Release, failure)?;
                 if record.failure.is_none() {
                     record.failure = Some(cleanup);
+                    failure_outcome = Some(outcome);
                 } else {
                     record.cleanup_failure = Some(cleanup);
                 }
@@ -501,6 +510,7 @@ impl HostShared {
             result: RuntimeResult::ContainedLabOperation {
                 operation: Box::new(operation),
             },
+            failure_outcome,
         })
     }
 
@@ -843,17 +853,23 @@ impl HostShared {
     }
 }
 
+/// A failed stage of a Lab operation: its record entry, and the host's failure as the receipt
+/// outcome that tops the operation's receipt when it is the operation's failure (Workflow #378
+/// A4, coordinator ruling A-M2).
 fn lab_operation_failure(
     stage: LabOperationStage,
     failure: RequestFailure,
-) -> Result<LabOperationFailure, RequestFailure> {
+) -> Result<(LabOperationFailure, Outcome), RequestFailure> {
     if failure.poison_runtime || failure.error.is_fatal() {
         return Err(failure);
     }
-    Ok(LabOperationFailure {
-        stage,
-        code: failure.error.code().to_string(),
-        error: failure.error.projection().clone(),
-        event: failure.terminal,
-    })
+    Ok((
+        LabOperationFailure {
+            stage,
+            code: failure.error.code().to_string(),
+            error: failure.error.projection().clone(),
+            event: failure.terminal,
+        },
+        failure.error.receipt_outcome(),
+    ))
 }

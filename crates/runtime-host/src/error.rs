@@ -424,6 +424,34 @@ impl RuntimeHostError {
         &self.projection
     }
 
+    /// This error as the outcome of a denied or failed receipt (Workflow #378 A4, model section
+    /// 7.2): the outcome its ledger record carries ([`Self::outcome`]: its code on top with the
+    /// values its producer attached, its operation, and the failure behind it as the `caused_by`
+    /// link), with its projection's Runtime error code, halt, holder and retry as values
+    /// ([`RuntimeErrorProjection::with_receipt_values`]). A receipt and the record of the same
+    /// failure carry one outcome; a relayed spelling the catalog does not list tops both as
+    /// `outcome_relay_unregistered` with its `raw_code`.
+    pub(crate) fn receipt_outcome(&self) -> Outcome {
+        self.projection.with_receipt_values(self.outcome())
+    }
+
+    /// This refusal naming the lease it refused (Workflow #378 A4): `lease_expired` and
+    /// `lease_missing` carry it as `lease_id` wherever the token is in scope. An error with any
+    /// other code is returned as it is.
+    pub(crate) fn naming_lease(self, lease_id: actingcommand_contract::LeaseId) -> Self {
+        if !spelled(
+            self.code(),
+            &[
+                RuntimeErrorCode::LeaseExpired.code(),
+                RuntimeErrorCode::LeaseMissing.code(),
+            ],
+        ) {
+            return self;
+        }
+        let lease_id = crate::failure_identity::identifier_text(&lease_id);
+        self.with_outcome_values(|outcome| outcome.lease_id(lease_id))
+    }
+
     pub fn resource_declaration(
         &self,
     ) -> Option<&actingcommand_contract::ResourceDeclarationRejection> {

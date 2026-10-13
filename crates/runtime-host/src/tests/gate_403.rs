@@ -246,9 +246,10 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
         .error_projection()
         .expect("the command's failure");
     assert!(!projection.fatal, "{projection:?}");
+    // Receipt v2 (Workflow #378 A4): the refusal is the top of the receipt's outcome.
     assert_eq!(
-        projection.host_code(),
-        Some(HostCode::InstanceResourcesFenced.as_str())
+        fenced_receipt.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str()
     );
     assert_eq!(fenced_state.application_count.load(Ordering::Acquire), 1);
     assert_eq!(
@@ -259,7 +260,7 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
     assert!(matches!(
         run_receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         })
     ));
@@ -327,9 +328,10 @@ fn gate_a_direct_run_fence_starts_no_ladder_and_a_passing_resume_lifts_it() {
     assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
     let projection = receipt.error_projection().expect("the run's failure");
     assert!(!projection.fatal, "{projection:?}");
+    // Receipt v2 (Workflow #378 A4): the failure is the top of the receipt's outcome.
     assert_eq!(
-        projection.host_code(),
-        Some(HostCode::InstanceResourcesFenced.as_str())
+        receipt.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str()
     );
     let fence = status_fence(&host, FENCED_ALIAS).expect("the fence in status");
     assert!(fence.awaiting_person, "{fence:?}");

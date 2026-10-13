@@ -154,7 +154,7 @@ fn assert_run_goes_on(flow: &RuntimeFlowOutput, width: u32, height: u32) {
         matches!(
             flow.receipt().result(),
             Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some(page),
                 ..
             }) if page == "neutral/terminal"

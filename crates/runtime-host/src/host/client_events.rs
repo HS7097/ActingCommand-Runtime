@@ -49,6 +49,7 @@ impl HostShared {
             result: RuntimeResult::LabPinReleased {
                 release: Box::new(release),
             },
+            failure_outcome: None,
         })
     }
 
@@ -84,6 +85,7 @@ impl HostShared {
             result: RuntimeResult::AuthoringEventRecorded {
                 phase: event.phase(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -213,6 +215,7 @@ impl HostShared {
             result: RuntimeResult::DebugEventRecorded {
                 phase: event.phase(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -247,6 +250,7 @@ impl HostShared {
                 state: RuntimeReceiptState::Completed,
                 terminal: Some(terminal(&existing)),
                 result: RuntimeResult::ClientActionRecorded,
+                failure_outcome: None,
             });
         }
         let instance_id = match action.instance_alias() {
@@ -265,6 +269,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),
             result: RuntimeResult::ClientActionRecorded,
+            failure_outcome: None,
         })
     }
 

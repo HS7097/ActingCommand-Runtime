@@ -282,7 +282,7 @@ fn phased_route_enters_at_the_stage_of_its_matched_entry_page_without_recovery()
     assert!(matches!(
         run.receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             executed_steps: 1,
             final_page: Some(page),
             ..
@@ -364,7 +364,7 @@ fn entry_recovery_lands_in_the_set_and_the_run_goes_on_from_that_stage() {
     assert!(matches!(
         run.receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             executed_steps: 2,
             ..
         })

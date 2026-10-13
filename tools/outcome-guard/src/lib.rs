@@ -581,18 +581,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "RuntimeErrorProjection.host_code",
-        &[Check::G2],
-        "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime.rs",
-        "RuntimeErrorProjection.host_operation",
-        &[Check::G2],
-        "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime.rs",
         "SchedulingResumeSelfCheck.failure_code",
         &[Check::G2],
         "A2b/A2c merge follow-up: filled with a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then the field becomes a CodeStr",
@@ -605,21 +593,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime.rs",
-        "RuntimeErrorProjection::host_code",
-        &[Check::G2],
-        "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime.rs",
         "ResourceAuthoringEvent::new",
         &[Check::G2],
         "B4: carries a Lab error's code or reason, which crates/lab, apps/actinglab and resource tooling's Lab errors fill; the Lab sites stay on the allow list until B4, which registers their codes and retypes the channel",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/runtime.rs",
-        "RuntimeErrorProjection::with_host_failure",
-        &[Check::G2],
-        "A4: receipt projection; receipt v2 carries the outcome (host_code becomes the top code)",
     ),
     bridge(
         "crates/actingcommand-contract/src/runtime/lab_operation.rs",

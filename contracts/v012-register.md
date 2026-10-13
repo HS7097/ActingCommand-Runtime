@@ -248,10 +248,14 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W5 | read request `ScheduleExplanation { instance }` | runtime-client 3 | MCP-19 | reserved; per task: trigger, last dispatch, next due, not-run reason, produces, consumes, pools |
 | W6 | gate-class receipts carry `event_id` and store revisions, never a ledger sequence; install receipts after the commit | runtime-client 3 | AO-4 | [ledger-observer.md §13](ledger-observer.md#13-identity-without-ledger-positions-ao-3-ao-4-ao-4q-in-v0120) |
 | W7 | status blocks `ledger`, `tagged_state` | runtime-client 3 | AO-8 | [ledger-observer.md §14.2](ledger-observer.md#142-status-blocks) |
+| W8 | request `actingcommand.runtime.request.v4`: optional `detail` (`codes` \| `full`) | runtime-client 2 | A4 | #378 §7.1; absent, the source's class default applies (codes only for `source: ui`, the full outcome for every other source); requests v1–v3 are refused; [client-interactions.md](client-interactions.md) |
+| W9 | receipt `actingcommand.runtime.receipt.v2`: `outcome` (an `actingcommand.outcome.v1` envelope) on every receipt; the v1 member `error` (`RuntimeErrorProjection`) is removed | runtime-client 2 | A4 | #378 §7.2; admitted, observed, queued and cancelled carry `request_admitted`, `request_observed`, `request_queued`, `request_cancelled`; completed carries its kind's `request_<kind>_completed`; denied and failed carry the refusal or failure on top, with the values `runtime_code`, `operation`, `host_halted`, `holder_id`, `lease_id`, `retry_after_ms` where they apply; `host_halted` travels in codes mode too; a consumer judges refusal by `state` (denied/failed), the category only says how bad it is; codes mode is applied where the receipt leaves the host |
+| W10 | `RuntimeResult::ContainedTaskCompleted.outcome` → `task_result`; `ContainedTaskCancellationStatus::Terminal.outcome` → `task_result` | runtime-client 2 | A4 | #378 §8.1: renames in receipt v2 (same value), because `outcome` is reserved for the envelope |
+| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
-`UnloadPack` (UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
+`UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
 
 ## 4 Fact keys new in the 0.12 series and their tag class
 
@@ -332,7 +336,7 @@ from D1b on, and each section fact holds at most 256 rows.
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 
 `ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals); `runtime-client` [2, 2] (§3 W1–W4, A4, U-1,
+table, U-2's G14 members, PKG-S2 and PKG-S3 removals); `runtime-client` [2, 2] (§3 W1–W4, W8–W11: A4, U-1,
 D2-S5, P-m); `actingd-config` 5 (§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5,
 D2-S2/S3); `install-control` stays [0, 1] until U-4. AO-0 changes no declaration.
 

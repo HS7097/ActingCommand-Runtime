@@ -4765,7 +4765,7 @@ impl HostShared {
                         task_request_id,
                         status: ContainedTaskCancellationStatus::Terminal {
                             deadline_monotonic_ms,
-                            outcome: *outcome,
+                            task_result: *outcome,
                             reason,
                             task_terminal: terminal(task_terminal),
                             lease_terminal: terminal(lease_terminal),
@@ -4778,6 +4778,7 @@ impl HostShared {
                             },
                         },
                     },
+                    failure_outcome: None,
                 });
             }
         }
@@ -4796,6 +4797,7 @@ impl HostShared {
                 task_request_id,
                 status,
             },
+            failure_outcome: None,
         })
     }
 
@@ -5892,6 +5894,7 @@ impl HostShared {
                             reason,
                             lease_terminal: Some(ContainedTaskLeaseTerminal::Released),
                         },
+                        failure_outcome: None,
                     });
                 }
                 let task_failure = if scheduled {
@@ -6183,10 +6186,11 @@ impl HostShared {
                     task_id: *task_id.transport(),
                     task_request_id: original.request_id(),
                     response_deadline_monotonic_ms: Some(control.deadline()),
-                    outcome: outcome.outcome,
+                    task_result: outcome.outcome,
                     final_page: outcome.final_page,
                     executed_steps: outcome.executed_steps,
                 },
+                failure_outcome: None,
             }),
             Err(failure) => Err(self.cleanup_composite_failure_with_run_links(
                 request,
@@ -6757,7 +6761,7 @@ impl HostShared {
                     task_id,
                     task_request_id: request.request_id(),
                     response_deadline_monotonic_ms: deadline_monotonic_ms,
-                    outcome: *outcome,
+                    task_result: *outcome,
                     final_page: final_page.clone(),
                     executed_steps: executed_steps.ok_or_else(|| {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -6767,6 +6771,7 @@ impl HostShared {
                         ))
                     })?,
                 },
+                failure_outcome: None,
             })),
             TaskOutcome::Cancelled => Ok(Some(OperationSuccess {
                 state: RuntimeReceiptState::Cancelled,
@@ -6781,6 +6786,7 @@ impl HostShared {
                     ),
                     lease_terminal: lease_disposition,
                 },
+                failure_outcome: None,
             })),
             TaskOutcome::Failure => Err(RequestFailure::request(
                 RuntimeHostError::request(

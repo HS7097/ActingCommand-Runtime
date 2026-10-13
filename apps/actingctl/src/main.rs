@@ -42,7 +42,7 @@ use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
     ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
-    EventSource, FactObservation, FactRecord, FactScope, RuntimeMonitorPolicy,
+    EventSource, FactObservation, FactRecord, FactScope, RuntimeMonitorPolicy, RuntimeReceiptState,
     SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
@@ -122,10 +122,21 @@ fn main() -> ExitCode {
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {
+                // Receipt v2 (Workflow #378 A4, part B L2): a refused or failed request exits 1,
+                // judged by its receipt's state; the outcome's category only says how bad it is
+                // (a refusal may be topped by a warning or info code).
                 if output
                     .get("receipt")
-                    .and_then(|receipt| receipt.get("error"))
-                    .is_some_and(|error| !error.is_null())
+                    .and_then(|receipt| receipt.get("state"))
+                    .and_then(|state| {
+                        serde_json::from_value::<RuntimeReceiptState>(state.clone()).ok()
+                    })
+                    .is_some_and(|state| {
+                        matches!(
+                            state,
+                            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
+                        )
+                    })
                 {
                     ExitCode::FAILURE
                 } else {
