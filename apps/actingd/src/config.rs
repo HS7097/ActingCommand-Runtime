@@ -2471,7 +2471,7 @@ mod tests {
             assert_eq!(event.sensitivity(), Sensitivity::Sensitive);
             let detail = lifecycle.primary_detail().expect("actual device context");
             assert_eq!(detail.category(), "native");
-            assert_eq!(detail.stage(), "adb.ensure_device.get_state");
+            assert_eq!(detail.stage(), "adb_ensure_device_get_state");
             assert_eq!(
                 detail.backend(),
                 if capture {

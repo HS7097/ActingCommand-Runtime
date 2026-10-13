@@ -21,12 +21,12 @@ use crate::failure_identity::{
 };
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, CodeStr, Location};
+use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
     PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
-    scheduled_failure_code,
+    scheduled_failure_code_str,
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
@@ -130,18 +130,18 @@ impl Snapshot<'_> {
 
     /// The run's `task.failed` terminal (its failure's spelling and the record's severity,
     /// which is that failure's category) and the native detail of its lifecycle failure record
-    /// of that spelling (or of `fallback_code` when the run has no terminal). A failure is
-    /// spelled as the policy spells it (coordinator ruling 7): its code, or for
-    /// `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the report
-    /// showed it before ledger revision 3. Without a terminal, the run's failure severity is
-    /// its `runtime.failed` record's: the lifecycle failure of that spelling, else the run's
+    /// of that spelling (or of `fallback`, the recorded failure's code, when the run has no
+    /// terminal). A failure is spelled as the policy spells it (coordinator ruling 7): its code,
+    /// or for `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the
+    /// report showed it before ledger revision 3. Without a terminal, the run's failure severity
+    /// is its `runtime.failed` record's: the lifecycle failure of that spelling, else the run's
     /// latest one (coordinator ruling, 2026-10-13); `None` when the run has neither.
     fn run_failure(
         &self,
         run_id: Option<RunId>,
-        fallback_code: &str,
+        fallback: &CodeStr,
     ) -> (
-        Option<(String, EventSeverity)>,
+        Option<(CodeStr, EventSeverity)>,
         Option<EventSeverity>,
         Value,
     ) {
@@ -162,14 +162,12 @@ impl Snapshot<'_> {
                     TaskSemanticFact::TerminalCommitted {
                         outcome: Some(outcome),
                         ..
-                    } => Some((scheduled_failure_code(outcome), event.severity())),
+                    } => Some((scheduled_failure_code_str(outcome), event.severity())),
                     _ => None,
                 },
                 _ => None,
             });
-        let code = terminal
-            .as_ref()
-            .map_or(fallback_code, |(spelling, _)| spelling.as_str());
+        let code = terminal.as_ref().map_or(fallback, |(spelling, _)| spelling);
         let runtime_failures = self.ledger.query(&by_run(EventType::RuntimeFailed));
         // Ledger revision 3: the lifecycle failure's code is the record's outcome and its
         // native detail the `raw_text` of that outcome's direct foreign link.
@@ -179,7 +177,7 @@ impl Snapshot<'_> {
             .filter_map(|event| match event.payload() {
                 EventPayload::Runtime(RuntimePayload::Failed(payload))
                     if payload.lifecycle_failure().is_some()
-                        && scheduled_failure_code(payload.outcome()) == code =>
+                        && scheduled_failure_code_str(payload.outcome()) == *code =>
                 {
                     Some((event, payload))
                 }
@@ -433,8 +431,18 @@ pub fn suspension_report(
             continue;
         };
         let pair = format!("{task_id}/{instance_id}");
-        let identity = FailureIdentity::parse(&failure.error_code);
-        if identity.is_none() && failure.error_code.contains("~v1~") {
+        // Workflow #378 A2-P: the record keeps the failure's `outcome` and its identity apart;
+        // the report shows them as before, the identity, else the failure's code.
+        let failure_code = scheduled_failure_code_str(&failure.outcome);
+        let recorded = failure
+            .failure_identity
+            .clone()
+            .unwrap_or_else(|| failure_code.as_str().to_owned());
+        let identity = failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse);
+        if identity.is_none() && recorded.contains("~v1~") {
             warnings.push(format!("error_code_unparsed:{pair}"));
         }
         let previous = executions
@@ -444,11 +452,10 @@ pub fn suspension_report(
         let (paused_digest, current_run) = intents
             .get(&latest.decision_id)
             .map_or((None, None), |(digest, run_id)| (Some(digest), *run_id));
-        let base = identity.as_ref().map_or_else(
-            || failure.error_code.clone(),
-            |identity| identity.base.clone(),
-        );
-        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &base);
+        let base = identity
+            .as_ref()
+            .map_or_else(|| recorded.clone(), |identity| identity.base.clone());
+        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &failure_code);
         let failure_spelling = terminal
             .as_ref()
             .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
@@ -470,7 +477,7 @@ pub fn suspension_report(
             // Workflow #361 M6: the first interrupted settlement in a row is lifted by the
             // restart that recorded it, whatever the configuration (review P5).
             let lift = if crate::policy_control::interruption_lifted_by_restart(
-                &failure.error_code,
+                &failure_code,
                 failure.consecutive_same_error,
             ) {
                 Some(("restart".to_owned(), "active"))
@@ -526,14 +533,14 @@ pub fn suspension_report(
             });
             // Coordinator ruling 6: the severity of the run's failure terminal, which is its
             // failure's category; without a terminal, the run's `runtime.failed` record's. The
-            // execution record carries no outcome (until A2-P), so its own severity is its event
-            // type's category; it stands in only when the run has neither.
+            // execution record's own severity, its failure outcome's category (Workflow #378
+            // A2-P), stands in only when the run has neither.
             let severity = run_severity.unwrap_or(latest.severity);
             suspended.push(json!({
                 "task_id": task_id,
                 "instance_id": instance_id,
                 "procedure_ref": procedure_ref,
-                "error_code": failure.error_code,
+                "error_code": recorded,
                 "failure_code": failure_spelling,
                 "consecutive_same_error": failure.consecutive_same_error,
                 "effective_class": wire(&failure.effective_class),
@@ -564,7 +571,10 @@ pub fn suspension_report(
         else {
             continue;
         };
-        if FailureIdentity::parse(&previous_failure.error_code)
+        if previous_failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse)
             .is_none_or(|previous| previous.prefix() != identity.prefix())
         {
             continue;
@@ -575,7 +585,7 @@ pub fn suspension_report(
         repeating.push(json!({
             "task_id": task_id,
             "instance_id": instance_id,
-            "error_code": failure.error_code,
+            "error_code": recorded,
             "failure_code": failure_spelling,
             "step": snapshot.step(current_run, terminal.is_some())?,
             "latest": {
@@ -665,8 +675,8 @@ pub(crate) struct SlotSignal<'a> {
     pub(crate) signal_id: &'a str,
     pub(crate) task_id: Option<&'a str>,
     pub(crate) instance_id: &'a str,
-    /// The `fact_code` token: the record's code followed by `:<key>=<value>` pairs.
-    pub(crate) token: &'a str,
+    /// The record's outcome: its code with its values (Workflow #378 A2-P).
+    pub(crate) outcome: &'a Outcome,
 }
 
 /// A clock-slot record's values, deserialized from its typed map.
@@ -725,33 +735,29 @@ enum ParseState {
     Unparsed,
 }
 
-/// A record whose token does not read back; it adds no report-level warning.
+/// A record whose outcome does not read back; it adds no report-level warning.
 #[derive(Serialize)]
 struct UnparsedClockSlot<'a> {
     parse_state: ParseState,
     signal_id: &'a str,
-    raw_token: &'a str,
+    code: &'a CodeStr,
 }
 
 impl ClockSlotRecord {
-    /// K2's token read back (model-372 §4.5): the code and its `key=value` pairs go into a map
-    /// whose values are typed by their key (times as numbers, `first_run` as a boolean, codes
-    /// and vocabulary tokens as strings), the payload's task and instance join them, and the
-    /// record is deserialized from it. `None` when a step fails, when the code is not a
-    /// clock-slot code, or when a value its code requires is absent.
+    /// K2's outcome read back (model-372 §4.5; Workflow #378 A2-P): the code and the outcome's
+    /// values except its task and alias go into a map, the payload's task and instance join
+    /// them, and the record is deserialized from it. `None` when the code is not a clock-slot
+    /// code, when a value is not one the record holds or has the wrong type, or when a value its
+    /// code requires is absent.
     fn parse(signal: &SlotSignal<'_>) -> Option<Self> {
-        let mut parts = signal.token.split(':');
         let mut map = Map::new();
-        map.insert("code".to_owned(), Value::String(parts.next()?.to_owned()));
-        for part in parts {
-            let (key, text) = part.split_once('=').filter(|(_, text)| !text.is_empty())?;
-            let value = match key {
-                "gate_code" | "budget_dimension" => Value::String(text.to_owned()),
-                "first_run" => Value::Bool(text.parse().ok()?),
-                _ => Value::from(text.parse::<u64>().ok()?),
-            };
-            if map.insert(key.to_owned(), value).is_some() {
-                return None;
+        map.insert(
+            "code".to_owned(),
+            Value::String(signal.outcome.code().as_str().to_owned()),
+        );
+        for (key, value) in signal.outcome.values() {
+            if key != "task_id" && key != "alias" {
+                map.insert(key.clone(), value.clone());
             }
         }
         for (key, value) in [
@@ -822,7 +828,7 @@ impl ClockSlotRecord {
 }
 
 /// One `clock_slots` entry: the record with its fate, `next_dispatch` when the pair was
-/// admitted after it, or an unparsed entry that carries the raw token.
+/// admitted after it, or an unparsed entry that carries the outcome's code.
 pub(crate) fn clock_slot_entry(
     signal: &SlotSignal<'_>,
     next_dispatch: Option<SlotDispatch>,
@@ -843,7 +849,7 @@ pub(crate) fn clock_slot_entry(
         None => wire(&UnparsedClockSlot {
             parse_state: ParseState::Unparsed,
             signal_id: signal.signal_id,
-            raw_token: signal.token,
+            code: signal.outcome.code(),
         }),
     }
 }
@@ -852,7 +858,7 @@ pub(crate) fn clock_slot_entry(
 /// latest event, newest first and at most 200, and how many there are when the list is cut.
 /// A record's next dispatch is its pair's first admitted dispatch after it in the ledger; the
 /// reference time is the latest event's time. Records are selected by their kind and their
-/// `signal_id` prefix, never by their token.
+/// `signal_id` prefix, never by their outcome.
 fn clock_slots(
     snapshot: &Snapshot<'_>,
 ) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
@@ -918,7 +924,7 @@ fn clock_slots(
             signal_id: payload.signal_id(),
             task_id: payload.task_id(),
             instance_id: payload.instance_id(),
-            token: payload.fact_code(),
+            outcome: payload.outcome(),
         };
         entries.push(clock_slot_entry(&signal, next_dispatch, reference_unix_ms));
     }

@@ -175,14 +175,17 @@ fn bound_alias(
 /// provider-supplied token besides the typed stage).
 fn discovery_error(failure: &InstanceDiscoveryFailure) -> RuntimeHostError {
     let diagnostic = failure.error.diagnostic();
-    let stage = diagnostic.map_or("instance_discovery.failed", |diagnostic| diagnostic.stage());
+    let stage = diagnostic.map_or(
+        HostLocation::InstanceDiscoveryFailed.location(),
+        |diagnostic| diagnostic.stage(),
+    );
     let category = diagnostic.map_or("protocol", |diagnostic| diagnostic.category().as_str());
-    let (code, runtime_code) = match (failure.code, stage) {
-        (relayed, _) if relayed == HostCode::MumuManagerVersionUnsupported.as_str() => (
+    let (code, runtime_code) = match failure.code {
+        relayed if relayed == HostCode::MumuManagerVersionUnsupported.as_str() => (
             HostCode::MumuManagerVersionUnsupported.code(),
             RuntimeErrorCode::BackendOperationFailed,
         ),
-        (_, "instance_discovery.unsupported") => (
+        _ if stage == ContractLocation::InstanceDiscoveryUnsupported.location() => (
             SharedCode::InstanceDiscoveryUnavailable.code(),
             RuntimeErrorCode::InvalidRequest,
         ),

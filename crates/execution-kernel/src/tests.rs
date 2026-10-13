@@ -493,7 +493,7 @@ impl ExecutionBackendProvider for FakeProvider {
                 DeviceError::fatal("emulator control unsupported by this provider")
                     .with_diagnostic(
                         actingcommand_device::DeviceErrorCategory::Protocol,
-                        "emulator_control.unsupported",
+                        crate::ExecutionKernelLocation::EmulatorControlSupport.location(),
                     ),
                 0,
             )),
@@ -963,7 +963,7 @@ fn segmented_swipe_capability_failure_preserves_device_detail() {
     assert_eq!(error.code().as_str(), "input_backend_operation_failed");
     let detail = error.diagnostic_detail().expect("capability detail");
     assert_eq!(detail.category(), "protocol");
-    assert_eq!(detail.stage(), "input.segmented_swipe.capability");
+    assert_eq!(detail.stage().as_str(), "input_segmented_swipe_capability");
     assert_eq!(detail.backend(), "input_backend");
     assert_eq!(detail.operation(), "segmented_swipe");
     // Ledger revision 3: the fixed summary is Runtime text and is not persisted, so this
@@ -1159,8 +1159,15 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     let primary = ExecutionKernelError::device(
         actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
         &DeviceError::transient("primary bounded context")
-            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
-            .with_diagnostic_context("adb_shell_input", "reset", DeviceErrorSensitivity::Internal),
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                actingcommand_device::codes::DeviceStage::AdbInputBoundsValidate.location(),
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                actingcommand_device::codes::DeviceLocation::InputReset,
+                DeviceErrorSensitivity::Internal,
+            ),
     );
     // Ledger revision 3: the diagnostic detail carries no text; the device's own text is the
     // native detail.
@@ -1172,8 +1179,11 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     let bounded = ExecutionKernelError::device(
         actingcommand_contract::codes::SharedCode::InputBackendOperationFailed,
         &DeviceError::transient(&native_text)
-            .with_diagnostic(DeviceErrorCategory::Native, "device_registry.input.operation")
-            .with_diagnostic_context("maatouch", "swipe", DeviceErrorSensitivity::Secret)
+            .with_diagnostic(
+                DeviceErrorCategory::Native,
+                actingcommand_device::codes::DeviceStage::MaatouchStdinWrite.location(),
+            )
+            .with_diagnostic_context("maatouch", actingcommand_device::codes::DeviceLocation::InputSwipe, DeviceErrorSensitivity::Secret)
             .with_diagnostic_message(
                 actingcommand_device::DeviceErrorDiagnosticMessage::DeviceRegistryInputOperationFailed,
             ),
@@ -1189,7 +1199,7 @@ fn execution_error_preserves_secondary_cleanup_detail() {
         .expect("where the failure arose");
     assert_eq!(
         (summary.backend(), summary.operation()),
-        ("maatouch", "swipe")
+        ("maatouch", "input_swipe")
     );
     assert!(!format!("{bounded:?} {bounded}").contains('雪'));
     let merged_native = ExecutionKernelError::merge(bounded.clone(), primary.clone());
@@ -1197,8 +1207,15 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     let cleanup = ExecutionKernelError::device(
         ExecutionKernelCode::InputBackendCloseFailed,
         &DeviceError::fatal("exit_status=1 stderr=cleanup_failed")
-            .with_diagnostic(DeviceErrorCategory::CommandFlush, "maatouch.stdin.flush")
-            .with_diagnostic_context("maatouch", "close", DeviceErrorSensitivity::Secret),
+            .with_diagnostic(
+                DeviceErrorCategory::CommandFlush,
+                actingcommand_device::codes::DeviceStage::MaatouchStdinFlush.location(),
+            )
+            .with_diagnostic_context(
+                "maatouch",
+                actingcommand_device::codes::DeviceLocation::InputClose,
+                DeviceErrorSensitivity::Secret,
+            ),
     );
     let merged = ExecutionKernelError::merge_cleanup(primary.clone(), cleanup.clone());
     assert_eq!(merged.code(), primary.code());
@@ -1210,9 +1227,9 @@ fn execution_error_preserves_secondary_cleanup_detail() {
     assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
     assert_eq!(cause.detail(), cleanup.diagnostic_detail());
     let detail = cause.detail().expect("cleanup producer detail");
-    assert_eq!(detail.stage(), "maatouch.stdin.flush");
+    assert_eq!(detail.stage().as_str(), "maatouch_stdin_flush");
     assert_eq!(detail.backend(), "maatouch");
-    assert_eq!(detail.operation(), "close");
+    assert_eq!(detail.operation(), "input_close");
     // Ledger revision 3: the cleanup's device text is its native detail, not a detail message.
     assert_eq!(
         cleanup.native_detail().map(|native| native.text()),

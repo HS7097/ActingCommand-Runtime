@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::codes::ExecutionKernelCode;
+use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
@@ -1397,11 +1397,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
             DeviceError::fatal("foreground application observation unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "application.foreground_unsupported",
+                    ContractLocation::ApplicationForegroundUnsupported,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::ObserveForegroundApplication.as_str(),
+                    ContractLocation::ObserveForegroundApplication,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1418,11 +1418,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
             DeviceError::fatal("emulator control unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "emulator_control.unsupported",
+                    ExecutionKernelLocation::EmulatorControlSupport,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::ControlInstance.as_str(),
+                    ContractLocation::ControlInstance,
                     DeviceErrorSensitivity::Sensitive,
                 ),
             0,
@@ -1438,11 +1438,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
             DeviceError::fatal("emulator state read unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "emulator_control.unsupported",
+                    ExecutionKernelLocation::EmulatorControlSupport,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::ReadInstanceState.as_str(),
+                    ContractLocation::ReadInstanceState,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1462,11 +1462,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
             DeviceError::fatal("emulator control unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "emulator_control.unsupported",
+                    ExecutionKernelLocation::EmulatorControlSupport,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::RebindDiscoveredEndpoint.as_str(),
+                    ContractLocation::RebindDiscoveredEndpoint,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )
@@ -1483,11 +1483,11 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
             error: DeviceError::fatal("instance discovery unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "instance_discovery.unsupported",
+                    ContractLocation::InstanceDiscoveryUnsupported,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::DiscoverInstances.as_str(),
+                    ContractLocation::DiscoverInstances,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         }))

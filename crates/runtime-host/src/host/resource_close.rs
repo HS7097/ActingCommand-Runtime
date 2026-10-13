@@ -1181,7 +1181,7 @@ impl HostShared {
 
     /// A preparation step other than an open failed without being fatal (the preparation lease
     /// was refused): one `runtime.failed` record with stage
-    /// `runtime.lifecycle.connection_preparation` names the instance and the code, and the
+    /// `runtime_lifecycle_connection_preparation` names the instance and the code, and the
     /// instance stays or becomes unavailable.
     fn record_connection_preparation_failure(
         &self,

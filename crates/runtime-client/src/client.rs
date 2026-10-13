@@ -5695,12 +5695,14 @@ fn validate_task_terminal(
         }
         PolicyExecutionOutcome::Failed { failure } => {
             // The policy's failure code is the terminal outcome's, as the Runtime derives it
-            // (`scheduled_failure_code`: an unregistered relayed spelling's `raw_code`).
+            // (`scheduled_failure_code_str`: an unregistered relayed spelling's `raw_code`).
             *task_result == actingcommand_contract::TaskOutcome::Failure
                 && outcome
                     .as_ref()
-                    .map(actingcommand_contract::scheduled_failure_code)
-                    .is_some_and(|code| code == failure.error_code)
+                    .map(actingcommand_contract::scheduled_failure_code_str)
+                    .is_some_and(|code| {
+                        code == actingcommand_contract::scheduled_failure_code_str(&failure.outcome)
+                    })
         }
     };
     if !matches {
@@ -5716,7 +5718,8 @@ fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool 
     matches!(
         execution,
         PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
+            if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+                && failure.failure_identity.is_none()
                 && failure.original_class == PolicyFailureClass::Severe
                 && failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -6347,6 +6350,8 @@ mod run_summary_package_tests {
 #[cfg(test)]
 mod run_summary_settlement_tests {
     use super::{is_policy_settlement_interrupted, project_run_summary};
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::Outcome;
     use actingcommand_contract::{
         AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
         EventOrigin, EventPayloadDraft, EventSeverity, EventSource, IdentifierIssuer,
@@ -6422,9 +6427,9 @@ mod run_summary_settlement_tests {
             package_digest: format!("sha256:{}", "a".repeat(64)).into(),
             procedure_binding_digest: format!("sha256:{}", "b".repeat(64)),
             reason_chain_id: "reason:settlement".to_owned(),
-            reasons: vec![PolicyReasonRecord {
-                code: "scheduled".to_owned(),
-            }],
+            reasons: vec![PolicyReasonRecord(
+                actingcommand_contract::outcome::Outcome::relayed("placement_selected"),
+            )],
             catalog_hash: format!("sha256:{}", "c".repeat(64)),
             catalog_version: 1,
             input_ledger_position: 1,
@@ -6458,7 +6463,8 @@ mod run_summary_settlement_tests {
             },
         };
         let failure = PolicyFailureRecord {
-            error_code: "policy_settlement_interrupted".to_owned(),
+            outcome: Outcome::new(SharedCode::PolicySettlementInterrupted),
+            failure_identity: None,
             reported_success: false,
             original_class: PolicyFailureClass::Severe,
             effective_class: PolicyFailureClass::Severe,
@@ -6589,7 +6595,8 @@ mod run_summary_settlement_tests {
     #[test]
     fn only_the_exact_severe_interruption_shape_enters_the_settlement_lane() {
         let failure = PolicyFailureRecord {
-            error_code: "policy_settlement_interrupted".to_owned(),
+            outcome: Outcome::new(SharedCode::PolicySettlementInterrupted),
+            failure_identity: None,
             reported_success: false,
             original_class: PolicyFailureClass::Recoverable,
             effective_class: PolicyFailureClass::Recoverable,

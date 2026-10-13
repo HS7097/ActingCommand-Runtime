@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     FactScalar as ContractFactScalar, MAX_RESOURCE_TARGETS, MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
     NotTargetableResource, RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition,
@@ -1911,26 +1911,28 @@ impl ResourceTerm {
     }
 
     /// The candidate's v2 reasons after the policy-level one, in this order and each at most
-    /// once: `resource_targets`, `resource_target_unmapped:<id>`,
-    /// `resource_target_override:<id>`, `resource_weights`.
+    /// once: `resource_targets`, `resource_target_unmapped`, `resource_target_override` (each
+    /// with its `resource_target_id`), `resource_weights`.
     fn reasons(&self, score_milli: Option<i64>, offset_milli: i64) -> Vec<DecisionReason> {
         let mut reasons = Vec::with_capacity(4);
         if !self.targets.is_empty() {
             reasons.push(DecisionReason {
-                code: PolicyCode::ResourceTargets.as_str().to_owned(),
+                outcome: Outcome::new(PolicyCode::ResourceTargets),
                 detail: bounded_list(String::new(), &self.targets, "; "),
             });
         }
         if let Some((id, resource, task, why)) = &self.unmapped {
             reasons.push(DecisionReason {
-                code: format!("resource_target_unmapped:{id}"),
+                outcome: Outcome::new(PolicyCode::ResourceTargetUnmapped)
+                    .resource_target_id(id.as_str()),
                 detail: format!("resource={resource} task={task} why={why}"),
             });
         }
         if let Some((id, manual_offset)) = &self.override_target {
             let score = score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string());
             reasons.push(DecisionReason {
-                code: format!("resource_target_override:{id}"),
+                outcome: Outcome::new(PolicyCode::ResourceTargetOverride)
+                    .resource_target_id(id.as_str()),
                 detail: match manual_offset {
                     ManualOffset::Keep => format!(
                         "superseded score={score}; offset={offset_milli} kept (manual_offset=keep); utility kept"
@@ -1959,7 +1961,7 @@ impl ResourceTerm {
                 })
                 .collect::<Vec<_>>();
             reasons.push(DecisionReason {
-                code: PolicyCode::ResourceWeights.as_str().to_owned(),
+                outcome: Outcome::new(PolicyCode::ResourceWeights),
                 detail: bounded_list(
                     format!(
                         "policy={}@{} term={}{} items=",
@@ -2043,9 +2045,10 @@ impl TargetEffect {
         }
     }
 
-    /// The target-level reason: applied, satisfied, pending or unmapped.
+    /// The target-level reason: applied, satisfied, pending or unmapped, each with its
+    /// `resource_target_id`.
     fn target_reason(&self) -> Option<DecisionReason> {
-        let (code, detail) = match self {
+        let (code, id, detail) = match self {
             Self::None
             | Self::PolicyUnreadable { .. }
             | Self::PolicyExpired { .. }
@@ -2056,7 +2059,8 @@ impl TargetEffect {
                 task,
                 why,
             } => (
-                format!("resource_target_unmapped:{id}"),
+                PolicyCode::ResourceTargetUnmapped,
+                id,
                 format!("resource={resource} task={task} why={why}"),
             ),
             Self::Pending {
@@ -2064,7 +2068,8 @@ impl TargetEffect {
                 fact_key,
                 reason,
             } => (
-                format!("resource_target_pending:{id}"),
+                PolicyCode::ResourceTargetPending,
+                id,
                 format!(
                     "fact_key={fact_key} reason={}; configuration applied, waiting for a valid observation",
                     pending_name(*reason)
@@ -2078,7 +2083,8 @@ impl TargetEffect {
                 at_least,
                 mode,
             } => (
-                format!("resource_target_satisfied:{id}"),
+                PolicyCode::ResourceTargetSatisfied,
+                id,
                 format!(
                     "policy={policy_sha256} applied_at={applied_at_unix_ms} current={current} at_least={at_least} gap=0 mode={}{}",
                     mode_name(*mode),
@@ -2090,7 +2096,8 @@ impl TargetEffect {
                 ),
             ),
             Self::Applied(applied) => (
-                format!("resource_target_applied:{}", applied.id),
+                PolicyCode::ResourceTargetApplied,
+                &applied.id,
                 format!(
                     "policy={} applied_at={} resource={} fact_key={} mode={} current={} at_least={} gap={} scale={} importance={} weight={} per_run={} useful={} best_useful={} task_target={}{}",
                     applied.policy_sha256,
@@ -2112,7 +2119,10 @@ impl TargetEffect {
                 ),
             ),
         };
-        Some(DecisionReason { code, detail })
+        Some(DecisionReason {
+            outcome: Outcome::new(code).resource_target_id(id.as_str()),
+            detail,
+        })
     }
 }
 
@@ -2813,7 +2823,7 @@ impl InstanceTargets {
     ) -> Vec<DecisionReason> {
         let policy_reason = if let Some((scope_kind, observed_at_unix_ms)) = self.ignored {
             Some(DecisionReason {
-                code: PolicyCode::ResourceTargetPolicyIgnored.as_str().to_owned(),
+                outcome: Outcome::new(PolicyCode::ResourceTargetPolicyIgnored),
                 detail: format!(
                     "a {scope_kind} scoped {RESOURCE_TARGETS_FACT_KEY} record (observed_at={observed_at_unix_ms}) was not written by the formal entry and is ignored"
                 ),
@@ -2821,9 +2831,7 @@ impl InstanceTargets {
         } else {
             match (effect, &self.policy) {
                 (TargetEffect::PolicyUnreadable { code }, _) => Some(DecisionReason {
-                    code: PolicyCode::ResourceTargetPolicyUnreadable
-                        .as_str()
-                        .to_owned(),
+                    outcome: Outcome::new(PolicyCode::ResourceTargetPolicyUnreadable),
                     detail: format!(
                         "stored policy cannot be read ({code}); instance runs base scheduling"
                     ),
@@ -2836,24 +2844,20 @@ impl InstanceTargets {
                     },
                     _,
                 ) => Some(DecisionReason {
-                    code: PolicyCode::ResourceTargetPolicyExpired.as_str().to_owned(),
+                    outcome: Outcome::new(PolicyCode::ResourceTargetPolicyExpired),
                     detail: format!(
                         "policy={policy_sha256} applied_at={applied_at_unix_ms} valid_until={valid_until_unix_ms}"
                     ),
                 }),
                 (_, ResolvedPolicy::Active { unevaluable, .. }) if !unevaluable.is_empty() => {
                     Some(DecisionReason {
-                        code: PolicyCode::ResourceTargetTasksUnevaluable
-                            .as_str()
-                            .to_owned(),
+                        outcome: Outcome::new(PolicyCode::ResourceTargetTasksUnevaluable),
                         detail: unevaluable_detail(unevaluable),
                     })
                 }
                 (_, ResolvedPolicy::ActiveV2(resolved)) if !resolved.unevaluable.is_empty() => {
                     Some(DecisionReason {
-                        code: PolicyCode::ResourceTargetTasksUnevaluable
-                            .as_str()
-                            .to_owned(),
+                        outcome: Outcome::new(PolicyCode::ResourceTargetTasksUnevaluable),
                         detail: bounded_list(String::new(), &resolved.unevaluable, ","),
                     })
                 }
@@ -2871,7 +2875,8 @@ impl InstanceTargets {
             && applied.mode == TargetMode::Override
         {
             reasons.push(DecisionReason {
-                code: format!("resource_target_override:{}", applied.id),
+                outcome: Outcome::new(PolicyCode::ResourceTargetOverride)
+                    .resource_target_id(applied.id.as_str()),
                 detail: format!(
                     "superseded score={} offset={offset_milli}; utility kept",
                     score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string())

@@ -56,7 +56,7 @@ fn require_same_runtime_library_closure(
     } else {
         Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
-            "fastdeploy-ppocr",
+            "fastdeploy_ppocr",
             "native OCR runtime-library closure cannot change in-process; restart is required",
         ))
     }
@@ -141,7 +141,7 @@ where
 fn runtime_closure_error(message: impl Into<String>) -> VisionFfiError {
     VisionFfiError::fatal_with_code(
         VisionFfiErrorCode::ProviderUnavailable,
-        "fastdeploy-ppocr",
+        "fastdeploy_ppocr",
         message,
     )
 }
@@ -206,7 +206,7 @@ fn next_sequence(counter: &AtomicU64, label: &str) -> VisionFfiResult<u64> {
         .map_err(|_| {
             VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::Internal,
-                "ocr-adapter-identity",
+                "ocr_adapter_identity",
                 format!("{label} identity space is exhausted"),
             )
         })
@@ -234,9 +234,9 @@ type OrtGetApiBase = unsafe extern "system" fn() -> *const OrtApiBase;
 
 /// Reads the exact ONNX Runtime version from the admitted native library.
 pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<String> {
-    let library = load_library("onnxruntime-version", path)?;
+    let library = load_library("onnxruntime_version", path)?;
     let get_api_base: OrtGetApiBase =
-        load_symbol(&library, "onnxruntime-version", b"OrtGetApiBase\0")?;
+        load_symbol(&library, "onnxruntime_version", b"OrtGetApiBase\0")?;
     let api_base = unsafe {
         // SAFETY: OrtGetApiBase is loaded from the admitted ONNX Runtime
         // library and takes no arguments.
@@ -249,7 +249,7 @@ pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<St
     .ok_or_else(|| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
-            "onnxruntime-version",
+            "onnxruntime_version",
             "OrtGetApiBase returned null",
         )
     })?;
@@ -265,7 +265,7 @@ pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<St
     .ok_or_else(|| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
-            "onnxruntime-version",
+            "onnxruntime_version",
             "ONNX Runtime returned a null version string",
         )
     })?;
@@ -277,7 +277,7 @@ pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<St
     .map_err(|err| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "onnxruntime-version",
+            "onnxruntime_version",
             format!("ONNX Runtime version is not UTF-8: {err}"),
         )
     })?;
@@ -288,7 +288,7 @@ pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<St
     {
         return Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "onnxruntime-version",
+            "onnxruntime_version",
             "ONNX Runtime version must be a bounded non-blank identity",
         ));
     }
@@ -300,15 +300,15 @@ pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<St
 /// The result is bounded and carries stable UUID/PCI identity. Callers must not
 /// use display names as a selector or as execution evidence.
 pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
-    let library = load_library("cuda-driver", cuda_driver_library_name()?)?;
-    let cu_init: CuInit = load_symbol(&library, "cuda-driver", b"cuInit\0")?;
+    let library = load_library("cuda_driver", cuda_driver_library_name()?)?;
+    let cu_init: CuInit = load_symbol(&library, "cuda_driver", b"cuInit\0")?;
     let cu_driver_get_version: CuDriverGetVersion =
-        load_symbol(&library, "cuda-driver", b"cuDriverGetVersion\0")?;
+        load_symbol(&library, "cuda_driver", b"cuDriverGetVersion\0")?;
     let cu_device_get_count: CuDeviceGetCount =
-        load_symbol(&library, "cuda-driver", b"cuDeviceGetCount\0")?;
-    let cu_device_get: CuDeviceGet = load_symbol(&library, "cuda-driver", b"cuDeviceGet\0")?;
+        load_symbol(&library, "cuda_driver", b"cuDeviceGetCount\0")?;
+    let cu_device_get: CuDeviceGet = load_symbol(&library, "cuda_driver", b"cuDeviceGet\0")?;
     let cu_device_get_pci_bus_id: CuDeviceGetPciBusId =
-        load_symbol(&library, "cuda-driver", b"cuDeviceGetPCIBusId\0")?;
+        load_symbol(&library, "cuda_driver", b"cuDeviceGetPCIBusId\0")?;
     let cu_device_get_uuid: Option<CuDeviceGetUuid> = unsafe {
         // SAFETY: the symbol type follows the CUDA Driver API for both the v2
         // and legacy UUID entrypoints. The loaded library outlives every call.
@@ -331,7 +331,7 @@ pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
     let driver_version = u32::try_from(driver_version).map_err(|_| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "cuda-driver",
+            "cuda_driver",
             "CUDA driver returned a negative version",
         )
     })?;
@@ -343,14 +343,14 @@ pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
     let device_count = usize::try_from(device_count).map_err(|_| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "cuda-driver",
+            "cuda_driver",
             "CUDA driver returned a negative device count",
         )
     })?;
     if device_count == 0 || device_count > crate::MAX_CUDA_DEVICES {
         return Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
-            "cuda-driver",
+            "cuda_driver",
             format!(
                 "CUDA driver reported {device_count} devices; expected 1..={}",
                 crate::MAX_CUDA_DEVICES
@@ -363,7 +363,7 @@ pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
         let ordinal_i32 = i32::try_from(ordinal).map_err(|_| {
             VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidResponse,
-                "cuda-driver",
+                "cuda_driver",
                 "CUDA ordinal exceeds i32 range",
             )
         })?;
@@ -388,7 +388,7 @@ pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
             ordinal: u32::try_from(ordinal).map_err(|_| {
                 VisionFfiError::fatal_with_code(
                     VisionFfiErrorCode::InvalidResponse,
-                    "cuda-driver",
+                    "cuda_driver",
                     "CUDA ordinal exceeds u32 range",
                 )
             })?,
@@ -415,7 +415,7 @@ fn cuda_stable_identity(
     if uuid.iter().all(|byte| *byte == 0) {
         return Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "cuda-driver",
+            "cuda_driver",
             "CUDA driver returned an all-zero device UUID",
         ));
     }
@@ -434,7 +434,7 @@ fn cuda_driver_library_name() -> VisionFfiResult<&'static OsStr> {
     #[allow(unreachable_code)]
     Err(VisionFfiError::fatal_with_code(
         VisionFfiErrorCode::ProviderUnavailable,
-        "cuda-driver",
+        "cuda_driver",
         "CUDA driver discovery is unsupported on this operating system",
     ))
 }
@@ -458,7 +458,7 @@ fn cuda_pci_bus_id(
     .map_err(|err| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "cuda-driver",
+            "cuda_driver",
             format!("CUDA PCI bus identity is not UTF-8: {err}"),
         )
     })?
@@ -466,7 +466,7 @@ fn cuda_pci_bus_id(
     if value.is_empty() || value.len() >= CUDA_PCI_BUS_ID_BYTES {
         return Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidResponse,
-            "cuda-driver",
+            "cuda_driver",
             "CUDA PCI bus identity is empty or unbounded",
         ));
     }
@@ -479,7 +479,7 @@ fn cuda_success(operation: &str, status: i32) -> VisionFfiResult<()> {
     } else {
         Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
-            "cuda-driver",
+            "cuda_driver",
             format!("{operation} failed with CUDA status {status}"),
         ))
     }
@@ -572,10 +572,10 @@ mod tests {
         ));
         std::fs::write(&path, b"not a dynamic library").expect("corrupt dll fixture");
 
-        let err = validate_runtime_library_loadable("test-runtime", &path)
+        let err = validate_runtime_library_loadable("test_runtime", &path)
             .expect_err("corrupt runtime library rejected");
 
-        assert_eq!(err.module(), "test-runtime");
+        assert_eq!(err.module(), "test_runtime");
         assert!(err.message().contains("failed to load FFI library"));
         let _ = std::fs::remove_file(path);
     }

@@ -319,7 +319,7 @@ impl Fixture<'_> {
                 .artifact_id("artifact_00000000000000000000000000000001"),
                 DiagnosticDetailDraft::new(
                     "frame_retention",
-                    "frame_retention.remove",
+                    crate::codes::HostLocation::FrameRetentionRemove.location(),
                     "artifact_store",
                     "maintain_frame_retention",
                 ),

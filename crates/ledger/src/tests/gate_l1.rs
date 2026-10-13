@@ -162,9 +162,9 @@ fn selection_evaluated() -> TaskSemanticFact {
             outcome_key: "empty".to_owned(),
             selected: Vec::new(),
             verdicts: Vec::new(),
-            reasons: vec![PolicyReasonRecord {
-                code: "no_candidate".to_owned(),
-            }],
+            reasons: vec![PolicyReasonRecord(
+                actingcommand_contract::outcome::Outcome::relayed("selection_empty"),
+            )],
             confirmation: TaskSelectionConfirmation::NotAttempted,
         }),
     }

@@ -13,12 +13,14 @@ use super::instance_workers::{
 };
 use super::*;
 use crate::codes::HostCode;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     DiagnosticCode, EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome,
     RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
     RuntimePayload, SchedulerPayload,
 };
 use actingcommand_device::DeviceProcessPresence;
+use actingcommand_device::codes::DeviceStage;
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const ALIAS: &str = "emulator.a";
@@ -267,7 +269,7 @@ fn invalidated(event: &PersistedEvent) -> bool {
 /// while its device process stayed.
 fn stop_wait_expired() -> ScriptedControl {
     ScriptedControl::Failed {
-        stage: "mumu_manager.wait_timeout",
+        stage: actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
         exit_code: Some(0),
         last_state: Some(stopped_state()),
         device_process_present: Some(DeviceProcessPresence::Present),
@@ -276,7 +278,7 @@ fn stop_wait_expired() -> ScriptedControl {
 
 fn start_wait_expired() -> ScriptedControl {
     ScriptedControl::Failed {
-        stage: "mumu_manager.wait_timeout",
+        stage: actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
         exit_code: Some(0),
         last_state: Some(stopped_state()),
         device_process_present: None,
@@ -429,7 +431,7 @@ fn gate_a_restart_whose_stop_wait_expired_still_starts_and_fails_in_the_stop_pha
     run.host.close().expect("close host");
 }
 
-/// RB-D4 (F3's branch table): after a Stop that ended in `mumu_manager.wait_timeout` the Start
+/// RB-D4 (F3's branch table): after a Stop that ended in `mumu_manager_wait_timeout` the Start
 /// is dispatched; after any other Stop failure it is not, and the restart fails `phase=stop`.
 #[test]
 fn gate_only_a_stop_whose_wait_expired_is_followed_by_a_start() {
@@ -437,24 +439,52 @@ fn gate_only_a_stop_whose_wait_expired_is_followed_by_a_start() {
         launch_err_code: 3,
         ..stopped_state()
     };
-    let rows: [(&'static str, Option<i32>, Option<InstanceState>, bool); 5] = [
+    // Each Stop stage with the `stop_result` token the host's stop-result table gives it.
+    type StopRow = (
+        Location,
+        &'static str,
+        Option<i32>,
+        Option<InstanceState>,
+        bool,
+    );
+    let rows: [StopRow; 5] = [
         (
-            "mumu_manager.wait_timeout",
+            DeviceStage::MumuManagerWaitTimeout.location(),
+            "wait_timeout",
             Some(0),
             Some(stopped_state()),
             true,
         ),
-        ("mumu_manager.control_exit", Some(1), None, false),
-        ("mumu_manager.control_errcode", Some(0), None, false),
-        ("mumu_manager.run", None, None, false),
         (
-            "mumu_manager.launch_error",
+            DeviceStage::MumuManagerControlExit.location(),
+            "control_exit",
+            Some(1),
+            None,
+            false,
+        ),
+        (
+            DeviceStage::MumuManagerControlErrcode.location(),
+            "control_errcode",
+            Some(0),
+            None,
+            false,
+        ),
+        (
+            DeviceStage::MumuManagerRun.location(),
+            "run",
+            None,
+            None,
+            false,
+        ),
+        (
+            DeviceStage::MumuManagerLaunchError.location(),
+            "launch_error",
             Some(0),
             Some(launch_failed),
             false,
         ),
     ];
-    for (stage, exit_code, last_state, starts) in rows {
+    for (stage, token, exit_code, last_state, starts) in rows {
         let run = emulator_host();
         let emulator = &run.state.emulator;
         emulator.script_control(
@@ -476,7 +506,6 @@ fn gate_only_a_stop_whose_wait_expired_is_followed_by_a_start() {
         assert_eq!(control_calls(&emulator.calls()), expected, "{stage}");
         let recorded = failures(&request_events(&run.host, &receipt));
         assert_eq!(recorded.len(), 1, "{stage}: {recorded:?}");
-        let (_, token) = stage.rsplit_once('.').expect("a device stage");
         let stop_result = format!("stop_result={token}");
         let start_dispatched = format!("start_dispatched={starts}");
         assert_tokens(
@@ -659,7 +688,7 @@ fn gate_an_errcode_refusal_on_a_running_instance_reads_its_state_once_and_keeps_
     emulator.script_control(
         STOP,
         ScriptedControl::Failed {
-            stage: "mumu_manager.control_errcode",
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerControlErrcode.location(),
             exit_code: Some(0),
             last_state: None,
             device_process_present: Some(DeviceProcessPresence::Unknown),
@@ -905,7 +934,7 @@ fn gate_rung_three_fails_without_a_start_after_a_stop_whose_tool_exited() {
     emulator.script_control(
         STOP,
         ScriptedControl::Failed {
-            stage: "mumu_manager.control_exit",
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerControlExit.location(),
             exit_code: Some(1),
             last_state: None,
             device_process_present: Some(DeviceProcessPresence::Unknown),

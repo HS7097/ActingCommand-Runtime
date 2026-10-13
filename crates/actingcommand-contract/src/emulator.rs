@@ -165,9 +165,24 @@ impl FromStr for EmulatorCapability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EmulatorVersionEvidence {
-    Exact { value: String },
-    Minimum { value: String },
-    Unavailable { reason: String },
+    Exact {
+        value: String,
+    },
+    Minimum {
+        value: String,
+    },
+    Unavailable {
+        reason: EmulatorVersionUnavailableReason,
+    },
+}
+
+/// Why a profile has no version evidence (Workflow #378 A2-P: a closed token replaces the
+/// English text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmulatorVersionUnavailableReason {
+    /// The backend's version was not probed.
+    NotProbed,
 }
 
 impl EmulatorVersionEvidence {
@@ -176,9 +191,7 @@ impl EmulatorVersionEvidence {
             Self::Exact { value } | Self::Minimum { value } => {
                 validate_bounded_text(value, "provider version", 64)
             }
-            Self::Unavailable { reason } => {
-                validate_bounded_text(reason, "unavailable version reason", 256)
-            }
+            Self::Unavailable { .. } => Ok(()),
         }
     }
 }

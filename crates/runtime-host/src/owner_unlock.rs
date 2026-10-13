@@ -7,6 +7,7 @@ use crate::events::RuntimeEvents;
 use crate::owner::{OwnerUnlock, unlock_retained_owner};
 use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, EventActor, EventSeverity, EventSource, OriginModule,
     OwnerEpoch, OwnerResourceDisposition, OwnerUnlockActor, RuntimeErrorCode,
@@ -27,8 +28,9 @@ pub struct OwnerUnlockReceipt {
 #[derive(Debug, Clone)]
 pub struct OwnerUnlockFailure {
     pub error: RuntimeHostError,
-    /// `journal` up to and including the owner journal append, `ledger` for the fact.
-    pub stage: &'static str,
+    /// `unlock_owner_file` up to and including the owner journal append, `unlock_owner_ledger`
+    /// for the fact (Workflow #378 A2-P; unlock-owner v1 prints them as `journal` / `ledger`).
+    pub stage: Location,
     /// The unlock record is durable; the next start takes the epoch over regardless.
     pub journal_appended: bool,
 }
@@ -42,14 +44,14 @@ pub(crate) fn run(
 ) -> Result<OwnerUnlockReceipt, OwnerUnlockFailure> {
     let unlocked = unlock_retained_owner(root, confirmed).map_err(|error| OwnerUnlockFailure {
         error,
-        stage: "journal",
+        stage: HostLocation::UnlockOwnerFile.location(),
         journal_appended: false,
     })?;
     // The fact is recorded under the still-held owner lock. No new epoch is acquired, so
     // the confirmed epoch remains the last record and the next start takes it over.
     record(root, salt, clock, actor, &unlocked).map_err(|error| OwnerUnlockFailure {
         error,
-        stage: "ledger",
+        stage: HostLocation::UnlockOwnerLedger.location(),
         journal_appended: true,
     })?;
     Ok(OwnerUnlockReceipt {

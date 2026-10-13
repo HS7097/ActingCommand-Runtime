@@ -2,108 +2,12 @@
 
 use super::*;
 use crate::codes::HostLocation;
-use actingcommand_contract::outcome::{Location, Outcome};
-
-/// Each lifecycle failure stage: its registered location (ledger revision 3: the `stage` of the
-/// failure's outcome) and the dotted token it had before, which the record's diagnostic detail
-/// keeps as its stage (Workflow #378 A3). The last two are stages a host error names itself.
-const LIFECYCLE_STAGES: [(HostLocation, &str); 20] = [
-    // Workflow #381 A: a lifecycle failure stage had 2-4 dotted segments; the former one-word
-    // install stages failed that check, so no install failure could be recorded and every
-    // attempt latched the lifecycle append failure.
-    (
-        HostLocation::RuntimeLifecycleInstallDrain,
-        "runtime.lifecycle.install_drain",
-    ),
-    (
-        HostLocation::RuntimeLifecycleInstallHeld,
-        "runtime.lifecycle.install_held",
-    ),
-    (
-        HostLocation::RuntimeLifecycleInstallRelease,
-        "runtime.lifecycle.install_release",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyInitialization,
-        "runtime.lifecycle.policy_initialization",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyMonitor,
-        "runtime.lifecycle.policy_monitor",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyForward,
-        "runtime.lifecycle.policy_forward",
-    ),
-    (
-        HostLocation::RuntimeLifecycleStrategicReport,
-        "runtime.lifecycle.strategic_report",
-    ),
-    (
-        HostLocation::RuntimeLifecycleSessionClose,
-        "runtime.lifecycle.session_close",
-    ),
-    (
-        HostLocation::RuntimeLifecycleConnectionPreparation,
-        "runtime.lifecycle.connection_preparation",
-    ),
-    (
-        HostLocation::RuntimeLifecycleOperationCleanup,
-        "runtime.lifecycle.operation_cleanup",
-    ),
-    (
-        HostLocation::RuntimeLifecycleConnectionCleanup,
-        "runtime.lifecycle.connection_cleanup",
-    ),
-    (
-        HostLocation::RuntimeLifecycleShutdownJoin,
-        "runtime.lifecycle.shutdown_join",
-    ),
-    (
-        HostLocation::RuntimeLifecycleInfoFileRemoval,
-        "runtime.lifecycle.info_file_removal",
-    ),
-    (
-        HostLocation::RuntimeLifecycleRetainedReference,
-        "runtime.lifecycle.retained_reference",
-    ),
-    (
-        HostLocation::RuntimeLifecycleHostClose,
-        "runtime.lifecycle.host_close",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyDriver,
-        "runtime.lifecycle.policy_driver",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyControl,
-        "runtime.lifecycle.policy_control",
-    ),
-    (
-        HostLocation::RuntimeLifecyclePolicyBootstrap,
-        "runtime.lifecycle.policy_bootstrap",
-    ),
-    (
-        HostLocation::RuntimeLifecycleSelectionRecord,
-        "runtime.lifecycle.selection_record",
-    ),
-    (
-        HostLocation::RuntimeLifecycleShutdownRequested,
-        "runtime.lifecycle.shutdown_requested",
-    ),
-];
-
-/// The diagnostic detail's stage token of a lifecycle failure stage: its former dotted
-/// spelling, else the location's own spelling (a detail stage takes 1-4 dotted segments).
-fn lifecycle_detail_stage(stage: Location) -> &'static str {
-    LIFECYCLE_STAGES
-        .iter()
-        .find(|(location, _)| location.location() == stage)
-        .map_or(stage.as_str(), |(_, token)| *token)
-}
+use actingcommand_contract::outcome::Outcome;
 
 impl RuntimeLifecycleFailureStage {
-    /// The stage's registered location: the `stage` of its lifecycle failure's outcome.
+    /// The stage's registered location: the `stage` of its lifecycle failure's outcome and of
+    /// its record's diagnostic detail (Workflow #378 A2-P; the detail kept the dotted
+    /// `runtime.lifecycle.*` token until then).
     pub(super) const fn location(self) -> HostLocation {
         match self {
             Self::InstallDrain => HostLocation::RuntimeLifecycleInstallDrain,
@@ -125,11 +29,6 @@ impl RuntimeLifecycleFailureStage {
             Self::PolicyControl => HostLocation::RuntimeLifecyclePolicyControl,
             Self::PolicyBootstrap => HostLocation::RuntimeLifecyclePolicyBootstrap,
         }
-    }
-
-    /// The stage's former dotted spelling, which diagnostic details keep as their stage token.
-    pub(super) fn as_str(self) -> &'static str {
-        lifecycle_detail_stage(self.location().location())
     }
 }
 
@@ -356,7 +255,6 @@ impl HostShared {
             ),
         };
         let outcome = outcome.stage(failure_stage);
-        let detail_stage = lifecycle_detail_stage(failure_stage);
         let gate = lock(
             &self.fact_write_gate,
             HostLocation::AppendRuntimeLifecycleFailure,
@@ -426,7 +324,7 @@ impl HostShared {
                             }),
                         DiagnosticDetailDraft::new(
                             "runtime_lifecycle",
-                            detail_stage,
+                            failure_stage,
                             origin,
                             operation,
                         ),
@@ -651,7 +549,7 @@ impl HostShared {
                 error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "runtime_connection",
-                    stage.as_str(),
+                    stage.location(),
                     "local_ipc",
                     error.operation(),
                 ),

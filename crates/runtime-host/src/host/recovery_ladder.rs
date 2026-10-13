@@ -499,7 +499,7 @@ impl HostShared {
     /// pause and business capacity. Nothing is recorded.
     fn recovery_gate_open(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
         let paused = lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
-            .deferral(&pending.instance_alias)
+            .deferral_code(&pending.instance_alias)
             .is_some();
         if paused || self.fatal.is_shutdown_requested() {
             return Ok(false);
@@ -513,7 +513,7 @@ impl HostShared {
 
     fn recovery_admitted(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
         let paused = lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
-            .deferral(&pending.instance_alias)
+            .deferral_code(&pending.instance_alias)
             .is_some();
         let capacity = if paused || self.fatal.is_shutdown_requested() {
             false

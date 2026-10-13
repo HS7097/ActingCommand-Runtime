@@ -127,8 +127,8 @@ pub enum TaskSelectionCandidateStatus {
     UnknownDropped,
 }
 
-/// Mirrors the evaluator's `CandidateVerdict`; its reasons use the policy reason record,
-/// which has the evaluator's `DecisionReason` shape.
+/// Mirrors the evaluator's `CandidateVerdict`; its reasons use the policy reason record, each
+/// the outcome of an evaluator `DecisionReason`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSelectionVerdict {
@@ -395,7 +395,7 @@ impl TaskSelectionVerdict {
 
 fn validate_reasons(reasons: &[PolicyReasonRecord]) -> Result<(), SanitizationError> {
     for reason in reasons {
-        validate_policy_token(&reason.code, "reason_code")?;
+        validate_policy_token(reason.0.code().as_str(), "reason_code")?;
     }
     Ok(())
 }

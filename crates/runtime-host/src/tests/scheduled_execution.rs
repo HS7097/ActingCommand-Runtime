@@ -378,7 +378,8 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
                         if matches!(
                             payload.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
-                                if failure.error_code == error.code()
+                                if failure.outcome.code().as_str() == error.code()
+                                    && failure.failure_identity.is_none()
                                     && failure.original_class
                                         == PolicyFailureClass::Recoverable
                         )
@@ -507,7 +508,8 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
                         if matches!(
                             payload.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
-                                if failure.error_code == expected_code
+                                if failure.outcome.code().as_str() == expected_code
+                                    && failure.failure_identity.is_none()
                                     && failure.original_class
                                         == PolicyFailureClass::Recoverable
                         )

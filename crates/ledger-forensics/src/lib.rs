@@ -1111,7 +1111,7 @@ fn task_evidence_report(
         gaps.insert("through_sequence_unavailable");
     }
     if !failures.is_empty() {
-        gaps.insert("artifact_verification_failed");
+        gaps.insert("artifact_unverifiable");
     }
     Ok(TaskEvidenceReport {
         window_complete: !limited && gaps.is_empty(),

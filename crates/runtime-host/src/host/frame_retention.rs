@@ -342,12 +342,13 @@ impl FrameRetentionWarning {
         }
     }
 
-    fn stage(&self) -> &'static str {
+    fn stage(&self) -> actingcommand_contract::outcome::Location {
         match self.code {
-            HostCode::FrameRetentionMoveFailed => "frame_retention.move",
-            HostCode::FrameRetentionCounterFailed => "frame_retention.counter",
-            _ => "frame_retention.remove",
+            HostCode::FrameRetentionMoveFailed => HostLocation::FrameRetentionMove,
+            HostCode::FrameRetentionCounterFailed => HostLocation::FrameRetentionCounter,
+            _ => HostLocation::FrameRetentionRemove,
         }
+        .location()
     }
 
     /// The warning as its record's outcome (ledger revision 3; was a message of `key=value`

@@ -1058,8 +1058,9 @@ crate::outcome_codes! {
 
 crate::outcome_locations! {
     /// Operations that two or more owning crates name with one meaning (brief-a2a.md D3): the
-    /// client's request and the host's handling of it, or a store operation both name. Registered
-    /// once, here.
+    /// client's request and the host's handling of it, or a store operation both name; and the
+    /// stages the kernel's provider defaults and the host both emit, or the contract emits itself
+    /// (Workflow #378 A2-P). Registered once, here.
     pub enum ContractLocation {
         AcquireLease => "acquire_lease",
         AdmitContainedObservation => "admit_contained_observation",
@@ -1121,5 +1122,8 @@ crate::outcome_locations! {
         StartAgentSession => "start_agent_session",
         SubscribeRuntimeEvents => "subscribe_runtime_events",
         WriteStateDocument => "write_state_document",
+        InstanceDiscoveryUnsupported => "instance_discovery_unsupported",
+        ApplicationForegroundUnsupported => "application_foreground_unsupported",
+        ResourceDeclarationPrepare => "resource_declaration_prepare",
     }
 }

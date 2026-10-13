@@ -151,7 +151,7 @@ impl MinitouchBackend {
                     DeviceError::transient(format!("failed to push minitouch binary: {err}"))
                         .with_diagnostic(
                             DeviceErrorCategory::BackendLaunch,
-                            "minitouch.install.push",
+                            crate::codes::DeviceStage::MinitouchInstallPush.location(),
                         )
                 })?;
         }
@@ -161,7 +161,7 @@ impl MinitouchBackend {
                 DeviceError::transient(format!("failed to chmod minitouch binary: {err}"))
                     .with_diagnostic(
                         DeviceErrorCategory::BackendLaunch,
-                        "minitouch.install.chmod",
+                        crate::codes::DeviceStage::MinitouchInstallChmod.location(),
                     )
             })?;
         Ok(())
@@ -188,7 +188,7 @@ impl MinitouchBackend {
                 DeviceError::transient(format!("failed to start minitouch process: {err}"))
                     .with_diagnostic(
                         DeviceErrorCategory::BackendLaunch,
-                        "minitouch.process.spawn",
+                        crate::codes::DeviceStage::MinitouchProcessSpawn.location(),
                     )
             })?;
 
@@ -295,14 +295,14 @@ impl MinitouchBackend {
                 ))
                 .with_diagnostic(
                     DeviceErrorCategory::Handshake,
-                    "minitouch.handshake.timeout",
+                    crate::codes::DeviceStage::MinitouchHandshakeTimeout.location(),
                 ),
             )),
             Err(err) => Err(self.with_stderr(
                 DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
                     .with_diagnostic(
                         DeviceErrorCategory::Response,
-                        "minitouch.handshake.channel_receive",
+                        crate::codes::DeviceStage::MinitouchHandshakeChannelReceive.location(),
                     ),
             )),
         }
@@ -313,24 +313,32 @@ impl MinitouchBackend {
             return Err(
                 DeviceError::fatal("MinitouchBackend is not connected").with_diagnostic(
                     DeviceErrorCategory::ChildExit,
-                    "minitouch.operation.inactive",
+                    crate::codes::DeviceStage::MinitouchOperationInactive.location(),
                 ),
             );
         }
 
         let child = self.child.as_mut().ok_or_else(|| {
-            DeviceError::transient("minitouch child process is missing")
-                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.missing")
+            DeviceError::transient("minitouch child process is missing").with_diagnostic(
+                DeviceErrorCategory::ChildExit,
+                crate::codes::DeviceStage::MinitouchProcessMissing.location(),
+            )
         })?;
         if let Some(status) = child.try_wait().map_err(|err| {
             DeviceError::transient(format!("failed to poll minitouch process status: {err}"))
-                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.poll")
+                .with_diagnostic(
+                    DeviceErrorCategory::ChildExit,
+                    crate::codes::DeviceStage::MinitouchProcessPoll.location(),
+                )
         })? {
             return Err(self.with_stderr(
                 DeviceError::transient(format!(
                     "minitouch process exited unexpectedly with {status}"
                 ))
-                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.exited"),
+                .with_diagnostic(
+                    DeviceErrorCategory::ChildExit,
+                    crate::codes::DeviceStage::MinitouchProcessExited.location(),
+                ),
             ));
         }
 
@@ -372,16 +380,24 @@ impl MinitouchBackend {
     fn write_and_flush(&mut self, commands: &str) -> DeviceResult<()> {
         self.ensure_active()?;
         let stdin = self.stdin.as_mut().ok_or_else(|| {
-            DeviceError::transient("minitouch stdin is missing")
-                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.stdin.missing")
+            DeviceError::transient("minitouch stdin is missing").with_diagnostic(
+                DeviceErrorCategory::ChildExit,
+                crate::codes::DeviceStage::MinitouchStdinMissing.location(),
+            )
         })?;
         stdin.write_all(commands.as_bytes()).map_err(|err| {
             DeviceError::transient(format!("failed to write minitouch command: {err}"))
-                .with_diagnostic(DeviceErrorCategory::CommandWrite, "minitouch.stdin.write")
+                .with_diagnostic(
+                    DeviceErrorCategory::CommandWrite,
+                    crate::codes::DeviceStage::MinitouchStdinWrite.location(),
+                )
         })?;
         stdin.flush().map_err(|err| {
             DeviceError::transient(format!("failed to flush minitouch command: {err}"))
-                .with_diagnostic(DeviceErrorCategory::CommandFlush, "minitouch.stdin.flush")
+                .with_diagnostic(
+                    DeviceErrorCategory::CommandFlush,
+                    crate::codes::DeviceStage::MinitouchStdinFlush.location(),
+                )
         })?;
         Ok(())
     }
@@ -783,19 +799,19 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
     reader.read_line(&mut version).map_err(|err| {
         DeviceError::transient(format!("failed to read minitouch version: {err}")).with_diagnostic(
             DeviceErrorCategory::Response,
-            "minitouch.handshake.version_read",
+            crate::codes::DeviceStage::MinitouchHandshakeVersionRead.location(),
         )
     })?;
     reader.read_line(&mut max).map_err(|err| {
         DeviceError::transient(format!("failed to read minitouch max line: {err}")).with_diagnostic(
             DeviceErrorCategory::Response,
-            "minitouch.handshake.max_read",
+            crate::codes::DeviceStage::MinitouchHandshakeMaxRead.location(),
         )
     })?;
     reader.read_line(&mut pid).map_err(|err| {
         DeviceError::transient(format!("failed to read minitouch pid: {err}")).with_diagnostic(
             DeviceErrorCategory::Response,
-            "minitouch.handshake.pid_read",
+            crate::codes::DeviceStage::MinitouchHandshakePidRead.location(),
         )
     })?;
 
@@ -804,7 +820,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
             DeviceError::transient(format!("invalid minitouch version line: {version:?}"))
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "minitouch.handshake.version_parse",
+                    crate::codes::DeviceStage::MinitouchHandshakeVersionParse.location(),
                 ),
         );
     }
@@ -812,7 +828,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         DeviceError::transient(format!("invalid minitouch max line: {max:?}"))
             .with_diagnostic(
                 DeviceErrorCategory::Protocol,
-                "minitouch.handshake.max_parse",
+                crate::codes::DeviceStage::MinitouchHandshakeMaxParse.location(),
             )
             .input_parameter_failure()
     })?;
@@ -823,7 +839,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         ))
         .with_diagnostic(
             DeviceErrorCategory::Protocol,
-            "minitouch.handshake.max_shape",
+            crate::codes::DeviceStage::MinitouchHandshakeMaxShape.location(),
         )
         .input_parameter_failure());
     }
@@ -833,7 +849,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
             DeviceError::transient(format!("invalid minitouch {label} '{value}': {err}"))
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "minitouch.handshake.max_value_parse",
+                    crate::codes::DeviceStage::MinitouchHandshakeMaxValueParse.location(),
                 )
                 .input_parameter_failure()
         })
@@ -848,7 +864,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         ))
         .with_diagnostic(
             DeviceErrorCategory::Protocol,
-            "minitouch.handshake.max_value_validate",
+            crate::codes::DeviceStage::MinitouchHandshakeMaxValueValidate.location(),
         )
         .input_parameter_failure());
     }
@@ -857,7 +873,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         .ok_or_else(|| {
             DeviceError::transient(format!("invalid minitouch pid line: {pid:?}")).with_diagnostic(
                 DeviceErrorCategory::Protocol,
-                "minitouch.handshake.pid_parse",
+                crate::codes::DeviceStage::MinitouchHandshakePidParse.location(),
             )
         })?
         .trim()
@@ -866,7 +882,7 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
         return Err(
             DeviceError::transient("minitouch pid line is empty").with_diagnostic(
                 DeviceErrorCategory::Protocol,
-                "minitouch.handshake.pid_validate",
+                crate::codes::DeviceStage::MinitouchHandshakePidValidate.location(),
             ),
         );
     }
@@ -934,7 +950,7 @@ fn require_minitouch_file(path: &PathBuf) -> DeviceResult<()> {
         ))
         .with_diagnostic(
             DeviceErrorCategory::BackendLaunch,
-            "minitouch.install.local_file_metadata",
+            crate::codes::DeviceStage::MinitouchInstallLocalFileMetadata.location(),
         )
     })?;
     if !metadata.is_file() {
@@ -944,7 +960,7 @@ fn require_minitouch_file(path: &PathBuf) -> DeviceResult<()> {
         ))
         .with_diagnostic(
             DeviceErrorCategory::BackendLaunch,
-            "minitouch.install.local_file_validate",
+            crate::codes::DeviceStage::MinitouchInstallLocalFileValidate.location(),
         ));
     }
     Ok(())
@@ -957,7 +973,7 @@ fn validate_default_pressure(default_pressure: i32, max_pressure: i32) -> Device
         ))
         .with_diagnostic(
             DeviceErrorCategory::Protocol,
-            "minitouch.handshake.pressure_validate",
+            crate::codes::DeviceStage::MinitouchHandshakePressureValidate.location(),
         ));
     }
     Ok(())

@@ -340,7 +340,7 @@ impl HostShared {
                 error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "contained_observation",
-                    "observation.failed",
+                    HostLocation::ObservationFailed,
                     "contained_package",
                     error.operation(),
                 ),

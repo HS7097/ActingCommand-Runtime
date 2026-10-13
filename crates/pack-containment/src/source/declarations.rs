@@ -2086,6 +2086,24 @@ fn select_policy(
     policy
         .validate()
         .map_err(|error| refuse("", format!("invalid selection policy: {error}")))?;
+    // A gate or term id becomes a selection reason's `rule_id` (a token), so one the evaluator
+    // could not record is refused here, at admission, rather than met during a run.
+    for (index, gate) in policy.gates.iter().enumerate() {
+        if !actingcommand_selection_policy::is_rule_id(&gate.gate_id) {
+            return Err(refuse(
+                &format!("/gates/{index}/gate_id"),
+                "not a token: a gate id is its reasons' rule_id".to_owned(),
+            ));
+        }
+    }
+    for (index, term) in policy.scoring.iter().enumerate() {
+        if !actingcommand_selection_policy::is_rule_id(&term.term_id) {
+            return Err(refuse(
+                &format!("/scoring/{index}/term_id"),
+                "not a token: a term id is its reasons' rule_id".to_owned(),
+            ));
+        }
+    }
     let game = bundle
         .data
         .get("game")
@@ -3144,5 +3162,40 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    /// Coordinator ruling 5 on Workflow #378 A2-P: a gate or term id becomes a selection
+    /// reason's `rule_id`, a token. A document whose id is not one is refused at admission with
+    /// the declaration refusal pointing at the id, so no run ever records it (the outcome value
+    /// check would panic in a debug build).
+    #[test]
+    fn a_gate_or_term_id_that_is_not_a_token_is_refused_at_admission() {
+        let task = Declaration {
+            file: Path::new("tasks/list-task/task.json"),
+            schema: Some("0.9"),
+        };
+        let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
+        for pointer in ["/gates/0/gate_id", "/scoring/0/term_id"] {
+            let mut document: Value =
+                serde_json::from_slice(&keyed_policy_bytes()).expect("policy document");
+            *document.pointer_mut(pointer).expect("rule id") = Value::from("Rule Listed");
+            let bytes = serde_json::to_vec(&document).expect("policy bytes");
+            let error = select_policy(
+                &task,
+                &task_bundle("reject"),
+                &requested,
+                &requested,
+                &bytes,
+            )
+            .expect_err("an id that is not a token is refused at admission");
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(
+                issue["declaration_file"],
+                "tasks/list-task/policies/list.json"
+            );
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], "invalid_value");
+        }
     }
 }

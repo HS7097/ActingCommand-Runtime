@@ -316,7 +316,10 @@ struct NemuInputView {
 
 fn unsupported() -> DeviceError {
     DeviceError::fatal("selected Nemu input capability is unavailable for this operation")
-        .with_diagnostic(DeviceErrorCategory::Protocol, "input.nemu.capability")
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            crate::codes::DeviceStage::InputNemuCapability.location(),
+        )
 }
 
 impl InputBackend for NemuInputView {

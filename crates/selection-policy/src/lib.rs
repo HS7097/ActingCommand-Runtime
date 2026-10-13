@@ -50,5 +50,5 @@ pub use schema::{
     MAX_SCORING_TERMS, MAX_TIE_BREAK_KEYS, OutcomeKeys, Predicate, RowFilter,
     SELECTION_POLICY_SCHEMA_VERSION, ScoringTerm, SelectionError, SelectionErrorCode,
     SelectionMode, SelectionPolicy, SelectionRequirement, SortDirection, TermUnknownHandling,
-    TieBreakKey, Transform, ValueRef, ValueType,
+    TieBreakKey, Transform, ValueRef, ValueType, is_rule_id,
 };

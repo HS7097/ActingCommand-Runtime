@@ -134,8 +134,8 @@ rows below describe what the separate control path (`control_instance`, slice #3
   value, kept as an opaque bounded string and never compared semantically in the profile.
 - Available (supported): `inventory.read` and `instance.status.read`, evidence
   `mumu_manager.info`: `info -v all` answered with exit 0 and a parseable instance map at
-  discovery. A refusal surfaces as a fatal typed device error (`mumu_manager.run`, `.timeout`,
-  `.exit`, `.decode`, `.json`, `.errcode`, `.shape`, `.output_bound`), never as an empty
+  discovery. A refusal surfaces as a fatal typed device error (`mumu_manager_run`, `_timeout`,
+  `_exit`, `_decode`, `_json`, `_errcode`, `_shape`, `_output_bound`), never as an empty
   inventory.
 - Available (supported): `instance.start`, `instance.stop` and `instance.restart`, evidence
   `mumu_manager.control`: dispatched as `control -v <index> launch|shutdown` (a restart as a
@@ -144,9 +144,9 @@ rows below describe what the separate control path (`control_instance`, slice #3
   `ControlEmulatorInstance` request, after the per-instance lease fence and device-session
   close. The failure semantics name the typed refusals: `emulator_control_busy` (fence),
   `emulator_control_unavailable` (no discovery binding) or `emulator_control_unsupported`
-  (provider without a control surface), `mumu_manager.control_exit` / `.control_errcode`
-  (tool failure with exit code), `mumu_manager.launch_error` (`launch_err_code != 0`) and
-  `mumu_manager.wait_timeout` (readiness deadline). See `contracts/emulator-control.md`.
+  (provider without a control surface), `mumu_manager_control_exit` / `_control_errcode`
+  (tool failure with exit code), `mumu_manager_launch_error` (`launch_err_code != 0`) and
+  `mumu_manager_wait_timeout` (readiness deadline). See `contracts/emulator-control.md`.
 - Unavailable (unsupported), evidence `mumu.manager`: `instance.create`, `instance.clone`,
   `instance.delete`, `instance.configure` and `snapshot.manage` are not driven by this Runtime;
   `application.control` and `adb.bridge` are not driven through `MuMuManager` (the instance is
@@ -174,21 +174,21 @@ profile without starting the daemon, was retired in Runtime v0.11.6.
 
 `RuntimeOperation::ControlEmulatorInstance { instance_alias, action: start|stop|restart }` is
 the only path that drives `control`. `ExecutionBackendProvider::control_instance` has a default
-body that refuses (`emulator_control.unsupported`); `ExecutionBackendRegistry` implements it for
+body that refuses (`emulator_control_support`); `ExecutionBackendRegistry` implements it for
 discovery-bound entries only, using the `MuMuManager.exe` path carried on the
-`DiscoveredInstanceBinding` (explicit entries refuse with `emulator_control.unavailable`, fixture
+`DiscoveredInstanceBinding` (explicit entries refuse with `emulator_control_binding`, fixture
 instances likewise). The device runner dispatches `control -v <index> launch|shutdown` (a
 restart is a Stop and then a Start, composed in the Host; Workflow #381 B) with a 60 s bound, treats a non-zero exit or an `{"errcode","errmsg"}` envelope with
 `errcode != 0` as a typed failure carrying the exit code and a 1 KiB stdout+stderr summary
 (`{"errcode": 0, "errmsg": ""}` is the observed success acknowledgment), then polls
 `info -v <index>` every second (10 s bound each) through a lax reader that tolerates the flat
 and the map shape and a stopped instance without `adb_port` / `player_state`; a poll whose
-bound expires (`mumu_manager.timeout`, observed while stopping) counts as no observation and
+bound expires (`mumu_manager_timeout`, observed while stopping) counts as no observation and
 polling continues until the deadline. Readiness: `is_process_started && is_android_started &&
 adb_port != 0` after `launch` (120 s), `!is_process_started` after `shutdown`
 (120 s, raised from 60 s because `info` may not answer for more than 30 s while stopping);
 `launch_err_code != 0` is a typed failure carrying `launch_err_msg`; the deadline is
-`mumu_manager.wait_timeout` carrying the last observation or `no observation`; `player_state`
+`mumu_manager_wait_timeout` carrying the last observation or `no observation`; `player_state`
 is recorded opaquely and never branched on. The vendor documents no return value, exit code or
 blocking behaviour for `control`, so the bounds are Runtime policy. No automatic restart exists:
 the scheduler and agents cannot issue the operation (`invalid_emulator_control_origin`). Cold

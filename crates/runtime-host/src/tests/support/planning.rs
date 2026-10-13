@@ -308,3 +308,30 @@ fn forward_projection_request(
     )
     .expect("forward projection request")
 }
+
+/// The outcome of a planning signal a test records directly (Workflow #378 A2-P): the
+/// registered code of the producer of its kind. A goal-missed signal is a deferred clock slot
+/// of a fixture task; detection signals are recorded only by the policy cycle, with a budget.
+fn planning_signal_outcome(
+    kind: PolicyPlanningSignalKind,
+) -> actingcommand_contract::outcome::Outcome {
+    use actingcommand_contract::outcome::Outcome;
+    match kind {
+        PolicyPlanningSignalKind::GoalMissed => Outcome::new(HostCode::ClockSlotDeferred)
+            .task_id("fixture.observe")
+            .alias(POLICY_INSTANCE_ALIAS)
+            .gate_code(HostCode::DispatchPausedInstance)
+            .occurrence_unix_ms(POLICY_NOW_UNIX_MS),
+        PolicyPlanningSignalKind::FeasibilityRed => Outcome::new(HostCode::StrategicFeasibilityRed),
+        PolicyPlanningSignalKind::TimelineReached => {
+            Outcome::new(HostCode::StrategicTimelineReached)
+        }
+        PolicyPlanningSignalKind::DriftPredicted => {
+            Outcome::new(HostCode::MaintenanceRecheckSuggested)
+        }
+        PolicyPlanningSignalKind::DetectionReserved
+        | PolicyPlanningSignalKind::DetectionQuotaExhausted => {
+            panic!("a detection signal is recorded only by the policy cycle")
+        }
+    }
+}

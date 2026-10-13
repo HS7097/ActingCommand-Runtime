@@ -530,7 +530,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             };
             *state.input_error.lock().unwrap() = Some(error.with_diagnostic(
                 DeviceErrorCategory::Native,
-                "device_registry.input.operation",
+                crate::codes::HostLocation::DeviceRegistryInputOperation.location(),
             ));
         }
         state.block_input.store(fail_report, Ordering::Release);

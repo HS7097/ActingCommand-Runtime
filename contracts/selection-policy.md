@@ -28,6 +28,12 @@ Schema version `actingcommand.selection-policy.v1`. One document holds:
 - `gates[]` — hard gates; a candidate whose gate predicate does not hold is
   rejected.
 - `scoring[]` — weighted terms.
+
+A gate's `gate_id` and a term's `term_id` are tokens: lowercase ASCII letters,
+digits, `_`, `.`, `:` and `-`, because the decision's reasons carry them as the
+outcome value `rule_id` (Workflow #378 A2-P). The document's own validation
+bounds them only by length; pack admission refuses another id (see
+[selection-graph.md](selection-graph.md), section Select step).
 - `selection` — the selection mode and the required count.
 - `tie_break[]` — the ordered tie-break keys applied after the score.
 
@@ -80,8 +86,8 @@ read one; score it through a lookup instead. That is a validation error.
 A key whose value is unknown for one candidate and known for the other orders
 the known candidate first, whichever direction the key declares: an unknown
 never stands in for a value, so it can never outrank one. The candidate's
-verdict records a `tie_break.unknown` reason naming the key and the reason it
-could not be read. Two unknowns under the same key are indistinguishable and
+verdict records a `tie_break_unknown` reason (its developer detail, which is not
+persisted, names the key and why it could not be read). Two unknowns under the same key are indistinguishable and
 fall through to the next key.
 
 If the two candidates on either side of the cut compare equal under the score

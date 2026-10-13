@@ -21,7 +21,7 @@ pub use actingcommand_contract::{
     PPOCR_MAX_DIAGNOSTIC_NODES, PPOCR_MAX_DIAGNOSTIC_REPORTS, PPOCR_MAX_ENVELOPE_BYTES,
     PPOCR_MAX_NODE_LOG_BYTES, PPOCR_MAX_REPORT_JSON_BYTES, PPOCR_MAX_RESPONSE_BYTES,
     PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic, PpocrDiagnostics,
-    PpocrNodePlacementDiagnostic, validate_ppocr_call_diagnostics,
+    PpocrNodePlacementDiagnostic, PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
 };
 pub use artifacts::*;
 pub use codes::VisionListingCode;
@@ -262,9 +262,9 @@ pub struct VisionRect {
 impl VisionRect {
     pub fn full_frame(frame: &VisionFrame) -> VisionFfiResult<Self> {
         let width = i32::try_from(frame.width)
-            .map_err(|_| VisionFfiError::fatal("vision-frame", "frame width exceeds i32 range"))?;
+            .map_err(|_| VisionFfiError::fatal("vision_frame", "frame width exceeds i32 range"))?;
         let height = i32::try_from(frame.height)
-            .map_err(|_| VisionFfiError::fatal("vision-frame", "frame height exceeds i32 range"))?;
+            .map_err(|_| VisionFfiError::fatal("vision_frame", "frame height exceeds i32 range"))?;
         Ok(Self {
             x: 0,
             y: 0,
@@ -636,7 +636,7 @@ fn validate_frame_pixels(
 ) -> VisionFfiResult<()> {
     if width == 0 || height == 0 {
         return Err(VisionFfiError::fatal(
-            "vision-frame",
+            "vision_frame",
             format!("frame dimensions must be non-zero: {width}x{height}"),
         ));
     }
@@ -650,13 +650,13 @@ fn validate_frame_pixels(
         .and_then(|pixels| pixels.checked_mul(pixel_format.bytes_per_pixel()))
         .ok_or_else(|| {
             VisionFfiError::fatal(
-                "vision-frame",
+                "vision_frame",
                 format!("frame dimensions overflow: {width}x{height}"),
             )
         })?;
     if pixel_len != expected {
         return Err(VisionFfiError::fatal(
-            "vision-frame",
+            "vision_frame",
             format!(
                 "frame pixel length mismatch for {width}x{height}: got {pixel_len}, expected {expected}"
             ),
@@ -668,7 +668,7 @@ fn validate_frame_pixels(
 fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> VisionFfiResult<()> {
     if rect.x < 0 || rect.y < 0 {
         return Err(VisionFfiError::fatal(
-            "vision-rect",
+            "vision_rect",
             format!(
                 "rect coordinates must be non-negative: ({}, {})",
                 rect.x, rect.y
@@ -677,7 +677,7 @@ fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> Visio
     }
     if rect.width <= 0 || rect.height <= 0 {
         return Err(VisionFfiError::fatal(
-            "vision-rect",
+            "vision_rect",
             format!(
                 "rect dimensions must be positive: {}x{}",
                 rect.width, rect.height
@@ -686,25 +686,25 @@ fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> Visio
     }
 
     let x = u32::try_from(rect.x)
-        .map_err(|_| VisionFfiError::fatal("vision-rect", "rect x cannot be converted to u32"))?;
+        .map_err(|_| VisionFfiError::fatal("vision_rect", "rect x cannot be converted to u32"))?;
     let y = u32::try_from(rect.y)
-        .map_err(|_| VisionFfiError::fatal("vision-rect", "rect y cannot be converted to u32"))?;
+        .map_err(|_| VisionFfiError::fatal("vision_rect", "rect y cannot be converted to u32"))?;
     let width = u32::try_from(rect.width).map_err(|_| {
-        VisionFfiError::fatal("vision-rect", "rect width cannot be converted to u32")
+        VisionFfiError::fatal("vision_rect", "rect width cannot be converted to u32")
     })?;
     let height = u32::try_from(rect.height).map_err(|_| {
-        VisionFfiError::fatal("vision-rect", "rect height cannot be converted to u32")
+        VisionFfiError::fatal("vision_rect", "rect height cannot be converted to u32")
     })?;
     let right = x
         .checked_add(width)
-        .ok_or_else(|| VisionFfiError::fatal("vision-rect", "rect x + width overflows u32"))?;
+        .ok_or_else(|| VisionFfiError::fatal("vision_rect", "rect x + width overflows u32"))?;
     let bottom = y
         .checked_add(height)
-        .ok_or_else(|| VisionFfiError::fatal("vision-rect", "rect y + height overflows u32"))?;
+        .ok_or_else(|| VisionFfiError::fatal("vision_rect", "rect y + height overflows u32"))?;
 
     if right > frame_width || bottom > frame_height {
         return Err(VisionFfiError::fatal(
-            "vision-rect",
+            "vision_rect",
             format!(
                 "rect {}x{} at ({}, {}) exceeds frame {}x{}",
                 width, height, x, y, frame_width, frame_height
@@ -733,7 +733,7 @@ fn validate_unit_score(score: f32, label: &str) -> VisionFfiResult<()> {
 fn invalid_response(message: impl Into<String>) -> VisionFfiError {
     VisionFfiError::fatal_with_code(
         VisionFfiErrorCode::InvalidResponse,
-        "vision-provider-response",
+        "vision_provider_response",
         message,
     )
 }
@@ -761,7 +761,7 @@ mod tests {
             .expect_err("bad frame rejected");
 
         assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
-        assert_eq!(err.module(), "vision-frame");
+        assert_eq!(err.module(), "vision_frame");
     }
 
     #[test]
@@ -783,7 +783,7 @@ mod tests {
         let err = request.validate().expect_err("oversized region rejected");
 
         assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
-        assert_eq!(err.module(), "vision-rect");
+        assert_eq!(err.module(), "vision_rect");
     }
 
     #[test]

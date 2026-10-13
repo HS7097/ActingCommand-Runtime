@@ -1222,7 +1222,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
         decision
             .reasons
             .iter()
-            .any(|reason| reason.code == "policy_activity_interval_active")
+            .any(|reason| reason.outcome.code().as_str() == "policy_activity_interval_active")
     }));
     clock.advance(599_000);
     let next = host
@@ -1239,7 +1239,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
             .unwrap()
             .reasons
             .iter()
-            .any(|reason| reason.code == "policy_budget_exhausted")
+            .any(|reason| reason.outcome.code().as_str() == "policy_budget_exhausted")
     );
     host.close().expect("close scheduled host");
 
@@ -1329,7 +1329,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
             .unwrap()
             .reasons
             .iter()
-            .any(|reason| reason.code == "feedback_stop_true")
+            .any(|reason| reason.outcome.code().as_str() == "feedback_stop_true")
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     restarted.close().expect("close recovered host");
