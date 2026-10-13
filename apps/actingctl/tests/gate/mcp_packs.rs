@@ -6,7 +6,9 @@
 //! envelope's `warnings` as its top-level member (D3), and both are the rows §4.12 requires: id,
 //! path and role, no package digest. The root is a temporary install root without slots
 //! (`<root>\actingd.config.json`, as mcp-serve reads it); no Runtime runs, and the CLI gets no
-//! `--state-root` (D5).
+//! `--state-root` (D5). Workflow #378 A5: the CLI line carries the outcome
+//! `package_bindings_reported` beside the document, which is the rest of the line, and each
+//! warning on either side is `{outcome}`.
 
 use crate::mcp_harness::{McpServer, accepted};
 use serde_json::{Value, json};
@@ -77,7 +79,8 @@ fn write_install_root(root: &Path) {
     .expect("write control.json");
 }
 
-/// `actingctl packs --root <root> <flags>`: its stdout JSON.
+/// `actingctl packs --root <root> <flags>`: its stdout JSON without the line's `outcome`, which is
+/// `package_bindings_reported`.
 fn cli_packs(root: &Path, flags: &[&str]) -> Value {
     let output = Command::new(env!("CARGO_BIN_EXE_actingctl"))
         .arg("packs")
@@ -91,12 +94,24 @@ fn cli_packs(root: &Path, flags: &[&str]) -> Value {
         "actingctl packs {flags:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let mut line: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "actingctl packs {flags:?} printed no JSON ({error}): {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    let outcome = line
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"));
+    let Some(outcome) = outcome else {
+        panic!("actingctl packs {flags:?} printed no outcome: {line}")
+    };
+    assert_eq!(
+        outcome["code"],
+        json!("package_bindings_reported"),
+        "actingctl packs {flags:?}: {outcome}"
+    );
+    line
 }
 
 /// The `result` of an accepted `ac_packs` call with the envelope's `warnings`, when there are
@@ -212,14 +227,20 @@ fn gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuratio
             .and_then(|document| document.remove("warnings"));
         assert_eq!(rows, expected, "actingctl packs {flags:?}");
         if warned {
-            // One unreadable binding: its row says readable false and one warning names it.
+            // One unreadable binding: its row says readable false and one warning names it, its
+            // outcome's values the path and the instance that binds it.
             let warnings = warnings.unwrap_or_else(|| panic!("no warnings for {missing}"));
             let named = warnings
                 .as_array()
                 .map(|warnings| {
                     warnings
                         .iter()
-                        .map(|warning| (warning["code"].clone(), warning["details"].clone()))
+                        .map(|warning| {
+                            (
+                                warning["outcome"]["code"].clone(),
+                                warning["outcome"]["values"].clone(),
+                            )
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();

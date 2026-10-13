@@ -12,9 +12,9 @@ use super::runtime::Connected;
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
-use crate::codes::ActingctlCode;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::diagnose::{self, DiagnoseRequest, Failure};
-use crate::events::CursorBinding;
+use crate::events::{CursorBinding, MAX_INTEGER};
 use actingcommand_contract::{RequestId, RunId, RuntimeInstanceStatus};
 use actingcommand_runtime_client::{ContainedRunState, RecentContainedRuns, RunKey, RunStatusMode};
 use serde_json::{Map, Value, json};
@@ -35,18 +35,14 @@ const WAIT_READ_RESERVE: Duration = Duration::from_secs(5);
 /// Time kept back from the call budget before another Runtime read starts.
 const READ_RESERVE: Duration = Duration::from_secs(1);
 
+/// Now, in Unix milliseconds; `clock_unavailable` when the system clock is before the Unix epoch
+/// or out of range.
 fn now_unix_ms() -> Result<u64, ToolError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
-        .ok_or_else(|| {
-            ToolError::new(
-                "runtime",
-                ActingctlCode::ClockUnavailable,
-                "the system clock is before the Unix epoch or out of range",
-            )
-        })
+        .ok_or_else(|| ToolError::new("runtime", ActingctlCode::ClockUnavailable))
 }
 
 /// The start of the default 24 h run window.
@@ -61,15 +57,12 @@ pub(super) fn latest_run(
     instance: &RuntimeInstanceStatus,
     since_unix_ms: u64,
 ) -> Result<RecentContainedRuns, ToolError> {
+    // The 25 s call budget left no time to read the runs of this instance.
     if Instant::now() + READ_RESERVE >= context.deadline {
-        return Err(ToolError::new(
-            "runtime",
-            ActingctlCode::CallBudgetExhausted,
-            format!(
-                "the 25 s call budget left no time to read the runs of {}",
-                instance.instance_alias()
-            ),
-        ));
+        return Err(
+            ToolError::new("runtime", ActingctlCode::CallBudgetExhausted)
+                .with(|outcome| outcome.alias(instance.instance_alias())),
+        );
     }
     connected
         .client
@@ -92,11 +85,9 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     // A job of this process that is not a run (a pause, a resume, an emulator control, a
     // stop, a Lab call) has no run status: its phase and, once it ended, its outcome.
     if let Some(job) = job.as_ref().filter(|job| job.kind != "run_pack") {
+        // Exactly one of handle and run_id.
         if arguments.string("run_id")?.is_some() {
-            return Err(invalid_argument(
-                "handle",
-                "or run_id: give exactly one of them",
-            ));
+            return Err(invalid_argument("handle", ArgumentProblem::Conflicting));
         }
         job.wait_until(wait_until, context.cancelled);
         return Ok(ToolSuccess::new(
@@ -106,26 +97,25 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     let key = match (handle, arguments.string("run_id")?) {
         (Some(handle), None) => RunKey::RequestId(
             serde_json::from_value::<RequestId>(json!(handle)).map_err(|_| {
+                // A job handle this MCP process does not hold: the process that started it
+                // ended, or it is another one's.
                 if handle.starts_with("correlation_") || handle.starts_with(lab::HANDLE_PREFIX) {
-                    ToolError::usage(
-                        ActingctlCode::HandleUnknown,
-                        "this job handle is not held by this MCP process: the process that started it ended, or it is another one's",
-                    )
+                    ToolError::usage(ActingctlCode::HandleUnknown)
                 } else {
-                    invalid_argument("handle", "must be a Runtime request_id or a job handle")
+                    // Neither a Runtime request_id nor a job handle.
+                    invalid_argument("handle", ArgumentProblem::NotRecognised)
                 }
             })?,
         ),
         (None, Some(run_id)) => RunKey::RunId(
             serde_json::from_value::<RunId>(json!(run_id))
-                .map_err(|_| invalid_argument("run_id", "must be a Runtime run_id"))?,
+                .map_err(|_| invalid_argument("run_id", ArgumentProblem::NotRecognised))?,
         ),
-        _ => {
-            return Err(invalid_argument(
-                "handle",
-                "or run_id: give exactly one of them",
-            ));
+        // Exactly one of handle and run_id.
+        (Some(_), Some(_)) => {
+            return Err(invalid_argument("handle", ArgumentProblem::Conflicting));
         }
+        (None, None) => return Err(invalid_argument("handle", ArgumentProblem::Required)),
     };
     let connected = context.runtime.connect()?;
     loop {
@@ -167,10 +157,10 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
             .string("task_id")?
             .map(|text| {
                 diagnose::parse_task_id(text)
-                    .ok_or_else(|| invalid_argument("task_id", "must be a Runtime task_id"))
+                    .ok_or_else(|| invalid_argument("task_id", ArgumentProblem::NotRecognised))
             })
             .transpose()?,
-        since_unix_ms: arguments.integer("since_unix_ms", 0, u64::MAX)?,
+        since_unix_ms: arguments.integer("since_unix_ms", 0, MAX_INTEGER)?,
     };
     let since_unix_ms = request
         .window(now_unix_ms()?)
@@ -203,22 +193,20 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
     })
 }
 
-/// A diagnosis failure as a tool error, with the CLI's codes.
+/// A diagnosis failure as a tool error, with the CLI's outcomes (an argument as
+/// `arguments_invalid`).
 fn diagnose_error(
     context: &ToolContext<'_>,
     connected: Option<&Connected>,
     failure: Failure,
 ) -> ToolError {
     match &failure {
-        Failure::SinceOutOfRange { oldest_unix_ms } => {
-            ToolError::usage(failure.code(), failure.message())
-                .with_detail("oldest_unix_ms", json!(oldest_unix_ms))
+        Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
+        Failure::SinceOutOfRange { .. } | Failure::Selector { .. } => {
+            ToolError::outcome("usage", failure.outcome())
         }
-        Failure::Usage | Failure::Selector { .. } => {
-            ToolError::usage(failure.code(), failure.message())
-        }
-        Failure::QueryInvalid(_) | Failure::CursorEncode(_) | Failure::Clock | Failure::Output => {
-            ToolError::new("runtime", failure.code(), failure.message())
+        Failure::QueryInvalid(_) | Failure::CursorEncode(_) | Failure::Clock => {
+            ToolError::outcome("runtime", failure.outcome())
         }
         Failure::Runtime(error) => match connected {
             Some(connected) => context.runtime.failure(connected, error),
@@ -236,7 +224,7 @@ impl Diagnosis {
     ) -> ToolOutcome {
         let mut kept = self.kept_all();
         loop {
-            let result = self.render(&kept, errors_page(kept.errors)?);
+            let result = self.render(&kept, errors_page(kept.errors)?, &tools::envelope);
             if tools::fits_success(&result) {
                 return Ok(ToolSuccess::new(result));
             }

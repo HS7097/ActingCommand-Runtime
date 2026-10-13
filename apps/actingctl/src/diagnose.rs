@@ -18,14 +18,21 @@
 //! generation, not the one it started with, also when the fixed entry started it with an
 //! inherited selection (the train 4 review ruling on MCP-11, applied to the stale `current`
 //! digest of a suspension lift reported on 10-13).
+//!
+//! Workflow #378 A5: the CLI line also carries `outcome` (`runtime_diagnosis_reported`, or the
+//! failure alone), and the report status (`suspended_report`) carries the outcome of a report
+//! that is unavailable or failed beside its data members.
 
 use crate::child::{self, Captured, ChildFailure};
-use crate::codes::ActingctlCode;
+use crate::cli_line;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::events::{self, CursorBinding};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::packs;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{Code, CodeStr};
+use actingcommand_contract::outcome::{
+    Category, CauseRelation, Code, CodeStr, Detail, Outcome, OutcomeEnvelope, RawSource,
+};
 use actingcommand_contract::{
     CommandPayload, DiagnosticOutcomePayload, EventActor, EventPayload, EventQuery, EventSource,
     EventType, InstalledProcess, InstanceId, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
@@ -41,10 +48,8 @@ use actingcommand_runtime_client::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
-use std::fmt;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::thread::{self, JoinHandle};
@@ -114,8 +119,11 @@ pub(crate) fn parse_task_id(text: &str) -> Option<TaskId> {
 
 /// Why a diagnosis was refused or failed.
 pub(crate) enum Failure {
-    /// A CLI flag is unknown, repeated, missing its value or malformed.
-    Usage,
+    /// A CLI flag is unknown, repeated, missing its value or malformed: the flag as given.
+    Argument {
+        argument: String,
+        problem: ArgumentProblem,
+    },
     SinceOutOfRange {
         oldest_unix_ms: u64,
     },
@@ -123,54 +131,43 @@ pub(crate) enum Failure {
         miss: SelectorMiss,
         selector: String,
     },
-    /// A query of the diagnosis could not be formed.
-    QueryInvalid(String),
-    /// The next cursor of the errors page could not be formed.
-    CursorEncode(String),
+    /// A query of the diagnosis could not be formed: the contract's refusal of it.
+    QueryInvalid(Code),
+    /// The next cursor of the errors page could not be formed: `cursor_encode_failed`.
+    CursorEncode(Outcome),
     Clock,
-    Output,
     Runtime(RuntimeClientError),
 }
 
 impl Failure {
-    /// The registered code. A CLI flag failure is `actingctl_usage_invalid`; MCP answers
-    /// `arguments_invalid` for its argument failures before any read.
-    pub(crate) fn code(&self) -> Code {
-        match self {
-            Self::Usage => ActingctlCode::ActingctlUsageInvalid.code(),
-            Self::SinceOutOfRange { .. } => ActingctlCode::SinceOutOfRange.code(),
-            Self::Selector { miss, .. } => miss.code(),
-            Self::QueryInvalid(_) => ActingctlCode::ErrorsQueryInvalid.code(),
-            Self::CursorEncode(_) => ActingctlCode::CursorEncodeFailed.code(),
-            Self::Clock => ActingctlCode::ClockUnavailable.code(),
-            Self::Output => ActingctlCode::ActingctlOutputFailed.code(),
-            Self::Runtime(error) => error.code(),
+    fn argument(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
+        Self::Argument {
+            argument: argument.as_ref().to_string_lossy().into_owned(),
+            problem,
         }
     }
 
-    pub(crate) fn message(&self) -> String {
+    /// The failure as an outcome (Workflow #378 A5). A CLI flag failure is
+    /// `actingctl_usage_invalid` with `argument` and `argument_problem` (MCP answers
+    /// `arguments_invalid` for its argument failures before any read); a window start too far
+    /// back is `since_out_of_range` with the oldest start allowed (`range_min`).
+    pub(crate) fn outcome(&self) -> Outcome {
         match self {
-            Self::Usage => USAGE.to_owned(),
-            Self::SinceOutOfRange { oldest_unix_ms } => {
-                format!("since_unix_ms reaches back at most 7 days, to {oldest_unix_ms}")
+            Self::Argument { argument, problem } => {
+                Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+                    .argument(argument.as_str())
+                    .argument_problem(*problem)
             }
-            Self::Selector { miss, selector } => miss.message(selector),
-            Self::QueryInvalid(reason) => format!("cannot form a diagnosis query: {reason}"),
-            Self::CursorEncode(reason) => format!("cannot form the next cursor: {reason}"),
-            Self::Clock => "the system clock is before the Unix epoch or out of range".to_owned(),
-            Self::Output => "failed to write JSON output".to_owned(),
-            Self::Runtime(error) => error.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for Failure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Usage => write!(formatter, "{}: {USAGE}", self.code()),
-            // The client error's own text leads with its code.
-            Self::Runtime(error) => fmt::Display::fmt(error, formatter),
-            _ => write!(formatter, "{}: {}", self.code(), self.message()),
+            Self::SinceOutOfRange { oldest_unix_ms } => {
+                Outcome::new(ActingctlCode::SinceOutOfRange).range_min(*oldest_unix_ms)
+            }
+            Self::Selector { miss, selector } => miss.outcome(selector),
+            Self::QueryInvalid(cause) => {
+                Outcome::new(ActingctlCode::ErrorsQueryInvalid).caused_by(Outcome::new(*cause))
+            }
+            Self::CursorEncode(outcome) => outcome.clone(),
+            Self::Clock => Outcome::new(ActingctlCode::ClockUnavailable),
+            Self::Runtime(error) => error.outcome(),
         }
     }
 }
@@ -185,8 +182,8 @@ pub(crate) fn now_unix_ms() -> Result<u64, Failure> {
 }
 
 /// The `actingd suspended` child of one diagnosis, started before the Runtime reads so that it
-/// runs beside them; or, when it cannot start, the report status that says why.
-pub(crate) struct SuspensionReport(Result<JoinHandle<Result<Captured, ChildFailure>>, Value>);
+/// runs beside them; or, when it cannot start, the outcome that says why.
+pub(crate) struct SuspensionReport(Result<JoinHandle<Result<Captured, ChildFailure>>, Outcome>);
 
 impl SuspensionReport {
     /// Starts `<program root>\runtime\actingcommand-actingd.exe suspended --config <config>` of
@@ -196,7 +193,7 @@ impl SuspensionReport {
     pub(crate) fn start(root: Option<&Path>, deadline: Instant) -> Self {
         let (program_root, config, installation) = match suspension_source(root) {
             Ok(source) => source,
-            Err(status) => return Self(Err(status)),
+            Err(outcome) => return Self(Err(outcome)),
         };
         let mut command = Command::new(program_root.join("runtime").join(ACTINGD));
         command.arg("suspended").arg("--config").arg(config);
@@ -208,7 +205,7 @@ impl SuspensionReport {
 }
 
 /// The program root, the configuration and the installation of the generation selected now; or
-/// the report status that says why there is none, with the codes `actingctl packs` answers.
+/// the outcome that says why there is none, with the outcomes `actingctl packs` answers.
 /// `packs::selected_config` reads an installed process's selection again from
 /// `install\active.json` as it is now (`packs::current_selection`), not the one the process holds
 /// from its start, which the fixed entry `<root>\runtime\actingctl.exe` may have handed it.
@@ -216,24 +213,15 @@ impl SuspensionReport {
 /// child reads anew at every call and whose folder is the program root.
 fn suspension_source(
     root: Option<&Path>,
-) -> Result<(PathBuf, PathBuf, Option<InstalledProcess>), Value> {
-    let unavailable = |code: Code, message: String| {
-        json!({
-            "status": "unavailable",
-            "code": code.as_str(),
-            "message": message,
-        })
-    };
-    let (installation, config) = packs::selected_config(root)
-        .map_err(|error| unavailable(error.code(), error.message().to_owned()))?;
+) -> Result<(PathBuf, PathBuf, Option<InstalledProcess>), Outcome> {
+    let (installation, config) = packs::selected_config(root).map_err(|error| error.outcome())?;
     let program_root = match &installation {
         Some(selected) => selected.program_root(),
-        None => config.parent().map(Path::to_path_buf).ok_or_else(|| {
-            unavailable(
-                ActingctlCode::InstallRootUnresolved.code(),
-                format!("the configuration {} has no folder", config.display()),
-            )
-        })?,
+        // A configuration without a folder.
+        None => config
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| Outcome::new(ActingctlCode::InstallRootUnresolved).path(&config))?,
     };
     Ok((program_root, config, installation))
 }
@@ -285,7 +273,7 @@ pub(crate) fn read(
         ..EventQuery::default()
     };
     let page_request = RuntimeEventQueryPageRequest::new(ERRORS_PAGE_LIMIT, None)
-        .map_err(|error| Failure::QueryInvalid(error.to_string()))?;
+        .map_err(|error| Failure::QueryInvalid(error.code()))?;
     let page = client
         .query_event_page(query.clone(), events::PROFILE, page_request)
         .map_err(Failure::Runtime)?;
@@ -328,6 +316,7 @@ pub(crate) fn read(
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
+        report_outcome: report.outcome,
         clock_slots: report.clock_slots,
         clock_slots_total: report.clock_slots_total,
         runs_grouped: group_runs(&grouped_runs, status.as_ref()),
@@ -455,7 +444,7 @@ fn relayed_failure_code(
         ..EventQuery::default()
     };
     let page_request = RuntimeEventQueryPageRequest::new(1, None)
-        .map_err(|error| Failure::QueryInvalid(error.to_string()))?;
+        .map_err(|error| Failure::QueryInvalid(error.code()))?;
     let page = client
         .query_event_page(query, events::PROFILE, page_request)
         .map_err(Failure::Runtime)?;
@@ -690,7 +679,7 @@ fn read_pages(
             return Ok(false);
         }
         let page_request = RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, None)
-            .map_err(|error| Failure::QueryInvalid(error.to_string()))?;
+            .map_err(|error| Failure::QueryInvalid(error.code()))?;
         let page = client
             .query_event_page(next.clone(), events::PROFILE, page_request)
             .map_err(Failure::Runtime)?;
@@ -773,7 +762,11 @@ pub(crate) struct Diagnosis {
     pub(crate) suspended: Vec<Value>,
     pub(crate) lift: Vec<Value>,
     pub(crate) report_warnings: Vec<Value>,
+    /// The report status's data members: `{status, …}`.
     pub(crate) report_status: Value,
+    /// The outcome of a report that is unavailable or failed (Workflow #378 A5), rendered into
+    /// the status as `outcome` in the frontend's detail.
+    pub(crate) report_outcome: Option<Outcome>,
     /// At most 10 clock-slot rows (#372 K3), refused and deferred first.
     pub(crate) clock_slots: Vec<Value>,
     /// The clock-slot rows in the window, kept or not.
@@ -815,8 +808,14 @@ impl Diagnosis {
     }
 
     /// The result with the first `kept` of each list and `errors_page` as the errors page;
-    /// each list cut short is marked `<list>_truncated`.
-    pub(crate) fn render(&self, kept: &Kept, errors_page: Value) -> Value {
+    /// each list cut short is marked `<list>_truncated`. `envelope` renders the report status's
+    /// outcome as the frontend writes outcomes (its detail).
+    pub(crate) fn render(
+        &self,
+        kept: &Kept,
+        errors_page: Value,
+        envelope: &dyn Fn(&Outcome) -> Value,
+    ) -> Value {
         let mut result = Map::new();
         if !self.instance.is_null() {
             result.insert("instance".to_owned(), self.instance.clone());
@@ -845,7 +844,11 @@ impl Diagnosis {
                 json!(self.clock_slots_total),
             );
         }
-        result.insert("suspended_report".to_owned(), self.report_status.clone());
+        let mut report_status = self.report_status.clone();
+        if let (Some(outcome), Value::Object(status)) = (&self.report_outcome, &mut report_status) {
+            status.insert("outcome".to_owned(), envelope(outcome));
+        }
+        result.insert("suspended_report".to_owned(), report_status);
         list_into(
             &mut result,
             "runs_grouped",
@@ -878,7 +881,12 @@ impl Diagnosis {
             match kept.checked_sub(1).map(|last| self.error_sequences[last]) {
                 Some(after) => Some(
                     RuntimeEventQueryCursor::new(self.snapshot, after, query, events::PROFILE)
-                        .map_err(|error| Failure::CursorEncode(error.to_string()))?,
+                        .map_err(|error| {
+                            Failure::CursorEncode(
+                                Outcome::new(ActingctlCode::CursorEncodeFailed)
+                                    .caused_by(Outcome::new(error.code())),
+                            )
+                        })?,
                 ),
                 None => None,
             }
@@ -897,7 +905,7 @@ impl Diagnosis {
         if let Some(cursor) = next.filter(|_| self.continuable) {
             let token = binding
                 .encode(&cursor)
-                .map_err(|error| Failure::CursorEncode(error.message()))?;
+                .map_err(|error| Failure::CursorEncode(error.outcome()))?;
             page.insert("next_cursor".to_owned(), json!(token));
         }
         page.insert("snapshot_ledger_position".to_owned(), json!(self.snapshot));
@@ -914,7 +922,8 @@ fn list_into(result: &mut Map<String, Value>, name: &str, items: &[Value], kept:
 }
 
 /// The report's rows for the diagnosed instance (every row without one), its report-level
-/// warnings, and its own status.
+/// warnings, and its own status: the status's data members, and the outcome of a report that is
+/// unavailable or failed.
 struct SuspensionRows {
     complete: bool,
     suspended: Vec<Value>,
@@ -922,8 +931,73 @@ struct SuspensionRows {
     repeating: Vec<Value>,
     warnings: Vec<Value>,
     status: Value,
+    outcome: Option<Outcome>,
     clock_slots: Vec<Value>,
     clock_slots_total: usize,
+}
+
+impl SuspensionRows {
+    /// No rows: a report that is `unavailable` (actingd suspended gave none) or `failed` (it gave
+    /// a failure report, or no JSON), with the data members of `status` and its outcome.
+    fn without_rows(status: Map<String, Value>, outcome: Outcome) -> Self {
+        Self {
+            complete: false,
+            suspended: Vec::new(),
+            lift: Vec::new(),
+            repeating: Vec::new(),
+            warnings: Vec::new(),
+            status: Value::Object(status),
+            outcome: Some(outcome),
+            clock_slots: Vec::new(),
+            clock_slots_total: 0,
+        }
+    }
+}
+
+/// The data members of a report status: `{status}`, and `exit_code` once the child exited.
+fn report_status(status: &str, exit_code: Option<Option<i32>>) -> Map<String, Value> {
+    let mut members = Map::new();
+    members.insert("status".to_owned(), json!(status));
+    if let Some(exit_code) = exit_code {
+        members.insert("exit_code".to_owned(), json!(exit_code));
+    }
+    members
+}
+
+/// The outcome actingd suspended's own failure report carries: its envelope (`outcome`) relayed
+/// unchanged, else the code it names (`code`). A fatal one is left to the relayed `report`, as a
+/// fatal link needs a fatal top and the diagnosis goes on.
+fn report_outcome(document: &Value) -> Option<Outcome> {
+    let relayed = match document
+        .get("outcome")
+        .and_then(|outcome| serde_json::from_value::<OutcomeEnvelope>(outcome.clone()).ok())
+    {
+        Some(envelope) => Some(envelope.into_outcome()),
+        None => document
+            .get("code")
+            .and_then(Value::as_str)
+            .map(Outcome::relayed),
+    };
+    relayed.filter(|outcome| outcome.category() != Category::Fatal)
+}
+
+/// The tail of actingd suspended's stderr as `foreign_other_error` evidence; `None` when it wrote
+/// nothing.
+fn stderr_evidence(stderr: &[u8]) -> Option<Outcome> {
+    let tail = stderr_tail(stderr);
+    (!tail.trim().is_empty()).then(|| {
+        Outcome::new(ContractCode::ForeignOtherError)
+            .raw_source(RawSource::Process)
+            .raw_text(tail)
+    })
+}
+
+/// `outcome` with the stderr evidence, when there is some, as a `related` link.
+fn with_stderr(outcome: Outcome, stderr: &[u8]) -> Outcome {
+    match stderr_evidence(stderr) {
+        Some(evidence) => outcome.link(CauseRelation::Related, evidence),
+        None => outcome,
+    }
 }
 
 /// Whether a report row names the instance, by its alias or its instance id; every row does
@@ -1004,47 +1078,33 @@ impl SuspensionReport {
         let instance = instance
             .as_ref()
             .map(|(alias, instance_id)| (*alias, instance_id));
-        let unavailable = |status: Value| SuspensionRows {
-            complete: false,
-            suspended: Vec::new(),
-            lift: Vec::new(),
-            repeating: Vec::new(),
-            warnings: Vec::new(),
-            status,
-            clock_slots: Vec::new(),
-            clock_slots_total: 0,
+        let unavailable = |outcome: Outcome| {
+            SuspensionRows::without_rows(report_status("unavailable", None), outcome)
         };
         let captured = match self.0.map(JoinHandle::join) {
-            Err(status) => return unavailable(status),
+            Err(outcome) => return unavailable(outcome),
             Ok(Err(_)) => {
-                return unavailable(json!({
-                    "status": "unavailable",
-                    "code": ActingctlCode::SuspendedReportReaderPanicked.as_str(),
-                }));
+                return unavailable(Outcome::new(ActingctlCode::SuspendedReportReaderPanicked));
             }
             Ok(Ok(Err(failure))) => {
-                let (code, message) = match failure {
-                    ChildFailure::Spawn(error) => {
-                        (ActingctlCode::SuspendedReportSpawnFailed, error.to_string())
+                let code = if failure.reader_panicked() {
+                    ActingctlCode::SuspendedReportReaderPanicked
+                } else {
+                    match failure {
+                        ChildFailure::Spawn(_) => ActingctlCode::SuspendedReportSpawnFailed,
+                        ChildFailure::Io(_) => ActingctlCode::SuspendedReportIoFailed,
+                        // Still running at the end of the call budget.
+                        ChildFailure::StillRunning => ActingctlCode::SuspendedReportTimeout,
                     }
-                    ChildFailure::Io(error) => {
-                        (ActingctlCode::SuspendedReportIoFailed, error.to_string())
-                    }
-                    ChildFailure::StillRunning => (
-                        ActingctlCode::SuspendedReportTimeout,
-                        "actingd suspended was still running at the end of the call budget"
-                            .to_owned(),
-                    ),
                 };
-                return unavailable(json!({
-                    "status": "unavailable",
-                    "code": code.as_str(),
-                    "message": message,
-                }));
+                let outcome = Outcome::new(code);
+                return unavailable(match failure.os_failure() {
+                    Some(cause) => outcome.caused_by(cause),
+                    None => outcome,
+                });
             }
             Ok(Ok(Ok(captured))) => captured,
         };
-        let stderr_tail = stderr_tail(&captured.stderr);
         let exit_code = captured.status.code();
         let document = serde_json::from_slice::<Value>(captured.stdout.trim_ascii());
         match document {
@@ -1062,16 +1122,17 @@ impl SuspensionReport {
                     (Some(report), Some(located)) => same_directory(report, located),
                     _ => false,
                 };
+                // actingd suspended read another state root (`other_root`) than the one the
+                // Runtime reads go to (`state_root`): its rows are left out.
                 if !same_root {
-                    return unavailable(json!({
-                        "status": "unavailable",
-                        "code": ActingctlCode::SuspendedReportStateRootMismatch.as_str(),
-                        "message": "actingd suspended read another state root than the one the Runtime reads go to; its rows are left out",
-                        "details": {
-                            "report_state_root": report_state_root.map(|path| path.display().to_string()),
-                            "state_root": state_root.map(|path| path.display().to_string()),
-                        },
-                    }));
+                    let mut outcome = Outcome::new(ActingctlCode::SuspendedReportStateRootMismatch);
+                    if let Some(located) = state_root {
+                        outcome = outcome.state_root(located);
+                    }
+                    if let Some(report) = &report_state_root {
+                        outcome = outcome.other_root(report);
+                    }
+                    return unavailable(outcome);
                 }
                 let rows = |key: &str| {
                     document
@@ -1105,24 +1166,35 @@ impl SuspensionReport {
                         "status": "ok",
                         "through_sequence": document.get("through_sequence"),
                     }),
+                    outcome: None,
                     clock_slots,
                     clock_slots_total,
                 }
             }
-            // actingd's own failure document, as it printed it.
-            Ok(document) => unavailable(json!({
-                "status": "failed",
-                "exit_code": exit_code,
-                "report": document,
-                "stderr_tail": stderr_tail,
-            })),
-            Err(error) => unavailable(json!({
-                "status": "failed",
-                "code": ActingctlCode::SuspendedReportUnreadable.as_str(),
-                "message": format!("actingd suspended printed no JSON report: {error}"),
-                "exit_code": exit_code,
-                "stderr_tail": stderr_tail,
-            })),
+            // actingd's own failure document, as it printed it (`report`):
+            // `suspended_report_failed`, caused by the outcome the document carries.
+            Ok(document) => {
+                let outcome = Outcome::new(ActingctlCode::SuspendedReportFailed);
+                let outcome = match report_outcome(&document) {
+                    Some(cause) => outcome.caused_by(cause),
+                    None => outcome,
+                };
+                let mut status = report_status("failed", Some(exit_code));
+                status.insert("report".to_owned(), document);
+                SuspensionRows::without_rows(status, with_stderr(outcome, &captured.stderr))
+            }
+            // No JSON report: the decoder's refusal is the cause.
+            Err(error) => SuspensionRows::without_rows(
+                report_status("failed", Some(exit_code)),
+                with_stderr(
+                    Outcome::new(ActingctlCode::SuspendedReportUnreadable).caused_by(
+                        Outcome::new(ContractCode::ForeignDataError)
+                            .raw_source(RawSource::Json)
+                            .raw_text(error.to_string()),
+                    ),
+                    &captured.stderr,
+                ),
+            ),
         }
     }
 }
@@ -1136,17 +1208,22 @@ fn stderr_tail(stderr: &[u8]) -> String {
     text[start..].to_owned()
 }
 
-/// Runs `diagnose`; `None` leaves every other command to the CLI, unchanged.
+/// Runs `diagnose`; `None` leaves every other command to the CLI, unchanged. One result line on
+/// stdout (Workflow #378 A5): the diagnosis with `runtime_diagnosis_reported`, or `{outcome}`
+/// with the failure (a flag failure's developer line adds the usage) and exit 1.
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "diagnose" {
         return None;
     }
-    Some(match run(arguments).and_then(|output| print(&output)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failure) => {
-            eprintln!("FATAL actingctl: {failure}");
-            ExitCode::FAILURE
+    Some(match run(arguments) {
+        Ok(diagnosis) => cli_line::success(
+            cli_line::members(diagnosis, "diagnosis"),
+            &Outcome::new(ActingctlCode::RuntimeDiagnosisReported),
+        ),
+        Err(failure @ Failure::Argument { .. }) => {
+            cli_line::failure(&failure.outcome(), Some(USAGE))
         }
+        Err(failure) => cli_line::failure(&failure.outcome(), None),
     })
 }
 
@@ -1176,11 +1253,17 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
         generation: 1,
     };
     let errors_page = diagnosis.errors_page(&query, binding, diagnosis.errors.len())?;
-    Ok(diagnosis.render(&diagnosis.kept_all(), errors_page))
+    let detail = cli_line::detail().unwrap_or(Detail::Full);
+    Ok(
+        diagnosis.render(&diagnosis.kept_all(), errors_page, &|outcome: &Outcome| {
+            cli_line::outcome_value(outcome, detail)
+        }),
+    )
 }
 
 /// `--state-root` (required), `--root` and the flags of §4.8, each at most once and with a
-/// value; any other flag, a repeated one or a malformed value is `actingctl_usage_invalid`.
+/// value; any other flag, a repeated one or a malformed value is `actingctl_usage_invalid` with
+/// the flag (`argument`) and what is wrong with it (`argument_problem`).
 fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, DiagnoseRequest), Failure> {
     let mut state_root = None;
     let mut root = None;
@@ -1189,43 +1272,43 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, DiagnoseRe
     let mut since = None;
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
-        let slot = match flag.to_str() {
-            Some("--state-root") => &mut state_root,
-            Some("--root") => &mut root,
-            Some("--instance") => &mut instance,
-            Some("--task-id") => &mut task_id,
-            Some("--since-unix-ms") => &mut since,
-            _ => return Err(Failure::Usage),
+        let (name, slot) = match flag.to_str() {
+            Some(name @ "--state-root") => (name, &mut state_root),
+            Some(name @ "--root") => (name, &mut root),
+            Some(name @ "--instance") => (name, &mut instance),
+            Some(name @ "--task-id") => (name, &mut task_id),
+            Some(name @ "--since-unix-ms") => (name, &mut since),
+            Some(_) => return Err(Failure::argument(flag, ArgumentProblem::Unknown)),
+            None => return Err(Failure::argument(flag, ArgumentProblem::NotUtf8)),
         };
         let value = rest
             .next()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.trim().is_empty())
-            .ok_or(Failure::Usage)?;
+            .ok_or_else(|| Failure::argument(name, ArgumentProblem::ValueMissing))?
+            .to_str()
+            .ok_or_else(|| Failure::argument(name, ArgumentProblem::NotUtf8))?;
+        if value.trim().is_empty() {
+            return Err(Failure::argument(name, ArgumentProblem::ValueMissing));
+        }
         if slot.replace(value.to_owned()).is_some() {
-            return Err(Failure::Usage);
+            return Err(Failure::argument(name, ArgumentProblem::Repeated));
         }
     }
     let request = DiagnoseRequest {
         instance,
         task_id: task_id
-            .map(|text| parse_task_id(&text).ok_or(Failure::Usage))
+            .map(|text| {
+                parse_task_id(&text)
+                    .ok_or_else(|| Failure::argument("--task-id", ArgumentProblem::NotRecognised))
+            })
             .transpose()?,
         since_unix_ms: since
-            .map(|text| text.parse::<u64>().map_err(|_| Failure::Usage))
+            .map(|text| {
+                text.parse::<u64>()
+                    .map_err(|_| Failure::argument("--since-unix-ms", ArgumentProblem::WrongType))
+            })
             .transpose()?,
     };
-    Ok((
-        PathBuf::from(state_root.ok_or(Failure::Usage)?),
-        root.map(PathBuf::from),
-        request,
-    ))
-}
-
-fn print(output: &Value) -> Result<(), Failure> {
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, output).map_err(|_| Failure::Output)?;
-    writer.write_all(b"\n").map_err(|_| Failure::Output)?;
-    writer.flush().map_err(|_| Failure::Output)
+    let state_root =
+        state_root.ok_or_else(|| Failure::argument("--state-root", ArgumentProblem::Required))?;
+    Ok((PathBuf::from(state_root), root.map(PathBuf::from), request))
 }

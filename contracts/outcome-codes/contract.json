@@ -211,7 +211,8 @@
         "raw_text_sensitivity": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "exit_code": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -338,7 +339,9 @@
         "host_halted": "optional",
         "holder_id": "optional",
         "lease_id": "optional",
-        "retry_after_ms": "optional"
+        "retry_after_ms": "optional",
+        "state_root": "optional",
+        "mcp_blocker": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -422,7 +425,8 @@
         "host_halted": "optional",
         "holder_id": "optional",
         "lease_id": "optional",
-        "retry_after_ms": "optional"
+        "retry_after_ms": "optional",
+        "instance_selector": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1726,7 +1730,8 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "path": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1744,7 +1749,8 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "path": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3115,7 +3121,8 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "package_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -14614,7 +14621,8 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "mcp_blocker": "optional"
       },
       "review": "pending",
       "status": "active",

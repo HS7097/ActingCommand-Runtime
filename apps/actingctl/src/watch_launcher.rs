@@ -6,23 +6,32 @@
 //! --from-task` with `CREATE_NO_WINDOW`, appends the tick's stderr to
 //! `<root>\watchdog\watchdog.log` and returns the tick's exit code to Task Scheduler. It reads
 //! no slot material, takes no slot occupancy and decides nothing (`contracts/runtime-watchdog.md`).
-//! While acsetup holds the installation writer lock it does nothing at all; otherwise it holds
-//! that lock shared for the tick, so acsetup cannot replace this program or the fixed entry
-//! while a tick runs.
+//! While acsetup holds the installation writer lock it does nothing at all (exit 0); otherwise
+//! it holds that lock shared for the tick, so acsetup cannot replace this program or the fixed
+//! entry while a tick runs.
+//!
+//! Workflow #378 A5 (model v2.2 §7.5, §7.6): the tick's exit (0, 1 or 2) passes through
+//! unchanged. The launcher's own failures are registered codes (`watchdog_launcher_misplaced`,
+//! `watchdog_launcher_log_unavailable`, `watchdog_launcher_writer_lock_failed`,
+//! `watchdog_launcher_spawn_failed`), written as the log line
+//! `ERROR actingwatch: <code> <path>: <os error text>` when the log is open, and exit 1.
 
 #![windows_subsystem = "windows"]
 #![forbid(unsafe_code)]
 
+// The registry, for the launcher's own codes (never a literal spelling).
+#[allow(dead_code)]
+#[path = "codes.rs"]
+mod codes;
+
+use codes::ActingctlCode;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The launcher's own exit codes; every other code is the tick's.
-const MISPLACED: i32 = 20;
-const NO_WATCHDOG_DIRECTORY: i32 = 21;
-const CANNOT_RUN: i32 = 22;
-const WRITER_LOCK_FAILED: i32 = 23;
+/// The exit of every launcher failure: an error (model §7.6).
+const FAILED: i32 = 1;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -31,15 +40,15 @@ fn main() {
 }
 
 fn run() -> i32 {
+    // Not `<root>\tools\actingwatch.exe`: no root, so no log either.
     let Some(root) = install_root() else {
-        return MISPLACED;
+        return failed(None, ActingctlCode::WatchdogLauncherMisplaced, None);
     };
-    let Ok(mut log) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(root.join("watchdog").join("watchdog.log"))
-    else {
-        return NO_WATCHDOG_DIRECTORY;
+    let log_path = root.join("watchdog").join("watchdog.log");
+    let mut log = match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(log) => log,
+        // The log is what cannot be opened: nowhere to write the line.
+        Err(_) => return failed(None, ActingctlCode::WatchdogLauncherLogUnavailable, None),
     };
     let writer = root.join("install").join("writer.lock");
     let _writer = match File::open(&writer) {
@@ -48,16 +57,32 @@ fn run() -> i32 {
             // acsetup is installing, upgrading or configuring: this tick does nothing.
             Err(TryLockError::WouldBlock) => return 0,
             Err(TryLockError::Error(error)) => {
-                return failed(&mut log, WRITER_LOCK_FAILED, &writer, &error);
+                return failed(
+                    Some(&mut log),
+                    ActingctlCode::WatchdogLauncherWriterLockFailed,
+                    Some((writer.as_path(), error.to_string())),
+                );
             }
         },
         Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return failed(&mut log, WRITER_LOCK_FAILED, &writer, &error),
+        Err(error) => {
+            return failed(
+                Some(&mut log),
+                ActingctlCode::WatchdogLauncherWriterLockFailed,
+                Some((writer.as_path(), error.to_string())),
+            );
+        }
     };
     let entry = root.join("runtime").join("actingctl.exe");
     let stderr = match log.try_clone() {
         Ok(stderr) => stderr,
-        Err(error) => return failed(&mut log, CANNOT_RUN, &entry, &error),
+        Err(error) => {
+            return failed(
+                Some(&mut log),
+                ActingctlCode::WatchdogLauncherSpawnFailed,
+                Some((entry.as_path(), error.to_string())),
+            );
+        }
     };
     let mut command = Command::new(&entry);
     command
@@ -74,8 +99,20 @@ fn run() -> i32 {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     match command.status() {
-        Ok(status) => status.code().unwrap_or(CANNOT_RUN),
-        Err(error) => failed(&mut log, CANNOT_RUN, &entry, &error),
+        // The tick's own exit: 0, 1 or 2 by its decision's category.
+        Ok(status) => match status.code() {
+            Some(exit) => exit,
+            None => failed(
+                Some(&mut log),
+                ActingctlCode::WatchdogLauncherSpawnFailed,
+                Some((entry.as_path(), status.to_string())),
+            ),
+        },
+        Err(error) => failed(
+            Some(&mut log),
+            ActingctlCode::WatchdogLauncherSpawnFailed,
+            Some((entry.as_path(), error.to_string())),
+        ),
     }
 }
 
@@ -111,13 +148,20 @@ fn plain_path(path: &Path) -> PathBuf {
     }
 }
 
-fn failed(log: &mut File, code: i32, path: &Path, error: &std::io::Error) -> i32 {
-    let verb = if code == CANNOT_RUN { "run" } else { "lock" };
-    // The exit code is the report; a log that refuses the line changes nothing more.
-    let _ = writeln!(
-        log,
-        "ERROR actingwatch: cannot {verb} {}: {error}",
-        path.display()
-    );
-    code
+/// A launcher failure: the line `ERROR actingwatch: <code> <path>: <os error text>` when the
+/// log is open, and exit 1. The exit is the report; a log that refuses the line changes
+/// nothing more.
+fn failed(log: Option<&mut File>, failure: ActingctlCode, at: Option<(&Path, String)>) -> i32 {
+    if let Some(log) = log {
+        let line = match at {
+            Some((path, text)) => format!(
+                "ERROR actingwatch: {} {}: {text}",
+                failure.as_str(),
+                path.display()
+            ),
+            None => format!("ERROR actingwatch: {}", failure.as_str()),
+        };
+        let _ = writeln!(log, "{line}");
+    }
+    FAILED
 }

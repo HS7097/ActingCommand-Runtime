@@ -17,10 +17,11 @@
 //! `next_cursor` one call prints always answers `cursor_invalid` in the next call, by design;
 //! `last_sequence` stays valid across calls and Runtime restarts.
 
-use crate::codes::ActingctlCode;
+use crate::cli_line;
+use crate::codes::{self, ActingctlCode};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSeverity, EventSource, EventType, InstanceId,
     LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedEvent, ProjectionPayload,
@@ -33,7 +34,6 @@ use serde_json::{Map, Value, json};
 use std::collections::hash_map::RandomState;
 use std::ffi::OsString;
 use std::hash::BuildHasher;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{self, ExitCode};
 use std::thread;
@@ -79,6 +79,10 @@ pub(crate) const DEFAULT_LIMIT: u16 = 20;
 pub(crate) const CLI_MAX_LIMIT: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
 /// The longest wait for rows, CLI and MCP alike.
 pub(crate) const MAX_WAIT_S: u64 = 20;
+/// The largest value an unbounded integer parameter (a time, a sequence) takes, here and in the
+/// other commands: an outcome carries an argument's range as i64 values (`range_max`,
+/// Workflow #378 A5), and no time or sequence comes near it.
+pub(crate) const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type>] [--exclude-event-types <type,...>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
@@ -116,8 +120,10 @@ impl Request {
     }
 }
 
-/// What is wrong with one argument or flag. Its text is only the developer message beside the
-/// usage code (`argument <field> <problem>`); the code is decided by the frontend.
+/// What is wrong with one argument or flag. It is the value `argument_problem` (`token`), with
+/// `range_min` and `range_max` for a range (`range`); its text is only the developer line beside
+/// the usage code (`argument <field> <problem>`). The code is decided by the frontend:
+/// `actingctl_usage_invalid` on the CLI, `arguments_invalid` in MCP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArgumentProblem {
     /// Not a parameter of `actingctl events` / `ac_events`.
@@ -172,6 +178,33 @@ impl std::fmt::Display for ArgumentProblem {
     }
 }
 
+impl ArgumentProblem {
+    /// The problem's token of the vocabulary `argument_problem`.
+    pub(crate) const fn token(self) -> codes::ArgumentProblem {
+        match self {
+            Self::UnknownArgument | Self::UnknownFlag => codes::ArgumentProblem::Unknown,
+            Self::NotUtf8 => codes::ArgumentProblem::NotUtf8,
+            Self::ValueMissing => codes::ArgumentProblem::ValueMissing,
+            Self::GivenTwice => codes::ArgumentProblem::Repeated,
+            Self::Required => codes::ArgumentProblem::Required,
+            Self::NotText | Self::NotUnsigned => codes::ArgumentProblem::WrongType,
+            Self::OutOfRange { .. } => codes::ArgumentProblem::OutOfRange,
+            Self::NotA(_) | Self::DetailUnknown | Self::NotEventTypes => {
+                codes::ArgumentProblem::NotRecognised
+            }
+            Self::CursorWithAfterSequence => codes::ArgumentProblem::Conflicting,
+        }
+    }
+
+    /// The range an out-of-range value had to be in: `(range_min, range_max)`.
+    pub(crate) const fn range(self) -> Option<(u64, u64)> {
+        match self {
+            Self::OutOfRange { minimum, maximum } => Some((minimum, maximum)),
+            _ => None,
+        }
+    }
+}
+
 /// Why `actingctl events` / `ac_events` gives no page.
 #[derive(Debug)]
 pub(crate) enum EventsError {
@@ -190,8 +223,9 @@ pub(crate) enum EventsError {
     Query(SanitizationError),
     /// The cursor belongs to another query, Runtime connection or process.
     CursorInvalid,
-    /// The next page's cursor could not be formed.
-    CursorEncode(String),
+    /// The next page's cursor could not be formed: the contract's refusal of it, when it gave
+    /// one (`None`: the Runtime's cursor carries no query fingerprint).
+    CursorEncode(Option<Code>),
     /// The Runtime read failed.
     Runtime(RuntimeClientError),
 }
@@ -204,15 +238,41 @@ impl EventsError {
         }
     }
 
-    /// The message beside the code; for an argument, "argument <field> <problem>".
-    pub(crate) fn message(&self) -> String {
+    /// The failure as an outcome (Workflow #378 A5). An argument or flag is the CLI's
+    /// `actingctl_usage_invalid` with `argument`, `argument_problem` and, for a range,
+    /// `range_min` and `range_max`; MCP answers `arguments_invalid` with the same values.
+    pub(crate) fn outcome(&self) -> Outcome {
         match self {
-            Self::Argument { field, problem } => format!("argument {field} {problem}"),
-            Self::Selector { miss, selector } => miss.message(selector),
-            Self::Query(error) => format!("the Runtime refuses this event query: {error}"),
-            Self::CursorInvalid => "this cursor belongs to another query, Runtime connection or process; read again from the first page, or from after_sequence, without a cursor".to_owned(),
-            Self::CursorEncode(reason) => format!("cannot form the next cursor: {reason}"),
-            Self::Runtime(error) => error.to_string(),
+            Self::Argument { field, problem } => {
+                let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+                    .argument(field.as_str())
+                    .argument_problem(problem.token());
+                match problem.range() {
+                    Some((minimum, maximum)) => outcome.range_min(minimum).range_max(maximum),
+                    None => outcome,
+                }
+            }
+            Self::Selector { miss, selector } => miss.outcome(selector),
+            Self::Query(error) => Outcome::new(error.code()),
+            Self::CursorInvalid => Outcome::new(ActingctlCode::CursorInvalid),
+            Self::CursorEncode(cause) => {
+                let outcome = Outcome::new(ActingctlCode::CursorEncodeFailed);
+                match cause {
+                    Some(cause) => outcome.caused_by(Outcome::new(*cause)),
+                    None => outcome,
+                }
+            }
+            Self::Runtime(error) => error.outcome(),
+        }
+    }
+}
+
+/// The developer line's text of an argument or flag failure: "argument <field> <problem>".
+impl std::fmt::Display for EventsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Argument { field, problem } => write!(formatter, "argument {field} {problem}"),
+            other => write!(formatter, "{}", other.outcome()),
         }
     }
 }
@@ -255,7 +315,7 @@ pub(crate) fn parse(
             )
         })?;
     let wait = Duration::from_secs(integer(arguments, "wait_s", 0, MAX_WAIT_S)?.unwrap_or(0));
-    let after_sequence = integer(arguments, "after_sequence", 0, u64::MAX - 1)?;
+    let after_sequence = integer(arguments, "after_sequence", 0, MAX_INTEGER)?;
     let cursor = text(arguments, "cursor")?.map(str::to_owned);
     if cursor.is_some() && after_sequence.is_some() {
         return Err(EventsError::argument(
@@ -285,9 +345,9 @@ pub(crate) fn parse(
     };
     let filters = EventQuery {
         view: typed::<LedgerView>(arguments, "view", "a ledger view")?,
-        from_timestamp_unix_ms: integer(arguments, "since_unix_ms", 0, u64::MAX)?,
-        to_timestamp_unix_ms: integer(arguments, "until_unix_ms", 0, u64::MAX)?,
-        to_sequence: integer(arguments, "through_sequence", 0, u64::MAX)?,
+        from_timestamp_unix_ms: integer(arguments, "since_unix_ms", 0, MAX_INTEGER)?,
+        to_timestamp_unix_ms: integer(arguments, "until_unix_ms", 0, MAX_INTEGER)?,
+        to_sequence: integer(arguments, "through_sequence", 0, MAX_INTEGER)?,
         event_type: typed::<EventType>(arguments, "event_type", "an event type")?,
         exclude_event_types,
         minimum_severity: typed::<EventSeverity>(arguments, "min_severity", "a severity")?,
@@ -372,11 +432,7 @@ impl CursorBinding {
             .and_then(Value::as_str)
             .and_then(|fingerprint| fingerprint.strip_prefix("sha256:"))
             .map(str::to_owned)
-            .ok_or_else(|| {
-                EventsError::CursorEncode(
-                    "the Runtime cursor carries no query fingerprint".to_owned(),
-                )
-            })?;
+            .ok_or(EventsError::CursorEncode(None))?;
         Ok(format!(
             "v1.{:016x}.{}.{}.{}.{fingerprint}",
             self.session,
@@ -431,7 +487,7 @@ impl Page {
             &self.query,
             PROFILE,
         )
-        .map_err(|error| EventsError::CursorEncode(error.to_string()))
+        .map_err(|error| EventsError::CursorEncode(Some(error.code())))
     }
 
     /// Where the Runtime's next page starts; `None` once the snapshot is read to its end.
@@ -584,77 +640,27 @@ pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
     Value::Object(row)
 }
 
-/// `actingctl events …` when the first argument is `events`: one page as one line of JSON on
-/// stdout, or `FATAL actingctl: <code>: <message>` on stderr and exit 1.
+/// `actingctl events …` when the first argument is `events`: one result line on stdout
+/// (Workflow #378 A5), the page with `runtime_events_reported`, or `{outcome}` with the failure
+/// (an argument failure's developer line adds the usage) and exit 1.
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "events" {
         return None;
     }
-    let printed = run_cli(&arguments[1..]).and_then(|page| {
-        let mut stdout = io::stdout().lock();
-        serde_json::to_writer(&mut stdout, &page)
-            .map_err(io::Error::from)
-            .and_then(|()| stdout.write_all(b"\n"))
-            .and_then(|()| stdout.flush())
-            .map_err(|error| CliError::Output(error.to_string()))
-    });
-    Some(match printed {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("FATAL actingctl: {error}");
-            ExitCode::FAILURE
-        }
+    Some(match run_cli(&arguments[1..]) {
+        Ok(page) => cli_line::success(
+            cli_line::members(page, "events"),
+            &Outcome::new(ActingctlCode::RuntimeEventsReported),
+        ),
+        Err(error @ EventsError::Argument { .. }) => cli_line::failure(
+            &error.outcome(),
+            Some(format!("{error}\n{CLI_USAGE}").as_str()),
+        ),
+        Err(error) => cli_line::failure(&error.outcome(), None),
     })
 }
 
-enum CliError {
-    Events(EventsError),
-    Output(String),
-}
-
-impl From<EventsError> for CliError {
-    fn from(error: EventsError) -> Self {
-        Self::Events(error)
-    }
-}
-
-impl std::fmt::Display for CliError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            // The client error's own text leads with its code.
-            Self::Events(EventsError::Runtime(error)) => std::fmt::Display::fmt(error, formatter),
-            Self::Events(error @ EventsError::Argument { .. }) => {
-                write!(
-                    formatter,
-                    "{}: {}\n{CLI_USAGE}",
-                    cli_code(error),
-                    error.message()
-                )
-            }
-            Self::Events(error) => write!(formatter, "{}: {}", cli_code(error), error.message()),
-            Self::Output(reason) => write!(
-                formatter,
-                "{}: cannot write the page to stdout: {reason}",
-                ActingctlCode::ActingctlOutputFailed.code()
-            ),
-        }
-    }
-}
-
-/// The code of a CLI failure: argument errors are actingctl's usage code (the MCP tool answers
-/// `arguments_invalid` for them), the others the same codes as the MCP tool.
-fn cli_code(error: &EventsError) -> Code {
-    match error {
-        EventsError::Argument { .. } => ActingctlCode::ActingctlUsageInvalid.code(),
-        EventsError::Selector { miss, .. } => miss.code(),
-        EventsError::Query(error) => error.code(),
-        EventsError::CursorInvalid => ActingctlCode::CursorInvalid.code(),
-        EventsError::CursorEncode(_) => ActingctlCode::CursorEncodeFailed.code(),
-        EventsError::Runtime(error) => error.code(),
-    }
-}
-
-fn run_cli(arguments: &[OsString]) -> Result<Value, CliError> {
+fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
     let (state_root, parameters) = cli_parameters(arguments)?;
     let request = parse(&parameters, CLI_MAX_LIMIT)?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
@@ -761,4 +767,78 @@ pub(crate) fn process_session() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
     RandomState::new().hash_one((process::id(), started))
+}
+
+// Test-only: Workflow #378 A5, an argument failure of `events` as an outcome.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::outcome::Category;
+
+    #[test]
+    fn each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values() {
+        let cases = [
+            (ArgumentProblem::UnknownArgument, "unknown", None),
+            (ArgumentProblem::UnknownFlag, "unknown", None),
+            (ArgumentProblem::NotUtf8, "not_utf8", None),
+            (ArgumentProblem::ValueMissing, "value_missing", None),
+            (ArgumentProblem::GivenTwice, "repeated", None),
+            (ArgumentProblem::Required, "required", None),
+            (ArgumentProblem::NotText, "wrong_type", None),
+            (ArgumentProblem::NotUnsigned, "wrong_type", None),
+            (
+                ArgumentProblem::OutOfRange {
+                    minimum: 1,
+                    maximum: 256,
+                },
+                "out_of_range",
+                Some((1_u64, 256_u64)),
+            ),
+            (
+                ArgumentProblem::NotA("a ledger view"),
+                "not_recognised",
+                None,
+            ),
+            (ArgumentProblem::DetailUnknown, "not_recognised", None),
+            (ArgumentProblem::NotEventTypes, "not_recognised", None),
+            (
+                ArgumentProblem::CursorWithAfterSequence,
+                "conflicting",
+                None,
+            ),
+        ];
+        for (problem, token, range) in cases {
+            let outcome = EventsError::argument("limit", problem).outcome();
+            assert!(
+                outcome.is(ActingctlCode::ActingctlUsageInvalid),
+                "{problem:?}: {outcome}"
+            );
+            assert_eq!(
+                outcome.category(),
+                Category::Error,
+                "{problem:?}: {outcome}"
+            );
+            assert_eq!(
+                outcome.value("argument"),
+                Some(&json!("limit")),
+                "{problem:?}: {outcome}"
+            );
+            assert_eq!(
+                outcome.value("argument_problem"),
+                Some(&json!(token)),
+                "{problem:?}: {outcome}"
+            );
+            assert_eq!(
+                (
+                    outcome.value("range_min").cloned(),
+                    outcome.value("range_max").cloned()
+                ),
+                (
+                    range.map(|(minimum, _)| json!(minimum)),
+                    range.map(|(_, maximum)| json!(maximum))
+                ),
+                "{problem:?}: {outcome}"
+            );
+        }
+    }
 }

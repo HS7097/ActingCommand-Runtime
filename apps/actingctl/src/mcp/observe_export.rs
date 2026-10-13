@@ -29,13 +29,9 @@ pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>)
         .client
         .observe_readonly(&alias)
         .map_err(|error| context.runtime.failure(&connected, &error))?;
-    let frame = ObservedFrame::of(&flow).ok_or_else(|| {
-        ToolError::new(
-            "runtime",
-            ActingctlCode::MaterialRefUnknown,
-            "none of this observation's events carries the frame it reports",
-        )
-    })?;
+    // None of the observation's events carries the frame it reports.
+    let frame = ObservedFrame::of(&flow)
+        .ok_or_else(|| ToolError::new("runtime", ActingctlCode::MaterialRefUnknown))?;
     let material = Material {
         position: frame.position(),
         artifact: frame.observation.artifact().clone(),

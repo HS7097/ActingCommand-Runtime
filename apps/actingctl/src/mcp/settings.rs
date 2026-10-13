@@ -8,7 +8,10 @@
 
 use super::operator::{CLI, record_provenance};
 use super::runtime::client_error;
-use super::tools::{Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
+use super::tools::{
+    Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument, out_of_range,
+};
+use crate::codes::ArgumentProblem;
 use actingcommand_contract::{ConfigSettingChange, MAX_CONFIG_SETTING_CHANGES};
 use serde_json::{Map, Value, json};
 
@@ -31,37 +34,37 @@ pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Valu
 
 /// The changes of one `ac_config_set` call, the same request `actingctl config set|clear`
 /// sends: 1 to 64 objects `{key, value?}`, a missing or `null` value returning the key to its
-/// configuration-file value.
+/// configuration-file value. Anything else is `arguments_invalid` for `changes`: not an array
+/// of objects (`wrong_type`), outside 1 to 64 changes (`out_of_range`), a change with another
+/// member than key and value (`not_recognised`), a change without a non-empty string key
+/// (`required`, or `wrong_type` for a key that is not a string).
 pub(super) fn changes(value: Option<&Value>) -> Result<Vec<ConfigSettingChange>, ToolError> {
     let Some(Value::Array(items)) = value else {
-        return Err(invalid_argument(
-            "changes",
-            "must be an array of {key, value}",
-        ));
+        return Err(invalid_argument("changes", ArgumentProblem::WrongType));
     };
     if items.is_empty() || items.len() > MAX_CONFIG_SETTING_CHANGES {
-        return Err(invalid_argument("changes", "must hold 1 to 64 changes"));
+        return Err(out_of_range(
+            "changes",
+            1,
+            MAX_CONFIG_SETTING_CHANGES as u64,
+        ));
     }
     items
         .iter()
         .map(|item| {
             let Value::Object(change) = item else {
-                return Err(invalid_argument(
-                    "changes",
-                    "each change is an object {key, value}",
-                ));
+                return Err(invalid_argument("changes", ArgumentProblem::WrongType));
             };
             if change.keys().any(|name| name != "key" && name != "value") {
-                return Err(invalid_argument(
-                    "changes",
-                    "a change has only key and value",
-                ));
+                return Err(invalid_argument("changes", ArgumentProblem::NotRecognised));
             }
-            let key = change
-                .get("key")
-                .and_then(Value::as_str)
-                .filter(|key| !key.is_empty())
-                .ok_or_else(|| invalid_argument("changes", "each change needs a non-empty key"))?;
+            let key = match change.get("key") {
+                Some(Value::String(key)) if !key.is_empty() => key,
+                Some(Value::String(_)) | None => {
+                    return Err(invalid_argument("changes", ArgumentProblem::Required));
+                }
+                Some(_) => return Err(invalid_argument("changes", ArgumentProblem::WrongType)),
+            };
             Ok(ConfigSettingChange {
                 key: key.to_owned(),
                 value: change

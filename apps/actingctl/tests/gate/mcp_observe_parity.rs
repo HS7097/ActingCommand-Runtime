@@ -8,7 +8,9 @@
 //! `export.path`, a presentation difference of §2.2 (the CLI writes to the directory it is given,
 //! MCP to its fixed export directory), and `frame.ref`, because every call captures a frame of its
 //! own and names its own ledger event; each `frame.ref` is read back with ac_material instead.
-//! Every expected value comes from §4.5 and the fixture's frame.
+//! Every expected value comes from §4.5 and the fixture's frame. Workflow #378 A5: the CLI line
+//! carries the outcome `instance_frame_exported` beside the answer; the answer is the rest of
+//! the line.
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
@@ -174,7 +176,8 @@ fn members(value: &Value) -> BTreeSet<&str> {
         .unwrap_or_default()
 }
 
-/// `actingctl observe --export`: it exits 0 and prints one JSON value.
+/// `actingctl observe --export`: it exits 0 and prints one JSON line, whose `outcome` is
+/// `instance_frame_exported`; the answer is the line without it.
 fn cli_observe(root: &Path, selector: &str, directory: &Path) -> Value {
     let output = Command::new(env!("CARGO_BIN_EXE_actingctl"))
         .arg("observe")
@@ -191,12 +194,24 @@ fn cli_observe(root: &Path, selector: &str, directory: &Path) -> Value {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let mut line: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "actingctl observe --export printed no JSON ({error}): {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    let outcome = line
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"));
+    let Some(outcome) = outcome else {
+        panic!("actingctl observe --export with instance {selector} printed no outcome: {line}")
+    };
+    assert_eq!(
+        outcome["code"],
+        json!("instance_frame_exported"),
+        "actingctl observe --export with instance {selector}: {outcome}"
+    );
+    line
 }
 
 /// The instance_id the Runtime's status lists for the fixture's alias.

@@ -16,13 +16,19 @@
 //!
 //! Workflow #389 MCP-10: `actingctl start` and `restart` start through the same manual method,
 //! for an A/B root's selection or for a verification root's explicit config ([`Target`]).
+//!
+//! Workflow #378 A5: a failed start is one outcome: `entry_missing`, `log_create_failed`,
+//! `spawn_failed`, `watchdog_wmi_path_unsafe`, `wmi_start_failed`, `process_probe_failed`,
+//! `exited_during_startup` or `start_timeout`, with its values and the OS's or PowerShell's
+//! failure as its link.
 
 use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock, READY_TIMEOUT_MS};
 use super::observe::{self, Installation, RUNTIME_IMAGE};
 use super::powershell::{self, CREATE_NO_WINDOW};
+use super::{io_failure, json_failure};
 use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
@@ -42,14 +48,10 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 /// cmd metacharacters that a quoted path still cannot carry safely.
 const CMD_UNSAFE: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"'];
 
-pub(crate) struct StartError {
-    pub(crate) code: Code,
-    pub(crate) detail: String,
-}
-
-pub(crate) struct Outcome {
+/// One start: the method it used and the answering owner, or the start's failure.
+pub(crate) struct Attempt {
     pub(crate) method: &'static str,
-    pub(crate) result: Result<LiveOwner, StartError>,
+    pub(crate) result: Result<LiveOwner, Outcome>,
 }
 
 enum Started {
@@ -59,10 +61,10 @@ enum Started {
     Pid(u32),
 }
 
-fn failed(method: &'static str, code: Code, detail: String) -> Outcome {
-    Outcome {
+fn failed(method: &'static str, failure: Outcome) -> Attempt {
+    Attempt {
         method,
-        result: Err(StartError { code, detail }),
+        result: Err(failure),
     }
 }
 
@@ -93,28 +95,20 @@ impl<'a> Target<'a> {
 }
 
 /// The checks of a manual start that need no spawn, so `restart` refuses before it stops
-/// anything: the fixed entry is a file, and no path the WMI start carries holds a cmd
-/// metacharacter.
-pub(crate) fn preflight(target: &Target<'_>) -> Result<(), StartError> {
+/// anything: the fixed entry is a file (`entry_missing`), and no path the WMI start carries
+/// holds a cmd metacharacter (`watchdog_wmi_path_unsafe`; start the Runtime formally).
+pub(crate) fn preflight(target: &Target<'_>) -> Result<(), Outcome> {
     let entry = target.entry();
     if !entry.is_file() {
-        return Err(StartError {
-            code: ActingctlCode::EntryMissing.code(),
-            detail: format!("{} is not a file", entry.display()),
-        });
+        return Err(Outcome::new(ActingctlCode::EntryMissing).path(&entry));
     }
     match [entry.as_path(), target.config_plain, target.root_plain]
         .into_iter()
         .find(|path| path.to_string_lossy().contains(CMD_UNSAFE))
     {
-        Some(unsafe_path) => Err(StartError {
-            code: ActingctlCode::WatchdogWmiPathUnsafe.code(),
-            detail: format!(
-                "{} holds a cmd metacharacter ({}); start the Runtime formally",
-                unsafe_path.display(),
-                CMD_UNSAFE.iter().collect::<String>()
-            ),
-        }),
+        Some(unsafe_path) => {
+            Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(unsafe_path))
+        }
         None => Ok(()),
     }
 }
@@ -124,7 +118,7 @@ pub(crate) fn start(
     log: &Path,
     spawn_at_unix_ms: u64,
     from_task: bool,
-) -> Outcome {
+) -> Attempt {
     start_target(&Target::of(installation), log, spawn_at_unix_ms, from_task)
 }
 // --- Workflow #389 MCP-10 (end). ---
@@ -134,23 +128,21 @@ pub(crate) fn start_target(
     log: &Path,
     spawn_at_unix_ms: u64,
     from_task: bool,
-) -> Outcome {
+) -> Attempt {
     let entry = installation.entry();
+    let method = if from_task { "breakaway" } else { "wmi" };
     if !entry.is_file() {
-        let method = if from_task { "breakaway" } else { "wmi" };
         return failed(
             method,
-            ActingctlCode::EntryMissing.code(),
-            format!("{} is not a file", entry.display()),
+            Outcome::new(ActingctlCode::EntryMissing).path(&entry),
         );
     }
     let file = match OpenOptions::new().write(true).create_new(true).open(log) {
         Ok(file) => file,
         Err(error) => {
             return failed(
-                if from_task { "breakaway" } else { "wmi" },
-                ActingctlCode::LogCreateFailed.code(),
-                format!("{}: {error}", log.display()),
+                method,
+                io_failure(ActingctlCode::LogCreateFailed, log, &error, IoOp::Create),
             );
         }
     };
@@ -160,14 +152,13 @@ pub(crate) fn start_target(
             Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
                 match spawn_wmi(installation, &entry, log) {
                     Ok(pid) => ("wmi", Started::Pid(pid)),
-                    Err(error) => return failed("wmi", error.code, error.detail),
+                    Err(failure) => return failed("wmi", failure),
                 }
             }
             Err(error) => {
                 return failed(
                     "breakaway",
-                    ActingctlCode::SpawnFailed.code(),
-                    format!("{}: {error}", entry.display()),
+                    io_failure(ActingctlCode::SpawnFailed, &entry, &error, IoOp::Spawn),
                 );
             }
         }
@@ -175,10 +166,10 @@ pub(crate) fn start_target(
         drop(file);
         match spawn_wmi(installation, &entry, log) {
             Ok(pid) => ("wmi", Started::Pid(pid)),
-            Err(error) => return failed("wmi", error.code, error.detail),
+            Err(failure) => return failed("wmi", failure),
         }
     };
-    Outcome {
+    Attempt {
         method,
         result: wait_ready(installation, started, log, spawn_at_unix_ms),
     }
@@ -205,8 +196,10 @@ fn spawn_breakaway(installation: &Target<'_>, entry: &Path, log: File) -> std::i
 }
 
 /// X3 literally: `Win32_Process.Create` with `ShowWindow = 0` and normal priority, through
-/// `cmd /d /s /c` so stdout and stderr are appended to the log.
-fn spawn_wmi(installation: &Target<'_>, entry: &Path, log: &Path) -> Result<u32, StartError> {
+/// `cmd /d /s /c` so stdout and stderr are appended to the log. A path with a cmd
+/// metacharacter is `watchdog_wmi_path_unsafe`; every other failure is `wmi_start_failed`
+/// (with `return_value` when `Win32_Process.Create` refused, or `pid` out of range).
+fn spawn_wmi(installation: &Target<'_>, entry: &Path, log: &Path) -> Result<u32, Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $shell = if ($env:ComSpec) { $env:ComSpec } else { Join-Path $env:SystemRoot 'System32\\cmd.exe' }\n\
@@ -226,51 +219,45 @@ fn spawn_wmi(installation: &Target<'_>, entry: &Path, log: &Path) -> Result<u32,
         .iter()
         .find(|(_, path)| path.to_string_lossy().contains(CMD_UNSAFE))
     {
-        return Err(StartError {
-            code: ActingctlCode::WatchdogWmiPathUnsafe.code(),
-            detail: format!(
-                "{} holds a cmd metacharacter ({}); start the Runtime formally",
-                unsafe_path.display(),
-                CMD_UNSAFE.iter().collect::<String>()
-            ),
-        });
+        return Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(unsafe_path));
     }
     let environment = paths
         .iter()
         .map(|(name, path)| (*name, path.as_os_str()))
         .collect::<Vec<_>>();
-    let output =
-        powershell::run(SCRIPT, &environment, Duration::from_secs(60)).map_err(|detail| {
-            StartError {
-                code: ActingctlCode::WmiStartFailed.code(),
-                detail,
-            }
-        })?;
-    let value: Value = serde_json::from_str(output.trim()).map_err(|error| StartError {
-        code: ActingctlCode::WmiStartFailed.code(),
-        detail: format!("unexpected output {output:?}: {error}"),
+    let output = powershell::run(
+        SCRIPT,
+        &environment,
+        Duration::from_secs(60),
+        ActingctlCode::WmiStartFailed,
+    )?;
+    let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
+        Outcome::new(ActingctlCode::WmiStartFailed).caused_by(json_failure(&error))
     })?;
     match (value["return_value"].as_i64(), value["pid"].as_u64()) {
-        (Some(0), Some(pid)) if pid > 0 => u32::try_from(pid).map_err(|_| StartError {
-            code: ActingctlCode::WmiStartFailed.code(),
-            detail: format!("pid {pid} out of range"),
-        }),
-        _ => Err(StartError {
-            code: ActingctlCode::WmiStartFailed.code(),
-            detail: format!("Win32_Process.Create returned {value}"),
-        }),
+        (Some(0), Some(pid)) if pid > 0 => {
+            u32::try_from(pid).map_err(|_| Outcome::new(ActingctlCode::WmiStartFailed).pid(pid))
+        }
+        (Some(return_value), _) => {
+            Err(Outcome::new(ActingctlCode::WmiStartFailed).return_value(return_value))
+        }
+        (None, _) => Err(Outcome::new(ActingctlCode::WmiStartFailed)),
     }
 }
 
 /// Ready when the owner lock is held and runtime-info names an owner that started after the
-/// spawn and answers. The process is never terminated here, like acsetup's own start.
+/// spawn and answers. The process is never terminated here, like acsetup's own start. A start
+/// that ends first is `exited_during_startup` (`log`, the child's `exit_code` or the cmd's
+/// `pid`); one that does not answer in time is `start_timeout` (`log`, `timeout_ms`; the
+/// process is left running).
 fn wait_ready(
     installation: &Target<'_>,
     mut started: Started,
     log: &Path,
     spawn_at_unix_ms: u64,
-) -> Result<LiveOwner, StartError> {
+) -> Result<LiveOwner, Outcome> {
     let deadline = Instant::now() + installation.ready_timeout;
+    let exited = || Outcome::new(ActingctlCode::ExitedDuringStartup).log(log);
     loop {
         if let Ok((OwnerLock::Locked, _)) = observe::owner_journal(installation.state_root)
             && let Ok(owner) = observe::live_owner(installation.state_root, Some(HEALTH_TIMEOUT))
@@ -278,45 +265,39 @@ fn wait_ready(
         {
             return Ok(owner);
         }
-        let exited = match &mut started {
+        let ended = match &mut started {
             Started::Child(child) => match child.try_wait() {
-                Ok(Some(status)) => Some(status.to_string()),
+                Ok(Some(status)) => Some(match status.code() {
+                    Some(exit_code) => exited().exit_code(exit_code),
+                    None => exited(),
+                }),
                 Ok(None) => None,
-                Err(error) => Some(format!("state unavailable: {error}")),
+                // The child's state is unavailable: it no longer counts as starting.
+                Err(error) => Some(exited().caused_by(Outcome::from_io_error(&error, IoOp::Wait))),
             },
-            Started::Pid(pid) => match pid_alive(*pid) {
-                Ok(true) => None,
-                Ok(false) => Some(format!("cmd pid {pid} ended")),
-                Err(error) => {
-                    return Err(StartError {
-                        code: ActingctlCode::ProcessProbeFailed.code(),
-                        detail: error,
-                    });
+            Started::Pid(pid) => {
+                if pid_alive(*pid)? {
+                    None
+                } else {
+                    Some(exited().pid(*pid))
                 }
-            },
+            }
         };
-        if let Some(exit) = exited {
-            return Err(StartError {
-                code: ActingctlCode::ExitedDuringStartup.code(),
-                detail: format!("{exit}; {}", last_log_line(log)),
-            });
+        if let Some(ended) = ended {
+            return Err(ended);
         }
         if Instant::now() >= deadline {
-            return Err(StartError {
-                code: ActingctlCode::StartTimeout.code(),
-                detail: format!(
-                    "no answering owner within {} s; the process was left running; {}",
-                    installation.ready_timeout.as_secs(),
-                    last_log_line(log)
-                ),
-            });
+            return Err(Outcome::new(ActingctlCode::StartTimeout)
+                .log(log)
+                .timeout_ms(installation.ready_timeout));
         }
         thread::sleep(POLL_INTERVAL);
     }
 }
 
-/// The log's FATAL line, else its last non-empty line.
-fn last_log_line(log: &Path) -> String {
+/// The log's FATAL line, else its last non-empty line: developer text for the start's failure
+/// line in `watchdog.log` and on stderr, never an interface value.
+pub(crate) fn last_log_line(log: &Path) -> String {
     let mut tail = Vec::new();
     let read = File::open(log).and_then(|mut file| {
         let length = file.metadata()?.len();

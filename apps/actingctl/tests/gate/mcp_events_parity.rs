@@ -8,7 +8,8 @@
 //! presentation members of §2.2. The page read here holds every row of its range and fits the
 //! MCP output budget, so it has none of those members and the two compare whole. A last CLI read
 //! of the same range shows that a filter takes effect (`exclude_event_types`), not only that both
-//! sides apply it alike.
+//! sides apply it alike. Workflow #378 A5: the CLI line carries the outcome
+//! `runtime_events_reported` beside the page; the page is the rest of the line.
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
@@ -167,7 +168,8 @@ fn gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters() {
     drop(mcp);
 }
 
-/// `actingctl events --state-root <root>` with `parameters` as flags; its stdout JSON.
+/// `actingctl events --state-root <root>` with `parameters` as flags; its stdout JSON without
+/// the line's `outcome`, which is `runtime_events_reported`.
 fn cli_events(state_root: &Path, parameters: &[(&str, Value)]) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_actingctl"));
     command.arg("events").arg("--state-root").arg(state_root);
@@ -192,10 +194,22 @@ fn cli_events(state_root: &Path, parameters: &[(&str, Value)]) -> Value {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let mut line: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "actingctl events printed no JSON ({error}): {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    let outcome = line
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"));
+    let Some(outcome) = outcome else {
+        panic!("actingctl events printed no outcome: {line}")
+    };
+    assert_eq!(
+        outcome["code"],
+        json!("runtime_events_reported"),
+        "actingctl events: {outcome}"
+    );
+    line
 }

@@ -3,8 +3,13 @@
 //! Workflow #374: `actingctl watchdog` on an A/B fixture root. A live owner (the sealed C4
 //! Runtime child), a held acsetup writer lock, start attempts through a stand-in fixed entry
 //! and the budget, a FATAL hold, a formal start and close; and the task's registration and
-//! removal. Without a registered task `status` adds attention 14. The real start path with a
-//! real actingd is the exact-SHA build's "Watchdog smoke", a required check (test plan §4 #8).
+//! removal. Without a registered task `status` adds the attention `watchdog_task_missing`. The
+//! real start path with a real actingd is the exact-SHA build's "Watchdog smoke", a required
+//! check (test plan §4 #8).
+//!
+//! Workflow #378 A5 (model v2.2 §7.5, §7.6): every report is `actingcommand.watchdog.report.v2`
+//! with the decision as `outcome`; the exit follows its category (0 info, 1 error, 2 fatal) and
+//! status's attention never changes it.
 
 #![cfg(windows)]
 
@@ -143,7 +148,7 @@ impl Fixture {
         let started = Instant::now();
         loop {
             let (_, report) = self.watchdog(&["status"]);
-            if report["decision"] == "alive" {
+            if report["outcome"]["code"] == "watchdog_alive" {
                 return;
             }
             assert!(
@@ -155,6 +160,7 @@ impl Fixture {
     }
 }
 
+/// The codes of status's attention outcomes, in order.
 fn attention(report: &Value) -> Vec<String> {
     report["attention"]
         .as_array()
@@ -164,11 +170,16 @@ fn attention(report: &Value) -> Vec<String> {
         .collect()
 }
 
-fn assert_decision(result: (i32, Value), exit: i32, decision: &str) -> Value {
-    let (code, report) = result;
+/// A report v2 whose top outcome is `code`, with the process's exit.
+fn assert_decision(result: (i32, Value), exit: i32, code: &str) -> Value {
+    let (exit_code, report) = result;
     assert_eq!(
-        (code, report["decision"].as_str()),
-        (exit, Some(decision)),
+        report["schema_version"], "actingcommand.watchdog.report.v2",
+        "{report}"
+    );
+    assert_eq!(
+        (exit_code, report["outcome"]["code"].as_str()),
+        (exit, Some(code)),
         "{report}"
     );
     report
@@ -186,10 +197,10 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
     let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
     runtime.wait_ready(&fixture.state);
 
-    let report = assert_decision(fixture.watchdog(&["status"]), 14, "alive");
-    assert_eq!(report["detail"]["started_by_watchdog"], false);
-    assert_eq!(attention(&report), ["task_missing"]);
-    assert_decision(fixture.watchdog(&["run-once"]), 0, "alive");
+    let report = assert_decision(fixture.watchdog(&["status"]), 0, "watchdog_alive");
+    assert_eq!(report["live_owner"]["started_by_watchdog"], false);
+    assert_eq!(attention(&report), ["watchdog_task_missing"]);
+    assert_decision(fixture.watchdog(&["run-once"]), 0, "watchdog_alive");
     assert!(
         fixture
             .log()
@@ -204,31 +215,51 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
         .expect("open writer lock");
     writer.try_lock().expect("hold the writer lock");
     drop(runtime);
-    let report = assert_decision(fixture.watchdog(&["run-once"]), 0, "installer_busy");
+    let report = assert_decision(
+        fixture.watchdog(&["run-once"]),
+        0,
+        "watchdog_installer_busy",
+    );
     assert_eq!(report["journal"]["active"], true);
     drop(writer);
 
     // Three start attempts through the stand-in entry fail at once; then the budget holds.
     for attempt in 1..=3 {
-        let report = assert_decision(fixture.watchdog(&["run-once"]), 12, "start_failed");
+        let report = assert_decision(fixture.watchdog(&["run-once"]), 1, "watchdog_start_failed");
         assert_eq!(
-            report["detail"]["code"], "exited_during_startup",
+            report["outcome"]["values"]["failure_code"], "exited_during_startup",
+            "attempt {attempt}"
+        );
+        assert_eq!(
+            report["outcome"]["causes"][0]["code"], "exited_during_startup",
             "attempt {attempt}"
         );
         assert_eq!(report["last_start"]["method"], "wmi");
+        assert_eq!(
+            report["last_start"]["start_result"]["code"],
+            "exited_during_startup"
+        );
     }
     for _ in 0..2 {
-        assert_decision(fixture.watchdog(&["run-once"]), 11, "budget_exhausted");
+        assert_decision(
+            fixture.watchdog(&["run-once"]),
+            1,
+            "watchdog_budget_exhausted",
+        );
     }
     assert_eq!(fixture.start_logs(), 3);
-    assert_decision(fixture.watchdog(&["status"]), 11, "budget_exhausted");
+    assert_decision(
+        fixture.watchdog(&["status"]),
+        1,
+        "watchdog_budget_exhausted",
+    );
 
     // A FATAL newer than the journal holds before every start row.
     let fatal = fixture.root.join("actingd-1.log");
     fs::write(&fatal, "FATAL actingd: config: bind_port_invalid\n").expect("write FATAL log");
-    let report = assert_decision(fixture.watchdog(&["run-once"]), 10, "fatal_hold");
+    let report = assert_decision(fixture.watchdog(&["run-once"]), 2, "watchdog_fatal_hold");
     assert_eq!(
-        report["detail"]["line"],
+        report["fatal"]["line"],
         "FATAL actingd: config: bind_port_invalid"
     );
     File::options()
@@ -243,17 +274,17 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
     // `owner_lock_held`.
     let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
     fixture.wait_alive();
-    let report = assert_decision(fixture.watchdog(&["run-once"]), 0, "alive");
+    let report = assert_decision(fixture.watchdog(&["run-once"]), 0, "watchdog_alive");
     assert_eq!(report["budget"]["exhausted_since_unix_ms"], Value::Null);
     runtime.stop_clean();
-    assert_decision(fixture.watchdog(&["run-once"]), 0, "formal_close");
+    assert_decision(fixture.watchdog(&["run-once"]), 0, "watchdog_formal_close");
     assert_eq!(fixture.start_logs(), 3);
     // No Runtime log covers the closed epoch: `status` flags it (review M2).
-    let report = assert_decision(fixture.watchdog(&["status"]), 14, "formal_close");
+    let report = assert_decision(fixture.watchdog(&["status"]), 0, "watchdog_formal_close");
     assert_eq!(report["close_evidence"], "unlogged");
     assert_eq!(
         attention(&report),
-        ["formal_close_unlogged", "task_missing"]
+        ["watchdog_formal_close_unlogged", "watchdog_task_missing"]
     );
 }
 
@@ -289,7 +320,7 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
     )
     .expect("place the fixed entry");
 
-    let report = assert_decision(fixture.watchdog(&["install"]), 0, "installed");
+    let report = assert_decision(fixture.watchdog(&["install"]), 0, "watchdog_installed");
     let name = report["task_name"].as_str().expect("task name").to_owned();
     let _cleanup = TaskCleanup(name.clone());
     assert!(
@@ -332,7 +363,8 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
         assert!(text.contains(setting), "{setting} missing from {text}");
     }
     assert!(!text.contains("<Enabled>false</Enabled>"), "{text}");
-    let report = assert_decision(fixture.watchdog(&["status"]), 0, "never_started");
+    let report = assert_decision(fixture.watchdog(&["status"]), 0, "watchdog_never_started");
+    assert_eq!(attention(&report), Vec::<String>::new(), "{report}");
     assert_eq!(report["task"]["registered"], true, "{report}");
     assert_eq!(report["task"]["mismatches"], json!([]), "{report}");
     assert!(
@@ -342,7 +374,7 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
     );
 
     // Uninstall removes the task and keeps every file; a second one finds none.
-    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "uninstalled");
+    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "watchdog_uninstalled");
     assert_eq!(report["was_registered"], true);
     assert_eq!(report["tick_in_progress"], false, "{report}");
     let queried = Command::new("schtasks")
@@ -350,9 +382,9 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
         .output()
         .expect("schtasks /Query");
     assert!(!queried.status.success(), "the task is still registered");
-    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "uninstalled");
+    let report = assert_decision(fixture.watchdog(&["uninstall"]), 0, "watchdog_uninstalled");
     assert_eq!(report["was_registered"], false);
     assert!(fixture.root.join("watchdog").join("task.xml").is_file());
-    let report = assert_decision(fixture.watchdog(&["status"]), 14, "never_started");
-    assert_eq!(attention(&report), ["task_missing"]);
+    let report = assert_decision(fixture.watchdog(&["status"]), 0, "watchdog_never_started");
+    assert_eq!(attention(&report), ["watchdog_task_missing"]);
 }

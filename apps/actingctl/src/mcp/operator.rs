@@ -6,17 +6,19 @@
 //! `governance_client_not_allowed`), then `RecordClientAction{surface_id: "mcp", control_id:
 //! <tool>, kind: Command}`, then the formal operation, all under that one correlation. What a
 //! run is, whether it may run, whether a pause or a target policy is accepted: all of it is the
-//! Runtime's answer, passed on unchanged. Nothing here pauses implicitly (C1 甲).
+//! Runtime's answer, passed on unchanged. Nothing here pauses implicitly (C1 甲). A refusal
+//! keeps the Runtime receipt's outcome on top (`client_error`, Workflow #378 A5).
 
 use super::child;
 use super::lab;
 use super::observer::select_instance;
 use super::runtime::client_error;
 use super::tools::{
-    Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+    self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
-use crate::codes::ActingctlCode;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
+use actingcommand_contract::outcome::{Code, IoOp, Outcome};
 use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
@@ -41,12 +43,15 @@ const MIN_DEADLINE_S: u64 = 60;
 const MAX_DEADLINE_S: u64 = 1800;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 const MAX_VALID_DAYS: u64 = 365;
+/// The key table's bound of a `pointer` value (`json_pointer`).
+const MAX_POINTER_BYTES: usize = 512;
 /// Time kept back from the call budget for answering after a job wait.
 const ANSWER_RESERVE: Duration = Duration::from_secs(2);
 /// Time kept back from the call budget for an actinglab digest subprocess.
 const DIGEST_RESERVE: Duration = Duration::from_secs(10);
 
-/// One write's connection after its provenance was recorded.
+/// One write's connection after its provenance was recorded, with the warnings (each
+/// `{outcome}`) recording it gave.
 pub(super) struct Write {
     pub(super) client: RuntimeClient,
     pub(super) warnings: Vec<Value>,
@@ -85,22 +90,18 @@ pub(super) fn record_provenance(
         };
         if let Err(error) = client.declare_governance_identity(&card) {
             let error = client_error(&error);
-            if error.host_code() != Some(GovernanceIdentityRefusal::ClientNotAllowed.as_str()) {
+            if !error.is(GovernanceIdentityRefusal::ClientNotAllowed) {
                 return Err(error);
             }
-            // The Runtime recorded its warning event and still takes Cli writes.
-            warnings.push(
-                ToolError::new(
-                    "safety",
-                    GovernanceIdentityRefusal::ClientNotAllowed,
-                    "actingd's allowed_clients does not list actingctl-mcp; the Runtime recorded a warning and the write went ahead",
-                )
-                .with_detail("card_refusal", error.into_value())
-                .blocked_by(
-                    "governance.allowed_clients in actingd.config.json (apps/actingd/src/config.rs:295-320)",
-                )
-                .into_warning(),
-            );
+            // actingd's allowed_clients does not list actingctl-mcp: the Runtime recorded its
+            // warning event and still takes Cli writes. The write goes ahead with the warning
+            // `mcp_identity_card_refused`, caused by the refusal; the person changes
+            // `governance.allowed_clients` in actingd.config.json.
+            warnings.push(tools::warning(
+                &Outcome::new(ActingctlCode::McpIdentityCardRefused)
+                    .mcp_blocker(McpBlocker::PersonAction)
+                    .caused_by(error.into_outcome()),
+            ));
         }
     }
     let action = ClientActionRecord::new(
@@ -110,13 +111,7 @@ pub(super) fn record_provenance(
         instance_alias.map(str::to_owned),
         value,
     )
-    .map_err(|error| {
-        ToolError::new(
-            "usage",
-            SharedCode::ClientActionInvalid,
-            format!("cannot form the client action: {error}"),
-        )
-    })?;
+    .map_err(|_| ToolError::usage(SharedCode::ClientActionInvalid))?;
     client
         .record_client_action(action)
         .map_err(|error| client_error(&error))?;
@@ -145,7 +140,8 @@ fn text_of(value: Value) -> String {
     }
 }
 
-/// Waits for `job` within the call budget; its outcome, or a handle while it still runs.
+/// Waits for `job` within the call budget; its result (the answer, or its error as the call's
+/// error, unchanged), or a handle while it still runs.
 pub(super) fn job_answer(
     context: &ToolContext<'_>,
     job: &super::jobs::Job,
@@ -161,50 +157,19 @@ pub(super) fn job_answer(
     // Read after the wait: a body may add warnings as it ends.
     let warnings = job.warnings();
     if ended {
-        let outcome = job.outcome().unwrap_or(Value::Null);
-        if let Some(error) = outcome.get("error") {
-            return Err(error_from_value(error));
-        }
-        return Ok(ToolSuccess {
-            result: outcome,
-            warnings,
-        });
+        return match job.job_result() {
+            Some(Err(error)) => Err(error),
+            Some(Ok(result)) => Ok(ToolSuccess { result, warnings }),
+            None => Ok(ToolSuccess {
+                result: Value::Null,
+                warnings,
+            }),
+        };
     }
     Ok(ToolSuccess {
         result: json!({"handle": job.handle, "job_phase": job.phase()}),
         warnings,
     })
-}
-
-/// A job's stored error, answered as the call's error.
-fn error_from_value(error: &Value) -> ToolError {
-    fn field<'a>(error: &'a Value, key: &str) -> &'a str {
-        error.get(key).and_then(Value::as_str).unwrap_or_default()
-    }
-    let text = |key: &str| field(error, key).to_owned();
-    let class = match text("class").as_str() {
-        "usage" => "usage",
-        "safety" => "safety",
-        "device" => "device",
-        "uncertain" => "uncertain",
-        _ => "runtime",
-    };
-    let mut mapped = ToolError::coded(
-        class,
-        ToolCode::Relayed {
-            relayed_code: text("code"),
-        },
-        text("message"),
-    );
-    if let Some(Value::Object(details)) = error.get("details") {
-        for (key, value) in details {
-            mapped = mapped.with_detail(key, value.clone());
-        }
-    }
-    match error.get("blocked_by").and_then(Value::as_str) {
-        Some(blocked_by) => mapped.blocked_by(blocked_by),
-        None => mapped,
-    }
 }
 
 // ---------------------------------------------------------------- ac_run_pack
@@ -232,10 +197,11 @@ pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>
     ) {
         (Some(path), reference) => Some((package_path(path, "recovery_package")?, reference)),
         (None, None) => None,
+        // The recovery package is given as a pair: the ref needs recovery_package.
         (None, Some(_)) => {
             return Err(invalid_argument(
                 "recovery_package_ref",
-                "needs recovery_package: the recovery package is given as a pair",
+                ArgumentProblem::Conflicting,
             ));
         }
     };
@@ -245,11 +211,13 @@ pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>
         Some(reference) => reference.to_owned(),
         None => package_digest(context, &package)?,
     };
+    // A refused request part is `arguments_invalid` for its argument, caused by the contract's
+    // code.
     let mut request = ContainedTaskRequest::new(
         package.display().to_string(),
         parse_package_ref(&package_ref, "package_ref")?,
     )
-    .map_err(|error| invalid_argument("package", &format!("is not a contained task: {error}")))?;
+    .map_err(|error| refused_argument("package", error.code()))?;
     if let Some((path, reference)) = recovery {
         let reference = match reference {
             Some(reference) => reference.to_owned(),
@@ -259,16 +227,14 @@ pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>
             path.display().to_string(),
             parse_package_ref(&reference, "recovery_package_ref")?,
         )
-        .map_err(|error| {
-            invalid_argument("recovery_package", &format!("is not usable: {error}"))
-        })?;
-        request = request.with_recovery(binding).map_err(|error| {
-            invalid_argument("recovery_package", &format!("is not usable: {error}"))
-        })?;
+        .map_err(|error| refused_argument("recovery_package", error.code()))?;
+        request = request
+            .with_recovery(binding)
+            .map_err(|error| refused_argument("recovery_package", error.code()))?;
     }
     let request = request
         .with_response_deadline_ms(deadline_s * 1000)
-        .map_err(|error| invalid_argument("deadline_s", &format!("is refused: {error}")))?;
+        .map_err(|error| refused_argument("deadline_s", error.code()))?;
     let write = begin_write(context, "ac_run_pack", Some(alias.as_str()), CLI)?;
     let prepared = write
         .client
@@ -300,14 +266,25 @@ pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>
     })
 }
 
-fn package_path(text: &str, field: &str) -> Result<PathBuf, ToolError> {
-    std::fs::canonicalize(text)
-        .map_err(|error| invalid_argument(field, &format!("cannot be read: {error}")))
+/// `arguments_invalid` `unusable` for an argument the contract refused, caused by its code.
+fn refused_argument(argument: &str, refusal: Code) -> ToolError {
+    invalid_argument(argument, ArgumentProblem::Unusable).caused_by(Outcome::new(refusal))
 }
 
-fn parse_package_ref(text: &str, field: &str) -> Result<PackageRef, ToolError> {
-    PackageRef::parse_argument(text)
-        .map_err(|error| invalid_argument(field, &format!("is not a package reference: {error}")))
+/// The package path an argument names; one that cannot be read is `unusable`, caused by the
+/// OS error.
+fn package_path(text: &str, argument: &str) -> Result<PathBuf, ToolError> {
+    std::fs::canonicalize(text).map_err(|error| {
+        invalid_argument(argument, ArgumentProblem::Unusable)
+            .caused_by(Outcome::from_io_error(&error, IoOp::Canonicalize).path(text))
+    })
+}
+
+fn parse_package_ref(text: &str, argument: &str) -> Result<PackageRef, ToolError> {
+    PackageRef::parse_argument(text).map_err(|error| {
+        invalid_argument(argument, ArgumentProblem::NotRecognised)
+            .caused_by(Outcome::new(error.code()))
+    })
 }
 
 /// `<install root>\tools\actinglab.exe --json package digest --package <path>`: the package's
@@ -315,11 +292,11 @@ fn parse_package_ref(text: &str, field: &str) -> Result<PackageRef, ToolError> {
 fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, ToolError> {
     // Workflow #389 MCP-7 scope extension: the child gets the selection of this call.
     let location = context.runtime.locate_now()?;
+    // No install root, so actinglab cannot compute the package_ref: pass package_ref.
     let Some(root) = location.install_root else {
-        return Err(ToolError::usage(
-            ActingctlCode::LabToolUnavailable,
-            "no install root, so actinglab cannot compute the package_ref; pass package_ref",
-        ));
+        return Err(
+            ToolError::usage(ActingctlCode::LabToolUnavailable).blocked_by(McpBlocker::InstallRoot)
+        );
     };
     let mut command = Command::new(root.join("tools").join("actinglab.exe"));
     super::runtime::pin_child(&mut command, location.installation.as_ref());
@@ -337,16 +314,11 @@ fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, T
         .map_err(|failure| lab::child_failure(&failure, "package digest"))?;
     // The S3 runner's reading of the envelope: the exit code gives the class.
     let digest = lab::interpret(&captured, "package digest").result?;
+    // An answer without a package reference is no usable envelope.
     digest
         .get("reference")
         .map(Value::to_string)
-        .ok_or_else(|| {
-            ToolError::new(
-                "runtime",
-                ActingctlCode::LabProcessFailed,
-                "actinglab package digest answered without a package reference",
-            )
-        })
+        .ok_or_else(|| ToolError::new("runtime", ActingctlCode::LabProcessFailed))
 }
 
 // ---------------------------------------------------------------- ac_stop_run
@@ -354,8 +326,9 @@ fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, T
 pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["handle", "wait_s"])?;
     let handle = arguments.required_string("handle")?;
+    // A run's Runtime request_id.
     let request_id = serde_json::from_value::<RequestId>(json!(handle))
-        .map_err(|_| invalid_argument("handle", "must be a run's Runtime request_id"))?;
+        .map_err(|_| invalid_argument("handle", ArgumentProblem::NotRecognised))?;
     let wait_until =
         Instant::now() + Duration::from_secs(arguments.integer("wait_s", 0, 25)?.unwrap_or(20));
     // A live job of this process submitted the run: only ask it to stop; the job's own
@@ -394,11 +367,10 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
             .find(|instance| instance.instance_id() == instance_id)
             .map(|instance| instance.instance_alias().to_owned())
     }) else {
-        return Err(ToolError::usage(
-            ActingctlCode::RunUnknown,
-            "the ledger names no configured instance for this handle; read it with ac_get_run",
-        )
-        .with_detail("state", json!(run.state)));
+        // The ledger names no configured instance for this handle: read it with ac_get_run.
+        return Err(
+            ToolError::usage(ActingctlCode::RunUnknown).with(|outcome| outcome.request_id(handle))
+        );
     };
     let write = begin_write(context, "ac_stop_run", Some(alias.as_str()), CLI)?;
     let job_handle = text_of(json!(write.client.correlation_id()));
@@ -437,13 +409,13 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
     })
 }
 
-/// A scheduled run cannot be stopped by a client; an instance pause drains it.
+/// A scheduled run cannot be stopped by a client; an instance pause drains it (ac_pause drains
+/// the instance and, when its drain times out, stops its in-flight runs): the Runtime's refusal
+/// with `mcp_blocker` `scheduling_pause`.
 fn stop_error(error: &actingcommand_runtime_client::RuntimeClientError) -> ToolError {
     let mapped = client_error(error);
-    if mapped.host_code() == Some(SharedCode::ScheduledContainedTaskNotClientCancellable.as_str()) {
-        return mapped.blocked_by(
-            "ac_pause: an instance pause drains the instance and, when its drain times out, stops its in-flight runs",
-        );
+    if mapped.is(SharedCode::ScheduledContainedTaskNotClientCancellable) {
+        return mapped.blocked_by(McpBlocker::SchedulingPause);
     }
     mapped
 }
@@ -471,10 +443,11 @@ fn scope_alias(scope: &SchedulingPauseScope) -> Option<&str> {
 
 pub(super) fn pause(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "reason", "drain_timeout_s"])?;
+    // 1-64 bytes of [a-z0-9_.-].
     let reason = actingcommand_contract::SchedulingPauseReason::new(
         arguments.string("reason")?.unwrap_or(DEFAULT_PAUSE_REASON),
     )
-    .map_err(|_| invalid_argument("reason", "must be 1-64 bytes of [a-z0-9_.-]"))?;
+    .map_err(|_| invalid_argument("reason", ArgumentProblem::NotRecognised))?;
     let drain_timeout_s = arguments
         .integer("drain_timeout_s", 1, MAX_DRAIN_TIMEOUT_S)?
         .unwrap_or(DEFAULT_DRAIN_TIMEOUT_S);
@@ -505,18 +478,14 @@ pub(super) fn resume(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
         arguments,
         &["instance", "expected_owner_epoch", "expected_revision"],
     )?;
+    // The owner_epoch ac_pause or ac_overview gave.
     let owner_epoch = serde_json::from_value::<OwnerEpoch>(json!(
         arguments.required_string("expected_owner_epoch")?
     ))
-    .map_err(|_| {
-        invalid_argument(
-            "expected_owner_epoch",
-            "must be the owner_epoch ac_pause or ac_overview gave",
-        )
-    })?;
+    .map_err(|_| invalid_argument("expected_owner_epoch", ArgumentProblem::NotRecognised))?;
     let revision = arguments
         .integer("expected_revision", 1, u64::MAX)?
-        .ok_or_else(|| invalid_argument("expected_revision", "is required"))?;
+        .ok_or_else(|| invalid_argument("expected_revision", ArgumentProblem::Required))?;
     context.jobs.has_capacity()?;
     let scope = pause_scope(context, arguments.string("instance")?)?;
     let write = begin_write(context, "ac_resume", scope_alias(&scope), CLI)?;
@@ -552,7 +521,7 @@ pub(super) fn emulator(context: &ToolContext<'_>, arguments: &Map<String, Value>
         "start" => EmulatorInstanceAction::Start,
         "stop" => EmulatorInstanceAction::Stop,
         "restart" => EmulatorInstanceAction::Restart,
-        _ => return Err(invalid_argument("action", "must be start, stop or restart")),
+        _ => return Err(invalid_argument("action", ArgumentProblem::NotRecognised)),
     };
     context.jobs.has_capacity()?;
     let alias = resolve_alias(context, arguments.required_string("instance")?)?;
@@ -577,7 +546,9 @@ pub(super) fn emulator(context: &ToolContext<'_>, arguments: &Map<String, Value>
 
 // ---------------------------------------------------------------- resource targets
 
-/// R5's view of one instance; an older daemon answers `runtime_operation_unsupported`.
+/// R5's view of one instance; an actingd older than v0.11.0 answers
+/// `runtime_operation_unsupported` with `mcp_blocker` `runtime_upgrade` (read the scheduling
+/// catalog's resources instead: skill actingcommand, CLI workshop).
 fn target_view(
     context: &ToolContext<'_>,
     selector: &str,
@@ -589,10 +560,8 @@ fn target_view(
         .resource_target_view(&alias)
         .map_err(|error| {
             let mapped = context.runtime.failure(&connected, &error);
-            if mapped.code() == Some(ClientCode::RuntimeOperationUnsupported.code()) {
-                mapped.blocked_by(
-                    "an actingd older than v0.11.0: read the scheduling catalog's resources instead (skill actingcommand, CLI workshop)",
-                )
+            if mapped.is(ClientCode::RuntimeOperationUnsupported.code()) {
+                mapped.blocked_by(McpBlocker::RuntimeUpgrade)
             } else {
                 mapped
             }
@@ -646,11 +615,9 @@ pub(super) fn targets_set(
 ) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "targets", "valid_days"])?;
     let selector = arguments.required_string("instance")?;
+    // An array of v2 targets.
     let Some(Value::Array(targets)) = arguments.value("targets") else {
-        return Err(invalid_argument(
-            "targets",
-            "must be an array of v2 targets",
-        ));
+        return Err(invalid_argument("targets", ArgumentProblem::WrongType));
     };
     let valid_days = arguments.integer("valid_days", 1, MAX_VALID_DAYS)?;
     let view = target_view(context, selector)?;
@@ -666,25 +633,19 @@ pub(super) fn targets_set(
             .duration_since(UNIX_EPOCH)
             .ok()
             .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
-            .ok_or_else(|| {
-                ToolError::new(
-                    "runtime",
-                    ActingctlCode::ClockUnavailable,
-                    "the system clock is before the Unix epoch or out of range",
-                )
-            })?;
+            .ok_or_else(|| ToolError::new("runtime", ActingctlCode::ClockUnavailable))?;
         document.insert("valid_until_unix_ms".to_owned(), json!(now + days * DAY_MS));
     }
     document.insert("targets".to_owned(), Value::Array(targets.clone()));
     let document = Value::Object(document).to_string();
     if document.len() > MAX_RESOURCE_TARGETS_DOCUMENT_BYTES {
-        return Err(ToolError::usage(
-            ActingctlCode::ResourceTargetsDocumentTooLarge,
-            format!(
-                "the policy document has {} bytes; the Runtime takes at most {MAX_RESOURCE_TARGETS_DOCUMENT_BYTES}",
-                document.len()
-            ),
-        ));
+        return Err(
+            ToolError::usage(ActingctlCode::ResourceTargetsDocumentTooLarge).with(|outcome| {
+                outcome
+                    .actual_bytes(document.len())
+                    .limit_bytes(MAX_RESOURCE_TARGETS_DOCUMENT_BYTES)
+            }),
+        );
     }
     let write = begin_write(
         context,
@@ -697,16 +658,28 @@ pub(super) fn targets_set(
             result: json!({"applied": applied}),
             warnings: write.warnings,
         }),
+        // The Runtime's refusal on top. Its document position travels in the receipt's typed
+        // `resource_targets_rejection`, not in its outcome: it is added to the outcome as the
+        // registered values `json_pointer` (within the key table's bound), `line` and `column`.
+        // The rejection's reason has no registered key and is not carried.
         Err(error) => {
-            let rejection = error
-                .received_receipt()
-                .and_then(|receipt| receipt.resource_targets_rejection())
-                .map(|rejection| json!(rejection));
             let mapped = client_error(&error);
-            Err(match rejection {
-                Some(rejection) => mapped.with_detail("rejection", rejection),
-                None => mapped,
-            })
+            Err(
+                match error
+                    .received_receipt()
+                    .and_then(|receipt| receipt.resource_targets_rejection())
+                {
+                    Some(rejection) => mapped.with(|outcome| {
+                        let outcome = outcome.line(rejection.line).column(rejection.column);
+                        if rejection.field_path.len() <= MAX_POINTER_BYTES {
+                            outcome.json_pointer(rejection.field_path.as_str())
+                        } else {
+                            outcome
+                        }
+                    }),
+                    None => mapped,
+                },
+            )
         }
     }
 }

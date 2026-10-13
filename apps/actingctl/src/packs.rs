@@ -5,18 +5,22 @@
 //! sends no Runtime request and writes no ledger record; `source.kind` says the answer comes from
 //! the selected generation, which a running actingd may not have loaded yet. Each row carries the
 //! package id, its path and its role only (option 丙: no package digest). `ac_packs`
-//! (`mcp/packs.rs`) answers the same document through [`read`].
+//! (`mcp/packs.rs`) answers the same document through [`read`]. Workflow #378 A5: the CLI line
+//! also carries `outcome` (`package_bindings_reported`, or the refusal alone), each warning is
+//! `{outcome}`, and a refusal is its outcome.
 
-use crate::codes::ActingctlCode;
-use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{InstalledProcess, RuntimeErrorCode};
-use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value;
-use std::ffi::OsString;
+use crate::cli_line;
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::instance_selector::SelectorMiss;
+use actingcommand_contract::InstalledProcess;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -133,34 +137,11 @@ struct InstallationRow {
     scheduled: bool,
 }
 
-/// A warning in the shape every MCP warning has today, `{code, message, blocked_by, details}`
-/// (A5 replaces it with `{outcome}`).
-#[derive(Serialize)]
-pub(crate) struct Warning {
-    #[serde(serialize_with = "spelling")]
-    code: Code,
-    message: String,
-    blocked_by: Option<String>,
-    details: WarningDetails,
-}
-
-#[derive(Serialize, PartialEq, Eq)]
-struct WarningDetails {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    alias: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    package_id: Option<String>,
-}
-
-fn spelling<S: Serializer>(code: &Code, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(code.as_str())
-}
-
 pub(crate) struct Answer {
     packs: Packs,
-    warnings: Vec<Warning>,
+    /// Each warning once: `package_binding_unreadable {path, alias?}` and
+    /// `return_home_package_unbound {package_id}`.
+    warnings: Vec<Outcome>,
 }
 
 #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
@@ -169,82 +150,53 @@ impl Answer {
         &self.packs
     }
 
-    pub(crate) fn warnings(&self) -> &[Warning] {
+    pub(crate) fn warnings(&self) -> &[Outcome] {
         &self.warnings
     }
 
-    /// What the CLI prints, and what `ac_packs` exports when its answer is over the output
-    /// budget: the answer with its warnings as a top-level member, present only when there are
-    /// some (command table D3).
-    pub(crate) fn document(&self) -> Document<'_> {
-        Document {
-            packs: &self.packs,
-            warnings: &self.warnings,
+    /// What the CLI prints beside its `outcome`, and what `ac_packs` exports when its answer is
+    /// over the output budget: the answer with its warnings, each `{outcome}` as the side's
+    /// `warning` renders it, as a top-level member present only when there are some (command
+    /// table D3).
+    pub(crate) fn document(
+        &self,
+        warning: impl Fn(&Outcome) -> Value,
+    ) -> Result<Map<String, Value>, serde_json::Error> {
+        let mut document = cli_line::members(serde_json::to_value(&self.packs)?, "packs");
+        if !self.warnings.is_empty() {
+            document.insert(
+                "warnings".to_owned(),
+                Value::Array(self.warnings.iter().map(warning).collect()),
+            );
         }
+        Ok(document)
     }
 }
 
-#[derive(Serialize)]
-pub(crate) struct Document<'a> {
-    #[serde(flatten)]
-    packs: &'a Packs,
-    #[serde(skip_serializing_if = "no_warnings")]
-    warnings: &'a [Warning],
-}
-
-fn no_warnings(warnings: &&[Warning]) -> bool {
-    warnings.is_empty()
-}
-
-/// A refusal of `packs`: its registered code, the developer text and, for a configuration that
-/// cannot be read, the configuration's path and the install selection's own code beneath it.
+/// A refusal of `packs` as its outcome (Workflow #378 A5): the code with its values (a
+/// configuration's `path`, a selector's `instance_selector`, a flag's `argument`) and the
+/// failure beneath it as its cause.
 #[derive(Debug)]
-pub(crate) struct PacksError {
-    code: Code,
-    message: String,
-    path: Option<String>,
-    cause: Option<Code>,
-}
+pub(crate) struct PacksError(Outcome);
 
-#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl PacksError {
-    fn new(code: impl Into<Code>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            path: None,
-            cause: None,
-        }
+    fn usage(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
+        Self(
+            Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+                .argument(argument.as_ref().to_string_lossy())
+                .argument_problem(problem),
+        )
     }
 
-    fn usage() -> Self {
-        Self::new(ActingctlCode::ActingctlUsageInvalid, USAGE)
-    }
-
-    pub(crate) const fn code(&self) -> Code {
-        self.code
-    }
-
-    pub(crate) fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub(crate) fn path(&self) -> Option<&str> {
-        self.path.as_deref()
-    }
-
-    pub(crate) const fn cause(&self) -> Option<Code> {
-        self.cause
+    /// The refusal's outcome.
+    pub(crate) fn outcome(&self) -> Outcome {
+        self.0.clone()
     }
 }
 
 impl fmt::Display for PacksError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)?;
-        match self.cause {
-            Some(cause) => write!(formatter, " ({cause})"),
-            None => Ok(()),
-        }
+        write!(formatter, "{}", self.0)
     }
 }
 
@@ -316,38 +268,38 @@ struct ControlFile {
 /// Reads the selected configuration `config` (through `installation`'s checked read when there
 /// is an install selection, as actingd does) and lists its package bindings. A configuration
 /// that cannot be read is `config_read_failed`, one that does not decode `config_decode_failed`
-/// (ruling Q6).
+/// (ruling Q6), each with the configuration's `path` and the failure beneath it as its cause.
 pub(crate) fn read(
     installation: Option<&InstalledProcess>,
     config: &Path,
     query: &Query<'_>,
 ) -> Result<Answer, PacksError> {
-    let unreadable = |path: &Path, cause: Option<Code>| {
-        let mut error = PacksError::new(
-            SharedCode::ConfigReadFailed,
-            format!("cannot read the selected configuration {}", path.display()),
-        );
-        error.path = Some(path.display().to_string());
-        error.cause = cause;
-        error
+    let unreadable = |path: &Path, cause: Outcome| {
+        PacksError(
+            Outcome::new(SharedCode::ConfigReadFailed)
+                .path(path)
+                .caused_by(cause),
+        )
     };
-    let config = std::path::absolute(config).map_err(|_| unreadable(config, None))?;
+    let config = std::path::absolute(config)
+        .map_err(|error| unreadable(config, Outcome::from_io_error(&error, IoOp::Absolute)))?;
     let bytes = match installation {
         Some(selected) => selected
             .config_bytes()
-            .map_err(|error| unreadable(&config, Some(error.code())))?,
-        None => fs::read(&config).map_err(|_| unreadable(&config, None))?,
+            .map_err(|error| unreadable(&config, Outcome::new(error.code())))?,
+        None => fs::read(&config)
+            .map_err(|error| unreadable(&config, Outcome::from_io_error(&error, IoOp::Read)))?,
     };
     let file = serde_json::from_slice::<ConfigFile>(&bytes).map_err(|error| {
-        let mut refused = PacksError::new(
-            SharedCode::ConfigDecodeFailed,
-            format!(
-                "the selected configuration {} does not decode: {error}",
-                config.display()
-            ),
-        );
-        refused.path = Some(config.display().to_string());
-        refused
+        PacksError(
+            Outcome::new(SharedCode::ConfigDecodeFailed)
+                .path(&config)
+                .caused_by(
+                    Outcome::new(ContractCode::ForeignDataError)
+                        .raw_source(RawSource::Json)
+                        .raw_text(error.to_string()),
+                ),
+        )
     })?;
     let selected = match query.instance {
         Some(selector) => vec![select(&file.instances, selector)?],
@@ -376,7 +328,8 @@ pub(crate) fn read(
     })
 }
 
-/// The configured instance a selector names by alias, instance_id or ADB port.
+/// The configured instance a selector names by alias, instance_id or ADB port; else
+/// `instance_unknown` or `instance_ambiguous` with the selector.
 fn select<'c>(
     instances: &'c [InstanceEntry],
     selector: &str,
@@ -387,19 +340,11 @@ fn select<'c>(
             || instance.instance_id == selector
             || port.is_some_and(|port| instance.port == Some(port))
     });
-    let selected = matching.next().ok_or_else(|| {
-        PacksError::new(
-            RuntimeErrorCode::InstanceUnknown.code(),
-            format!("no configured instance has the alias, instance_id or ADB port {selector}"),
-        )
-    })?;
+    let selected = matching
+        .next()
+        .ok_or_else(|| PacksError(SelectorMiss::Unknown.outcome(selector)))?;
     if matching.next().is_some() {
-        return Err(PacksError::new(
-            ActingctlCode::InstanceAmbiguous,
-            format!(
-                "{selector} names more than one configured instance; pass its alias or instance_id"
-            ),
-        ));
+        return Err(PacksError(SelectorMiss::Ambiguous.outcome(selector)));
     }
     Ok(selected)
 }
@@ -408,7 +353,7 @@ struct Rows {
     /// The configuration's folder: relative paths resolve against it, as actingd's do.
     base: PathBuf,
     role: Option<Role>,
-    warnings: Vec<Warning>,
+    warnings: Vec<Outcome>,
 }
 
 impl Rows {
@@ -429,42 +374,21 @@ impl Rows {
         path
     }
 
-    fn warn(&mut self, code: Code, message: String, details: WarningDetails) {
-        if !self
-            .warnings
-            .iter()
-            .any(|warning| warning.code == code && warning.details == details)
-        {
-            self.warnings.push(Warning {
-                code,
-                message,
-                blocked_by: None,
-                details,
-            });
+    /// Records a warning once.
+    fn warn(&mut self, warning: Outcome) {
+        if !self.warnings.contains(&warning) {
+            self.warnings.push(warning);
         }
     }
 
-    /// Records a bound path that does not exist or cannot be read.
+    /// Records a bound path that does not exist or cannot be read: the path, and the instance
+    /// that binds it (`alias`) unless the installation does.
     fn unreadable(&mut self, path: &Path, alias: Option<&str>) {
-        let message = match alias {
-            Some(alias) => format!(
-                "instance {alias} binds {}, which does not exist or cannot be read",
-                path.display()
-            ),
-            None => format!(
-                "the configuration binds {}, which does not exist or cannot be read",
-                path.display()
-            ),
-        };
-        self.warn(
-            ActingctlCode::PackageBindingUnreadable.code(),
-            message,
-            WarningDetails {
-                path: Some(path.display().to_string()),
-                alias: alias.map(str::to_owned),
-                package_id: None,
-            },
-        );
+        let warning = Outcome::new(ActingctlCode::PackageBindingUnreadable).path(path);
+        self.warn(match alias {
+            Some(alias) => warning.alias(alias),
+            None => warning,
+        });
     }
 
     fn instance(&mut self, instance: &InstanceEntry) -> InstanceRow {
@@ -572,18 +496,11 @@ impl Rows {
                     .find(|prerequisite| prerequisite.package_id == entry.package_id)
                 {
                     Some(prerequisite) => Some(self.installation_path(&prerequisite.package_path)),
+                    // return_home_packages names a package prerequisite_packages does not bind.
                     None => {
                         self.warn(
-                            SharedCode::ReturnHomePackageUnbound.code(),
-                            format!(
-                                "return_home_packages names {}, which prerequisite_packages does not bind",
-                                entry.package_id
-                            ),
-                            WarningDetails {
-                                path: None,
-                                alias: None,
-                                package_id: Some(entry.package_id.clone()),
-                            },
+                            Outcome::new(SharedCode::ReturnHomePackageUnbound)
+                                .package_id(entry.package_id.as_str()),
                         );
                         None
                     }
@@ -642,17 +559,22 @@ fn startup_package_id(path: &Path) -> Option<String> {
 }
 
 /// Runs `packs` when the first argument names it; `None` leaves every other command to the
-/// CLI. It takes no `--state-root`: it never connects to the Runtime (command table D5).
+/// CLI. It takes no `--state-root`: it never connects to the Runtime (command table D5). One
+/// result line on stdout (Workflow #378 A5): the bindings with `package_bindings_reported`, or
+/// `{outcome}` with the refusal (a flag refusal's developer line adds the usage) and exit 1.
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
     Some(match run(&arguments[1..]) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("FATAL actingctl: {error}");
-            ExitCode::FAILURE
+        Ok(document) => cli_line::success(
+            document,
+            &Outcome::new(ActingctlCode::PackageBindingsReported),
+        ),
+        Err(PacksError(outcome)) if outcome.is(ActingctlCode::ActingctlUsageInvalid) => {
+            cli_line::failure(&outcome, Some(USAGE))
         }
+        Err(PacksError(outcome)) => cli_line::failure(&outcome, None),
     })
 }
 
@@ -663,38 +585,54 @@ struct Flags {
     role: Option<Role>,
 }
 
-/// Each flag at most once and with its value; any other argument is a usage error.
+/// Each flag at most once and with its value; any other argument is a usage error naming the
+/// flag (`argument`) and what is wrong with it (`argument_problem`).
 fn parse(arguments: &[OsString]) -> Result<Flags, PacksError> {
     let mut flags = Flags::default();
     let mut index = 0;
     while index < arguments.len() {
-        let flag = arguments[index].to_str().ok_or_else(PacksError::usage)?;
-        let value = arguments.get(index + 1).ok_or_else(PacksError::usage)?;
-        match flag {
-            "--root" if flags.root.is_none() => flags.root = Some(PathBuf::from(value)),
-            "--instance" if flags.instance.is_none() => {
-                let selector = value
-                    .to_str()
-                    .filter(|selector| !selector.trim().is_empty())
-                    .ok_or_else(PacksError::usage)?;
-                flags.instance = Some(selector.to_owned());
+        let flag = arguments[index]
+            .to_str()
+            .ok_or_else(|| PacksError::usage(&arguments[index], ArgumentProblem::NotUtf8))?;
+        let given = match flag {
+            "--root" => flags.root.is_some(),
+            "--instance" => flags.instance.is_some(),
+            "--role" => flags.role.is_some(),
+            _ => return Err(PacksError::usage(flag, ArgumentProblem::Unknown)),
+        };
+        if given {
+            return Err(PacksError::usage(flag, ArgumentProblem::Repeated));
+        }
+        let value = arguments
+            .get(index + 1)
+            .ok_or_else(|| PacksError::usage(flag, ArgumentProblem::ValueMissing))?;
+        if flag == "--root" {
+            flags.root = Some(PathBuf::from(value));
+        } else {
+            let text = value
+                .to_str()
+                .ok_or_else(|| PacksError::usage(flag, ArgumentProblem::NotUtf8))?;
+            if text.trim().is_empty() {
+                return Err(PacksError::usage(flag, ArgumentProblem::ValueMissing));
             }
-            "--role" if flags.role.is_none() => {
+            if flag == "--instance" {
+                flags.instance = Some(text.to_owned());
+            } else {
                 flags.role = Some(
-                    value
-                        .to_str()
-                        .and_then(Role::parse)
-                        .ok_or_else(PacksError::usage)?,
+                    Role::parse(text)
+                        .ok_or_else(|| PacksError::usage(flag, ArgumentProblem::NotRecognised))?,
                 );
             }
-            _ => return Err(PacksError::usage()),
         }
         index += 2;
     }
     Ok(flags)
 }
 
-fn run(arguments: &[OsString]) -> Result<(), PacksError> {
+/// The CLI's document: the bindings and their warnings, each `{outcome}` in this process's
+/// detail. One that does not encode is `actingctl_output_failed`, caused by the encoder's
+/// failure.
+fn run(arguments: &[OsString]) -> Result<Map<String, Value>, PacksError> {
     let flags = parse(arguments)?;
     let (installation, config) = selected_config(flags.root.as_deref())?;
     let answer = read(
@@ -705,19 +643,15 @@ fn run(arguments: &[OsString]) -> Result<(), PacksError> {
             role: flags.role,
         },
     )?;
-    let output_failed = |error: &dyn fmt::Display| {
-        PacksError::new(
-            ActingctlCode::ActingctlOutputFailed,
-            format!("failed to write JSON output: {error}"),
+    answer.document(cli_line::warning).map_err(|error| {
+        PacksError(
+            Outcome::new(ActingctlCode::ActingctlOutputFailed).caused_by(
+                Outcome::new(ContractCode::ForeignDataError)
+                    .raw_source(RawSource::Json)
+                    .raw_text(error.to_string()),
+            ),
         )
-    };
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, &answer.document())
-        .map_err(|error| output_failed(&error))?;
-    writer
-        .write_all(b"\n")
-        .map_err(|error| output_failed(&error))
+    })
 }
 
 /// The selected configuration generation, found as mcp-serve finds it (`mcp/runtime.rs`): this
@@ -732,28 +666,25 @@ fn run(arguments: &[OsString]) -> Result<(), PacksError> {
 pub(crate) fn selected_config(
     root: Option<&Path>,
 ) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
-    let process = actingcommand_contract::process_installation().map_err(|error| {
-        PacksError::new(
-            error.code(),
-            "the install selection of this process cannot be read",
-        )
-    })?;
+    // The install selection of this process cannot be read: the contract's code.
+    let process = actingcommand_contract::process_installation()
+        .map_err(|error| PacksError(Outcome::new(error.code())))?;
     if let Some(selected) = process {
-        if let Some(root) = root {
-            let root = fs::canonicalize(root).map_err(|error| {
-                PacksError::new(
-                    ActingctlCode::InstallRootUnresolved,
-                    format!("--root {}: {error}", root.display()),
+        if let Some(given) = root {
+            // `--root` that does not resolve, or is not the install root this actingctl runs
+            // from (`install_root`).
+            let root = fs::canonicalize(given).map_err(|error| {
+                PacksError(
+                    Outcome::new(ActingctlCode::InstallRootUnresolved)
+                        .path(given)
+                        .caused_by(Outcome::from_io_error(&error, IoOp::Canonicalize)),
                 )
             })?;
             if root != selected.root() {
-                return Err(PacksError::new(
-                    ActingctlCode::InstallProcessRootMismatch,
-                    format!(
-                        "--root {} is not the install root {} this actingctl runs from",
-                        root.display(),
-                        selected.root().display()
-                    ),
+                return Err(PacksError(
+                    Outcome::new(ActingctlCode::InstallProcessRootMismatch)
+                        .path(root)
+                        .install_root(selected.root()),
                 ));
             }
         }
@@ -762,12 +693,9 @@ pub(crate) fn selected_config(
         return Ok((Some(current), config));
     }
     if let Some(root) = root {
-        let selected = InstalledProcess::read(root).map_err(|error| {
-            PacksError::new(
-                error.code(),
-                format!("the install selection of {} cannot be read", root.display()),
-            )
-        })?;
+        // The install selection of `--root` cannot be read: the contract's code.
+        let selected =
+            InstalledProcess::read(root).map_err(|error| PacksError(Outcome::new(error.code())))?;
         return Ok(match selected {
             Some(selected) => {
                 let config = selected.config_path();
@@ -776,14 +704,10 @@ pub(crate) fn selected_config(
             None => (None, root.join(ROOT_CONFIG_FILE)),
         });
     }
+    // actingctl does not run from an install root, and no `--root` was given.
     executable_install_root()
         .map(|root| (None, root.join(ROOT_CONFIG_FILE)))
-        .ok_or_else(|| {
-            PacksError::new(
-                ActingctlCode::InstallRootUnresolved,
-                "actingctl does not run from an install root; pass --root <install root>",
-            )
-        })
+        .ok_or_else(|| PacksError(Outcome::new(ActingctlCode::InstallRootUnresolved)))
 }
 
 /// The selection `install\active.json` of the install root `root` holds now (Workflow #389 MCP-7
@@ -795,21 +719,8 @@ pub(crate) fn selected_config(
 /// code, one the root no longer has `install_selection_unavailable`.
 pub(crate) fn current_selection(root: &Path) -> Result<InstalledProcess, PacksError> {
     InstalledProcess::read_active(root)
-        .map_err(|error| {
-            PacksError::new(
-                error.code(),
-                format!("the install selection of {} cannot be read", root.display()),
-            )
-        })?
-        .ok_or_else(|| {
-            PacksError::new(
-                SharedCode::InstallSelectionUnavailable,
-                format!(
-                    "the install root {} no longer has a selection",
-                    root.display()
-                ),
-            )
-        })
+        .map_err(|error| PacksError(Outcome::new(error.code())))?
+        .ok_or_else(|| PacksError(Outcome::new(SharedCode::InstallSelectionUnavailable)))
 }
 
 /// Two levels above the running executable when `<root>\runtime\BUILD-MANIFEST.json` is a
@@ -850,14 +761,14 @@ mod tests {
 
         // Ruling Q6: a configuration that cannot be read is actingd's config_read_failed,
         // one that does not decode its config_decode_failed, both shared through SharedCode.
-        let missing = refused(read(None, &config, &everything));
-        assert_eq!(missing.code(), SharedCode::ConfigReadFailed.code());
-        assert_eq!(missing.code().category(), Category::Error);
+        let missing = refused(read(None, &config, &everything)).outcome();
+        assert!(missing.is(SharedCode::ConfigReadFailed), "{missing}");
+        assert_eq!(missing.category(), Category::Error);
 
         fs::write(&config, b"not json").expect("write configuration");
-        let malformed = refused(read(None, &config, &everything));
-        assert_eq!(malformed.code(), SharedCode::ConfigDecodeFailed.code());
-        assert_eq!(malformed.code().category(), Category::Error);
+        let malformed = refused(read(None, &config, &everything)).outcome();
+        assert!(malformed.is(SharedCode::ConfigDecodeFailed), "{malformed}");
+        assert_eq!(malformed.category(), Category::Error);
 
         // Command table §2.1: a selector that names no configured instance is instance_unknown.
         fs::write(&config, ONE_INSTANCE).expect("write configuration");
@@ -868,8 +779,12 @@ mod tests {
                 instance: Some("node-z"),
                 role: None,
             },
-        ));
-        assert_eq!(unknown.code(), RuntimeErrorCode::InstanceUnknown.code());
-        assert_eq!(unknown.code().category(), Category::Error);
+        ))
+        .outcome();
+        assert!(
+            unknown.is(actingcommand_contract::RuntimeErrorCode::InstanceUnknown.code()),
+            "{unknown}"
+        );
+        assert_eq!(unknown.category(), Category::Error);
     }
 }

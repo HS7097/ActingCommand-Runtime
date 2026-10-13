@@ -10,7 +10,9 @@ mod held_runtime;
 
 use super::decide::{self, Decision, Journal, Stage, StartProbes};
 use super::observe;
-use super::state::{StartRecord, WatchdogState};
+use super::state::{Recorded, StartRecord, WatchdogState};
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_runtime_host::{
     PreparationCheckpoint, PreparationTestAction, RuntimeHost, RuntimeHostConfig,
 };
@@ -97,7 +99,7 @@ impl Fixture {
 
     fn observed(&self) -> decide::Observed {
         observe::observe_owner(&self.state, std::slice::from_ref(&self.logs))
-            .unwrap_or_else(|failure| panic!("observe: {}: {}", failure.code, failure.detail))
+            .unwrap_or_else(|failure| panic!("observe: {failure}"))
     }
 
     /// One owner whose start stopped: its journal closed, then its FATAL line.
@@ -158,8 +160,8 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
         "FATAL actingd: runtime host error install_startup_shut_down during install_transition",
     ] {
         assert_eq!(
-            decision(&Fixture::stopped_owner(line).observed(), &fresh).name(),
-            "fatal_hold",
+            decision(&Fixture::stopped_owner(line).observed(), &fresh).code(),
+            ActingctlCode::WatchdogFatalHold,
             "{line}"
         );
     }
@@ -167,7 +169,7 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
         starts: (1..=3)
             .map(|minute| StartRecord {
                 at_unix_ms: T0 + 60_000 - minute * 60_000,
-                outcome: "exited_during_startup".to_owned(),
+                start_result: Recorded::of(&Outcome::new(ActingctlCode::ExitedDuringStartup)),
                 ..StartRecord::default()
             })
             .collect(),
@@ -178,8 +180,8 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
             &Fixture::stopped_owner(STOPPED_WITH_CAUSE).observed(),
             &exhausted
         )
-        .name(),
-        "budget_exhausted"
+        .code(),
+        ActingctlCode::WatchdogBudgetExhausted
     );
 }
 
@@ -187,38 +189,37 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
 /// stopped held start are restartable; any other FATAL, an install operation included, holds.
 #[test]
 fn gate_fatal_line_formats_class_by_the_registered_top_code_only() {
+    let start_due = ActingctlCode::WatchdogStartDue;
+    let fatal_hold = ActingctlCode::WatchdogFatalHold;
     let rows = [
-        (STOPPED, "start_due"),
-        (STOPPED_WITH_CAUSE, "start_due"),
-        (HELD_TIMEOUT, "start_due"),
-        (RELEASE_TIMEOUT, "start_due"),
+        (STOPPED, start_due),
+        (STOPPED_WITH_CAUSE, start_due),
+        (HELD_TIMEOUT, start_due),
+        (RELEASE_TIMEOUT, start_due),
         (
             "FATAL actingd: runtime host error install_preparation_not_authorized during install_transition",
-            "fatal_hold",
+            fatal_hold,
         ),
         (
             "FATAL actingd: runtime host error ledger_failure during append_runtime_event",
-            "fatal_hold",
+            fatal_hold,
         ),
         (
             "FATAL actingd: runtime host error agent_ledger_failure during recover_agent_dispatcher",
-            "fatal_hold",
+            fatal_hold,
         ),
-        ("FATAL actingd: usage_invalid", "fatal_hold"),
+        ("FATAL actingd: usage_invalid", fatal_hold),
         (
             "FATAL actingd: resource_package_invalid: C:\\packages\\missing.zip",
-            "fatal_hold",
+            fatal_hold,
         ),
-        (
-            "FATAL acforward: Cannot run C:\\root\\runtime",
-            "fatal_hold",
-        ),
+        ("FATAL acforward: Cannot run C:\\root\\runtime", fatal_hold),
     ];
     for (line, class) in rows {
         let observed = Fixture::stopped_owner(line).observed();
         let decided = match decide::decide_observed(&observed, &WatchdogState::default()) {
-            Stage::Decided(decision) => decision.name(),
-            Stage::ConsiderStart => "start_due",
+            Stage::Decided(decision) => decision.code(),
+            Stage::ConsiderStart => Decision::Start.code(),
         };
         assert_eq!(decided, class, "{line}");
     }
@@ -287,7 +288,7 @@ fn gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start() {
     .expect("write the FATAL log");
     let read_root = || {
         observe::observe_owner(&state, std::slice::from_ref(&logs))
-            .unwrap_or_else(|failure| panic!("observe: {}: {}", failure.code, failure.detail))
+            .unwrap_or_else(|failure| panic!("observe: {failure}"))
     };
     assert_eq!(
         decision(&read_root(), &WatchdogState::default()),

@@ -135,8 +135,8 @@
       "description": "Processes involved, one record each."
     },
     "owner_epoch": {
-      "type": "integer",
-      "description": "The owner epoch of a Runtime start."
+      "type": "id",
+      "description": "The owner epoch of a Runtime start (an opaque id, epoch_...)."
     },
     "raw_source": {
       "type": "vocab:raw_source",
@@ -1576,6 +1576,42 @@
     "removed_package_ids": {
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
+    },
+    "argument": {
+      "type": "name",
+      "description": "The name of a command-line flag or of an MCP tool or request argument, as given."
+    },
+    "argument_problem": {
+      "type": "vocab:argument_problem",
+      "description": "What is wrong with one flag or argument."
+    },
+    "instance_selector": {
+      "type": "name",
+      "description": "An instance selector as given: an alias, an instance_id or an ADB port."
+    },
+    "mcp_tool": {
+      "type": "name",
+      "description": "The name of an MCP tool."
+    },
+    "material_state": {
+      "type": "vocab:material_state",
+      "description": "The state of a Runtime material read."
+    },
+    "material_limit": {
+      "type": "vocab:material_limit",
+      "description": "Why a Runtime material read stopped short."
+    },
+    "req_id": {
+      "type": "id",
+      "description": "The request id actinglab gave a Lab request."
+    },
+    "owner_closed": {
+      "type": "boolean",
+      "description": "Whether the owner journal's last record of the epoch says the owner closed."
+    },
+    "process_alive": {
+      "type": "boolean",
+      "description": "Whether the process was alive at the last probe."
     }
   },
   "vocabularies": {
@@ -3717,6 +3753,15 @@
         },
         "person_action": {
           "description": "A person must act."
+        },
+        "state_root": {
+          "description": "The Runtime state root must be known (--state-root, or the configuration's state_root)."
+        },
+        "scheduling_pause": {
+          "description": "Scheduling must be paused first (ac_pause)."
+        },
+        "runtime_upgrade": {
+          "description": "actingd must be a release that serves the request."
         }
       }
     },
@@ -4535,6 +4580,87 @@
         },
         "repeated_key": {
           "description": "The request names the key more than once."
+        }
+      }
+    },
+    "argument_problem": {
+      "description": "What is wrong with one command-line flag or MCP tool argument.",
+      "tokens": {
+        "unknown": {
+          "description": "Not a flag of the command or an argument of the tool."
+        },
+        "required": {
+          "description": "A required flag or argument is absent."
+        },
+        "repeated": {
+          "description": "Given more than once."
+        },
+        "value_missing": {
+          "description": "A flag without its value."
+        },
+        "not_utf8": {
+          "description": "A command-line word that is not UTF-8."
+        },
+        "wrong_type": {
+          "description": "Not of the type it must have."
+        },
+        "out_of_range": {
+          "description": "A number or a length outside its range (range_min, range_max)."
+        },
+        "not_recognised": {
+          "description": "Text that is none of the spellings or forms it may take."
+        },
+        "conflicting": {
+          "description": "Excludes, or needs, another flag or argument."
+        },
+        "unusable": {
+          "description": "Names something that cannot be used: unreadable, not of its kind, or refused."
+        }
+      }
+    },
+    "material_state": {
+      "description": "The state of a Runtime material read (RuntimeMaterialReadState).",
+      "tokens": {
+        "verified": {
+          "description": "The material was read and verified."
+        },
+        "not_provided": {
+          "description": "The Runtime did not provide the material."
+        },
+        "missing": {
+          "description": "The material is missing from the store."
+        },
+        "integrity_failed": {
+          "description": "The material failed its integrity check."
+        },
+        "source_incomplete": {
+          "description": "The material's source record is incomplete."
+        },
+        "request_denied": {
+          "description": "The read request was denied."
+        },
+        "read_failed": {
+          "description": "Reading the material failed."
+        }
+      }
+    },
+    "material_limit": {
+      "description": "Why a Runtime material read stopped short (RuntimeMaterialReadLimit).",
+      "tokens": {
+        "pending_eviction": {
+          "description": "The material is about to be evicted."
+        },
+        "evicted": {
+          "description": "The material was evicted."
+        },
+        "eviction_failed": {
+          "description": "Evicting the material failed."
+        },
+        "budget_exceeded": {
+          "description": "The read would exceed its byte budget."
+        },
+        "reply_bytes": {
+          "description": "The reply would exceed its byte bound."
         }
       }
     }
@@ -7362,6 +7488,9 @@
     ],
     "interrupt_": [
       "runtime-host"
+    ],
+    "instances_": [
+      "actingctl"
     ]
   },
   "fragments": {
