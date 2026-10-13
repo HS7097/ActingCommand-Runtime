@@ -5,9 +5,9 @@
 //! code, so COM's task service is out of reach. The definition is written as UTF-16LE XML
 //! with a BOM, the form `schtasks /Query /XML` declares (`contracts/runtime-watchdog.md`).
 
-use super::Failure;
-use super::powershell;
+use super::{json_failure, powershell, process_failure};
 use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
@@ -45,24 +45,27 @@ fn system32(program: &str) -> PathBuf {
     PathBuf::from(system_root).join("System32").join(program)
 }
 
-fn run(program: &str, arguments: &[&OsStr]) -> Result<Output, String> {
-    Command::new(system32(program))
+/// Runs a System32 tool; one that does not run is the OS's failure (`foreign_os_error` with
+/// the program's `path`).
+fn run(program: &str, arguments: &[&OsStr]) -> Result<Output, Outcome> {
+    let path = system32(program);
+    Command::new(&path)
         .args(arguments)
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map_err(|error| format!("{program} did not run: {error}"))
+        .map_err(|error| Outcome::from_io_error(&error, IoOp::Spawn).path(&path))
 }
 
-/// What a tool printed, stdout then stderr, as one trimmed text.
-fn printed(output: &Output) -> String {
-    format!(
+/// A tool that answered with a failure: what it printed, stdout then stderr, as the raw text of
+/// `foreign_other_error`, with its exit code.
+fn tool_failure(output: &Output) -> Outcome {
+    let printed = format!(
         "{} {}",
         decode(&output.stdout).trim(),
         decode(&output.stderr).trim()
-    )
-    .trim()
-    .to_owned()
+    );
+    process_failure(output.status, printed.trim().as_bytes())
 }
 
 /// `schtasks` writes in the console code page when redirected, UTF-16 when asked for it;
@@ -84,23 +87,22 @@ fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// The current user's SID, the task's principal.
-pub(crate) fn current_user_sid() -> Result<String, Failure> {
+/// The current user's SID, the task's principal; `watchdog_user_unavailable` caused by
+/// `whoami`'s failure, or by what it printed when that holds no SID.
+pub(crate) fn current_user_sid() -> Result<String, Outcome> {
+    let unavailable = || Outcome::new(ActingctlCode::WatchdogUserUnavailable);
     let output = run(
         "whoami.exe",
         &["/user", "/fo", "csv", "/nh"].map(OsStr::new),
     )
-    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogUserUnavailable, detail))?;
+    .map_err(|failure| unavailable().caused_by(failure))?;
     let text = decode(&output.stdout);
     let sid = csv_fields(text.lines().next().unwrap_or_default())
         .pop()
         .filter(|sid| sid.starts_with("S-1-"));
     match (output.status.success(), sid) {
         (true, Some(sid)) => Ok(sid),
-        _ => Err(Failure::misconfigured(
-            ActingctlCode::WatchdogUserUnavailable,
-            format!("whoami /user printed no SID: {}", printed(&output)),
-        )),
+        _ => Err(unavailable().caused_by(tool_failure(&output))),
     }
 }
 
@@ -210,7 +212,10 @@ pub(crate) fn utf16le_with_bom(text: &str) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Failure> {
+/// `schtasks /Create`; a failure is `watchdog_task_register_failed` (`name`) caused by
+/// schtasks' failure.
+pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Outcome> {
+    let failed = || Outcome::new(ActingctlCode::WatchdogTaskRegisterFailed).name(name);
     let output = run(
         "schtasks.exe",
         &[
@@ -222,30 +227,27 @@ pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Failure> {
             OsStr::new("/F"),
         ],
     )
-    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskRegisterFailed, detail))?;
+    .map_err(|failure| failed().caused_by(failure))?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(Failure::misconfigured(
-            ActingctlCode::WatchdogTaskRegisterFailed,
-            format!("schtasks /Create {}: {}", output.status, printed(&output)),
-        ))
+        Err(failed().caused_by(tool_failure(&output)))
     }
 }
 
-pub(crate) fn delete(name: &str) -> Result<(), Failure> {
+/// `schtasks /Delete`; a failure is `watchdog_task_delete_failed` (`name`) caused by
+/// schtasks' failure.
+pub(crate) fn delete(name: &str) -> Result<(), Outcome> {
+    let failed = || Outcome::new(ActingctlCode::WatchdogTaskDeleteFailed).name(name);
     let output = run(
         "schtasks.exe",
         &["/Delete", "/TN", name, "/F"].map(OsStr::new),
     )
-    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskDeleteFailed, detail))?;
+    .map_err(|failure| failed().caused_by(failure))?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(Failure::misconfigured(
-            ActingctlCode::WatchdogTaskDeleteFailed,
-            format!("schtasks /Delete {}: {}", output.status, printed(&output)),
-        ))
+        Err(failed().caused_by(tool_failure(&output)))
     }
 }
 
@@ -279,7 +281,8 @@ pub(crate) enum Registration {
 /// PowerShell that answers in UTF-8 JSON: its definition (`Export-ScheduledTask`) and its run
 /// state (`Get-ScheduledTaskInfo`). `schtasks /Query` would print in the console code page.
 /// The names of every other watchdog task in the root folder come along, for `uninstall`.
-pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Failure> {
+/// Every failure is `watchdog_task_query_failed`.
+pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $all = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'ActingCommand Runtime watchdog *' })\n\
@@ -300,16 +303,17 @@ pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Failure> 
         SCRIPT,
         &[("AC_WD_TASK", OsStr::new(name))],
         Duration::from_secs(60),
-    )
-    .map_err(|detail| Failure::misconfigured(ActingctlCode::WatchdogTaskQueryFailed, detail))?;
+        ActingctlCode::WatchdogTaskQueryFailed,
+    )?;
     parse_query(&output)
 }
 
-pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Failure> {
-    let unreadable =
-        |detail: String| Failure::misconfigured(ActingctlCode::WatchdogTaskQueryFailed, detail);
+/// The query's answer; output that is not JSON is `watchdog_task_query_failed` caused by the
+/// parser's message, output without `exists` (or a task without `xml`) the code alone.
+pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Outcome> {
+    let unreadable = || Outcome::new(ActingctlCode::WatchdogTaskQueryFailed);
     let value: Value = serde_json::from_str(output.trim())
-        .map_err(|error| unreadable(format!("task query output is not JSON: {error}")))?;
+        .map_err(|error| unreadable().caused_by(json_failure(&error)))?;
     let others = match &value["others"] {
         Value::Array(names) => names
             .iter()
@@ -321,9 +325,7 @@ pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), F
     let registration = match value["exists"].as_bool() {
         Some(false) => Registration::Absent,
         Some(true) => {
-            let xml = value["xml"]
-                .as_str()
-                .ok_or_else(|| unreadable(format!("task query output lacks xml: {value}")))?;
+            let xml = value["xml"].as_str().ok_or_else(unreadable)?;
             let text = |key: &str| value[key].as_str().map(str::to_owned);
             Registration::Present(
                 parse_definition(xml),
@@ -335,22 +337,15 @@ pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), F
                 },
             )
         }
-        None => {
-            return Err(unreadable(format!(
-                "task query output lacks exists: {value}"
-            )));
-        }
+        None => return Err(unreadable()),
     };
     Ok((registration, others))
 }
 
-/// `schtasks /End`: ends a tick in flight; a task that is not running answers non-zero, which
-/// is reported, not an error.
-pub(crate) fn end(name: &str) -> String {
-    match run("schtasks.exe", &["/End", "/TN", name].map(OsStr::new)) {
-        Ok(output) => format!("{}: {}", output.status, printed(&output)),
-        Err(detail) => detail,
-    }
+/// `schtasks /End`: ends a tick in flight. Its exit code is reported, not judged: a task that
+/// is not running answers non-zero. A schtasks that did not run is the OS's failure.
+pub(crate) fn end(name: &str) -> Result<Option<i32>, Outcome> {
+    run("schtasks.exe", &["/End", "/TN", name].map(OsStr::new)).map(|output| output.status.code())
 }
 
 pub(crate) fn parse_definition(xml: &str) -> Definition {
@@ -370,8 +365,10 @@ fn element(xml: &str, tag: &str) -> Option<String> {
     Some(unescape(xml[start..end].trim()))
 }
 
-/// What differs from the definition `install` writes; empty when it matches.
-pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<String> {
+/// What differs from the definition `install` writes, as the names of the members that differ
+/// (`command`, `interval`, `logon_type`, `run_level`, `disabled`); empty when it matches. The
+/// values themselves are the definition's members.
+pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<&'static str> {
     let expected = launcher(root_plain).display().to_string();
     let mut differences = Vec::new();
     if !definition
@@ -379,17 +376,14 @@ pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<Stri
         .as_deref()
         .is_some_and(|command| command.eq_ignore_ascii_case(&expected))
     {
-        differences.push(format!(
-            "command {:?}, expected {expected:?}",
-            definition.command
-        ));
+        differences.push("command");
     }
     for (name, value, expected) in [
         ("interval", &definition.interval, INTERVAL),
         ("logon_type", &definition.logon_type, LOGON_TYPE),
     ] {
         if value.as_deref() != Some(expected) {
-            differences.push(format!("{name} {value:?}, expected {expected:?}"));
+            differences.push(name);
         }
     }
     // Task Scheduler omits the default run level, which is the least privilege.
@@ -398,13 +392,10 @@ pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<Stri
         .as_deref()
         .is_some_and(|level| level != RUN_LEVEL)
     {
-        differences.push(format!(
-            "run_level {:?}, expected {RUN_LEVEL:?}",
-            definition.run_level
-        ));
+        differences.push("run_level");
     }
     if !definition.enabled {
-        differences.push("disabled".to_owned());
+        differences.push("disabled");
     }
     differences
 }

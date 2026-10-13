@@ -19,6 +19,10 @@
 //! The generation test: an ac_diagnose of a server started on an install root runs the
 //! `actingd suspended` of the generation selected at the call, not the one selected when the
 //! server started (the stale-source report of 10-13, as the train 4 ruling on MCP-11).
+//!
+//! Workflow #378 A5: the CLI line carries the outcome `runtime_diagnosis_reported` beside the
+//! diagnosis, which is the rest of the line; a report status that is unavailable or failed
+//! carries its `outcome`; a tool error is `{class, outcome}`.
 
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::codes::SharedCode;
@@ -163,7 +167,8 @@ fn parity(mcp: &mut McpServer, id: u64, root: &Path, arguments: Value) -> Value 
     cli
 }
 
-/// `actingctl diagnose --state-root <root>` with `arguments` as flags; its stdout JSON.
+/// `actingctl diagnose --state-root <root>` with `arguments` as flags; its stdout JSON without
+/// the line's `outcome`, which is `runtime_diagnosis_reported`.
 #[track_caller]
 fn cli_diagnose(root: &Path, arguments: &Value) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_actingctl"));
@@ -181,12 +186,24 @@ fn cli_diagnose(root: &Path, arguments: &Value) -> Value {
         "actingctl diagnose with {arguments} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let mut line: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "actingctl diagnose with {arguments} printed no JSON ({error}): {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    let outcome = line
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"));
+    let Some(outcome) = outcome else {
+        panic!("actingctl diagnose with {arguments} printed no outcome: {line}")
+    };
+    assert_eq!(
+        outcome["code"],
+        json!("runtime_diagnosis_reported"),
+        "actingctl diagnose with {arguments}: {outcome}"
+    );
+    line
 }
 
 /// The scripted Runtime's ledger and status, and the groups §4.8 gives for them.
@@ -993,9 +1010,13 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
 /// and B, generation 1 selected on slot A. The MCP server is the install's own actingctl in slot A,
 /// started as the fixed entry `<root>\runtime\actingctl.exe` starts it: with the install root and
 /// the selection of its start inherited, which it holds for its whole life. The programs it runs
-/// are stand-ins, actingctl itself, which refuses their arguments as usage and prints nothing
-/// (exit 1, no JSON): `<slot>\runtime\actingcommand-actingd.exe` (actingd suspended, actingd
-/// check-config) and `<root>\tools\actinglab.exe` (the Lab tools, ac_run_pack's package digest).
+/// are stand-ins, actingctl itself, which refuses their arguments as usage: it prints its one
+/// result line, the refusal `{outcome}`, and exits 1 (Workflow #378 A5, model §7.3):
+/// `<slot>\runtime\actingcommand-actingd.exe` (actingd suspended, actingd check-config) and
+/// `<root>\tools\actinglab.exe` (the Lab tools, ac_run_pack's package digest). A stand-in that
+/// ran leaves its exit code 1 in the answer: ac_diagnose's report status is `failed` with
+/// `suspended_report_failed` and `exit_code`, ac_binding_draft's check_config has `exit_code`. A
+/// program that is not there leaves no exit code (a spawn failure).
 ///
 /// A deploy then selects generation 2 on slot B, and the actingd stand-in now stands only in
 /// slot B. Each tool answers the generation selected now: ac_diagnose and ac_binding_draft's
@@ -1127,8 +1148,11 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
     // Generation 1: slot A's actingd runs, and ac_packs names generation 1's configuration.
     let before = report(&call(&mut mcp, "ac_diagnose", json!({})));
     assert_eq!(
-        (before["code"].clone(), before["exit_code"].clone()),
-        (json!("suspended_report_unreadable"), json!(1)),
+        (
+            before["outcome"]["code"].clone(),
+            before["exit_code"].clone()
+        ),
+        (json!("suspended_report_failed"), json!(1)),
         "the actingd stand-in in slot A ran: {before}"
     );
     let config = packs_config(&call(&mut mcp, "ac_packs", json!({})));
@@ -1142,8 +1166,8 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
     select("B", 2);
     let after = report(&call(&mut mcp, "ac_diagnose", json!({})));
     assert_eq!(
-        (after["code"].clone(), after["exit_code"].clone()),
-        (json!("suspended_report_unreadable"), json!(1)),
+        (after["outcome"]["code"].clone(), after["exit_code"].clone()),
+        (json!("suspended_report_failed"), json!(1)),
         "ac_diagnose ran actingd suspended of the generation it started with, not of the one selected now: {after}"
     );
     let config = packs_config(&call(&mut mcp, "ac_packs", json!({})));
@@ -1158,11 +1182,8 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
     );
     let check_config = accepted(&answer, "ac_binding_draft")["check_config"].clone();
     assert_eq!(
-        (
-            check_config["error"]["code"].clone(),
-            check_config["error"]["details"]["exit_code"].clone(),
-        ),
-        (json!("check_config_failed"), json!(1)),
+        check_config["exit_code"],
+        json!(1),
         "ac_binding_draft ran actingd check-config of the generation it started with, not of the one selected now: {check_config}"
     );
 
@@ -1179,7 +1200,7 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
     ] {
         let answer = call(&mut mcp, tool, arguments);
         assert_eq!(
-            answer["result"]["structuredContent"]["error"]["code"],
+            answer["result"]["structuredContent"]["error"]["outcome"]["code"],
             json!("install_selection_unavailable"),
             "{tool} without a selection: {answer}"
         );

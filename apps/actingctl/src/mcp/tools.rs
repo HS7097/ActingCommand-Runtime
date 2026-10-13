@@ -13,9 +13,10 @@ use super::operator;
 use super::protocol::Era;
 use super::runs;
 use super::runtime::RuntimeAccess;
-use crate::codes::ActingctlCode;
-use actingcommand_contract::outcome::Code;
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_contract::outcome::{Code, Detail, Outcome};
 use serde_json::{Map, Value, json};
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
@@ -39,7 +40,7 @@ macro_rules! check_job {
 /// How a Lab tool reports actinglab's failures.
 macro_rules! lab_errors {
     () => {
-        " Failures keep actinglab's class by its exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage not_implemented) with its error verbatim in details.lab_error; any other exit, or no JSON envelope, is runtime lab_process_failed with the stderr tail. String arguments may not start with --. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported; an error that large keeps its class, code and message, with lab_error trimmed to its code, message and scalar details, lab_error_trimmed, req_id and export."
+        " Failures are {class, outcome}: an actinglab error envelope keeps its class by actinglab's exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage) with outcome lab_tool_failed (exit_code, req_id), caused by actinglab's code (not_implemented for exit 6) and, when actinglab's error has details, by foreign_other_error whose raw_text is those details as JSON; any other exit, or no JSON envelope, is runtime lab_process_failed caused by foreign_other_error with actinglab's stderr tail as raw_text. String arguments may not start with --. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported."
     };
 }
 
@@ -70,6 +71,16 @@ impl Tier {
             Self::Operator => "operator",
             Self::Author => "author",
         }
+    }
+}
+
+/// The tier is the catalog vocabulary `mcp_tier` (its source is this enum), the value
+/// `required_tier` of `tier_not_enabled`.
+impl actingcommand_contract::outcome::VocabularyToken for Tier {
+    const VOCABULARY: &'static str = "mcp_tier";
+
+    fn token(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -145,138 +156,139 @@ impl ToolSuccess {
     }
 }
 
-/// `{class, code, message, blocked_by, details}`; boxed so results stay small.
+actingcommand_contract::outcome_vocabulary! {
+    /// What must change before an MCP call can work (vocabulary `mcp_blocker`, Workflow #378
+    /// A5, model v2.2 §7.3): the value `mcp_blocker` of a tool error. The advice itself is the
+    /// code's `handling` in the catalog.
+    pub(super) enum McpBlocker: "mcp_blocker" {
+        /// The server's tier must include the tool's tier (`--tier`).
+        ServerTier => "server_tier",
+        /// The installation root must be known (`--root`).
+        InstallRoot => "install_root",
+        /// The root Tools folder must hold the tool.
+        ToolsDir => "tools_dir",
+        /// The material mode must allow it (`mode export`).
+        MaterialMode => "material_mode",
+        /// actingd must run on the state root.
+        RuntimeRunning => "runtime_running",
+        /// A person must act (configuration, approval).
+        PersonAction => "person_action",
+        /// The Runtime state root must be known (`--state-root` or the configuration's).
+        StateRoot => "state_root",
+        /// Scheduling must be paused first (`ac_pause`).
+        SchedulingPause => "scheduling_pause",
+        /// actingd must be a release that serves the request.
+        RuntimeUpgrade => "runtime_upgrade",
+    }
+}
+
+/// The outcome detail of every tool error and warning this server writes (model v2.2 §7.1:
+/// class (b), full by default; `mcp-serve --detail codes` or `ACTINGCOMMAND_DETAIL=codes`).
+static DETAIL: OnceLock<Detail> = OnceLock::new();
+
+/// Sets this server's outcome detail once, at start.
+pub(super) fn set_detail(detail: Detail) {
+    let _ = DETAIL.set(detail);
+}
+
+fn detail() -> Detail {
+    DETAIL.get().copied().unwrap_or(Detail::Full)
+}
+
+/// An outcome as this server writes it: the `actingcommand.outcome.v1` envelope in the
+/// server's detail.
+pub(super) fn envelope(outcome: &Outcome) -> Value {
+    crate::cli_line::outcome_value(outcome, detail())
+}
+
+/// A warning beside a result: `{outcome}` (Workflow #378 A5; no English member), the same
+/// form the CLI line carries.
+pub(super) fn warning(outcome: &Outcome) -> Value {
+    crate::cli_line::warning_value(outcome, detail())
+}
+
+/// A tool error, `{class, outcome}` (Workflow #378 A5, model v2.2 §7.3): the class (#338 R6:
+/// usage, safety, device, runtime, uncertain) and one outcome, whose values and links hold
+/// everything the error says; there is no `code`, `message`, `blocked_by`, `details` or
+/// `explain` member. Boxed so results stay small.
+#[derive(Clone)]
 pub(super) struct ToolError(Box<ToolErrorBody>);
 
+#[derive(Clone)]
 struct ToolErrorBody {
     class: &'static str,
-    code: ToolCode,
-    message: String,
-    blocked_by: Option<String>,
-    details: Map<String, Value>,
-}
-
-/// The code a tool error answers with.
-pub(super) enum ToolCode {
-    /// A code this server emits.
-    Emitted(Code),
-    /// A code passed on as another program or the Runtime reported it: actinglab's envelope
-    /// error, a job's stored error and the Runtime's material read failure, which A5's
-    /// `{class, outcome}` relays as links. It also carries actingctl's own dynamic family
-    /// `material_<state>` (a material read without a failure): a code that carries the read
-    /// state, which A5 splits into one fixed code with a `material_state` value instead of
-    /// relaying it.
-    Relayed { relayed_code: String },
-}
-
-impl ToolCode {
-    /// The code's spelling.
-    fn as_str(&self) -> &str {
-        match self {
-            Self::Emitted(code) => code.as_str(),
-            Self::Relayed { relayed_code } => relayed_code,
-        }
-    }
+    outcome: Outcome,
 }
 
 impl ToolError {
-    pub(super) fn new(
-        class: &'static str,
-        code: impl Into<Code>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::coded(class, ToolCode::Emitted(code.into()), message)
+    /// An error of this class whose outcome is `code` alone; add values with [`Self::with`].
+    pub(super) fn new(class: &'static str, code: impl Into<Code>) -> Self {
+        Self::outcome(class, Outcome::new(code))
     }
 
-    /// An error with this code, emitted or relayed.
-    pub(super) fn coded(class: &'static str, code: ToolCode, message: impl Into<String>) -> Self {
-        Self(Box::new(ToolErrorBody {
-            class,
-            code,
-            message: message.into(),
-            blocked_by: None,
-            details: Map::new(),
-        }))
+    /// An error of this class with this outcome.
+    pub(super) fn outcome(class: &'static str, outcome: Outcome) -> Self {
+        Self(Box::new(ToolErrorBody { class, outcome }))
     }
 
-    pub(super) fn usage(code: impl Into<Code>, message: impl Into<String>) -> Self {
-        Self::new("usage", code, message)
+    /// A `usage` error whose outcome is `code` alone.
+    pub(super) fn usage(code: impl Into<Code>) -> Self {
+        Self::new("usage", code)
     }
 
-    pub(super) fn with_detail(mut self, key: &str, value: Value) -> Self {
-        self.0.details.insert(key.to_owned(), value);
-        self
+    /// Changes the outcome: adds values with its typed setters, or links.
+    pub(super) fn with(self, change: impl FnOnce(Outcome) -> Outcome) -> Self {
+        let ToolErrorBody { class, outcome } = *self.0;
+        Self::outcome(class, change(outcome))
     }
 
-    /// What has to change before the call can succeed.
-    pub(super) fn blocked_by(mut self, pointer: impl Into<String>) -> Self {
-        self.0.blocked_by = Some(pointer.into());
-        self
+    /// Attaches the outcome that caused this error.
+    pub(super) fn caused_by(self, link: Outcome) -> Self {
+        self.with(|outcome| outcome.caused_by(link))
     }
 
-    /// The code this server emitted; `None` for a relayed one.
-    pub(super) fn code(&self) -> Option<Code> {
-        match &self.0.code {
-            ToolCode::Emitted(code) => Some(*code),
-            ToolCode::Relayed { .. } => None,
-        }
+    /// What must change before the call can work: the value `mcp_blocker`.
+    pub(super) fn blocked_by(self, blocker: McpBlocker) -> Self {
+        self.with(|outcome| outcome.mcp_blocker(blocker))
     }
 
-    /// The spelling of the code, emitted or relayed, as the error's JSON carries it.
-    pub(super) fn code_spelling(&self) -> &str {
-        self.0.code.as_str()
+    /// The error's class; only the gates read it apart from `{class, outcome}`.
+    #[cfg(test)]
+    pub(super) fn class(&self) -> &'static str {
+        self.0.class
     }
 
-    /// One member of the details, when present.
-    pub(super) fn detail(&self, key: &str) -> Option<&Value> {
-        self.0.details.get(key)
+    /// The error's outcome; only the gates read it apart from `{class, outcome}`.
+    #[cfg(test)]
+    pub(super) fn outcome_ref(&self) -> &Outcome {
+        &self.0.outcome
     }
 
-    /// `{class, code, message, blocked_by, details}`, leaving the error in place.
+    pub(super) fn into_outcome(self) -> Outcome {
+        self.0.outcome
+    }
+
+    /// Whether the error's top code is `code`.
+    pub(super) fn is(&self, code: impl Into<Code>) -> bool {
+        self.0.outcome.is(code)
+    }
+
+    /// `{class, outcome}`, leaving the error in place.
     pub(super) fn to_value(&self) -> Value {
-        json!({
-            "class": self.0.class,
-            "code": self.0.code.as_str(),
-            "message": self.0.message,
-            "blocked_by": self.0.blocked_by,
-            "details": self.0.details,
-        })
+        let mut error = Map::new();
+        error.insert("class".to_owned(), Value::String(self.0.class.to_owned()));
+        error.insert("outcome".to_owned(), envelope(&self.0.outcome));
+        Value::Object(error)
     }
 
-    pub(super) fn message(&self) -> &str {
-        &self.0.message
-    }
-
-    /// `{class, code, message, blocked_by, details}`.
+    /// `{class, outcome}`.
     pub(super) fn into_value(self) -> Value {
-        let body = *self.0;
-        json!({
-            "class": body.class,
-            "code": body.code.as_str(),
-            "message": body.message,
-            "blocked_by": body.blocked_by,
-            "details": body.details,
-        })
+        self.to_value()
     }
 
-    /// The Runtime's host failure code this error carries, if any.
-    pub(super) fn host_code(&self) -> Option<&str> {
-        self.0
-            .details
-            .get("host_failure")
-            .and_then(|failure| failure.get("code"))
-            .and_then(Value::as_str)
-    }
-
-    /// The same failure reported beside a successful result.
+    /// The same failure reported beside a successful result: `{outcome}`.
     pub(super) fn into_warning(self) -> Value {
-        let body = *self.0;
-        json!({
-            "code": body.code.as_str(),
-            "message": body.message,
-            "blocked_by": body.blocked_by,
-            "details": body.details,
-        })
+        warning(&self.0.outcome)
     }
 }
 
@@ -289,7 +301,7 @@ pub(super) struct Arguments<'a> {
 impl<'a> Arguments<'a> {
     pub(super) fn new(map: &'a Map<String, Value>, allowed: &[&str]) -> Result<Self, ToolError> {
         match map.keys().find(|key| !allowed.contains(&key.as_str())) {
-            Some(unknown) => Err(invalid_argument(unknown, "is not an argument of this tool")),
+            Some(unknown) => Err(invalid_argument(unknown, ArgumentProblem::Unknown)),
             None => Ok(Self { map }),
         }
     }
@@ -307,13 +319,13 @@ impl<'a> Arguments<'a> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(text)) if !text.is_empty() => Ok(Some(text.as_str())),
-            Some(_) => Err(invalid_argument(key, "must be a non-empty string")),
+            Some(_) => Err(invalid_argument(key, ArgumentProblem::WrongType)),
         }
     }
 
     pub(super) fn required_string(&self, key: &str) -> Result<&'a str, ToolError> {
         self.string(key)?
-            .ok_or_else(|| invalid_argument(key, "is required"))
+            .ok_or_else(|| invalid_argument(key, ArgumentProblem::Required))
     }
 
     pub(super) fn integer(
@@ -328,22 +340,29 @@ impl<'a> Arguments<'a> {
                 .as_u64()
                 .filter(|number| (minimum..=maximum).contains(number))
                 .map(Some)
-                .ok_or_else(|| {
-                    invalid_argument(
-                        key,
-                        &format!("must be an integer from {minimum} to {maximum}"),
-                    )
-                }),
+                .ok_or_else(|| out_of_range(key, minimum, maximum)),
         }
     }
 }
 
-pub(super) fn invalid_argument(field: &str, reason: &str) -> ToolError {
-    ToolError::usage(
-        ActingctlCode::ArgumentsInvalid,
-        format!("argument {field} {reason}"),
+/// `arguments_invalid` for one argument: its name (`argument`) and what is wrong with it
+/// (`argument_problem`).
+pub(super) fn invalid_argument(argument: &str, problem: ArgumentProblem) -> ToolError {
+    ToolError::outcome(
+        "usage",
+        Outcome::new(ActingctlCode::ArgumentsInvalid)
+            .argument(argument)
+            .argument_problem(problem),
     )
-    .with_detail("field", json!(field))
+}
+
+/// `arguments_invalid` for an integer argument outside `minimum..=maximum`.
+/// A bound beyond the key table's i64 integers (an argument limited only by its type) is given
+/// as `i64::MAX`.
+pub(super) fn out_of_range(argument: &str, minimum: u64, maximum: u64) -> ToolError {
+    let bound = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+    invalid_argument(argument, ArgumentProblem::OutOfRange)
+        .with(|outcome| outcome.range_min(bound(minimum)).range_max(bound(maximum)))
 }
 
 /// One row of the tool table.
@@ -366,7 +385,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {code, message}} (code runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -417,7 +436,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_get_run",
         title: "Run status",
         tier: Tier::Observer,
-        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example QueueExpired, class safety, after a wait for a busy instance) in job.outcome.error. Another job handle of this process (ac_pause, ac_resume, ac_emulator, ac_stop_run or a Lab tool) answers {handle, job {kind, phase, warnings, outcome}}; a job handle this process does not hold answers handle_unknown.",
+        description: "One contained run as actingcommand.run-status.v1, read in full from its ledger events by handle (the Runtime request_id an ac_run_pack returns) or by run_id; give exactly one. The state is not_found, admitted, running, succeeded, failed, cancelled or interrupted_unterminated (admitted before a later Runtime start and never ended: uncertain). wait_s (0-25, default 0) waits for a change: the run is read again every second while its state is not_found, admitted or running, within the 25 s call budget; then the latest status is returned. Call it again to keep waiting. request_id is null only when a run_id lookup found no run. A submit refused before admission stays not_found with job.phase failed and the Runtime's error (for example lease_queue_expired, class safety, after a wait for a busy instance) in job.job_result.error. Another job handle of this process (ac_pause, ac_resume, ac_emulator, ac_stop_run or a Lab tool) answers {handle, job {kind, phase, warnings, job_result}}; a job handle this process does not hold answers handle_unknown.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -457,7 +476,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_resources_list",
         title: "Targetable resources",
         tier: Tier::Observer,
-        description: "What one instance can target, as the Runtime reports it, unchanged: targetable resources (resource, fact_key, producing tasks, defaults, what must be given, the current observation) and the not-targetable ones with their reason. policy_instance is the value the instance field of a policy document takes. An actingd older than v0.11.0 answers runtime_operation_unsupported: read the resources of the scheduling catalog instead.",
+        description: "What one instance can target, as the Runtime reports it, unchanged: targetable resources (resource, fact_key, producing tasks, defaults, what must be given, the current observation) and the not-targetable ones with their reason. policy_instance is the value the instance field of a policy document takes. An actingd older than v0.11.0 answers runtime_operation_unsupported with mcp_blocker runtime_upgrade: read the resources of the scheduling catalog instead.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -469,7 +488,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_targets_get",
         title: "Active resource targets",
         tier: Tier::Observer,
-        description: "The resource target policy one instance holds now, as the Runtime reports it, unchanged: active {policy_sha256, schema_version, version, event_id, valid_until_unix_ms, expired, targets, conditions}, or no active field when it holds none. An actingd older than v0.11.0 answers runtime_operation_unsupported: read the resources of the scheduling catalog instead.",
+        description: "The resource target policy one instance holds now, as the Runtime reports it, unchanged: active {policy_sha256, schema_version, version, event_id, valid_until_unix_ms, expired, targets, conditions}, or no active field when it holds none. An actingd older than v0.11.0 answers runtime_operation_unsupported with mcp_blocker runtime_upgrade: read the resources of the scheduling catalog instead.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -512,7 +531,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Check a task package",
         tier: Tier::Observer,
         description: concat!(
-            "Checks one task package offline, as actinglab --json package digest and package preflight do, and answers both verbatim: {digest, preflight}. preflight runs with package_ref when it is given, otherwise with the digest's reference. With package_ref, package_ref_check {given, matches_digest} says whether it is the digest's reference, and preflight is actinglab's verdict on it. preflight's coverage says how far the check went: it neither recognizes nor executes anything. A failed preflight keeps the digest in details.digest.",
+            "Checks one task package offline, as actinglab --json package digest and package preflight do, and answers both verbatim: {digest, preflight}. preflight runs with package_ref when it is given, otherwise with the digest's reference. With package_ref, package_ref_check {given, matches_digest} says whether it is the digest's reference, and preflight is actinglab's verdict on it. preflight's coverage says how far the check went: it neither recognizes nor executes anything.",
             lab_errors!(),
             check_job!()
         ),
@@ -543,7 +562,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_run_pack",
         title: "Run a task package",
         tier: Tier::Operator,
-        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.outcome.error as the Runtime's QueueExpired (lease_queue_expired), class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.job_result.error as the Runtime's lease_queue_expired, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -555,7 +574,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_stop_run",
         title: "Stop a run",
         tier: Tier::Operator,
-        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example QueueExpired) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back, blocked_by ac_pause.",
+        description: "Stops one manual run (MCP, CLI, UI or Lab) by its handle, the Runtime request_id, from any process: the run's package is abandoned and the screen stays where it is; there is no return home, no recovery package and no rerun; only touch points that may still be held are lifted. Answers {cancellation, touch_release, job_phase}; touch_release is done, failed or not_needed: not_needed includes a run that had already ended before this call, and failed (for example lease_queue_expired) can mean the still-connected submitter already lifted them itself. When this server submitted the run and its job still waits, only the stop is sent and that job lifts the touches. Otherwise a background job waits for the run to end, up to the longest run deadline; not done within wait_s (default 20) the answer is {handle, job_phase} for ac_get_run. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the pause's revision and owner_epoch, or the emulator's state, from ac_overview, and a stopped run with ac_get_run by its request_id. A scheduled run cannot be stopped by a client: the Runtime's refusal comes back with mcp_blocker scheduling_pause (an instance pause with ac_pause drains it).",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -603,7 +622,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_targets_set",
         title: "Set resource targets",
         tier: Tier::Operator,
-        description: "Sets one instance's resource targets: targets are actingcommand.resource-targets.v2 targets ([] withdraws the policy when the Runtime takes that), and the server writes the v2 document around them with the instance value ac_resources_list reports (policy_instance). valid_days (1-365) sets valid_until; without it none is written. The Runtime checks the document; a refusal comes back with its position (details.rejection). Use ac_resources_list for what may be targeted and ac_targets_get for what is active.",
+        description: "Sets one instance's resource targets: targets are actingcommand.resource-targets.v2 targets ([] withdraws the policy when the Runtime takes that), and the server writes the v2 document around them with the instance value ac_resources_list reports (policy_instance). valid_days (1-365) sets valid_until; without it none is written. The Runtime checks the document; a refusal is the Runtime's outcome, with the refused position as json_pointer, line and column and the reason as resource_targets_rejection_reason. Use ac_resources_list for what may be targeted and ac_targets_get for what is active.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -820,32 +839,31 @@ pub(super) fn list_markdown() -> String {
     table
 }
 
-/// A call to a tool of a tier this process was not started with.
+/// A call to a tool of a tier this process was not started with: `tier_not_enabled` with the
+/// tool's tier and `mcp_blocker` `server_tier` (U-3 retires it with the tiers).
 pub(super) fn tier_not_enabled(tool: &ToolDef) -> ToolError {
-    ToolError::new(
+    ToolError::outcome(
         "safety",
-        ActingctlCode::TierNotEnabled,
-        format!(
-            "{} belongs to tier {}, which this server was not started with",
-            tool.name,
-            tool.tier.as_str()
-        ),
+        Outcome::new(ActingctlCode::TierNotEnabled)
+            .required_tier(tool.tier)
+            .mcp_tool(tool.name),
     )
-    .with_detail("required_tier", json!(tool.tier.as_str()))
-    .blocked_by("the person restarts mcp-serve with --tier including this tier")
+    .blocked_by(McpBlocker::ServerTier)
 }
 
 /// The `tools/call` result: the envelope as compact JSON text, and from 2025-06-18 on also
-/// as `structuredContent`. A result over the budget becomes `output_budget_exceeded`.
+/// as `structuredContent`. A result over the budget becomes `output_budget_exceeded`, with the
+/// payload's size (`actual_bytes`) and the structured budget (`limit_bytes`).
 pub(super) fn call_result(outcome: ToolOutcome, era: Era) -> Value {
-    let mut structured = envelope(outcome);
+    let mut structured = call_envelope(outcome);
     if !fits(&structured) {
         let payload_bytes = structured.to_string().len();
-        structured = envelope(Err(ToolError::usage(
-            ActingctlCode::OutputBudgetExceeded,
-            "the result is larger than the 24 KiB tool output budget; narrow the request or lower limit",
-        )
-        .with_detail("payload_bytes", json!(payload_bytes))));
+        structured = call_envelope(Err(ToolError::outcome(
+            "usage",
+            Outcome::new(ActingctlCode::OutputBudgetExceeded)
+                .actual_bytes(payload_bytes)
+                .limit_bytes(PAYLOAD_LIMIT),
+        )));
     }
     let is_error = structured.get("ok") == Some(&Value::Bool(false));
     let mut result = Map::new();
@@ -878,22 +896,57 @@ fn fits(structured: &Value) -> bool {
     whole.to_string().len() + MODERN_FIELDS_RESERVE <= RESULT_LIMIT
 }
 
-fn envelope(outcome: ToolOutcome) -> Value {
+fn call_envelope(outcome: ToolOutcome) -> Value {
+    let mut envelope = Map::new();
     match outcome {
         Ok(success) => {
-            let mut envelope = Map::new();
             envelope.insert("ok".to_owned(), json!(true));
             envelope.insert("result".to_owned(), success.result);
             if !success.warnings.is_empty() {
                 envelope.insert("warnings".to_owned(), Value::Array(success.warnings));
             }
-            Value::Object(envelope)
         }
-        Err(error) => json!({"ok": false, "error": error.into_value()}),
+        Err(error) => {
+            envelope.insert("ok".to_owned(), json!(false));
+            envelope.insert("error".to_owned(), error.into_value());
+        }
     }
+    Value::Object(envelope)
 }
 
-/// Both envelope forms, with the tool's own result schema.
+/// An `actingcommand.outcome.v1` envelope (Workflow #378 A5): code, category and values, with
+/// nested links.
+pub(super) fn outcome_schema() -> Value {
+    // The members are inserted one by one: an outcome's own member names are not `json!` keys.
+    let mut properties = Map::new();
+    properties.insert(
+        "schema_version".to_owned(),
+        json!({"const": actingcommand_contract::outcome::OUTCOME_SCHEMA_VERSION}),
+    );
+    properties.insert("code".to_owned(), json!({"type": "string"}));
+    properties.insert(
+        "category".to_owned(),
+        json!({"type": "string", "enum": ["success", "info", "warning", "error", "fatal"]}),
+    );
+    properties.insert("values".to_owned(), json!({"type": "object"}));
+    properties.insert(
+        "causes".to_owned(),
+        json!({"type": "array", "items": {"type": "object"}}),
+    );
+    properties.insert("causes_total".to_owned(), json!({"type": "integer"}));
+    properties.insert("detail".to_owned(), json!({"const": "codes"}));
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), json!("object"));
+    schema.insert("properties".to_owned(), Value::Object(properties));
+    schema.insert(
+        "required".to_owned(),
+        json!(["schema_version", "code", "category"]),
+    );
+    Value::Object(schema)
+}
+
+/// Both envelope forms, with the tool's own result schema: `{ok, result, warnings?}` with each
+/// warning `{outcome}`, or `{ok: false, error {class, outcome}}`.
 fn output_schema(result: Value) -> Value {
     json!({
         "type": "object",
@@ -904,13 +957,8 @@ fn output_schema(result: Value) -> Value {
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {
-                        "code": {"type": "string"},
-                        "message": {"type": "string"},
-                        "blocked_by": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                        "details": {"type": "object"},
-                    },
-                    "required": ["code", "message"],
+                    "properties": {"outcome": outcome_schema()},
+                    "required": ["outcome"],
                 },
             },
             "error": {
@@ -920,12 +968,9 @@ fn output_schema(result: Value) -> Value {
                         "type": "string",
                         "enum": ["usage", "safety", "device", "runtime", "uncertain"],
                     },
-                    "code": {"type": "string"},
-                    "message": {"type": "string"},
-                    "blocked_by": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    "details": {"type": "object"},
+                    "outcome": outcome_schema(),
                 },
-                "required": ["class", "code", "message", "blocked_by", "details"],
+                "required": ["class", "outcome"],
             },
         },
         "required": ["ok"],
@@ -1230,7 +1275,9 @@ fn diagnose_result() -> Value {
     result
 }
 
-/// A job of this process: its kind, phase, warnings and, once it ended, its outcome.
+/// A job of this process: its kind, phase, warnings and, once it ended, its result
+/// (`job_result`: the answer, or `{error {class, outcome}}`; Workflow #378 A5 L6 renamed it
+/// from `outcome`, which names only the envelope).
 fn job_schema() -> Value {
     json!({
         "type": "object",
@@ -1238,7 +1285,7 @@ fn job_schema() -> Value {
             "kind": {"type": "string"},
             "phase": {"type": "string"},
             "warnings": {"type": "array"},
-            "outcome": {},
+            "job_result": {},
         },
         "required": ["kind", "phase", "warnings"],
     })
@@ -1358,15 +1405,20 @@ fn stop_run_result() -> Value {
 }
 
 fn pause_input() -> Value {
-    json!({
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "instance": instance_argument(),
-            "reason": {"type": "string", "pattern": "^[a-z0-9_.-]{1,64}$", "default": "mcp.pause"},
             "drain_timeout_s": {"type": "integer", "minimum": 1, "maximum": 600, "default": 60},
         },
         "additionalProperties": false,
-    })
+    });
+    // The argument `reason` is the CLI's `--reason` (#389 R2): a pause reason, a name, not a
+    // code; inserted by name, outside `json!`, like every other non-code member that shares a
+    // code-like name.
+    schema["properties"]["reason"] =
+        json!({"type": "string", "pattern": "^[a-z0-9_.-]{1,64}$", "default": "mcp.pause"});
+    schema
 }
 
 fn resume_input() -> Value {

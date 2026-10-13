@@ -2,19 +2,24 @@
 
 //! Workflow #382 MCP-T1 (test plan A-5a, inventory key 30): the one overflow rule for every
 //! Lab answer (#338 S3 review F2, items 1-3). An answer over the output budget goes whole to
-//! `%TEMP%\actingcommand-mcp\materials\<sha256>.json`; an error that large keeps its class,
-//! code and message with `lab_error` trimmed. Tool-error members are read only through
-//! `error_parts`.
+//! `%TEMP%\actingcommand-mcp\materials\<sha256>.json`, with the warning `answer_exported`
+//! naming that file. Workflow #378 A5: a tool error is `{class, outcome}` and is never exported;
+//! the warnings found before it become its `note` links. Also A5: how `interpret` turns
+//! actinglab's exit code and envelope into an answer or a tool error.
 
-use super::super::{Effect, Overflow, finish};
+use super::super::{Overflow, finish, interpret};
+use crate::child::Captured;
 use crate::codes::ActingctlCode;
-use crate::mcp::tools::ToolError;
+use crate::mcp::tools::{self, ToolError};
+use actingcommand_contract::codes::{ContractCode, RuntimeErrorCode, SharedCode};
+use actingcommand_contract::outcome::{Category, Outcome};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 /// The ac_record_stop parts an exported answer keeps inline (F2 item 2).
 const BINDING_PARTS: [&str; 5] = [
@@ -41,28 +46,26 @@ fn members(value: &Value) -> BTreeSet<&str> {
         .unwrap_or_default()
 }
 
-/// Class, code and message of a tool error.
-#[track_caller]
-fn error_parts(error: &Value) -> (&str, &str, &str) {
-    (
-        error_text(error, "class"),
-        error_text(error, "code"),
-        error_text(error, "message"),
-    )
+/// `(relation, code)` of each link of `outcome`, in order.
+fn links(outcome: &Outcome) -> Vec<(String, String)> {
+    outcome
+        .causes()
+        .iter()
+        .map(|link| {
+            (
+                link.relation().as_str().to_owned(),
+                link.outcome().code().as_str().to_owned(),
+            )
+        })
+        .collect()
 }
 
+/// The content of the file an export `{path, sha256, size}` names and that file's
+/// `sha256:<hex>`, after checking the export against it: the file is in
+/// `%TEMP%\actingcommand-mcp\materials`, named `<sha256 hex>.json`; `size` is its byte length
+/// and `sha256` names the SHA-256 of its bytes.
 #[track_caller]
-fn error_text<'a>(error: &'a Value, member: &str) -> &'a str {
-    error[member]
-        .as_str()
-        .unwrap_or_else(|| panic!("a tool error without {member}: {error}"))
-}
-
-/// The content of the file an export `{path, sha256, size}` names, after checking the export
-/// against it: the file is in `%TEMP%\actingcommand-mcp\materials`, named `<sha256 hex>.json`;
-/// `size` is its byte length and `sha256` names the SHA-256 of its bytes.
-#[track_caller]
-fn exported(export: &Value) -> Value {
+fn exported(export: &Value) -> (Value, String) {
     assert_eq!(
         members(export),
         BTreeSet::from(["path", "sha256", "size"]),
@@ -94,21 +97,21 @@ fn exported(export: &Value) -> Value {
         named == digest || named == format!("sha256:{digest}"),
         "the export's sha256 does not name the file's SHA-256 {digest}: {export}"
     );
-    serde_json::from_slice(&bytes)
-        .unwrap_or_else(|error| panic!("the exported file is not JSON ({error}): {export}"))
+    let content = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("the exported file is not JSON ({error}): {export}"));
+    (content, format!("sha256:{digest}"))
 }
 
 #[test]
 fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back_unchanged() {
-    // (a) An answer over the budget: {req_id, export, overflowed: true}, the file the answer.
+    // (a) An answer over the budget: {req_id, export, overflowed: true}, the file the answer,
+    // and the one warning answer_exported {path, actual_sha256, actual_bytes} naming that file.
     let data = json!({"req_id": "gate-req-a", "observation": {"rows": oversized("a")}});
     let overflow = Overflow {
         handle: "lab_job_gate_a",
-        what: "record status",
-        effect: Effect::Unchanged,
         keeps_binding: false,
     };
-    let (result, _) = finish(&overflow, Ok(data.clone()), Some("gate-req-a"), Vec::new());
+    let (result, warnings) = finish(&overflow, Ok(data.clone()), Some("gate-req-a"), Vec::new());
     let answer =
         result.unwrap_or_else(|error| panic!("(a) answered an error: {}", error.to_value()));
     assert_eq!(
@@ -118,10 +121,30 @@ fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back
     );
     assert_eq!(answer["req_id"], json!("gate-req-a"), "(a) {answer}");
     assert_eq!(answer["overflowed"], json!(true), "(a) {answer}");
+    let (content, sha256) = exported(&answer["export"]);
+    assert_eq!(content, data, "(a) the exported file is not the answer");
+    assert_eq!(warnings.len(), 1, "(a) warnings: {warnings:?}");
     assert_eq!(
-        exported(&answer["export"]),
-        data,
-        "(a) the exported file is not the answer"
+        members(&warnings[0]),
+        BTreeSet::from(["outcome"]),
+        "(a) {}",
+        warnings[0]
+    );
+    let warning = &warnings[0]["outcome"];
+    assert_eq!(
+        warning["code"],
+        json!(ActingctlCode::AnswerExported.as_str()),
+        "(a) {warning}"
+    );
+    assert_eq!(warning["category"], json!("warning"), "(a) {warning}");
+    assert_eq!(
+        warning["values"],
+        json!({
+            "path": answer["export"]["path"],
+            "actual_sha256": sha256,
+            "actual_bytes": answer["export"]["size"],
+        }),
+        "(a) {warning}"
     );
 
     // (b) An ac_record_stop answer over the budget keeps its binding parts inline, verbatim.
@@ -137,8 +160,6 @@ fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back
     let data = json!({"req_id": "gate-req-b", "lab": lab});
     let overflow = Overflow {
         handle: "lab_job_gate_b",
-        what: "record stop",
-        effect: Effect::Changed,
         keeps_binding: true,
     };
     let (result, _) = finish(&overflow, Ok(data.clone()), Some("gate-req-b"), Vec::new());
@@ -157,69 +178,263 @@ fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back
     }
     assert_eq!(answer["overflowed"], json!(true), "(b) {answer}");
     assert_eq!(
-        exported(&answer["export"]),
+        exported(&answer["export"]).0,
         data,
         "(b) the exported file is not the answer"
     );
 
-    // (c) An error over the budget, as a Lab failure arrives: the class of exit code 5, code
-    // and message verbatim from the envelope's error, which is lab_error.
-    let scalars = json!({"req_id": "gate-req-c", "step": 3, "retryable": false, "note": null});
-    let mut details = scalars.as_object().cloned().unwrap_or_default();
-    details.insert("frames".to_owned(), oversized("c"));
-    details.insert("context".to_owned(), json!({"nested": "gate-context"}));
-    let lab_error = json!({
-        "code": "lab_process_failed",
-        "message": "gate lab failure",
-        "details": Value::Object(details),
-    });
-    let error = ToolError::new(
-        "runtime",
-        ActingctlCode::LabProcessFailed,
-        "gate lab failure",
-    )
-    .with_detail("lab_exit_code", json!(5))
-    .with_detail("lab_error", lab_error.clone());
+    // (c) An error, as a Lab failure arrives (actinglab's exit 4, its code as the cause), with a
+    // warning found before it: the error comes back as it is, {class, outcome} and nothing else,
+    // the warning as its note link, and the job keeps no warning of its own.
+    let error = ToolError::outcome(
+        "device",
+        Outcome::new(ActingctlCode::LabToolFailed)
+            .exit_code(4)
+            .req_id("gate-req-c")
+            .caused_by(Outcome::relayed(RuntimeErrorCode::InstanceUnknown.as_str())),
+    );
+    let note = tools::warning(&Outcome::new(ActingctlCode::ClientActionWithoutReqId));
     let overflow = Overflow {
         handle: "lab_job_gate_c",
-        what: "do",
-        effect: Effect::Changed,
         keeps_binding: false,
     };
-    let (result, _) = finish(&overflow, Err(error), Some("gate-req-c"), Vec::new());
+    let (result, warnings) = finish(&overflow, Err(error), Some("gate-req-c"), vec![note]);
     let error = match result {
-        Ok(answer) => panic!("(c) an error over the budget answered {answer}"),
-        Err(error) => error.to_value(),
+        Ok(answer) => panic!("(c) an error answered {answer}"),
+        Err(error) => error,
     };
     assert_eq!(
-        error_parts(&error),
-        ("runtime", "lab_process_failed", "gate lab failure"),
-        "(c) {error}"
+        members(&error.to_value()),
+        BTreeSet::from(["class", "outcome"]),
+        "(c) {}",
+        error.to_value()
     );
-    let details = &error["details"];
+    assert_eq!(error.class(), "device", "(c) {}", error.to_value());
+    let outcome = error.outcome_ref();
     assert_eq!(
-        details["lab_error"],
-        json!({"code": "lab_process_failed", "message": "gate lab failure", "details": scalars}),
-        "(c) {error}"
+        outcome.code().as_str(),
+        ActingctlCode::LabToolFailed.as_str(),
+        "(c) {outcome:?}"
     );
-    assert_eq!(details["lab_error_trimmed"], json!(true), "(c) {error}");
-    assert_eq!(details["req_id"], json!("gate-req-c"), "(c) {error}");
     assert_eq!(
-        exported(&details["export"]),
-        lab_error,
-        "(c) the exported file is not the untrimmed lab_error"
+        Some(outcome.values()),
+        json!({"exit_code": 4, "req_id": "gate-req-c"}).as_object(),
+        "(c) {outcome:?}"
     );
+    assert_eq!(
+        links(outcome),
+        vec![
+            (
+                "caused_by".to_owned(),
+                RuntimeErrorCode::InstanceUnknown.as_str().to_owned()
+            ),
+            (
+                "note".to_owned(),
+                ActingctlCode::ClientActionWithoutReqId.as_str().to_owned()
+            ),
+        ],
+        "(c) {outcome:?}"
+    );
+    assert!(warnings.is_empty(), "(c) job warnings: {warnings:?}");
 
     // (d) An answer inside the budget comes back unchanged, with no export.
     let data = json!({"req_id": "gate-req-d", "status": "inside"});
     let overflow = Overflow {
         handle: "lab_job_gate_d",
-        what: "record status",
-        effect: Effect::Unchanged,
         keeps_binding: false,
     };
     let (result, _) = finish(&overflow, Ok(data.clone()), Some("gate-req-d"), Vec::new());
     let answer =
         result.unwrap_or_else(|error| panic!("(d) answered an error: {}", error.to_value()));
     assert_eq!(answer, data, "(d) an answer inside the budget changed");
+}
+
+#[cfg(windows)]
+fn exited(code: u8) -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+    ExitStatus::from_raw(u32::from(code))
+}
+
+#[cfg(unix)]
+fn exited(code: u8) -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    ExitStatus::from_raw(i32::from(code) << 8)
+}
+
+/// What an actinglab child that exited with `code` printed.
+fn captured(code: u8, stdout: &str, stderr: &str) -> Captured {
+    Captured {
+        status: exited(code),
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
+    }
+}
+
+#[test]
+fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause() {
+    // Exit 0 with ok: the envelope's data, unchanged, and its req_id.
+    let data = json!({"req_id": "gate-req-0", "observation": {"rows": []}});
+    let envelope = json!({"ok": true, "data": data.clone()});
+    let answer = interpret(&captured(0, &envelope.to_string(), ""), "gate");
+    assert!(answer.returned, "exit 0");
+    assert_eq!(answer.req_id.as_deref(), Some("gate-req-0"), "exit 0");
+    match answer.result {
+        Ok(result) => assert_eq!(result, data, "exit 0"),
+        Err(error) => panic!("exit 0 answered an error: {}", error.to_value()),
+    }
+
+    // Exits 2..6 with an error envelope: lab_tool_failed {exit_code, req_id} in the class the
+    // exit code names, caused by actinglab's code (not_implemented for exit 6) and by
+    // foreign_other_error {raw_source process, raw_text, exit_code} whose raw_text is the
+    // error's details as JSON (coordinator ruling 7 on A5: data a consumer reads is kept).
+    // actinglab's message is not carried.
+    let rows = [
+        (
+            2,
+            "observe_identity_limit_exceeded",
+            "usage",
+            "observe_identity_limit_exceeded",
+        ),
+        (
+            3,
+            RuntimeErrorCode::LeaseBusy.as_str(),
+            "safety",
+            RuntimeErrorCode::LeaseBusy.as_str(),
+        ),
+        (
+            4,
+            RuntimeErrorCode::InstanceUnknown.as_str(),
+            "device",
+            RuntimeErrorCode::InstanceUnknown.as_str(),
+        ),
+        (
+            5,
+            RuntimeErrorCode::RuntimeUnavailable.as_str(),
+            "runtime",
+            RuntimeErrorCode::RuntimeUnavailable.as_str(),
+        ),
+        (
+            6,
+            "lab_command_not_implemented",
+            "usage",
+            SharedCode::NotImplemented.as_str(),
+        ),
+    ];
+    for (code, spelling, class, cause) in rows {
+        let req_id = format!("gate-req-{code}");
+        let envelope = json!({
+            "ok": false,
+            "error": {
+                "code": spelling,
+                "message": "gate lab message",
+                "details": {"req_id": req_id, "step": 3},
+            },
+        });
+        let answer = interpret(
+            &captured(code, &envelope.to_string(), "gate stderr"),
+            "gate",
+        );
+        assert!(answer.returned, "exit {code}");
+        assert_eq!(
+            answer.req_id.as_deref(),
+            Some(req_id.as_str()),
+            "exit {code}"
+        );
+        let error = match answer.result {
+            Ok(result) => panic!("exit {code} answered {result}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.class(), class, "exit {code}: {}", error.to_value());
+        let outcome = error.outcome_ref();
+        assert_eq!(
+            outcome.code().as_str(),
+            ActingctlCode::LabToolFailed.as_str(),
+            "exit {code}: {outcome:?}"
+        );
+        assert_eq!(outcome.category(), Category::Error, "exit {code}");
+        assert_eq!(
+            Some(outcome.values()),
+            json!({"exit_code": code, "req_id": req_id}).as_object(),
+            "exit {code}: {outcome:?}"
+        );
+        assert_eq!(
+            links(outcome),
+            vec![
+                ("caused_by".to_owned(), cause.to_owned()),
+                (
+                    "caused_by".to_owned(),
+                    ContractCode::ForeignOtherError.as_str().to_owned()
+                ),
+            ],
+            "exit {code}: {outcome:?}"
+        );
+        let details = outcome.causes()[1].outcome().values();
+        assert_eq!(
+            (
+                details.get("raw_source"),
+                details.get("exit_code"),
+                details.len()
+            ),
+            (Some(&json!("process")), Some(&json!(code)), 3),
+            "exit {code}: {details:?}"
+        );
+        let text = details
+            .get("raw_text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("exit {code}: details without raw_text: {details:?}"));
+        assert_eq!(
+            serde_json::from_str::<Value>(text).ok(),
+            Some(json!({"req_id": req_id, "step": 3})),
+            "exit {code}: the details are not actinglab's: {text}"
+        );
+        assert!(
+            !error.to_value().to_string().contains("gate lab message"),
+            "exit {code} carries actinglab's message: {}",
+            error.to_value()
+        );
+    }
+
+    // No envelope: runtime lab_process_failed {exit_code}, caused by foreign_other_error with
+    // actinglab's stderr as raw_text.
+    let answer = interpret(
+        &captured(1, "gate output that is not JSON", "gate stderr tail"),
+        "gate",
+    );
+    assert!(answer.returned, "no envelope");
+    let error = match answer.result {
+        Ok(result) => panic!("no envelope answered {result}"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.class(),
+        "runtime",
+        "no envelope: {}",
+        error.to_value()
+    );
+    let outcome = error.outcome_ref();
+    assert_eq!(
+        outcome.code().as_str(),
+        ActingctlCode::LabProcessFailed.as_str(),
+        "no envelope: {outcome:?}"
+    );
+    assert_eq!(
+        Some(outcome.values()),
+        json!({"exit_code": 1}).as_object(),
+        "no envelope: {outcome:?}"
+    );
+    assert_eq!(
+        links(outcome),
+        vec![(
+            "caused_by".to_owned(),
+            ContractCode::ForeignOtherError.as_str().to_owned()
+        )],
+        "no envelope: {outcome:?}"
+    );
+    let cause = outcome.causes()[0].outcome();
+    assert_eq!(
+        Some(cause.values()),
+        json!({"raw_source": "process", "raw_text": "gate stderr tail", "exit_code": 1})
+            .as_object(),
+        "no envelope: {cause:?}"
+    );
 }

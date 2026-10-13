@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+// Workflow #378 A5: the one result line of every exit.
+mod cli_line;
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
 mod events;
@@ -37,25 +39,35 @@ mod child;
 mod diagnose;
 // ---- Workflow #389 MCP-7 (end) ----
 
-use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_SELECTION_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY,
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
     EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord, FactScope,
-    MAX_CONFIG_SETTING_CHANGES, RuntimeMonitorPolicy, RuntimeReceiptState, SchedulingPauseScope,
+    InstallTransitionAction, InstallTransitionPhase, MAX_CONFIG_SETTING_CHANGES,
+    RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState, RuntimeResult, SanitizationError,
+    SchedulingPauseScope,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use codes::ActingctlCode;
-use serde_json::Value;
+use instance_selector::SelectorMiss;
+use serde::Serialize;
+use serde_json::{Map, Value};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// The developer text of `actingctl_usage_invalid`.
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+/// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
+const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
+/// The member a result that is not a JSON object goes under (`status --config` names its own).
+const RESULT_MEMBER: &str = "result";
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
 /// `source_detector` of the priority offsets `task-offset` publishes.
@@ -65,11 +77,29 @@ const DEFAULT_PAUSE_REASON: &str = "operator";
 const DEFAULT_PAUSE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 
 fn main() -> ExitCode {
-    if let Err(error) = actingcommand_contract::process_installation() {
-        eprintln!("FATAL actingctl: {error}");
-        return ExitCode::FAILURE;
+    // Model §6 (M2): actingctl's diagnostic sink. Foreign text cut at its bound and other
+    // developer text about an outcome go to stderr as `DIAG actingctl:` lines.
+    if let Err(error) =
+        actingcommand_contract::outcome::install_diagnostic_sink(Box::new(|outcome, text| {
+            eprintln!("DIAG actingctl: {outcome} {text}");
+        }))
+    {
+        eprintln!("DIAG actingctl: {error}");
     }
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    if let Err(error) = actingcommand_contract::process_installation() {
+        let outcome = Outcome::new(error.code());
+        // Model §7.3: `mcp-serve` and `mcp-config` print no result line (stdout is the
+        // protocol or the printed configuration); only the developer line.
+        if matches!(
+            arguments.first().and_then(|argument| argument.to_str()),
+            Some("mcp-serve" | "mcp-config")
+        ) {
+            cli_line::developer_line(&outcome, None);
+            return ExitCode::from(cli_line::exit_code(outcome.category(), true));
+        }
+        return failed(&outcome, None);
+    }
     // Workflow #338: `mcp-serve` and `mcp-config` take their own flags, so they leave before
     // `Invocation::parse`, which requires `--state-root`.
     #[cfg(feature = "mcp")]
@@ -78,6 +108,12 @@ fn main() -> ExitCode {
             return exit;
         }
     }
+    // Workflow #378 A5: every other exit prints one result line through `cli_line`, in the
+    // detail ACTINGCOMMAND_DETAIL asks for; an unknown value is refused before any command runs.
+    let detail = match cli_line::detail() {
+        Ok(detail) => detail,
+        Err(outcome) => return failed(&outcome, Some(DETAIL_USAGE)),
+    };
     // Workflow #374: `watchdog` takes `--root`, not `--state-root`.
     #[cfg(windows)]
     {
@@ -119,40 +155,33 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-7 (end) ----
-    match run(arguments) {
-        Ok(output) => match write_output(&output) {
-            Ok(()) => {
-                // Receipt v2 (Workflow #378 A4, part B L2): a refused or failed request exits 1,
-                // judged by its receipt's state; the outcome's category only says how bad it is
-                // (a refusal may be topped by a warning or info code).
-                if output
-                    .get("receipt")
-                    .and_then(|receipt| receipt.get("state"))
-                    .and_then(|state| {
-                        serde_json::from_value::<RuntimeReceiptState>(state.clone()).ok()
-                    })
-                    .is_some_and(|state| {
-                        matches!(
-                            state,
-                            RuntimeReceiptState::Denied | RuntimeReceiptState::Failed
-                        )
-                    })
-                {
-                    ExitCode::FAILURE
-                } else {
-                    ExitCode::SUCCESS
-                }
-            }
-            Err(error) => {
-                eprintln!("FATAL actingctl: {error}");
-                ExitCode::FAILURE
-            }
-        },
-        Err(error) => {
-            eprintln!("FATAL actingctl: {error}");
+    match run(arguments, detail) {
+        Ok(Done {
+            members,
+            outcome,
+            refused: false,
+        }) => cli_line::success(members, &outcome),
+        // Receipt v2 (Workflow #378 A4, part B L2): a refused or failed request exits 1, judged
+        // by its receipt's state; the outcome's category only says how bad it is.
+        Ok(Done {
+            members,
+            outcome,
+            refused: true,
+        }) => cli_line::receipt(members, &outcome, true),
+        // Model §7.3: a result that does not encode leaves only the developer line.
+        Err(error @ ActingctlError::Output(_)) => {
+            cli_line::developer_line(&error.outcome(), Some(&error.to_string()));
             ExitCode::FAILURE
         }
+        Err(error) => failed(&error.outcome(), Some(&error.to_string())),
     }
+}
+
+/// A failed exit: `{outcome}` and the developer line with `text`. It exits non-zero whatever
+/// the top's category: a refusal the Runtime topped with an info or warning code still failed
+/// (A4 part B L2), so its line goes out as a refused one.
+fn failed(outcome: &Outcome, text: Option<&str>) -> ExitCode {
+    cli_line::refused(outcome, text)
 }
 
 /// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.
@@ -172,10 +201,7 @@ struct InstallTransitionRun {
 const INSTALL_TRANSITION_RUN_BUDGET: Duration = Duration::from_secs(60);
 const INSTALL_COMMIT_EXCHANGE_BUDGET: Duration = Duration::from_secs(10);
 
-fn install_transition_run(
-    action: &actingcommand_contract::InstallTransitionAction,
-) -> InstallTransitionRun {
-    use actingcommand_contract::InstallTransitionAction;
+fn install_transition_run(action: &InstallTransitionAction) -> InstallTransitionRun {
     let budget = match action {
         InstallTransitionAction::CommitShutdown { .. } => INSTALL_COMMIT_EXCHANGE_BUDGET,
         _ => INSTALL_TRANSITION_RUN_BUDGET,
@@ -204,7 +230,26 @@ fn client_config(state_root: &Path, command: &Command, started: Instant) -> Runt
     }
 }
 
-fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
+/// One subcommand's result line (Workflow #378 A5): the result's members, its top outcome, and
+/// whether the receipt it prints was refused or failed (A4 part B L2: such a line exits
+/// non-zero whatever the outcome's category).
+struct Done {
+    members: Map<String, Value>,
+    outcome: Outcome,
+    refused: bool,
+}
+
+impl Done {
+    fn new(members: Map<String, Value>, outcome: Outcome) -> Self {
+        Self {
+            members,
+            outcome,
+            refused: false,
+        }
+    }
+}
+
+fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError> {
     let started = Instant::now();
     let Invocation {
         state_root,
@@ -212,81 +257,70 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         shutdown_wait,
         command,
     } = Invocation::parse(arguments)?;
-    let observation = if let Command::AgentPublishFacts { record_file } = &command {
-        let mut bytes = Vec::new();
-        std::fs::File::open(record_file)
-            .map_err(|_| ActingctlError::FactRecord)?
-            .take(actingcommand_contract::MAX_FACT_OBSERVATION_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ActingctlError::FactRecord)?;
-        if bytes.len() > actingcommand_contract::MAX_FACT_OBSERVATION_BYTES {
-            return Err(ActingctlError::FactRecord);
-        }
-        let observation: actingcommand_contract::FactObservation =
-            serde_json::from_slice(&bytes).map_err(|_| ActingctlError::FactRecord)?;
-        observation
-            .validate()
-            .map_err(|_| ActingctlError::FactRecord)?;
-        Some(observation)
-    } else {
-        None
+    let success = command.success(shutdown_wait.is_some());
+    let observation = match &command {
+        Command::AgentPublishFacts { record_file } => Some(read_fact_observation(record_file)?),
+        _ => None,
     };
     // Workflow #308 RT-S1a: the policy document is read bounded and checked as UTF-8 only;
     // the Runtime parses and checks its content.
-    let resource_targets = if let Command::AgentApplyResourceTargets { policy_file } = &command {
-        let mut bytes = Vec::new();
-        std::fs::File::open(policy_file)
-            .map_err(|_| ActingctlError::ResourceTargetsFile)?
-            .take(actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ActingctlError::ResourceTargetsFile)?;
-        if bytes.is_empty()
-            || bytes.len() > actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
-        {
-            return Err(ActingctlError::ResourceTargetsFile);
+    let resource_targets = match &command {
+        Command::AgentApplyResourceTargets { policy_file } => {
+            Some(read_resource_targets(policy_file)?)
         }
-        Some(String::from_utf8(bytes).map_err(|_| ActingctlError::ResourceTargetsFile)?)
-    } else {
-        None
+        _ => None,
     };
     let install_run = match &command {
         Command::InstallTransition { action } => Some(install_transition_run(action)),
         _ => None,
     };
-    let client = RuntimeClient::connect(client_config(&state_root, &command, started))
-        .map_err(ActingctlError::runtime)?;
+    let config = client_config(&state_root, &command, started);
+    // Model §7.1: `ACTINGCOMMAND_DETAIL=codes` reaches the receipts the line prints, too.
+    let config = match detail {
+        Detail::Codes => config.with_detail(Detail::Codes),
+        Detail::Full => config,
+    };
+    let client = RuntimeClient::connect(config).map_err(ActingctlError::Runtime)?;
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
-    let output = match command {
-        Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
-            "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
-        })),
+    match command {
+        Command::AgentPublishFacts { .. } => {
+            let observation = observation.ok_or(ActingctlError::Usage)?;
+            let event_id = client
+                .publish_facts(observation)
+                .map_err(ActingctlError::Runtime)?;
+            Ok(Done::new(
+                members([member("event_id", &event_id)?]),
+                Outcome::new(success),
+            ))
+        }
         // Workflow #387 D1b: `config set|clear` (MCP `ac_config_set`); a refused change prints
-        // the Runtime's receipt, whose error exits non-zero.
+        // the Runtime's receipt beside its outcome and exits non-zero.
         Command::ConfigureSettings { changes } => match client.configure_settings(changes) {
-            Ok(settings) => Ok(serde_json::json!({ "settings": settings })),
-            Err(error) => match error.received_receipt() {
-                Some(receipt) => Ok(serde_json::json!({ "receipt": receipt })),
-                None => return Err(ActingctlError::runtime(error)),
-            },
+            Ok(settings) => Ok(Done::new(
+                members([member("settings", &settings)?]),
+                Outcome::new(success),
+            )),
+            Err(error) => refused(error),
         },
-        // A refused policy prints the Runtime's receipt, whose error exits non-zero.
-        Command::AgentApplyResourceTargets { .. } => match client
-            .apply_resource_targets(resource_targets.ok_or(ActingctlError::ResourceTargetsFile)?)
-        {
-            Ok(applied) => Ok(serde_json::json!({ "applied": applied })),
-            Err(error) => match error.received_receipt() {
-                Some(receipt) => Ok(serde_json::json!({ "receipt": receipt })),
-                None => return Err(ActingctlError::runtime(error)),
-            },
-        },
+        // A refused policy prints the Runtime's receipt beside its outcome and exits non-zero.
+        Command::AgentApplyResourceTargets { .. } => {
+            let document = resource_targets.ok_or(ActingctlError::Usage)?;
+            match client.apply_resource_targets(document) {
+                Ok(applied) => Ok(Done::new(
+                    members([member("applied", &applied)?]),
+                    Outcome::new(success),
+                )),
+                Err(error) => refused(error),
+            }
+        }
         // One manual priority offset (Workflow #308 slice 4a-2) through the ordinary fact
         // publication, with this CLI's Cli/Cli origin.
         Command::TaskOffset {
             task_id,
             offset_milli,
         } => {
-            let status = client.status().map_err(ActingctlError::runtime)?;
+            let status = client.status().map_err(ActingctlError::Runtime)?;
             let scope = match optional_instance.as_deref() {
                 Some(alias) => {
                     if !status
@@ -294,7 +328,7 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                         .iter()
                         .any(|registered| registered.instance_alias() == alias)
                     {
-                        return Err(ActingctlError::InstanceUnknown);
+                        return Err(ActingctlError::InstanceUnknown(alias.to_owned()));
                     }
                     FactScope::Instance {
                         instance_id: alias.to_owned(),
@@ -331,69 +365,82 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 observed_at_unix_ms,
                 TASK_OFFSET_DETECTOR,
             )
-            .map_err(|_| ActingctlError::PriorityOffsetInvalid)?;
+            .map_err(ActingctlError::PriorityOffsetInvalid)?;
             let (scope, key) = (record.scope.clone(), record.key.clone());
             let event_id = client
                 .publish_facts(FactObservation {
                     records: vec![record],
                 })
-                .map_err(ActingctlError::runtime)?;
-            Ok(serde_json::json!({
-                "event_id": event_id,
-                "scope": scope,
-                "key": key,
-                "offset_milli": offset_milli,
-            }))
+                .map_err(ActingctlError::Runtime)?;
+            Ok(Done::new(
+                members([
+                    member("event_id", &event_id)?,
+                    member("scope", &scope)?,
+                    member("key", &key)?,
+                    member("offset_milli", &offset_milli)?,
+                ]),
+                Outcome::new(success),
+            ))
         }
-        Command::RequestShutdown => match shutdown_wait {
-            None => Ok(serde_json::json!({
-                "receipt": client.request_shutdown().map_err(ActingctlError::runtime)?,
-            })),
-            Some(wait) => {
-                let receipt = client.request_shutdown().map_err(ActingctlError::runtime)?;
+        Command::RequestShutdown => {
+            let receipt = client.request_shutdown().map_err(ActingctlError::Runtime)?;
+            let mut result = members([member("receipt", &receipt)?]);
+            if let Some(wait) = shutdown_wait {
                 // request_shutdown verified that the accepted receipt names exactly this target.
                 let target = client.runtime_info().shutdown_target();
                 // Close the connection so the waiting CLI leaves nothing for the Runtime to drain.
                 drop(client);
                 let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
-                Ok(serde_json::json!({ "receipt": receipt, "shutdown": shutdown }))
+                result.insert("shutdown".to_owned(), shutdown);
             }
-        },
+            Ok(Done::new(result, Outcome::new(success)))
+        }
         Command::InstallTransition { action } => {
             if install_run.is_some_and(|install_run| install_run.declares_identity) {
-                client.declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
-                    client: "actingctl".to_owned(), client_version: Some(env!("CARGO_PKG_VERSION").to_owned()), instance: None,
-                }).map_err(ActingctlError::runtime)?;
+                client
+                    .declare_governance_identity(&actingcommand_contract::GovernanceIdentityCard {
+                        client: "actingctl".to_owned(),
+                        client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                        instance: None,
+                    })
+                    .map_err(ActingctlError::Runtime)?;
             }
-            let receipt = client.install_transition(action).map_err(ActingctlError::runtime)?;
-            match shutdown_wait {
-                Some(wait) => {
-                    let target = client.runtime_info().shutdown_target();
-                    drop(client);
-                    let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
-                    Ok(serde_json::json!({ "receipt": receipt, "shutdown": shutdown }))
-                }
-                None => Ok(serde_json::json!({ "receipt": receipt })),
+            let transition_id = action_transition_id(&action).to_owned();
+            let receipt = client
+                .install_transition(action)
+                .map_err(ActingctlError::Runtime)?;
+            let mut result = members([member("receipt", &receipt)?]);
+            if let Some(wait) = shutdown_wait {
+                let target = client.runtime_info().shutdown_target();
+                drop(client);
+                let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
+                result.insert("shutdown".to_owned(), shutdown);
             }
+            Ok(Done::new(
+                result,
+                install_transition_outcome(&receipt, &transition_id),
+            ))
         }
-        Command::Reset => serde_json::to_value(
-            client
+        Command::Reset => reported(
+            &client
                 .safe_reset(instance()?)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::Observe => serde_json::to_value(
-            client
+        Command::Observe => reported(
+            &client
                 .observe_readonly(instance()?)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::Status => serde_json::to_value(client.status().map_err(ActingctlError::runtime)?),
+        Command::Status => reported(&client.status().map_err(ActingctlError::Runtime)?, success),
         // The same program-fact read as `facts --program`, reduced to the `config.*` records:
         // `config.subsystems`, `config.selection` when recorded, and every
         // `config.parameters.<section>` in key order (Workflow #387 D1b); no new operation.
         Command::StatusConfig => {
             let snapshot = client
                 .runtime_fact_snapshot()
-                .map_err(ActingctlError::runtime)?;
+                .map_err(ActingctlError::Runtime)?;
             let record = |key: &str| snapshot.records.iter().find(|record| record.key == key);
             let mut sections = snapshot
                 .records
@@ -408,75 +455,108 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 vec![record(CONFIG_SUBSYSTEMS_FACT_KEY).ok_or(ActingctlError::ConfigFactsMissing)?];
             records.extend(record(CONFIG_SELECTION_FACT_KEY));
             records.extend(sections);
-            serde_json::to_value(records)
+            // The records are a list: they go under `records`.
+            Ok(Done::new(
+                result_members(&records, "records")?,
+                Outcome::new(success),
+            ))
         }
-        Command::ProgramFacts => serde_json::to_value(
-            client
+        Command::ProgramFacts => reported(
+            &client
                 .runtime_fact_snapshot()
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::MonitorStatus => {
-            serde_json::to_value(client.monitor_status().map_err(ActingctlError::runtime)?)
-        }
-        Command::MonitorSet { policy } => serde_json::to_value(
-            client
+        Command::MonitorStatus => reported(
+            &client.monitor_status().map_err(ActingctlError::Runtime)?,
+            success,
+        ),
+        Command::MonitorSet { policy } => reported(
+            &client
                 .configure_monitor(instance()?, policy)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::MonitorClear => serde_json::to_value(
-            client
+        Command::MonitorClear => reported(
+            &client
                 .clear_monitor(instance()?)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
         // Served by the existing status read, filtered to the one alias; no new operation.
         Command::EmulatorStatus => {
             let alias = instance()?;
-            let status = client.status().map_err(ActingctlError::runtime)?;
+            let status = client.status().map_err(ActingctlError::Runtime)?;
             let instance = status
                 .instances()
                 .iter()
                 .find(|instance| instance.instance_alias() == alias)
-                .ok_or(ActingctlError::InstanceUnknown)?;
-            serde_json::to_value(instance)
+                .ok_or_else(|| ActingctlError::InstanceUnknown(alias.to_owned()))?;
+            reported(instance, success)
         }
-        Command::EmulatorControl { action } => serde_json::to_value(
-            client
+        Command::EmulatorControl { action } => reported(
+            &client
                 .control_emulator_instance(instance()?, action)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::EmulatorDiscover => serde_json::to_value(
-            client
+        Command::EmulatorDiscover => {
+            let discovery = client
                 .discover_instances()
-                .map_err(ActingctlError::runtime)?,
-        ),
+                .map_err(ActingctlError::Runtime)?;
+            Ok(Done::new(
+                result_members(&discovery, RESULT_MEMBER)?,
+                Outcome::new(success).count(discovery.instances().len()),
+            ))
+        }
         // Workflow #191 ps1: without --instance the pause / resume is global.
         Command::Pause {
             pause_reason,
             drain_timeout_ms,
-        } => serde_json::to_value(
-            client
+        } => reported(
+            &client
                 .pause_scheduling(
                     pause_scope(optional_instance),
                     pause_reason,
                     drain_timeout_ms,
                 )
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        Command::Resume => serde_json::to_value(
-            client
+        Command::Resume => reported(
+            &client
                 .resume_scheduling(pause_scope(optional_instance))
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
-        // Workflow #317 sc3 (d): manual reconnect and self-check of one physical instance.
-        Command::SelfCheck { instance_alias } => serde_json::to_value(
-            client
+        // Workflow #317 sc3 (d): manual reconnect and self-check of one physical instance. A
+        // check that failed is no success: `instance_self_check_failed`, caused by the check's
+        // failure code (the result is printed beside it).
+        Command::SelfCheck { instance_alias } => {
+            let result = client
                 .self_check_instance(&instance_alias)
-                .map_err(ActingctlError::runtime)?,
-        ),
-        Command::Stream { spec } => serde_json::to_value(
-            client
+                .map_err(ActingctlError::Runtime)?;
+            let outcome = match &result {
+                RuntimeResult::InstanceSelfChecked { selfcheck, .. }
+                    if selfcheck.failure_code.is_some()
+                        || !selfcheck.capture.ok
+                        || !selfcheck.touch.ok =>
+                {
+                    let check_failed = Outcome::new(ActingctlCode::InstanceSelfCheckFailed);
+                    match selfcheck.failure_code.as_deref() {
+                        Some(spelling) => with_cause(check_failed, Outcome::relayed(spelling)),
+                        None => check_failed,
+                    }
+                }
+                _ => Outcome::new(success),
+            };
+            Ok(Done::new(result_members(&result, RESULT_MEMBER)?, outcome))
+        }
+        Command::Stream { spec } => reported(
+            &client
                 .capture_sequence(instance()?, spec)
-                .map_err(ActingctlError::runtime)?,
+                .map_err(ActingctlError::Runtime)?,
+            success,
         ),
         Command::TaskRun {
             package,
@@ -484,13 +564,10 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             recovery_package,
             recovery_expected_sha256,
         } => {
-            let package = std::fs::canonicalize(package).map_err(|_| ActingctlError::Package)?;
+            let package = canonical_package(package)?;
             let recovery = match (recovery_package, recovery_expected_sha256) {
                 (Some(package), Some(expected_sha256)) => Some((
-                    std::fs::canonicalize(package)
-                        .map_err(|_| ActingctlError::Package)?
-                        .display()
-                        .to_string(),
+                    canonical_package(package)?.display().to_string(),
                     expected_sha256,
                 )),
                 (None, None) => None,
@@ -498,15 +575,169 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             };
             let request =
                 task_run_request(package.display().to_string(), expected_sha256, recovery)?;
-            serde_json::to_value(
-                client
-                    .run_contained_task(instance()?, request)
-                    .map_err(ActingctlError::runtime)?,
-            )
+            let output = client
+                .run_contained_task(instance()?, request)
+                .map_err(ActingctlError::Runtime)?;
+            // A run that ended failed may still come back with its receipt and events (a
+            // committed failure with its official OCR fields): the receipt's own outcome is the
+            // top, and the line exits non-zero.
+            let completed = output.receipt().state() == RuntimeReceiptState::Completed;
+            let outcome = if completed {
+                Outcome::new(success)
+            } else {
+                output.receipt().outcome().clone()
+            };
+            Ok(Done {
+                members: result_members(&output, RESULT_MEMBER)?,
+                outcome,
+                refused: !completed,
+            })
         }
     }
-    .map_err(|_| ActingctlError::Output)?;
-    Ok(output)
+}
+
+/// The line of a typed result whose subcommand succeeded with `success`.
+fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, ActingctlError> {
+    Ok(Done::new(
+        result_members(result, RESULT_MEMBER)?,
+        Outcome::new(success),
+    ))
+}
+
+/// A refused request whose receipt the subcommand prints: `{receipt, outcome}` with the
+/// receipt's outcome on top; it exits non-zero (A4 part B L2). Without a receipt it is the
+/// client's failure.
+fn refused(error: RuntimeClientError) -> Result<Done, ActingctlError> {
+    let Some(receipt) = error.received_receipt() else {
+        return Err(ActingctlError::Runtime(error));
+    };
+    Ok(Done {
+        members: members([member("receipt", receipt)?]),
+        outcome: error.outcome(),
+        refused: true,
+    })
+}
+
+/// One member of a result line; a value that does not encode is `actingctl_output_failed`.
+fn member(name: &str, value: &impl Serialize) -> Result<(String, Value), ActingctlError> {
+    Ok((
+        name.to_owned(),
+        serde_json::to_value(value).map_err(ActingctlError::Output)?,
+    ))
+}
+
+fn members<const N: usize>(members: [(String, Value); N]) -> Map<String, Value> {
+    members.into_iter().collect()
+}
+
+/// A typed result as the members of its line; a result that is not a JSON object goes under
+/// `name`.
+fn result_members(
+    result: &impl Serialize,
+    name: &str,
+) -> Result<Map<String, Value>, ActingctlError> {
+    serde_json::to_value(result)
+        .map(|value| cli_line::members(value, name))
+        .map_err(ActingctlError::Output)
+}
+
+/// `top` caused by `cause`. A fatal cause is the top itself: a fatal link needs a fatal top
+/// (spec §5), and the operation ended in that condition.
+fn with_cause(top: Outcome, cause: Outcome) -> Outcome {
+    if cause.category() == Category::Fatal {
+        cause
+    } else {
+        top.caused_by(cause)
+    }
+}
+
+/// The transition an install-transition action names.
+fn action_transition_id(action: &InstallTransitionAction) -> &str {
+    match action {
+        InstallTransitionAction::BeginDrain { transition_id, .. }
+        | InstallTransitionAction::Query { transition_id } => transition_id,
+        InstallTransitionAction::Abort { ticket }
+        | InstallTransitionAction::CommitShutdown { ticket }
+        | InstallTransitionAction::Release { ticket, .. } => &ticket.transition_id,
+    }
+}
+
+/// Model §7.3: the outcome of an install transition's receipt. A reported phase `failed` or
+/// `aborted` is `install_transition_failed` / `install_transition_aborted` (error), caused by
+/// the transition's failure code when it carries one; any other phase is
+/// `install_transition_reported`. A commit's receipt (the accepted shutdown) reports no phase,
+/// only the transition the action named.
+fn install_transition_outcome(receipt: &RuntimeReceipt, transition_id: &str) -> Outcome {
+    let Some(RuntimeResult::InstallTransition { status }) = receipt.result() else {
+        return Outcome::new(ActingctlCode::InstallTransitionReported).transition_id(transition_id);
+    };
+    let (code, ended) = match status.phase {
+        InstallTransitionPhase::Failed => (ActingctlCode::InstallTransitionFailed, true),
+        InstallTransitionPhase::Aborted => (ActingctlCode::InstallTransitionAborted, true),
+        _ => (ActingctlCode::InstallTransitionReported, false),
+    };
+    let outcome = Outcome::new(code)
+        .transition_id(&status.ticket.transition_id)
+        .phase(status.phase);
+    match status.failure_code.as_deref() {
+        Some(spelling) if ended => with_cause(outcome, Outcome::relayed(spelling)),
+        _ => outcome,
+    }
+}
+
+/// `task-run`: a package path as the Runtime opens it.
+fn canonical_package(path: PathBuf) -> Result<PathBuf, ActingctlError> {
+    match std::fs::canonicalize(&path) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) => Err(ActingctlError::Package { path, error }),
+    }
+}
+
+/// Reads at most `limit` bytes of an input file; a longer file is `TooLarge`.
+fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, InputProblem> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|error| InputProblem::Io(error, IoOp::Open))?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| InputProblem::Io(error, IoOp::Read))?;
+    if bytes.len() > limit {
+        return Err(InputProblem::TooLarge(limit));
+    }
+    Ok(bytes)
+}
+
+/// `agent-publish-facts --record-file`: one bounded, valid fact observation.
+fn read_fact_observation(path: &Path) -> Result<FactObservation, ActingctlError> {
+    let invalid = |problem: InputProblem| ActingctlError::FactRecord {
+        path: path.to_path_buf(),
+        problem,
+    };
+    let bytes =
+        read_bounded(path, actingcommand_contract::MAX_FACT_OBSERVATION_BYTES).map_err(invalid)?;
+    let observation: FactObservation =
+        serde_json::from_slice(&bytes).map_err(|error| invalid(InputProblem::Json(error)))?;
+    observation
+        .validate()
+        .map_err(|error| invalid(InputProblem::Invalid(error)))?;
+    Ok(observation)
+}
+
+/// `agent-apply-resource-targets --policy-file`: the document, bounded, not empty, UTF-8.
+fn read_resource_targets(path: &Path) -> Result<String, ActingctlError> {
+    let invalid = |problem: InputProblem| ActingctlError::ResourceTargetsFile {
+        path: path.to_path_buf(),
+        problem,
+    };
+    let bytes = read_bounded(
+        path,
+        actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
+    )
+    .map_err(invalid)?;
+    if bytes.is_empty() {
+        return Err(invalid(InputProblem::Empty));
+    }
+    String::from_utf8(bytes).map_err(|error| invalid(InputProblem::NotUtf8(error)))
 }
 
 /// Workflow #387 D1b: the changes of `config set <key>=<json>…` and `config clear <key>…`, the
@@ -570,13 +801,6 @@ fn task_run_request(
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
         })
         .map_err(|_| ActingctlError::Usage)
-}
-
-fn write_output(output: &Value) -> Result<(), ActingctlError> {
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, output).map_err(|_| ActingctlError::Output)?;
-    writer.write_all(b"\n").map_err(|_| ActingctlError::Output)
 }
 
 struct Invocation {
@@ -982,6 +1206,36 @@ impl Invocation {
 }
 
 impl Command {
+    /// The success code of this subcommand's line (Workflow #378 A5, model §7.3). `waits` is
+    /// `--wait`: `request-shutdown` then saw the shutdown complete.
+    const fn success(&self, waits: bool) -> ActingctlCode {
+        match self {
+            Self::AgentPublishFacts { .. } => ActingctlCode::AgentFactsPublished,
+            Self::AgentApplyResourceTargets { .. } => ActingctlCode::ResourceTargetsApplied,
+            Self::TaskOffset { .. } => ActingctlCode::TaskOffsetPublished,
+            Self::RequestShutdown if waits => ActingctlCode::RuntimeShutdownCompleted,
+            Self::RequestShutdown => ActingctlCode::RuntimeShutdownRequested,
+            Self::InstallTransition { .. } => ActingctlCode::InstallTransitionReported,
+            Self::Observe => ActingctlCode::InstanceObserved,
+            Self::Reset => ActingctlCode::InstanceResetDone,
+            Self::Status => ActingctlCode::RuntimeStatusReported,
+            Self::StatusConfig => ActingctlCode::RuntimeConfigReported,
+            Self::ConfigureSettings { .. } => ActingctlCode::ConfigSettingsChanged,
+            Self::ProgramFacts => ActingctlCode::RuntimeFactsReported,
+            Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
+            Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
+            Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
+            Self::EmulatorStatus => ActingctlCode::InstanceStatusReported,
+            Self::EmulatorControl { .. } => ActingctlCode::InstanceEmulatorControlled,
+            Self::EmulatorDiscover => ActingctlCode::InstancesDiscovered,
+            Self::Pause { .. } => ActingctlCode::RuntimeSchedulingPaused,
+            Self::Resume => ActingctlCode::RuntimeSchedulingResumed,
+            Self::SelfCheck { .. } => ActingctlCode::InstanceSelfCheckReported,
+            Self::Stream { .. } => ActingctlCode::InstanceFramesCaptured,
+            Self::TaskRun { .. } => ActingctlCode::TaskRunReported,
+        }
+    }
+
     const fn origin(&self) -> (EventActor, EventSource) {
         if matches!(
             self,
@@ -1034,77 +1288,149 @@ fn require_u16(arguments: &[OsString], index: &mut usize) -> Result<u16, Actingc
         .map_err(|_| ActingctlError::Usage)
 }
 
+/// Why a subcommand's bounded input file (`--record-file`, `--policy-file`) cannot be used.
+#[derive(Debug)]
+enum InputProblem {
+    /// Opening (`IoOp::Open`) or reading (`IoOp::Read`) it failed.
+    Io(io::Error, IoOp),
+    /// It holds no byte.
+    Empty,
+    /// It is larger than its bound, in bytes.
+    TooLarge(usize),
+    /// Its text is not UTF-8.
+    NotUtf8(std::string::FromUtf8Error),
+    /// Its JSON does not decode.
+    Json(serde_json::Error),
+    /// The contract refuses its content.
+    Invalid(SanitizationError),
+}
+
+impl InputProblem {
+    /// `top` with what this problem adds: the I/O or decode failure as its `caused_by` link
+    /// (`foreign_os_error`, `foreign_data_error`), the size, or the contract's refusal code.
+    fn attach(&self, top: Outcome) -> Outcome {
+        match self {
+            Self::Io(error, op) => top.caused_by(Outcome::from_io_error(error, *op)),
+            Self::Empty => top.actual_bytes(0_u64),
+            Self::TooLarge(limit) => top.limit_bytes(*limit),
+            Self::NotUtf8(error) => top.caused_by(foreign_data_error(error)),
+            Self::Json(error) => top.caused_by(foreign_data_error(error)),
+            Self::Invalid(error) => top.caused_by(Outcome::new(error.code())),
+        }
+    }
+}
+
+/// `foreign_data_error` for JSON text a decoder refused: the decoder's message verbatim as
+/// `raw_text` (spec §7).
+fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
+    Outcome::new(ContractCode::ForeignDataError)
+        .raw_source(RawSource::Json)
+        .raw_text(error.to_string())
+}
+
 #[derive(Debug)]
 enum ActingctlError {
     Usage,
     Runtime(actingcommand_runtime_client::RuntimeClientError),
-    Package,
-    FactRecord,
+    /// `task-run`: the package (or recovery package) path does not canonicalize.
+    Package {
+        path: PathBuf,
+        error: io::Error,
+    },
+    /// `agent-publish-facts`: the bounded fact observation file cannot be used.
+    FactRecord {
+        path: PathBuf,
+        problem: InputProblem,
+    },
     /// `agent-apply-resource-targets`: the policy file is unreadable, empty, larger than the
     /// document bound or not UTF-8.
-    ResourceTargetsFile,
-    InstanceUnknown,
+    ResourceTargetsFile {
+        path: PathBuf,
+        problem: InputProblem,
+    },
+    /// The runtime status lists no instance with this alias.
+    InstanceUnknown(String),
     /// `task-offset` without `--instance`: the registered instances do not name exactly one
     /// configured game.
     TaskOffsetScopeAmbiguous,
     /// `task-offset`: the task identifier cannot form a valid priority offset record.
-    PriorityOffsetInvalid,
+    PriorityOffsetInvalid(SanitizationError),
     /// The system clock is before the Unix epoch or out of range.
     Clock,
     /// `status --config`: the snapshot carries no `config.subsystems` or no
     /// `config.parameters.<section>`.
     ConfigFactsMissing,
-    Output,
-    /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
-    ShutdownWait {
-        code: Code,
-        detail: String,
-    },
+    /// A result does not encode as JSON (developer line only, model §7.3).
+    Output(serde_json::Error),
+    /// `--wait` after an accepted shutdown: the wait's failure (`shutdown_wait_timeout`,
+    /// `shutdown_wait_journal_unreadable`) with the OS failures as `foreign_*` links.
+    ShutdownWait(Outcome),
 }
 
 impl ActingctlError {
-    fn runtime(error: actingcommand_runtime_client::RuntimeClientError) -> Self {
-        Self::Runtime(error)
-    }
-
-    /// The registered code of this failure (model section 7.3).
-    fn code(&self) -> Code {
+    /// This failure as one outcome (model §7.3): a Runtime client failure as the client gives
+    /// it (the refused receipt's outcome on top), every other kind as actingctl's code with its
+    /// values and its I/O or decode cause as a link.
+    fn outcome(&self) -> Outcome {
         match self {
-            Self::Usage => ActingctlCode::ActingctlUsageInvalid.code(),
-            Self::Runtime(error) => error.code(),
-            Self::Package => ActingctlCode::ActingctlPackageResolutionFailed.code(),
-            Self::FactRecord => ActingctlCode::ActingctlFactRecordInvalid.code(),
-            Self::ResourceTargetsFile => ActingctlCode::ResourceTargetsFileInvalid.code(),
-            Self::InstanceUnknown => {
-                actingcommand_contract::RuntimeErrorCode::InstanceUnknown.code()
+            Self::Usage => Outcome::new(ActingctlCode::ActingctlUsageInvalid),
+            Self::Runtime(error) => error.outcome(),
+            Self::Package { path, error } => {
+                Outcome::new(ActingctlCode::ActingctlPackageResolutionFailed)
+                    .path(path)
+                    .caused_by(Outcome::from_io_error(error, IoOp::Canonicalize))
             }
-            Self::TaskOffsetScopeAmbiguous => ActingctlCode::TaskOffsetScopeAmbiguous.code(),
-            Self::PriorityOffsetInvalid => SharedCode::PriorityOffsetInvalid.code(),
-            Self::Clock => ActingctlCode::ClockUnavailable.code(),
-            Self::ConfigFactsMissing => ActingctlCode::ConfigFactsMissing.code(),
-            Self::Output => ActingctlCode::ActingctlOutputFailed.code(),
-            Self::ShutdownWait { code, .. } => *code,
+            Self::FactRecord { path, problem } => {
+                problem.attach(Outcome::new(ActingctlCode::ActingctlFactRecordInvalid).path(path))
+            }
+            Self::ResourceTargetsFile { path, problem } => {
+                problem.attach(Outcome::new(ActingctlCode::ResourceTargetsFileInvalid).path(path))
+            }
+            Self::InstanceUnknown(alias) => SelectorMiss::Unknown.outcome(alias),
+            Self::TaskOffsetScopeAmbiguous => Outcome::new(ActingctlCode::TaskOffsetScopeAmbiguous),
+            Self::PriorityOffsetInvalid(error) => Outcome::new(SharedCode::PriorityOffsetInvalid)
+                .caused_by(Outcome::new(error.code())),
+            Self::Clock => Outcome::new(ActingctlCode::ClockUnavailable),
+            Self::ConfigFactsMissing => Outcome::new(ActingctlCode::ConfigFactsMissing),
+            Self::Output(_) => Outcome::new(ActingctlCode::ActingctlOutputFailed),
+            Self::ShutdownWait(outcome) => outcome.clone(),
         }
     }
 }
 
+/// The developer text of the stderr line; the outcome before it already names the code and
+/// its values.
 impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>"),
+            Self::Usage => formatter.write_str(USAGE),
             Self::Runtime(error) => error.fmt(formatter),
-            Self::Package => formatter.write_str("failed to resolve contained task package"),
-            Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
-            Self::ResourceTargetsFile => write!(formatter, "{}: the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8", self.code()),
-            Self::InstanceUnknown => write!(formatter, "{}: the runtime status lists no instance with that alias", self.code()),
-            Self::TaskOffsetScopeAmbiguous => write!(formatter, "{}: the registered instances do not name exactly one configured game; pass --instance <alias>", self.code()),
-            Self::PriorityOffsetInvalid => write!(formatter, "{}: the task identifier cannot form a priority offset fact", self.code()),
-            Self::Clock => write!(formatter, "{}: the system clock is before the Unix epoch or out of range", self.code()),
-            Self::ConfigFactsMissing => write!(formatter, "{}: the runtime fact snapshot holds no config.subsystems or no config.parameters.<section> record", self.code()),
-            Self::Output => formatter.write_str("failed to write JSON output"),
-            Self::ShutdownWait { code, detail } => {
-                write!(formatter, "{code} during wait_shutdown: {detail}")
+            Self::Package { .. } => {
+                formatter.write_str("the contained task package cannot be resolved")
+            }
+            Self::FactRecord { .. } => formatter.write_str(
+                "the fact observation file is unreadable, larger than its bound or invalid",
+            ),
+            Self::ResourceTargetsFile { .. } => formatter.write_str(
+                "the policy file is unreadable, empty, larger than 65536 bytes or not UTF-8",
+            ),
+            Self::InstanceUnknown(_) => {
+                formatter.write_str("the runtime status lists no instance with that alias")
+            }
+            Self::TaskOffsetScopeAmbiguous => formatter.write_str(
+                "the registered instances do not name exactly one configured game; pass --instance <alias>",
+            ),
+            Self::PriorityOffsetInvalid(_) => {
+                formatter.write_str("the task identifier cannot form a priority offset fact")
+            }
+            Self::Clock => formatter
+                .write_str("the system clock is before the Unix epoch or out of range"),
+            Self::ConfigFactsMissing => formatter.write_str(
+                "the runtime fact snapshot holds no config.subsystems or no config.parameters.<section> record",
+            ),
+            Self::Output(error) => write!(formatter, "the JSON result cannot be encoded: {error}"),
+            Self::ShutdownWait(_) => {
+                formatter.write_str("the accepted shutdown was not seen to complete")
             }
         }
     }
@@ -1332,5 +1658,210 @@ mod tests {
 
         assert_eq!(recovery.package_path(), "return-home.zip");
         assert_eq!(recovery.expected_sha256(), &"1".repeat(64).into());
+    }
+
+    /// Workflow #378 A5 (model §7.3): every subcommand's line has its own success code
+    /// (category success; `request-shutdown --wait` the completed shutdown's), and every local
+    /// failure its own error code with its I/O, decode or contract cause as the first link; a
+    /// Runtime client failure is the client's outcome unchanged.
+    #[test]
+    fn every_command_has_its_success_code_and_every_failure_its_code() {
+        let package_ref = "0".repeat(64);
+        let commands: [(&[&str], &str); 23] = [
+            (
+                &["agent-publish-facts", "--record-file", "observation.json"],
+                "agent_facts_published",
+            ),
+            (
+                &[
+                    "agent-apply-resource-targets",
+                    "--policy-file",
+                    "policy.json",
+                ],
+                "resource_targets_applied",
+            ),
+            (
+                &["task-offset", "neutral.task", "250"],
+                "task_offset_published",
+            ),
+            (&["request-shutdown"], "runtime_shutdown_requested"),
+            (
+                &["request-shutdown", "--wait", "60"],
+                "runtime_shutdown_completed",
+            ),
+            (
+                &[
+                    "install-transition",
+                    "--action-json",
+                    r#"{"action":"query","transition_id":"transition-a5"}"#,
+                ],
+                "install_transition_reported",
+            ),
+            (
+                &["observe", "--instance", "neutral.instance"],
+                "instance_observed",
+            ),
+            (
+                &["reset", "--instance", "neutral.instance"],
+                "instance_reset_done",
+            ),
+            (&["status"], "runtime_status_reported"),
+            (&["status", "--config"], "runtime_config_reported"),
+            (
+                &["config", "set", "neutral.key=1"],
+                "config_settings_changed",
+            ),
+            (&["facts", "--program"], "runtime_facts_reported"),
+            (&["monitor-status"], "monitor_status_reported"),
+            (
+                &["monitor-set", "--instance", "neutral.instance"],
+                "monitor_policy_set",
+            ),
+            (
+                &["monitor-clear", "--instance", "neutral.instance"],
+                "monitor_policy_cleared",
+            ),
+            (
+                &["emulator", "status", "--instance", "neutral.instance"],
+                "instance_status_reported",
+            ),
+            (
+                &["emulator", "restart", "--instance", "neutral.instance"],
+                "instance_emulator_controlled",
+            ),
+            (&["emulator", "discover"], "instances_discovered"),
+            (&["pause"], "runtime_scheduling_paused"),
+            (&["resume"], "runtime_scheduling_resumed"),
+            (
+                &["selfcheck", "neutral.instance"],
+                "instance_self_check_reported",
+            ),
+            (
+                &["stream", "--instance", "neutral.instance"],
+                "instance_frames_captured",
+            ),
+            (
+                &[
+                    "task-run",
+                    "--instance",
+                    "neutral.instance",
+                    "--package",
+                    "neutral-task.zip",
+                    "--expected-sha256",
+                    package_ref.as_str(),
+                ],
+                "task_run_reported",
+            ),
+        ];
+        for (words, expected) in commands {
+            let arguments = words
+                .iter()
+                .chain(&["--state-root", "state"])
+                .map(|word| OsString::from(*word))
+                .collect();
+            let invocation =
+                Invocation::parse(arguments).unwrap_or_else(|error| panic!("{words:?}: {error}"));
+            let success = invocation
+                .command
+                .success(invocation.shutdown_wait.is_some());
+            assert_eq!(
+                (success.as_str(), success.category()),
+                (expected, Category::Success),
+                "{words:?}"
+            );
+        }
+
+        let Err(client_error) = RuntimeClient::connect(RuntimeClientConfig::new(
+            "",
+            EventActor::Cli,
+            EventSource::Cli,
+        )) else {
+            panic!("a client without a state root is refused before any I/O");
+        };
+        assert_eq!(
+            ActingctlError::Runtime(client_error.clone()).outcome(),
+            client_error.outcome()
+        );
+        let refusal = FactObservation {
+            records: Vec::new(),
+        }
+        .validate()
+        .expect_err("an empty observation is refused");
+        let refusal_code = refusal.code().as_str();
+        let decode = || serde_json::from_str::<Value>("{").expect_err("truncated JSON");
+        let failures = [
+            (ActingctlError::Usage, "actingctl_usage_invalid", None),
+            (
+                ActingctlError::Package {
+                    path: PathBuf::from("neutral-task.zip"),
+                    error: io::Error::from(io::ErrorKind::NotFound),
+                },
+                "actingctl_package_resolution_failed",
+                Some("foreign_os_error"),
+            ),
+            (
+                ActingctlError::FactRecord {
+                    path: PathBuf::from("observation.json"),
+                    problem: InputProblem::Json(decode()),
+                },
+                "actingctl_fact_record_invalid",
+                Some("foreign_data_error"),
+            ),
+            (
+                ActingctlError::ResourceTargetsFile {
+                    path: PathBuf::from("policy.json"),
+                    problem: InputProblem::Empty,
+                },
+                "resource_targets_file_invalid",
+                None,
+            ),
+            (
+                ActingctlError::InstanceUnknown("neutral.instance".to_owned()),
+                "instance_unknown",
+                None,
+            ),
+            (
+                ActingctlError::TaskOffsetScopeAmbiguous,
+                "task_offset_scope_ambiguous",
+                None,
+            ),
+            (
+                ActingctlError::PriorityOffsetInvalid(refusal),
+                "priority_offset_invalid",
+                Some(refusal_code),
+            ),
+            (ActingctlError::Clock, "clock_unavailable", None),
+            (
+                ActingctlError::ConfigFactsMissing,
+                "config_facts_missing",
+                None,
+            ),
+            (
+                ActingctlError::Output(decode()),
+                "actingctl_output_failed",
+                None,
+            ),
+            (
+                ActingctlError::ShutdownWait(
+                    Outcome::new(ActingctlCode::ShutdownWaitTimeout)
+                        .pid(4_242_u32)
+                        .timeout_ms(Duration::from_secs(60)),
+                ),
+                "shutdown_wait_timeout",
+                None,
+            ),
+        ];
+        for (error, expected, expected_cause) in failures {
+            let outcome = error.outcome();
+            let cause = outcome
+                .causes()
+                .first()
+                .map(|link| link.outcome().code().as_str());
+            assert_eq!(
+                (outcome.code().as_str(), outcome.category(), cause),
+                (expected, Category::Error, expected_cause),
+                "{error:?}"
+            );
+        }
     }
 }

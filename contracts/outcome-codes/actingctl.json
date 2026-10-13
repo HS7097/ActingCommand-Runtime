@@ -7,7 +7,13 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "argument": "optional",
+        "argument_problem": "optional",
+        "range_min": "optional",
+        "range_max": "optional",
+        "variable": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -21,7 +27,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -35,7 +43,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -63,7 +74,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "actual_bytes": "optional",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -119,7 +134,13 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "pid": "required",
+        "timeout_ms": "required",
+        "owner_epoch": "optional",
+        "owner_closed": "optional",
+        "process_alive": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -133,7 +154,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "line": "optional",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -147,7 +172,12 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "argument": "required",
+        "argument_problem": "required",
+        "range_min": "optional",
+        "range_max": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -162,7 +192,9 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "required_tier": "required"
+        "required_tier": "required",
+        "mcp_tool": "optional",
+        "mcp_blocker": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -177,7 +209,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "actual_bytes": "optional",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -191,7 +226,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "limit_count": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -219,7 +256,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -247,7 +286,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "range_min": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -303,7 +344,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "instance_selector": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -317,7 +360,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -331,7 +376,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "config_path": "optional",
+        "path": "optional",
+        "mcp_blocker": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -345,7 +394,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "install_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -359,7 +411,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "state_root": "optional",
+        "config_path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -373,7 +429,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -401,7 +459,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "event_id": "optional",
+        "artifact_id": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -429,7 +490,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mcp_blocker": "optional",
+        "offset": "optional",
+        "media_type": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -443,7 +508,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "actual_bytes": "optional",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -457,7 +525,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "from_path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -471,7 +542,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "request_id": "optional",
+        "run_state": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -485,7 +559,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "actual_bytes": "optional",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -499,7 +576,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mcp_blocker": "required",
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -513,7 +593,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "exit_code": "optional",
+        "req_id": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -541,7 +624,12 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "actual_sha256": "optional",
+        "actual_bytes": "optional",
+        "count": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -597,7 +685,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -611,7 +701,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -625,7 +717,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "exit_code": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -695,7 +790,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "state_root": "optional",
+        "other_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -737,7 +835,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mcp_tool": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -751,7 +851,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "owner_epoch": "required",
+        "pid": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -765,7 +868,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "owner_epoch": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -779,7 +884,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "next_eligible_unix_ms": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -835,7 +942,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "timeout_ms": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -849,7 +959,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "count": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -877,7 +989,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "owner_epoch": "required",
+        "pid": "required",
+        "log": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -891,7 +1007,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "failure_code": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -905,7 +1023,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "failure_code": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -919,7 +1039,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "owner_epoch": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -933,7 +1055,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "count": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -947,7 +1071,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "at_unix_ms": "required",
+        "limit_count": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -961,7 +1088,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "log": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -989,7 +1118,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "name": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1003,7 +1134,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "name": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1031,7 +1164,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1045,7 +1181,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1059,7 +1197,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1073,7 +1214,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "declared_schema": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1087,7 +1231,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1101,7 +1247,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1115,7 +1263,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1129,7 +1279,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1143,7 +1295,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1157,7 +1311,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "other_root": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1171,7 +1328,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1185,7 +1344,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1199,7 +1360,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1213,7 +1376,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "limit_bytes": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1227,7 +1393,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required",
+        "to_path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1241,7 +1410,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "name": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1255,7 +1426,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "name": "required",
+        "names": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1269,7 +1443,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "timeout_ms": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1283,7 +1459,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "name": "optional",
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1311,7 +1490,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1325,7 +1506,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1339,7 +1522,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1353,7 +1538,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1367,7 +1554,9 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1381,7 +1570,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "timeout_ms": "optional",
+        "return_value": "optional",
+        "pid": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1395,7 +1588,11 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "log": "required",
+        "exit_code": "optional",
+        "pid": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1409,7 +1606,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "log": "required",
+        "timeout_ms": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1423,7 +1623,10 @@
       "owner": "actingctl",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "pid": "optional",
+        "timeout_ms": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1473,7 +1676,8 @@
       "uncertain": false,
       "values": {
         "path": "required",
-        "alias": "optional"
+        "alias": "optional",
+        "package_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1489,7 +1693,9 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "path": "required"
+        "path": "required",
+        "pid": "optional",
+        "owner_epoch": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1512,6 +1718,969 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl restart: after --wait-idle (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "agent_facts_published": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl agent-publish-facts: the Runtime recorded the fact observation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_targets_applied": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl agent-apply-resource-targets: the Runtime applied the resource target policy.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "task_offset_published": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl task-offset: the Runtime recorded the manual priority offset.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_shutdown_requested": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_shutdown_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, closed its owner record and its process exited.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_transition_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required",
+        "phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl install-transition: the Runtime answered the transition action; phase is the phase it reports (a commit receipt reports none).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_transition_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required",
+        "phase": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl install-transition: the Runtime reports the transition in phase failed; the transition's failure code is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "install_transition_aborted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "transition_id": "required",
+        "phase": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted; the transition's failure code, when it has one, is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_reset_done": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl reset: the Runtime reset the instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_observed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl observe: the Runtime took one read-only frame of the instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_status_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl status: the Runtime reported its status.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_config_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl status --config: the config.* records of the runtime fact snapshot were printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_settings_changed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl config set|clear: the Runtime applied every change.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_facts_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl facts --program: the runtime fact snapshot was printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "monitor_status_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl monitor-status: the Runtime reported its monitor registry.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "monitor_policy_set": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl monitor-set: the Runtime took the instance's monitor policy.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "monitor_policy_cleared": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl monitor-clear: the Runtime cleared the instance's monitor policy.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_status_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl emulator status: the instance's row of the Runtime status was printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_emulator_controlled": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl emulator start|stop|restart: the Runtime completed the emulator control.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instances_discovered": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl emulator discover: the Runtime listed the emulator's instances; count is how many.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_scheduling_paused": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl pause: the Runtime paused scheduling (globally or for the instance).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_scheduling_resumed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl resume: the Runtime lifted the scheduling pause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_self_check_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl selfcheck: the instance reconnected and its self-check passed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_self_check_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl selfcheck: the instance's reconnect or self-check failed; its failure code, when the result gives one, is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_frames_captured": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl stream: the Runtime captured the frame sequence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "task_run_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl task-run: the contained run completed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_events_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl events: one page of ledger events was printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_frame_exported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl observe --export: the observed frame was read back verified and written to the export folder.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "run_list_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl runs: one page of the run list was printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_diagnosis_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl diagnose: the diagnosis of the window was printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "package_bindings_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl packs: the bound packages of the selected configuration were printed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_runtime_started": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pid": "required",
+        "log": "required",
+        "owner_epoch": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl start: the Runtime was started and its owner answers; log is the start's log file.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_runtime_restarted": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pid": "required",
+        "log": "required",
+        "owner_epoch": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl restart: the Runtime was stopped and started again and its owner answers; log is the start's log file.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_runtime_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl start or restart refused to start the Runtime; the watchdog condition that refused it (installer busy, a tick in progress) is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "material_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "material_state": "required",
+        "material_limit": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime answered a material read without the material: material_state is the read state and material_limit why it stopped short; the Runtime's typed failure code, when it gave one, is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_report_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended exited with its own failure report; that report's outcome is the caused_by link and its stderr tail a related foreign_other_error link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "lab_tool_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "exit_code": "required",
+        "req_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab answered an error envelope; exit_code is its exit code, its code is the first caused_by link and, when the error has details, a foreign_other_error link (raw_source process) holds those details' JSON as raw_text.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_params_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "argument": "required",
+        "argument_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32602: a params or _meta member of an MCP request is missing, of the wrong type or not recognised (argument names it).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_message_malformed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32700: an MCP message line is not JSON; the parser's error is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_message_too_large": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "limit_bytes": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32700: an MCP message line is longer than limit_bytes and was skipped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_batch_empty": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32600: an MCP batch array was empty.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_batch_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32600: a batch array arrived outside a session initialized with protocol 2025-03-26.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_request_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32600: an MCP message is not a JSON-RPC 2.0 request or notification.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_method_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32601: mcp-serve has no such method.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_protocol_version_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32022: a request's _meta names a protocol version mcp-serve does not take that way; data lists the supported versions.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_protocol_version_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32602: a request neither follows a legacy initialize nor carries the _meta protocol version and client capabilities.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_request_id_in_use": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "JSON-RPC -32600: a tools/call request with this id is still in flight.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_server_start_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "thread": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve could not start one of its threads (thread); the OS error is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_input_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve could not read stdin and ended; the OS error is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_file_too_large": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "limit_bytes": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "mcp-serve read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_config_program_unresolved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "program": "optional",
+        "install_root": "optional",
+        "entry": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl mcp-config cannot name the program a client registers: the executable or the installation selection cannot be read, or a slot's fixed entry is missing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_config_program_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "program": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl mcp-config cannot write the client configuration for this program path (not Unicode, or a double quote for claude).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "mcp_identity_card_refused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "mcp_blocker": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime refused mcp-serve's governance identity card (governance.allowed_clients); the write went ahead without it and the refusal is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_start_due": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog decision (status): run-once would start the Runtime now.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_start_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog state: a start whose result is not known yet.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_owner_lock_unanswered": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "elapsed_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog status attention: the owner lock has been held for elapsed_ms (10 minutes or more) without an answering owner.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_formal_close_unlogged": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "owner_epoch": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog status attention: no Runtime log covers the formally closed owner epoch, so a fatal stop of an unlogged start may be hidden.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_last_start_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "at_unix_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog status attention: the last watchdog start (at_unix_ms) failed; its start result is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_restarts_repeated": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog status attention: the watchdog started the Runtime count times (2 or more) within a day.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_task_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "name": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Watchdog status attention: no watchdog task (name) is registered for this root.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_install_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl watchdog install refused; the condition that refused it (installer busy, a tick in progress) is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_launcher_misplaced": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingwatch is not <root>\\tools\\actingwatch.exe, so it knows no installation root.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_launcher_log_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingwatch cannot open <root>\\watchdog\\watchdog.log.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_launcher_writer_lock_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingwatch cannot probe the installation writer lock.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "watchdog_launcher_spawn_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
       "common_causes": "TBD",
       "handling": "TBD"
     }

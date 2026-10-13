@@ -5,10 +5,11 @@
 //! the Runtime processes under the root. Nothing here writes, and the owner journal is never
 //! locked.
 
-use super::Failure;
 use super::decide::{Fatal, Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess};
-use super::powershell;
+use super::{io_failure, json_failure, powershell};
 use crate::codes::ActingctlCode;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
 };
@@ -52,45 +53,36 @@ pub(crate) struct Installation {
 impl Installation {
     /// The selection comes from `process_installation()` (the snapshot acforward handed this
     /// process) or, for a direct run, from `install\active.json`; only A/B installs qualify.
-    pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Failure> {
+    pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Outcome> {
         let root = fs::canonicalize(root_argument).map_err(|error| {
-            Failure::misconfigured(
+            io_failure(
                 ActingctlCode::WatchdogRootUnavailable,
-                format!("{}: {error}", root_argument.display()),
+                root_argument,
+                &error,
+                IoOp::Canonicalize,
             )
         })?;
-        let inherited = actingcommand_contract::process_installation().map_err(|error| {
-            Failure::misconfigured(error.code(), "the process installation is unreadable")
-        })?;
+        // The process installation, or `install\active.json` and its inputs, unreadable: the
+        // installation contract's own code.
+        let inherited = actingcommand_contract::process_installation()
+            .map_err(|error| Outcome::new(error.code()))?;
         let selected = match inherited {
             Some(selected) if selected.root() == root => selected.clone(),
+            // This actingctl belongs to another installation.
             Some(selected) => {
-                return Err(Failure::misconfigured(
-                    ActingctlCode::WatchdogRootMismatch,
-                    format!(
-                        "this actingctl belongs to {}, not {}",
-                        plain_path(selected.root()).display(),
-                        plain_path(&root).display()
-                    ),
-                ));
+                return Err(Outcome::new(ActingctlCode::WatchdogRootMismatch)
+                    .path(plain_path(&root))
+                    .other_root(plain_path(selected.root())));
             }
             None => match InstalledProcess::read_active(&root) {
                 Ok(Some(selected)) => selected,
+                // No install\active.json: the watchdog supervises A/B installs only.
                 Ok(None) => {
-                    return Err(Failure::misconfigured(
-                        ActingctlCode::WatchdogLayoutUnknown,
-                        format!(
-                            "{} has no install\\active.json; the watchdog supervises A/B installs only",
-                            plain_path(&root).display()
-                        ),
-                    ));
+                    return Err(
+                        Outcome::new(ActingctlCode::WatchdogLayoutUnknown).path(plain_path(&root))
+                    );
                 }
-                Err(error) => {
-                    return Err(Failure::misconfigured(
-                        error.code(),
-                        "install\\active.json or its inputs are unreadable",
-                    ));
-                }
+                Err(error) => return Err(Outcome::new(error.code())),
             },
         };
         Ok(Self {
@@ -109,36 +101,33 @@ impl Installation {
 
     /// Review M3: `install\active.json` read again under the shared writer lock, so it cannot
     /// change before the fixed entry reads it once more.
-    pub(crate) fn selection_unchanged(&self) -> Result<bool, Failure> {
+    pub(crate) fn selection_unchanged(&self) -> Result<bool, Outcome> {
         match InstalledProcess::read_active(&self.root) {
             Ok(Some(current)) => Ok(current.selection_json() == self.selection_json),
             Ok(None) => Ok(false),
-            Err(error) => Err(Failure::misconfigured(
-                error.code(),
-                "install\\active.json is unreadable before the start",
-            )),
+            // install\active.json is unreadable before the start.
+            Err(error) => Err(Outcome::new(error.code())),
         }
     }
 }
 
-fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Failure> {
+fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Outcome> {
+    let config = plain_path(&selected.config_path());
     let bytes = selected
         .config_bytes()
-        .map_err(|error| Failure::misconfigured(error.code(), "the selected config"))?;
+        .map_err(|error| Outcome::new(error.code()))?;
     let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
-        Failure::misconfigured(ActingctlCode::WatchdogConfigUnreadable, error.to_string())
+        Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
+            .path(&config)
+            .caused_by(json_failure(&error))
     })?;
+    // The selected config's state_root must be an absolute path.
     let state_root = document
         .get("state_root")
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .ok_or_else(|| {
-            Failure::misconfigured(
-                ActingctlCode::WatchdogStateRootInvalid,
-                "the selected config's state_root must be an absolute path",
-            )
-        })?;
+        .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(&config))?;
     Ok(state_root)
 }
 
@@ -169,43 +158,49 @@ pub(crate) fn unix_ms(time: SystemTime) -> u64 {
 
 /// L and J. A read refused by the owner's lock (os error 33, WouldBlock elsewhere) is Locked;
 /// only complete lines count, so a torn tail of an append in progress is ignored.
-pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), Failure> {
+pub(crate) fn owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal), Outcome> {
     read_owner_journal(state_root).map(|(lock, journal, _)| (lock, journal))
 }
 
-/// L and J, with the bytes of an unlocked journal (R5b looks back in them).
-fn read_owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal, Vec<u8>), Failure> {
+/// L and J, with the bytes of an unlocked journal (R5b looks back in them). An unreadable
+/// journal is `watchdog_journal_unreadable` (`path`); an unrecognised last record carries
+/// `watchdog_journal_unrecognised` with the journal's `path`.
+fn read_owner_journal(state_root: &Path) -> Result<(OwnerLock, Journal, Vec<u8>), Outcome> {
     let path = state_root.join(OWNER_JOURNAL_FILE);
-    let unreadable = |detail: String| {
-        Failure::misconfigured(
-            ActingctlCode::WatchdogJournalUnreadable,
-            format!("{}: {detail}", path.display()),
-        )
+    let unreadable = |error: &std::io::Error, op: IoOp| {
+        io_failure(ActingctlCode::WatchdogJournalUnreadable, &path, error, op)
     };
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             return Ok((OwnerLock::Missing, Journal::Absent, Vec::new()));
         }
-        Err(error) => return Err(unreadable(error.to_string())),
+        Err(error) => return Err(unreadable(&error, IoOp::Open)),
     };
     let modified_unix_ms = file
         .metadata()
         .and_then(|metadata| metadata.modified())
         .map(unix_ms)
-        .map_err(|error| unreadable(error.to_string()))?;
+        .map_err(|error| unreadable(&error, IoOp::Metadata))?;
     let mut bytes = Vec::new();
     match file.take(OWNER_JOURNAL_LIMIT + 1).read_to_end(&mut bytes) {
         Err(error) if error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(33) => {
             return Ok((OwnerLock::Locked, Journal::Absent, Vec::new()));
         }
-        Err(error) => return Err(unreadable(error.to_string())),
+        Err(error) => return Err(unreadable(&error, IoOp::Read)),
         Ok(_) if bytes.len() as u64 > OWNER_JOURNAL_LIMIT => {
-            return Err(unreadable("larger than the owner journal limit".to_owned()));
+            return Err(Outcome::new(ActingctlCode::WatchdogJournalUnreadable)
+                .path(&path)
+                .limit_bytes(OWNER_JOURNAL_LIMIT));
         }
         Ok(_) => {}
     }
-    let journal = parse_journal(&bytes, modified_unix_ms);
+    let journal = match parse_journal(&bytes, modified_unix_ms) {
+        Journal::Unrecognised { failure } => Journal::Unrecognised {
+            failure: failure.path(&path),
+        },
+        journal => journal,
+    };
     Ok((OwnerLock::Unlocked, journal, bytes))
 }
 
@@ -214,58 +209,71 @@ pub(crate) fn parse_journal(bytes: &[u8], modified_unix_ms: u64) -> Journal {
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |end| end + 1);
-    let Ok(text) = std::str::from_utf8(&bytes[..complete]) else {
-        return unrecognised("the journal is not UTF-8");
+    let text = match std::str::from_utf8(&bytes[..complete]) {
+        Ok(text) => text,
+        Err(error) => return unrecognised(not_utf8(&error)),
     };
     let Some(line) = text.lines().rev().find(|line| !line.trim().is_empty()) else {
         return Journal::Absent;
     };
-    let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return unrecognised("the last record is not JSON");
-    };
-    let value = match value["schema_version"].as_str() {
-        Some(OWNER_SCHEMA_V1 | OWNER_SCHEMA_V2) => &value,
-        Some(OWNER_CHECKPOINT_SCHEMA) => &value["last_record"],
-        Some(other) => return unrecognised(&format!("schema {other}")),
-        None => return unrecognised("the last record has no schema_version"),
-    };
-    match owner_record(value) {
-        Some(record) => Journal::Record {
+    let record = serde_json::from_str::<Value>(line)
+        .map_err(|error| journal_unrecognised().caused_by(json_failure(&error)))
+        .and_then(|value| owner_line(&value));
+    match record {
+        Ok(record) => Journal::Record {
             record,
             modified_unix_ms,
         },
-        None => unrecognised("the last owner record lacks a required field"),
+        Err(failure) => unrecognised(failure),
     }
 }
 
 /// Workflow #381 A R5b: each owner's last record, oldest first: one entry per run of
 /// consecutive records of one epoch, from a checkpoint's `last_record` and the physical
-/// records. A complete line that is no owner record is an error.
-fn owner_blocks(bytes: &[u8]) -> Result<Vec<OwnerRecord>, String> {
+/// records. A complete line that is no owner record is `watchdog_journal_unrecognised`.
+fn owner_blocks(bytes: &[u8]) -> Result<Vec<OwnerRecord>, Outcome> {
     let complete = bytes
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |end| end + 1);
-    let text = std::str::from_utf8(&bytes[..complete])
-        .map_err(|_| "the journal is not UTF-8".to_owned())?;
+    let text = std::str::from_utf8(&bytes[..complete]).map_err(|error| not_utf8(&error))?;
     let mut owners: Vec<OwnerRecord> = Vec::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let value: Value =
-            serde_json::from_str(line).map_err(|_| "a journal line is not JSON".to_owned())?;
-        let value = match value["schema_version"].as_str() {
-            Some(OWNER_SCHEMA_V1 | OWNER_SCHEMA_V2) => &value,
-            Some(OWNER_CHECKPOINT_SCHEMA) => &value["last_record"],
-            Some(other) => return Err(format!("schema {other}")),
-            None => return Err("a journal line has no schema_version".to_owned()),
-        };
-        let record = owner_record(value)
-            .ok_or_else(|| "an owner record lacks a required field".to_owned())?;
+        let value: Value = serde_json::from_str(line)
+            .map_err(|error| journal_unrecognised().caused_by(json_failure(&error)))?;
+        let record = owner_line(&value)?;
         match owners.last_mut() {
             Some(last) if last.owner_epoch == record.owner_epoch => *last = record,
             _ => owners.push(record),
         }
     }
     Ok(owners)
+}
+
+fn journal_unrecognised() -> Outcome {
+    Outcome::new(ActingctlCode::WatchdogJournalUnrecognised)
+}
+
+/// A journal that is not UTF-8: the decoder's message as `foreign_data_error`.
+fn not_utf8(error: &std::str::Utf8Error) -> Outcome {
+    journal_unrecognised().caused_by(
+        Outcome::new(ContractCode::ForeignDataError)
+            .raw_source(RawSource::Other)
+            .raw_text(error.to_string()),
+    )
+}
+
+/// The owner record of one journal line: a v1 or v2 record, or a checkpoint's `last_record`.
+/// Another schema is unrecognised with its `declared_schema`; a line without one, or a record
+/// that lacks a required field, is unrecognised.
+fn owner_line(value: &Value) -> Result<OwnerRecord, Outcome> {
+    let value = match value["schema_version"].as_str() {
+        Some(OWNER_SCHEMA_V1 | OWNER_SCHEMA_V2) => value,
+        Some(OWNER_CHECKPOINT_SCHEMA) => &value["last_record"],
+        Some(other) => return Err(journal_unrecognised().declared_schema(other)),
+        None => return Err(journal_unrecognised()),
+    };
+    owner_record(value).ok_or_else(journal_unrecognised)
 }
 
 /// Workflow #381 A R5b: among the `LOOKBACK_OWNERS` owners before the last one, the newest whose
@@ -275,7 +283,7 @@ fn owner_blocks(bytes: &[u8]) -> Result<Vec<OwnerRecord>, String> {
 fn earlier_owner_fatal(
     log_directories: &[PathBuf],
     owners: &[OwnerRecord],
-) -> Result<Option<Fatal>, Failure> {
+) -> Result<Option<Fatal>, Outcome> {
     let Some((last, earlier)) = owners.split_last() else {
         return Ok(None);
     };
@@ -291,12 +299,7 @@ fn earlier_owner_fatal(
             .iter()
             .find(|(_, modified)| *modified >= owner.started_at_unix_ms && *modified <= end)
         {
-            let tail = read_tail(path).map_err(|error| {
-                Failure::misconfigured(
-                    ActingctlCode::WatchdogLogUnreadable,
-                    format!("{}: {error}", path.display()),
-                )
-            })?;
+            let tail = read_tail(path)?;
             return Ok(fatal_line(&tail).map(|line| Fatal {
                 log: plain_path(path).display().to_string(),
                 line,
@@ -307,10 +310,8 @@ fn earlier_owner_fatal(
     Ok(None)
 }
 
-fn unrecognised(detail: &str) -> Journal {
-    Journal::Unrecognised {
-        detail: detail.to_owned(),
-    }
+fn unrecognised(failure: Outcome) -> Journal {
+    Journal::Unrecognised { failure }
 }
 
 fn owner_record(value: &Value) -> Option<OwnerRecord> {
@@ -343,7 +344,7 @@ fn epoch_text(value: &Value) -> Option<String> {
 pub(crate) fn observe_owner(
     state_root: &Path,
     log_directories: &[PathBuf],
-) -> Result<Observed, Failure> {
+) -> Result<Observed, Outcome> {
     let (lock, journal, bytes) = read_owner_journal(state_root)?;
     let fatal = match (&lock, &journal) {
         (
@@ -371,15 +372,8 @@ pub(crate) fn observe_owner(
             if logged {
                 None
             } else {
-                let owners = owner_blocks(&bytes).map_err(|detail| {
-                    Failure::misconfigured(
-                        ActingctlCode::WatchdogJournalUnrecognised,
-                        format!(
-                            "{}: {detail}",
-                            state_root.join(OWNER_JOURNAL_FILE).display()
-                        ),
-                    )
-                })?;
+                let owners = owner_blocks(&bytes)
+                    .map_err(|failure| failure.path(state_root.join(OWNER_JOURNAL_FILE)))?;
                 earlier_owner_fatal(log_directories, &owners)?
             }
         }
@@ -410,14 +404,15 @@ pub(crate) fn runtime_info(state_root: &Path) -> Option<Value> {
     }))
 }
 
-/// Review M1: alive means the owner named by runtime-info answers a health request.
+/// Review M1: alive means the owner named by runtime-info answers a health request; an owner
+/// that does not is the client's failure (`RuntimeClientError::outcome`).
 pub(crate) fn live_owner(
     state_root: &Path,
     timeout: Option<Duration>,
-) -> Result<LiveOwner, String> {
+) -> Result<LiveOwner, Outcome> {
     let config = RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
         .with_io_timeout(timeout.unwrap_or(HEALTH_TIMEOUT));
-    let client = RuntimeClient::connect(config).map_err(|error| error.to_string())?;
+    let client = RuntimeClient::connect(config).map_err(|error| error.outcome())?;
     let info = client.runtime_info();
     Ok(LiveOwner {
         pid: info.pid(),
@@ -430,16 +425,18 @@ pub(crate) fn live_owner(
 /// The logs a FATAL is searched in: `actingd-*.log` in the given directories (the root for
 /// acsetup, a logon script and an operator's restart script; `<root>\watchdog` for the
 /// watchdog's own starts; the console's log directory).
-fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Failure> {
+fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Outcome> {
     let mut logs = Vec::new();
     for directory in directories {
         let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(Failure::misconfigured(
+                return Err(io_failure(
                     ActingctlCode::WatchdogLogDirectoryUnreadable,
-                    format!("{}: {error}", directory.display()),
+                    directory,
+                    &error,
+                    IoOp::ReadDir,
                 ));
             }
         };
@@ -467,17 +464,12 @@ fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Failur
 pub(crate) fn fatal_after(
     directories: &[PathBuf],
     since_unix_ms: u64,
-) -> Result<Option<Fatal>, Failure> {
+) -> Result<Option<Fatal>, Outcome> {
     for (path, modified) in candidate_logs(directories)? {
         if modified < since_unix_ms {
             break;
         }
-        let tail = read_tail(&path).map_err(|error| {
-            Failure::misconfigured(
-                ActingctlCode::WatchdogLogUnreadable,
-                format!("{}: {error}", path.display()),
-            )
-        })?;
+        let tail = read_tail(&path)?;
         if let Some(line) = fatal_line(&tail) {
             return Ok(Some(Fatal {
                 log: plain_path(&path).display().to_string(),
@@ -494,19 +486,29 @@ pub(crate) fn close_logged(
     directories: &[PathBuf],
     started_at_unix_ms: u64,
     closed_at_unix_ms: u64,
-) -> Result<bool, Failure> {
+) -> Result<bool, Outcome> {
     Ok(candidate_logs(directories)?.iter().any(|(_, modified)| {
         *modified >= started_at_unix_ms
             && *modified <= closed_at_unix_ms.saturating_add(super::decide::CLOCK_SLACK_MS)
     }))
 }
 
-fn read_tail(path: &Path) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(LOG_TAIL_BYTES)))?;
+/// A log's tail; an unreadable log is `watchdog_log_unreadable` (`path`).
+fn read_tail(path: &Path) -> Result<String, Outcome> {
+    let unreadable = |error: &std::io::Error, op: IoOp| {
+        io_failure(ActingctlCode::WatchdogLogUnreadable, path, error, op)
+    };
+    let mut file = File::open(path).map_err(|error| unreadable(&error, IoOp::Open))?;
+    let length = file
+        .metadata()
+        .map_err(|error| unreadable(&error, IoOp::Metadata))?
+        .len();
+    file.seek(SeekFrom::Start(length.saturating_sub(LOG_TAIL_BYTES)))
+        .map_err(|error| unreadable(&error, IoOp::Seek))?;
     let mut bytes = Vec::new();
-    file.take(LOG_TAIL_BYTES).read_to_end(&mut bytes)?;
+    file.take(LOG_TAIL_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|error| unreadable(&error, IoOp::Read))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -528,25 +530,20 @@ pub(crate) enum WriterProbe {
     Busy,
 }
 
-pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Failure> {
+pub(crate) fn writer_lock(root: &Path) -> Result<WriterProbe, Outcome> {
     let path = root.join(WRITER_LOCK);
+    let failed = |error: &std::io::Error, op: IoOp| {
+        io_failure(ActingctlCode::WatchdogWriterLockFailed, &path, error, op)
+    };
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(WriterProbe::Free(None)),
-        Err(error) => {
-            return Err(Failure::misconfigured(
-                ActingctlCode::WatchdogWriterLockFailed,
-                format!("{}: {error}", path.display()),
-            ));
-        }
+        Err(error) => return Err(failed(&error, IoOp::Open)),
     };
     match file.try_lock_shared() {
         Ok(()) => Ok(WriterProbe::Free(Some(file))),
         Err(std::fs::TryLockError::WouldBlock) => Ok(WriterProbe::Busy),
-        Err(std::fs::TryLockError::Error(error)) => Err(Failure::misconfigured(
-            ActingctlCode::WatchdogWriterLockFailed,
-            format!("{}: {error}", path.display()),
-        )),
+        Err(std::fs::TryLockError::Error(error)) => Err(failed(&error, IoOp::Lock)),
     }
 }
 
@@ -566,23 +563,32 @@ pub(crate) struct HostProbe {
     pub(crate) boot_unix_ms: Option<u64>,
 }
 
-pub(crate) fn host_probe(root_plain: &Path) -> Result<HostProbe, String> {
+/// Every failure is `process_probe_failed`: caused by PowerShell's failure, or by
+/// `foreign_data_error` when its output is not JSON; output without `boot_unix_ms`, or a
+/// process row without a pid, is the code alone.
+pub(crate) fn host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath } })\n\
         $boot = ([DateTimeOffset](Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime).ToUnixTimeMilliseconds()\n\
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
         [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ boot_unix_ms = $boot; processes = $found }) -Compress -Depth 4))\n";
-    let output = powershell::run(SCRIPT, &[], Duration::from_secs(60))?;
+    let output = powershell::run(
+        SCRIPT,
+        &[],
+        Duration::from_secs(60),
+        ActingctlCode::ProcessProbeFailed,
+    )?;
     parse_host_probe(&output, root_plain)
 }
 
-pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostProbe, String> {
-    let value: Value = serde_json::from_str(output.trim())
-        .map_err(|error| format!("host probe output is not JSON: {error}"))?;
+pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostProbe, Outcome> {
+    let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
+        Outcome::new(ActingctlCode::ProcessProbeFailed).caused_by(json_failure(&error))
+    })?;
     let boot_unix_ms = value["boot_unix_ms"]
         .as_u64()
-        .ok_or_else(|| format!("host probe output lacks boot_unix_ms: {value}"))?;
+        .ok_or_else(|| Outcome::new(ActingctlCode::ProcessProbeFailed))?;
     Ok(HostProbe {
         processes: parse_processes(&value["processes"], root_plain)?,
         boot_unix_ms: Some(boot_unix_ms),
@@ -592,7 +598,7 @@ pub(crate) fn parse_host_probe(output: &str, root_plain: &Path) -> Result<HostPr
 pub(crate) fn parse_processes(
     value: &Value,
     root_plain: &Path,
-) -> Result<Vec<RuntimeProcess>, String> {
+) -> Result<Vec<RuntimeProcess>, Outcome> {
     let rows = match value {
         Value::Array(rows) => rows.clone(),
         Value::Null => Vec::new(),
@@ -611,7 +617,7 @@ pub(crate) fn parse_processes(
             let pid = row["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
             let path = row["path"].as_str().map(str::to_owned);
             match (pid, path) {
-                (None, _) => Some(Err(format!("process row without a pid: {row}"))),
+                (None, _) => Some(Err(Outcome::new(ActingctlCode::ProcessProbeFailed))),
                 (Some(pid), None) => Some(Ok(RuntimeProcess { pid, path: None })),
                 (Some(pid), Some(path)) => {
                     let under_root = path.to_lowercase().starts_with(&prefix);

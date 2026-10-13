@@ -6,15 +6,22 @@
 //! with `RuntimeClient::connect`, which checks the owner epoch against `runtime-info.json`.
 //! A connection the client has locked after a failure is dropped, and the next call
 //! connects again; cursors issued on the old connection then answer `cursor_invalid`.
+//!
+//! Workflow #378 A5: every location and connection failure is an outcome. An installation that
+//! cannot be located is its own condition (`install_process_root_mismatch`,
+//! `install_process_state_root_mismatch` or the installation selection's code); a state root
+//! that cannot be told is `install_state_root_unresolved`; an actingd that does not answer is
+//! `runtime_unavailable` caused by the client's outcome.
 
 use super::lock;
-use super::tools::ToolError;
+use super::tools::{McpBlocker, ToolError};
 use crate::codes::ActingctlCode;
 use actingcommand_contract::RuntimeErrorCode;
-use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{EventActor, EventSource, InstanceId};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -33,7 +40,7 @@ pub(super) struct RuntimeAccess {
     install_root: Option<PathBuf>,
     config: Option<PathBuf>,
     installation: Option<actingcommand_contract::InstalledProcess>,
-    location_error: Option<String>,
+    location_error: Option<Outcome>,
     state_root: Option<PathBuf>,
     slot: Mutex<Slot>,
 }
@@ -58,17 +65,16 @@ pub(super) struct Location {
     pub(super) install_root: Option<PathBuf>,
     pub(super) config: Option<PathBuf>,
     pub(super) installation: Option<actingcommand_contract::InstalledProcess>,
-    error: Option<String>,
-    pub(super) state_root: Result<PathBuf, String>,
+    error: Option<Outcome>,
+    /// The state root, or `install_state_root_unresolved` with what kept it unknown.
+    pub(super) state_root: Result<PathBuf, Outcome>,
 }
 
 impl Location {
+    /// The installation could not be located at startup: that condition, class usage.
     pub(super) fn check(&self) -> Result<(), ToolError> {
         match &self.error {
-            Some(error) => Err(ToolError::usage(
-                SharedCode::InstallSelectionUnavailable,
-                error.clone(),
-            )),
+            Some(error) => Err(ToolError::outcome("usage", error.clone())),
             None => Ok(()),
         }
     }
@@ -88,15 +94,23 @@ impl RuntimeAccess {
         let requested_root = root.clone();
         let located = (|| {
             let process = actingcommand_contract::process_installation()
-                .map_err(|error| error.code().as_str().to_owned())?;
+                .map_err(|error| Outcome::new(error.code()))?;
             let installation = match process {
                 Some(selected) => {
                     if let Some(root) = &root {
-                        let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
-                        if root != selected.root() {
-                            return Err(ActingctlCode::InstallProcessRootMismatch
-                                .as_str()
-                                .to_owned());
+                        // A --root that is not the root this process runs from, readable or not.
+                        let mismatch = || {
+                            Outcome::new(ActingctlCode::InstallProcessRootMismatch)
+                                .path(root)
+                                .install_root(selected.root())
+                        };
+                        let canonical = fs::canonicalize(root).map_err(|error| {
+                            mismatch().caused_by(
+                                Outcome::from_io_error(&error, IoOp::Canonicalize).path(root),
+                            )
+                        })?;
+                        if canonical != selected.root() {
+                            return Err(mismatch());
                         }
                     }
                     Some(selected.clone())
@@ -105,7 +119,7 @@ impl RuntimeAccess {
                     .as_deref()
                     .map(actingcommand_contract::InstalledProcess::read)
                     .transpose()
-                    .map_err(|error| error.code().as_str().to_owned())?
+                    .map_err(|error| Outcome::new(error.code()))?
                     .flatten(),
             };
             let program_root = installation
@@ -130,18 +144,29 @@ impl RuntimeAccess {
             {
                 let configured = configured_state_root(config.as_deref())?;
                 if requested != &configured {
-                    let requested =
-                        fs::canonicalize(requested).map_err(|error| error.to_string())?;
-                    let configured =
-                        fs::canonicalize(configured).map_err(|error| error.to_string())?;
-                    if requested != configured {
-                        return Err(ActingctlCode::InstallProcessStateRootMismatch
-                            .as_str()
-                            .to_owned());
+                    // A --state-root that is not the configuration's, readable or not.
+                    let mismatch = || {
+                        let outcome = Outcome::new(ActingctlCode::InstallProcessStateRootMismatch)
+                            .state_root(requested)
+                            .path(&configured);
+                        match &config {
+                            Some(config) => outcome.config_path(config),
+                            None => outcome,
+                        }
+                    };
+                    let canonical = |path: &Path| {
+                        fs::canonicalize(path).map_err(|error| {
+                            mismatch().caused_by(
+                                Outcome::from_io_error(&error, IoOp::Canonicalize).path(path),
+                            )
+                        })
+                    };
+                    if canonical(requested)? != canonical(&configured)? {
+                        return Err(mismatch());
                     }
                 }
             }
-            Ok::<_, String>((program_root, install_root, config, installation))
+            Ok::<_, Outcome>((program_root, install_root, config, installation))
         })();
         let (root, install_root, config, installation, location_error) = match located {
             Ok((root, install_root, config, installation)) => {
@@ -174,7 +199,7 @@ impl RuntimeAccess {
             return Ok(location);
         };
         let current = crate::packs::current_selection(start.root())
-            .map_err(|error| ToolError::usage(error.code(), error.message()))?;
+            .map_err(|error| ToolError::outcome("usage", error.outcome()))?;
         location.root = Some(current.program_root());
         location.install_root = Some(current.root().to_path_buf());
         location.config = Some(current.config_path());
@@ -190,14 +215,17 @@ impl RuntimeAccess {
     /// `--root`, or two levels above the running executable when
     /// `<root>\runtime\BUILD-MANIFEST.json` is a file (as actingd's install detection);
     /// `--state-root`, or the absolute `state_root` of `<root>\actingd.config.json` (as the
-    /// UI's setup reads it).
+    /// UI's setup reads it). An installation that could not be located leaves the state root
+    /// `install_state_root_unresolved`, caused by that condition.
     pub(super) fn locate(&self) -> Location {
         let root = self.root.clone();
-        let state_root = match (&self.location_error, &self.state_root) {
-            (Some(error), _) => Err(error.clone()),
-            (None, Some(state_root)) => Ok(state_root.clone()),
-            (None, None) => configured_state_root(self.config.as_deref()),
-        };
+        let state_root =
+            match (&self.location_error, &self.state_root) {
+                (Some(error), _) => Err(Outcome::new(ActingctlCode::InstallStateRootUnresolved)
+                    .caused_by(error.clone())),
+                (None, Some(state_root)) => Ok(state_root.clone()),
+                (None, None) => configured_state_root(self.config.as_deref()),
+            };
         Location {
             root,
             install_root: self.install_root.clone(),
@@ -226,11 +254,7 @@ impl RuntimeAccess {
                 _ => slot.client = None,
             }
         }
-        let state_root = self.locate().state_root.map_err(|reason| {
-            ToolError::usage(ActingctlCode::InstallStateRootUnresolved, reason).blocked_by(
-                "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
-            )
-        })?;
+        let state_root = self.locate().state_root.map_err(state_root_unresolved)?;
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             &state_root,
             EventActor::Cli,
@@ -302,59 +326,55 @@ impl RuntimeAccess {
 /// A new connection with this origin to the Runtime of a state root found earlier; a Lab
 /// call's job connects this way once its child has returned.
 pub(super) fn connect_at(
-    state_root: &Result<PathBuf, String>,
+    state_root: &Result<PathBuf, Outcome>,
     actor: EventActor,
     source: EventSource,
 ) -> Result<RuntimeClient, ToolError> {
-    let state_root = state_root.as_ref().map_err(|reason| {
-        ToolError::usage(ActingctlCode::InstallStateRootUnresolved, reason.clone()).blocked_by(
-            "mcp-serve --state-root <dir>, or state_root in <root>\\actingd.config.json",
-        )
-    })?;
+    let state_root = state_root
+        .as_ref()
+        .map_err(|outcome| state_root_unresolved(outcome.clone()))?;
     RuntimeClient::connect(RuntimeClientConfig::new(state_root, actor, source))
         .map_err(|error| unavailable(&error, state_root))
 }
 
-/// A Runtime client failure as a tool error. Its class is the client's own
-/// `RuntimeClientError::disposition()` (R6), the same class CLI, UI and Lab report.
+/// A state root that cannot be told (`install_state_root_unresolved`): class usage; the person
+/// gives `mcp-serve --state-root`, or `state_root` in the install's configuration.
+fn state_root_unresolved(outcome: Outcome) -> ToolError {
+    ToolError::outcome("usage", outcome).blocked_by(McpBlocker::StateRoot)
+}
+
+/// A Runtime client failure as a tool error (Workflow #378 A5): its class is the client's own
+/// `RuntimeClientError::disposition()` (R6), the same class CLI, UI and Lab report, and its
+/// outcome the client's: a denied or failed receipt's outcome on top as the Runtime wrote it,
+/// else the client's code. A refusal's top also carries its receipt's `receipt_state` and
+/// `request_id` (coordinator ruling on A5): a consumer judges refusal by the state (A4), and the
+/// request id is a run's handle for `ac_get_run`.
 pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
-    let mut mapped = ToolError::new(
-        error.disposition().as_str(),
-        error.code(),
-        error.to_string(),
-    )
-    .with_detail("operation", json!(error.operation().as_str()));
-    if let Some(projection) = error.projection() {
-        mapped = mapped.with_detail("runtime_code", json!(projection.code));
-    }
-    if let Some((code, operation)) = error.host_failure() {
-        mapped = mapped.with_detail(
-            "host_failure",
-            json!({"code": code, "operation": operation}),
-        );
-    }
-    if let Some(receipt) = error.received_receipt() {
-        mapped = mapped
-            .with_detail("receipt_state", json!(receipt.state()))
-            .with_detail("request_id", json!(receipt.request_id()));
-    }
-    mapped
+    let outcome = error.outcome();
+    let outcome = match (error.receipt_outcome(), error.received_receipt()) {
+        (Some(_), Some(receipt)) => {
+            let outcome = outcome.receipt_state(receipt.state());
+            match serde_json::to_value(receipt.request_id()) {
+                Ok(Value::String(request_id)) => outcome.request_id(request_id),
+                _ => outcome,
+            }
+        }
+        _ => outcome,
+    };
+    ToolError::outcome(error.disposition().as_str(), outcome)
 }
 
 /// actingd does not answer for this state root: no `runtime-info.json`, or nothing listens
-/// where it points, or its owner epoch does not match.
+/// where it points, or its owner epoch does not match. `runtime_unavailable` with the state
+/// root, caused by the client's outcome; starting actingd belongs to the person.
 fn unavailable(error: &RuntimeClientError, state_root: &Path) -> ToolError {
-    ToolError::new(
+    ToolError::outcome(
         error.disposition().as_str(),
-        RuntimeErrorCode::RuntimeUnavailable,
-        format!(
-            "actingd does not answer for state root {}: {error}",
-            state_root.display()
-        ),
+        Outcome::new(RuntimeErrorCode::RuntimeUnavailable)
+            .state_root(state_root)
+            .caused_by(error.outcome()),
     )
-    .with_detail("client_code", json!(error.code().as_str()))
-    .with_detail("operation", json!(error.operation().as_str()))
-    .blocked_by("actingd running on this state root; starting it belongs to the person")
+    .blocked_by(McpBlocker::RuntimeRunning)
 }
 
 fn executable_install_root() -> Option<PathBuf> {
@@ -366,38 +386,50 @@ fn executable_install_root() -> Option<PathBuf> {
         .then_some(root)
 }
 
-fn configured_state_root(config: Option<&Path>) -> Result<PathBuf, String> {
+/// The absolute `state_root` of the install's configuration. Without a configuration (no
+/// install root and no `--root`) it is `install_state_root_unresolved` caused by
+/// `install_root_unresolved`; otherwise that code with `config_path`, caused by the read or
+/// parse failure, or with the configured value as `path` when it is not absolute.
+fn configured_state_root(config: Option<&Path>) -> Result<PathBuf, Outcome> {
+    let unresolved = || Outcome::new(ActingctlCode::InstallStateRootUnresolved);
     let config = config.ok_or_else(|| {
-        "actingctl does not run from an install root (<root>\\runtime\\actingctl.exe beside <root>\\runtime\\BUILD-MANIFEST.json) and mcp-serve got neither --root nor --state-root".to_owned()
+        unresolved().caused_by(Outcome::new(ActingctlCode::InstallRootUnresolved))
     })?;
-    let bytes = read_bounded(config, MAX_CONFIG_BYTES)?;
-    let document = serde_json::from_slice::<Value>(&bytes)
-        .map_err(|error| format!("{} is not JSON: {error}", config.display()))?;
+    let bytes = read_bounded(config, MAX_CONFIG_BYTES)
+        .map_err(|cause| unresolved().config_path(config).caused_by(cause))?;
+    let document = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+        unresolved().config_path(config).caused_by(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Json)
+                .raw_text(error.to_string())
+                .path(config),
+        )
+    })?;
     let state_root = document
         .get("state_root")
         .and_then(Value::as_str)
         .map(PathBuf::from)
-        .ok_or_else(|| format!("{} has no string state_root", config.display()))?;
+        .ok_or_else(|| unresolved().config_path(config))?;
     if !state_root.is_absolute() {
-        return Err(format!(
-            "state_root in {} is not absolute: {}",
-            config.display(),
-            state_root.display()
-        ));
+        return Err(unresolved().config_path(config).path(&state_root));
     }
     Ok(state_root)
 }
 
-/// Reads a whole file of at most `limit` bytes.
-pub(super) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
-    let file =
-        fs::File::open(path).map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+/// Reads a whole file of at most `limit` bytes: a failed open or read is `foreign_os_error`
+/// with the `path` and `io_op`; a larger file is `mcp_file_too_large` with `path` and
+/// `limit_bytes`.
+pub(super) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
+    let file = fs::File::open(path)
+        .map_err(|error| Outcome::from_io_error(&error, IoOp::Open).path(path))?;
     let mut bytes = Vec::new();
     file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        .map_err(|error| Outcome::from_io_error(&error, IoOp::Read).path(path))?;
     if bytes.len() as u64 > limit {
-        return Err(format!("{} is larger than {limit} bytes", path.display()));
+        return Err(Outcome::new(ActingctlCode::McpFileTooLarge)
+            .path(path)
+            .limit_bytes(limit));
     }
     Ok(bytes)
 }
