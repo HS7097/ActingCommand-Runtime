@@ -804,7 +804,6 @@ impl HostShared {
             terminal,
             Some(receipt.request_id()),
             TaskOutcome::Success,
-            None,
         )?;
         let execution_input = PolicyExecutionInput::Succeeded;
         let replayed = {
@@ -1178,9 +1177,11 @@ impl HostShared {
             })
             .collect::<Vec<_>>();
         let task_failure = match task_terminals.as_slice() {
+            // Workflow #378 A2-P: a run with no terminal records its request error's top node.
             [] => {
                 return Ok(PolicyExecutionInput::Failed {
-                    error_code: failure.error.code().to_owned(),
+                    outcome: failure.error.outcome().without_causes(),
+                    failure_identity: None,
                     class: if failure.error.is_fatal() {
                         PolicyFailureClass::Severe
                     } else {
@@ -1227,11 +1228,14 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        // Ledger revision 3 (model section 8.1): the code and the class come from the terminal
-        // through the contract's shared functions, as the startup recovery and the ledger read
-        // them, no longer from the terminal's severity (now its category).
+        // Ledger revision 3 (model section 8.1): the class comes from the terminal through the
+        // contract's shared function, as the startup recovery and the ledger read it, no longer
+        // from the terminal's severity (now its category). Workflow #378 A2-P: the failure is the
+        // terminal outcome's top node, as the startup recovery records it; the ledger compares
+        // its code (`scheduled_failure_code_str`).
         Ok(PolicyExecutionInput::Failed {
-            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+            outcome: outcome.without_causes(),
+            failure_identity: None,
             class: actingcommand_contract::scheduled_failure_class(outcome.code(), *failure_severe),
         })
     }
@@ -1242,7 +1246,6 @@ impl HostShared {
         terminal: TerminalEvent,
         request_id: Option<RequestId>,
         expected_outcome: TaskOutcome,
-        expected_failure_code: Option<&str>,
     ) -> RuntimeHostResult<()> {
         let through_sequence = self
             .ledger
@@ -1285,6 +1288,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         };
+        // The terminal of a run settled from its receipt carries no failure outcome.
         let terminal_matches = matches!(
             terminal_event.payload(),
             EventPayload::Task(TaskPayload::Semantic(payload))
@@ -1294,9 +1298,7 @@ impl HostShared {
                         task_result,
                         outcome,
                         ..
-                    } if *task_result == expected_outcome
-                        && outcome.as_ref().map(|outcome| outcome.code().as_str())
-                            == expected_failure_code
+                    } if *task_result == expected_outcome && outcome.is_none()
                 )
         );
         if !terminal_matches
@@ -1461,8 +1463,10 @@ impl HostShared {
                     self.consume_scheduled_policy_checkpoint_for_test(context)?;
                     #[cfg(test)]
                     fail_policy_execution_append_for_test()?;
+                    // The stored severity is the record's category: its failure's, or its event
+                    // type's for a success (Workflow #378 A2-P).
                     if let Err(error) = self.append_event_raw(
-                        policy_execution_severity(&data),
+                        EventSeverity::Info,
                         EventSource::Scheduler,
                         OriginModule::Policy,
                         EventActor::Scheduler,
@@ -2011,11 +2015,13 @@ fn reconcile_scheduled_policy_outcomes_for(
                         recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
                     (
                         terminal.timestamp_unix_ms(),
-                        // Ledger revision 3 (model section 8.1): the code and the class come
-                        // from the terminal through the contract's shared functions, as the live
-                        // settlement and the ledger read them.
+                        // Ledger revision 3 (model section 8.1): the class comes from the
+                        // terminal through the contract's shared function, as the live
+                        // settlement and the ledger read it; the failure is the terminal
+                        // outcome's top node (Workflow #378 A2-P).
                         PolicyExecutionInput::Failed {
-                            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+                            outcome: outcome.without_causes(),
+                            failure_identity: None,
                             class: actingcommand_contract::scheduled_failure_class(
                                 outcome.code(),
                                 *failure_severe,
@@ -2027,7 +2033,8 @@ fn reconcile_scheduled_policy_outcomes_for(
                 [] => (
                     lease_ended_at,
                     PolicyExecutionInput::Failed {
-                        error_code: crate::policy_control::POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
+                        outcome: Outcome::new(SharedCode::PolicySettlementInterrupted),
+                        failure_identity: None,
                         class: PolicyFailureClass::Severe,
                     },
                     0,
@@ -2567,13 +2574,8 @@ fn policy_recovery_outcome_matches(
     }
     match (outcome, input) {
         (PolicyExecutionOutcome::Succeeded { .. }, PolicyExecutionInput::Succeeded) => true,
-        (
-            PolicyExecutionOutcome::Failed { failure },
-            PolicyExecutionInput::Failed { error_code, class },
-        ) => {
-            !failure.reported_success
-                && failure.error_code == *error_code
-                && failure.original_class == *class
+        (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Failed { .. }) => {
+            !failure.reported_success && input.names_failure(failure)
         }
         _ => false,
     }
@@ -2656,17 +2658,4 @@ fn policy_settlement_missing() -> RuntimeHostError {
         HostCode::PolicySettlementMissing,
         HostLocation::RecordPolicySettlementFacts,
     )
-}
-
-fn policy_execution_severity(data: &PolicyExecutionEventData) -> EventSeverity {
-    match &data.outcome {
-        actingcommand_contract::PolicyExecutionOutcome::Succeeded { .. } => EventSeverity::Info,
-        actingcommand_contract::PolicyExecutionOutcome::Failed { failure }
-            if failure.effective_class
-                == actingcommand_contract::PolicyFailureClass::Recoverable =>
-        {
-            EventSeverity::Warning
-        }
-        actingcommand_contract::PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
-    }
 }

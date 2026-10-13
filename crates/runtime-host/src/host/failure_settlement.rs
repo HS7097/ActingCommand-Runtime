@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #336 L6 (§12.4-§12.6, R21, R22, R25; `contracts/policy-suspension.md`): the failure
-//! identity a scheduled `linear_steps` run's live settlement writes as its existing
-//! `policy.execution_recorded` `failure.error_code`.
+//! identity a scheduled `linear_steps` run's live settlement writes as its
+//! `policy.execution_recorded` `failure.failure_identity`, beside the failure's `outcome`
+//! (Workflow #378 A2-P).
 //!
 //! The scheduled path records, by decision id, what preparation resolved: whether the main
 //! package was admitted and is `linear_steps`, its game, and the prerequisite chain layer by
 //! layer (§5.2.1 last item). The settlement reads it with the run's own task rows and error
 //! frames, compares the error frame with the previous failure's only when the identity prefix
-//! repeats, and writes the identity. Replay never compares: it reads the recorded code.
+//! repeats, and writes the identity. Replay never compares: it reads the recorded identity.
 
 use super::contained_task::prepare_contained_task;
 use super::policy_outcome::policy_dispatch_intent;
@@ -20,6 +21,8 @@ use crate::failure_identity::{
     failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
     package_digest_prefix,
 };
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::scheduled_failure_code_str;
 use actingcommand_execution_kernel::{FailureFrameVerdict, compare_failure_frames};
 use actingcommand_ledger::LedgerArtifactReference;
 
@@ -153,10 +156,11 @@ impl HostShared {
         failure: &RequestFailure,
         input: PolicyExecutionInput,
     ) -> RuntimeHostResult<PolicyExecutionInput> {
-        let (code, class) = match input {
-            PolicyExecutionInput::Failed { error_code, class } => (error_code, class),
+        let (outcome, class) = match input {
+            PolicyExecutionInput::Failed { outcome, class, .. } => (outcome, class),
             PolicyExecutionInput::Succeeded => return Ok(PolicyExecutionInput::Succeeded),
         };
+        let code = scheduled_failure_code_str(&outcome);
         let decision_id = context.decision_id();
         let (recorded, previous) = {
             let policy = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?;
@@ -164,13 +168,22 @@ impl HostShared {
                 policy.recorded_execution(decision_id).cloned(),
                 policy
                     .latest_failure(context.catalog_task_id(), context.instance_alias())
-                    .map(|(code, decision)| (code.to_owned(), decision.to_owned())),
+                    .and_then(|(identity, decision)| {
+                        identity.map(|identity| (identity.to_owned(), decision.to_owned()))
+                    }),
             )
         };
-        // §12.6 point 4: a dispatch that already has its execution record keeps its code.
+        // §12.6 point 4: a dispatch that already has its execution record keeps its failure.
         if let Some(recorded) = recorded {
-            return recorded_failure_input(recorded, code, class);
+            return recorded_failure_input(recorded, outcome, class);
         }
+        // Workflow #378 A2-P: the failure's outcome is recorded as it is; only the identity
+        // beside it is built here.
+        let failed = |failure_identity: Option<String>| PolicyExecutionInput::Failed {
+            outcome,
+            failure_identity,
+            class,
+        };
         let resolution = lock(
             &self.scheduled_resolutions,
             HostLocation::ReadScheduledResolution,
@@ -178,7 +191,7 @@ impl HostShared {
         .get(decision_id)
         .cloned();
         let Some(resolution) = resolution else {
-            // An internal miss keeps the original code and says so.
+            // An internal miss records no identity and says so.
             self.record_scheduled_policy_diagnostic(
                 context,
                 &RuntimeHostError::request(
@@ -188,18 +201,12 @@ impl HostShared {
                 )
                 .with_native_detail(format!("decision_id={decision_id}")),
             )?;
-            return Ok(PolicyExecutionInput::Failed {
-                error_code: code,
-                class,
-            });
+            return Ok(failed(None));
         };
         // A main package that was not admitted (its mode is unknown) or is a page-graph
-        // package keeps the original code.
+        // package records no identity.
         let Some(main) = resolution.main.filter(|main| main.linear) else {
-            return Ok(PolicyExecutionInput::Failed {
-                error_code: code,
-                class,
-            });
+            return Ok(failed(None));
         };
         let query = |query: EventQuery| {
             self.ledger
@@ -248,10 +255,7 @@ impl HostShared {
             frame: IdentityFrame::unique(decision_id),
         };
         if rerun_only_backend || !failure_accumulates(&code, &scope, restart_segment) {
-            return Ok(PolicyExecutionInput::Failed {
-                error_code: identity.encode(),
-                class,
-            });
+            return Ok(failed(Some(identity.encode())));
         }
         let current = if scope == "prepare" {
             None
@@ -265,17 +269,14 @@ impl HostShared {
                 previous.accumulates() && previous.prefix() == identity.prefix()
             })
         });
-        let Some((previous_code, previous_decision)) = previous else {
-            return Ok(PolicyExecutionInput::Failed {
-                error_code: identity.encode(),
-                class,
-            });
+        let Some((previous_identity, previous_decision)) = previous else {
+            return Ok(failed(Some(identity.encode())));
         };
         let (comparison, previous_run) =
             self.compare_error_frames(&previous_decision, current.as_ref())?;
-        let error_code = match comparison {
+        let failure_identity = match comparison {
             FrameComparison::Different => identity.encode(),
-            FrameComparison::Similar => previous_code,
+            FrameComparison::Similar => previous_identity,
             // A comparison that cannot be made counts as the same problem: the prefix already
             // matched. Only the main scope has frames to miss (§12.4).
             FrameComparison::Unavailable(reason) => {
@@ -297,10 +298,10 @@ impl HostShared {
                         )),
                     )?;
                 }
-                previous_code
+                previous_identity
             }
         };
-        Ok(PolicyExecutionInput::Failed { error_code, class })
+        Ok(failed(Some(failure_identity)))
     }
 
     /// Compares the error frame of the previous failed dispatch's run with the current run's.
@@ -399,29 +400,34 @@ fn compare_frame_files(
     }
 }
 
-/// §12.6 point 4: the recorded execution's own input, after its base segment is checked against
-/// the terminal's code; any other record is left to the replay, which refuses it.
+/// §12.6 point 4: the recorded execution's own input, after its failure is checked against the
+/// terminal's `outcome` (the same code, and an identity whose base segment is that code's); any
+/// other record is left to the replay, which refuses it.
 fn recorded_failure_input(
     recorded: PolicyExecutionEventData,
-    code: String,
+    outcome: Outcome,
     class: PolicyFailureClass,
 ) -> RuntimeHostResult<PolicyExecutionInput> {
     let PolicyExecutionOutcome::Failed { failure } = recorded.outcome else {
         return Ok(PolicyExecutionInput::Failed {
-            error_code: code,
+            outcome,
+            failure_identity: None,
             class,
         });
     };
     if failure.reported_success {
         return Ok(PolicyExecutionInput::Failed {
-            error_code: code,
+            outcome,
+            failure_identity: None,
             class,
         });
     }
-    let consistent = match FailureIdentity::parse(&failure.error_code) {
-        Some(identity) => identity.base == encode_failure_base(&code),
-        None => failure.error_code == code,
-    };
+    let code = scheduled_failure_code_str(&outcome);
+    let consistent = scheduled_failure_code_str(&failure.outcome) == code
+        && failure.failure_identity.as_deref().is_none_or(|identity| {
+            FailureIdentity::parse(identity)
+                .is_some_and(|parsed| parsed.base == encode_failure_base(&code))
+        });
     if !consistent {
         return Err(RuntimeHostError::fatal(
             HostCode::PolicyExecutionIdentityConflict,
@@ -430,7 +436,8 @@ fn recorded_failure_input(
         ));
     }
     Ok(PolicyExecutionInput::Failed {
-        error_code: failure.error_code,
+        outcome: failure.outcome,
+        failure_identity: failure.failure_identity,
         class: failure.original_class,
     })
 }

@@ -2304,7 +2304,10 @@ impl RuntimeHost {
         shared.record_policy_dispatch_outcome_with_cache_update(
             context.decision_id(),
             &PolicyExecutionInput::Failed {
-                error_code: "injected.pre-terminal".to_owned(),
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    RuntimeErrorCode::RuntimeUnavailable,
+                ),
+                failure_identity: None,
                 class: PolicyFailureClass::Recoverable,
             },
             Some(context),

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #336 L6 (§12.4, §12.7, `contracts/policy-suspension.md`): the failure identity a
-//! scheduled `linear_steps` run's settlement writes as the existing
-//! `policy.execution_recorded` `failure.error_code`, and the suspension lift rule read back
-//! from it. Pure: it reads only the rows and values its callers pass, never a ledger handle,
-//! an artifact, a clock or a lock.
+//! scheduled `linear_steps` run's settlement writes as the `policy.execution_recorded`
+//! `failure.failure_identity` (beside the failure's `outcome`, Workflow #378 A2-P), and the
+//! suspension lift rule read back from it. Pure: it reads only the rows and values its callers
+//! pass, never a ledger handle, an artifact, a clock or a lock.
 //!
 //! `<base>~v1~k<K>~m<M>[~p<I><D>]{0,3}[~r<G><I><D>]{0,1}~f<F>`: the terminal failure code (or
 //! `h` and its hash), the failure key over code, scope, step and detail, the main package
@@ -14,6 +14,7 @@
 
 use crate::ProcedureManifest;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     ApplicationPayload, ArtifactKind, ContainedTaskRecoveryBinding, EventAction, EventPayload,
     EventQuery, EventType, PackageRef, RunId, TaskEntryTargetDisposition, TaskPayload,
@@ -118,7 +119,8 @@ pub(crate) fn return_home_key_hash(game: &str, server: &str) -> String {
 
 /// The base segment of a failure code: the code itself, or `h` and sixteen hex digits of its
 /// SHA-256 when it is longer than 64 bytes or contains `~`.
-pub(crate) fn encode_failure_base(code: &str) -> String {
+pub(crate) fn encode_failure_base(code: &CodeStr) -> String {
+    let code = code.as_str();
     if code.len() > MAX_BASE_BYTES || code.contains('~') {
         format!(
             "h{}",
@@ -151,9 +153,16 @@ pub(crate) fn failure_detail_fingerprint(detail: Option<&str>) -> String {
 
 /// K: the first twelve hex digits of SHA-256 over the domain line, the original failure code,
 /// the scope, the step's operation label and detail′, one per line.
-pub(crate) fn failure_key(code: &str, scope: &str, operation: &str, detail: &str) -> String {
+pub(crate) fn failure_key(
+    code: &CodeStr,
+    scope: &str,
+    operation_label: &str,
+    detail: &str,
+) -> String {
     hex_prefix(
-        &sha256_hex(format!("{KEY_DOMAIN}\n{code}\n{scope}\n{operation}\n{detail}").as_bytes()),
+        &sha256_hex(
+            format!("{KEY_DOMAIN}\n{code}\n{scope}\n{operation_label}\n{detail}").as_bytes(),
+        ),
         KEY_HEX,
     )
 }
@@ -161,7 +170,8 @@ pub(crate) fn failure_key(code: &str, scope: &str, operation: &str, detail: &str
 /// Whether a failure accumulates toward suspension (R21, R25-1): a main-scope failure of the
 /// main package's own steps outside the restart segment, or a prerequisite preparation
 /// refusal. Every other failure is rerun only.
-pub(crate) fn failure_accumulates(code: &str, scope: &str, restart_segment: bool) -> bool {
+pub(crate) fn failure_accumulates(code: &CodeStr, scope: &str, restart_segment: bool) -> bool {
+    let code = code.as_str();
     match scope {
         "main" => !restart_segment && MAIN_ACCUMULATING.contains(&code),
         "prepare" => code.starts_with(PREPARE_ACCUMULATING_PREFIX),
@@ -337,10 +347,9 @@ impl FailureIdentity {
         !matches!(self.frame, IdentityFrame::Unique(_))
     }
 
-    /// The identity a code encodes, or `None` for any other code (a page-graph task's code,
-    /// a reconciled code, a v0.9.0 record).
-    pub(crate) fn parse(code: &str) -> Option<Self> {
-        let parts = code.split('~').collect::<Vec<_>>();
+    /// The identity a recorded failure identity string encodes, or `None` for any other text.
+    pub(crate) fn parse(identity: &str) -> Option<Self> {
+        let parts = identity.split('~').collect::<Vec<_>>();
         let [base, version, key, main_digest, middle @ .., frame] = parts.as_slice() else {
             return None;
         };

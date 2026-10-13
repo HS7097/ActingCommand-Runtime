@@ -70,7 +70,8 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     );
 
     let failure_input = PolicyExecutionInput::Failed {
-        error_code: "transient.capture".to_owned(),
+        outcome: actingcommand_contract::outcome::Outcome::new(RuntimeErrorCode::CaptureFailed),
+        failure_identity: None,
         class: PolicyFailureClass::Recoverable,
     };
     clock.advance(100);

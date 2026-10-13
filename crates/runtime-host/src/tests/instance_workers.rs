@@ -2617,7 +2617,8 @@ fn crash_inside_the_hand_off(root: &Path, eval_ms: Option<u64>) -> (RunId, Lease
     (run_id, lease_id)
 }
 
-/// The failure code of the run's one `policy.execution_recorded`; `None` when it succeeded.
+/// The failure the run's one `policy.execution_recorded` records (its failure identity, else
+/// its outcome's code); `None` when it succeeded.
 fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<String> {
     let executions = events
         .iter()
@@ -2632,7 +2633,12 @@ fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<St
     match execution.payload() {
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
             match payload.policy_result() {
-                PolicyExecutionOutcome::Failed { failure } => Some(failure.error_code.clone()),
+                PolicyExecutionOutcome::Failed { failure } => Some(
+                    failure
+                        .failure_identity
+                        .clone()
+                        .unwrap_or_else(|| failure.outcome.code().as_str().to_owned()),
+                ),
                 PolicyExecutionOutcome::Succeeded { .. } => None,
             }
         }

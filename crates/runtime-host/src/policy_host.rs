@@ -1447,9 +1447,11 @@ impl PolicyHost {
                             reason: DecisionReason {
                                 // Coordinator ruling 7 (acceptance H-L6): an unregistered
                                 // relayed spelling defers under its `raw_code`.
-                                code: actingcommand_contract::scheduled_failure_code(
+                                code: actingcommand_contract::scheduled_failure_code_str(
                                     &rejection.outcome,
-                                ),
+                                )
+                                .as_str()
+                                .to_owned(),
                                 detail: format!(
                                     "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
                                     rejection.budget, rejection.next_eligible_unix_ms
@@ -1706,9 +1708,13 @@ impl PolicyHost {
         )
     }
 
-    /// Workflow #336 L6: the failure code and dispatch of a pair's latest failed execution,
-    /// while no success has followed it.
-    pub(crate) fn latest_failure(&self, task_id: &str, instance_id: &str) -> Option<(&str, &str)> {
+    /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
+    /// latest failed execution, while no success has followed it.
+    pub(crate) fn latest_failure(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<(Option<&str>, &str)> {
         self.control.latest_failure(task_id, instance_id)
     }
 
@@ -3487,13 +3493,8 @@ fn execution_input_matches(outcome: &PolicyExecutionOutcome, input: &PolicyExecu
         (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Succeeded) => {
             failure.reported_success
         }
-        (
-            PolicyExecutionOutcome::Failed { failure },
-            PolicyExecutionInput::Failed { error_code, class },
-        ) => {
-            !failure.reported_success
-                && failure.error_code == *error_code
-                && failure.original_class == *class
+        (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Failed { .. }) => {
+            !failure.reported_success && input.names_failure(failure)
         }
         _ => false,
     }

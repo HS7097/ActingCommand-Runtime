@@ -2679,9 +2679,17 @@ pub struct PolicyAdmissionRecord {
     pub budget: PolicyBudgetReceipt,
 }
 
+/// A failed run as the policy records it (Workflow #378 A2-P). `outcome` is the run's failure:
+/// its terminal outcome's top node ([`Outcome::without_causes`]), the top node of the request
+/// error of a run with no terminal, or the policy's own [`POLICY_RUNTIME_BUDGET_EXCEEDED`] or
+/// `policy_settlement_interrupted`; its category is the record's severity. `failure_identity`
+/// is the #336 failure identity a live `linear_steps` settlement computes
+/// (`contracts/policy-suspension.md`), and is absent for any other failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PolicyFailureRecord {
-    pub error_code: String,
+    pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_identity: Option<String>,
     pub reported_success: bool,
     pub original_class: PolicyFailureClass,
     pub effective_class: PolicyFailureClass,
@@ -2718,18 +2726,12 @@ pub fn scheduled_failure_class(
     }
 }
 
-/// The policy failure code of a failed run's terminal outcome (Workflow #378 A3; coordinator
-/// ruling 7, 2026-10-13): the outcome's code, except for a relayed spelling the embedded catalog
-/// does not register (`outcome_relay_unregistered`), whose spelling the outcome keeps as
-/// `raw_code`, so distinct failures keep distinct failure identities and streaks. The live
-/// settlement, the startup recovery and the ledger's re-derivation all take it from here.
-pub fn scheduled_failure_code(outcome: &Outcome) -> String {
-    scheduled_failure_code_str(outcome).as_str().to_owned()
-}
-
-/// [`scheduled_failure_code`] as a received code, for the readers that keep a code: the
-/// recovery ladder's task trigger (acceptance H-L6). The relayed spelling is read back from the
-/// outcome's `raw_code`.
+/// The policy failure code of a failed run's outcome (Workflow #378 A3; coordinator ruling 7,
+/// 2026-10-13): the outcome's code, except for a relayed spelling the embedded catalog does not
+/// register (`outcome_relay_unregistered`), whose spelling the outcome keeps as `raw_code`, so
+/// distinct failures keep distinct failure identities and streaks. The live settlement, the
+/// startup recovery, the ledger's re-derivation and the recovery ladder's task trigger
+/// (acceptance H-L6) all take it from here, and compare a recorded failure by it.
 pub fn scheduled_failure_code_str(outcome: &Outcome) -> crate::outcome::CodeStr {
     if outcome.is(ContractCode::OutcomeRelayUnregistered)
         && let Some(spelling) = outcome
@@ -2929,9 +2931,11 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
 
 impl PolicyFailureRecord {
     /// Whether this failure is the policy's runtime-budget rewrite of a run that succeeded
-    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`], class Severe.
+    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`] with no failure
+    /// identity, class Severe.
     pub fn is_runtime_budget_rewrite(&self, reported_success: bool) -> bool {
-        self.error_code == POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
+        self.outcome.is(POLICY_RUNTIME_BUDGET_EXCEEDED)
+            && self.failure_identity.is_none()
             && self.original_class == PolicyFailureClass::Severe
             && self.reported_success == reported_success
     }
@@ -2961,7 +2965,9 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Wire {
-            error_code: String,
+            outcome: Outcome,
+            #[serde(default)]
+            failure_identity: Option<String>,
             reported_success: bool,
             original_class: PolicyFailureClass,
             effective_class: PolicyFailureClass,
@@ -2981,7 +2987,8 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
 
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
-            error_code: wire.error_code,
+            outcome: wire.outcome,
+            failure_identity: wire.failure_identity,
             reported_success: wire.reported_success,
             original_class: wire.original_class,
             effective_class: wire.effective_class,
@@ -3006,6 +3013,24 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
 pub enum PolicyExecutionOutcome {
     Succeeded { runtime_ms: u64 },
     Failed { failure: PolicyFailureRecord },
+}
+
+impl PolicyExecutionOutcome {
+    /// This result as the public projection carries it (Workflow #378 A2-P, register E9): a
+    /// failure's outcome is codes only, as the record's own projected `outcome` is.
+    fn codes_only(&self) -> Self {
+        match self {
+            Self::Succeeded { runtime_ms } => Self::Succeeded {
+                runtime_ms: *runtime_ms,
+            },
+            Self::Failed { failure } => Self::Failed {
+                failure: PolicyFailureRecord {
+                    outcome: failure.outcome.codes_only(),
+                    ..failure.clone()
+                },
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5699,6 +5724,15 @@ impl PayloadDetail for PolicyExecutionPayload {
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
+
+    /// A failed execution carries its failure (Workflow #378 A2-P), so the record's severity
+    /// is the failure's category; a success carries none (its event type's category).
+    fn outcome(&self) -> Option<&Outcome> {
+        match &self.policy_result {
+            PolicyExecutionOutcome::Failed { failure } => Some(&failure.outcome),
+            PolicyExecutionOutcome::Succeeded { .. } => None,
+        }
+    }
 }
 
 impl PayloadDetail for PolicyPlanningSignalPayload {
@@ -6796,7 +6830,9 @@ fn validate_policy_execution_data(
         ));
     }
     if let PolicyExecutionOutcome::Failed { failure } = &data.outcome {
-        validate_policy_token(&failure.error_code, "error_code")?;
+        if let Some(identity) = &failure.failure_identity {
+            validate_policy_token(identity, "failure_identity")?;
+        }
         failure.perf_context.validate()?;
         let retry_scheduled = failure.disposition == PolicyFailureDisposition::RetryScheduled;
         if failure.consecutive_same_error == 0
@@ -6821,7 +6857,7 @@ fn validate_policy_execution_data(
             || failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition != PolicyFailureDisposition::PausedTask
             || failure.reported_success
-                && (failure.error_code != POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
+                && (!failure.outcome.is(POLICY_RUNTIME_BUDGET_EXCEEDED)
                     || failure.original_class != PolicyFailureClass::Severe
                     || failure.effective_class != PolicyFailureClass::Severe)
             || failure.sensitive
@@ -11609,7 +11645,7 @@ impl EventPayload {
             }),
             policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
             policy_execution_outcome: policy_execution
-                .map(|value| Box::new(value.policy_result.clone())),
+                .map(|value| Box::new(value.policy_result.codes_only())),
             policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
             policy_signal_kind: policy_signal.map(|value| value.kind),
             policy_signal_fact_code: policy_signal

@@ -407,7 +407,8 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
     // registered always-severe one.
     let policy_failure_of =
         |error_code: &str, class: PolicyFailureClass, runtime_ms| PolicyFailureRecord {
-            error_code: error_code.to_owned(),
+            outcome: Outcome::relayed(error_code),
+            failure_identity: None,
             reported_success: false,
             original_class: class,
             effective_class: class,
@@ -444,7 +445,8 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         outcome,
     };
     let interrupted_failure = PolicyFailureRecord {
-        error_code: "policy_settlement_interrupted".to_owned(),
+        outcome: Outcome::relayed("policy_settlement_interrupted"),
+        failure_identity: None,
         reported_success: false,
         original_class: PolicyFailureClass::Severe,
         effective_class: PolicyFailureClass::Severe,
@@ -1220,12 +1222,10 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
         &recoverable_drafts.recovered_warning_execution,
     );
     assert_recovered_execution_chain(&recovered, &recoverable_drafts);
-    // Ledger revision 3: an execution record carries no outcome; its severity is its event
-    // type's category, whatever the policy's class.
-    assert_eq!(
-        recovered.severity(),
-        EventSeverity::from_category(EventType::PolicyExecutionRecorded.category())
-    );
+    // Ledger revision 3 (Workflow #378 A2-P): a failed execution record carries its failure's
+    // outcome; its severity is that outcome's category (`capture_failed`: error), whatever the
+    // policy's class.
+    assert_eq!(recovered.severity(), EventSeverity::Error);
     recoverable.close().expect("close recoverable ledger");
 
     let severe_root = TempDir::new().expect("severe temp");
@@ -1246,10 +1246,8 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
         .expect("recover severe execution");
     let recovered = recovered_execution_fact(&severe, &severe_drafts.recovered_fatal_execution);
     assert_recovered_execution_chain(&recovered, &severe_drafts);
-    assert_eq!(
-        recovered.severity(),
-        EventSeverity::from_category(EventType::PolicyExecutionRecorded.category())
-    );
+    // Its failure outcome's category (`execution_kernel_closed`: error).
+    assert_eq!(recovered.severity(), EventSeverity::Error);
     severe.close().expect("close severe ledger");
 
     let interrupted_root = TempDir::new().expect("interrupted temp");
@@ -1304,7 +1302,8 @@ fn recovered_policy_execution_settles_a_failure_severe_terminal_severe() {
     assert!(matches!(
         payload.policy_result(),
         PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == RECOVERABLE_FAILURE_CODE
+            if failure.outcome.code().as_str() == RECOVERABLE_FAILURE_CODE
+                && failure.failure_identity.is_none()
                 && failure.original_class == PolicyFailureClass::Severe
     ));
     ledger.close().expect("close failure-severe ledger");

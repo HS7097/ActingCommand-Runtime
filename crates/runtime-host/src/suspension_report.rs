@@ -26,7 +26,7 @@ use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
     PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
-    scheduled_failure_code,
+    scheduled_failure_code_str,
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
@@ -130,18 +130,18 @@ impl Snapshot<'_> {
 
     /// The run's `task.failed` terminal (its failure's spelling and the record's severity,
     /// which is that failure's category) and the native detail of its lifecycle failure record
-    /// of that spelling (or of `fallback_code` when the run has no terminal). A failure is
-    /// spelled as the policy spells it (coordinator ruling 7): its code, or for
-    /// `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the report
-    /// showed it before ledger revision 3. Without a terminal, the run's failure severity is
-    /// its `runtime.failed` record's: the lifecycle failure of that spelling, else the run's
+    /// of that spelling (or of `fallback`, the recorded failure's code, when the run has no
+    /// terminal). A failure is spelled as the policy spells it (coordinator ruling 7): its code,
+    /// or for `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the
+    /// report showed it before ledger revision 3. Without a terminal, the run's failure severity
+    /// is its `runtime.failed` record's: the lifecycle failure of that spelling, else the run's
     /// latest one (coordinator ruling, 2026-10-13); `None` when the run has neither.
     fn run_failure(
         &self,
         run_id: Option<RunId>,
-        fallback_code: &str,
+        fallback: &CodeStr,
     ) -> (
-        Option<(String, EventSeverity)>,
+        Option<(CodeStr, EventSeverity)>,
         Option<EventSeverity>,
         Value,
     ) {
@@ -162,14 +162,12 @@ impl Snapshot<'_> {
                     TaskSemanticFact::TerminalCommitted {
                         outcome: Some(outcome),
                         ..
-                    } => Some((scheduled_failure_code(outcome), event.severity())),
+                    } => Some((scheduled_failure_code_str(outcome), event.severity())),
                     _ => None,
                 },
                 _ => None,
             });
-        let code = terminal
-            .as_ref()
-            .map_or(fallback_code, |(spelling, _)| spelling.as_str());
+        let code = terminal.as_ref().map_or(fallback, |(spelling, _)| spelling);
         let runtime_failures = self.ledger.query(&by_run(EventType::RuntimeFailed));
         // Ledger revision 3: the lifecycle failure's code is the record's outcome and its
         // native detail the `raw_text` of that outcome's direct foreign link.
@@ -179,7 +177,7 @@ impl Snapshot<'_> {
             .filter_map(|event| match event.payload() {
                 EventPayload::Runtime(RuntimePayload::Failed(payload))
                     if payload.lifecycle_failure().is_some()
-                        && scheduled_failure_code(payload.outcome()) == code =>
+                        && scheduled_failure_code_str(payload.outcome()) == *code =>
                 {
                     Some((event, payload))
                 }
@@ -433,8 +431,18 @@ pub fn suspension_report(
             continue;
         };
         let pair = format!("{task_id}/{instance_id}");
-        let identity = FailureIdentity::parse(&failure.error_code);
-        if identity.is_none() && failure.error_code.contains("~v1~") {
+        // Workflow #378 A2-P: the record keeps the failure's `outcome` and its identity apart;
+        // the report shows them as before, the identity, else the failure's code.
+        let failure_code = scheduled_failure_code_str(&failure.outcome);
+        let recorded = failure
+            .failure_identity
+            .clone()
+            .unwrap_or_else(|| failure_code.as_str().to_owned());
+        let identity = failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse);
+        if identity.is_none() && recorded.contains("~v1~") {
             warnings.push(format!("error_code_unparsed:{pair}"));
         }
         let previous = executions
@@ -444,11 +452,10 @@ pub fn suspension_report(
         let (paused_digest, current_run) = intents
             .get(&latest.decision_id)
             .map_or((None, None), |(digest, run_id)| (Some(digest), *run_id));
-        let base = identity.as_ref().map_or_else(
-            || failure.error_code.clone(),
-            |identity| identity.base.clone(),
-        );
-        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &base);
+        let base = identity
+            .as_ref()
+            .map_or_else(|| recorded.clone(), |identity| identity.base.clone());
+        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &failure_code);
         let failure_spelling = terminal
             .as_ref()
             .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
@@ -470,7 +477,7 @@ pub fn suspension_report(
             // Workflow #361 M6: the first interrupted settlement in a row is lifted by the
             // restart that recorded it, whatever the configuration (review P5).
             let lift = if crate::policy_control::interruption_lifted_by_restart(
-                &failure.error_code,
+                &failure_code,
                 failure.consecutive_same_error,
             ) {
                 Some(("restart".to_owned(), "active"))
@@ -526,14 +533,14 @@ pub fn suspension_report(
             });
             // Coordinator ruling 6: the severity of the run's failure terminal, which is its
             // failure's category; without a terminal, the run's `runtime.failed` record's. The
-            // execution record carries no outcome (until A2-P), so its own severity is its event
-            // type's category; it stands in only when the run has neither.
+            // execution record's own severity, its failure outcome's category (Workflow #378
+            // A2-P), stands in only when the run has neither.
             let severity = run_severity.unwrap_or(latest.severity);
             suspended.push(json!({
                 "task_id": task_id,
                 "instance_id": instance_id,
                 "procedure_ref": procedure_ref,
-                "error_code": failure.error_code,
+                "error_code": recorded,
                 "failure_code": failure_spelling,
                 "consecutive_same_error": failure.consecutive_same_error,
                 "effective_class": wire(&failure.effective_class),
@@ -564,7 +571,10 @@ pub fn suspension_report(
         else {
             continue;
         };
-        if FailureIdentity::parse(&previous_failure.error_code)
+        if previous_failure
+            .failure_identity
+            .as_deref()
+            .and_then(FailureIdentity::parse)
             .is_none_or(|previous| previous.prefix() != identity.prefix())
         {
             continue;
@@ -575,7 +585,7 @@ pub fn suspension_report(
         repeating.push(json!({
             "task_id": task_id,
             "instance_id": instance_id,
-            "error_code": failure.error_code,
+            "error_code": recorded,
             "failure_code": failure_spelling,
             "step": snapshot.step(current_run, terminal.is_some())?,
             "latest": {

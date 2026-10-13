@@ -7,12 +7,12 @@ use crate::error::spelled;
 use crate::failure_identity::{FailureIdentity, IdentityLayer, SuspensionLiftView};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     PackageRef, PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord,
     PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
-    RuntimeErrorCode,
+    RuntimeErrorCode, scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -22,25 +22,47 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MILLIS_PER_MINUTE: i128 = 60_000;
 const MILLIS_PER_DAY: i128 = 24 * 60 * MILLIS_PER_MINUTE;
-/// The failure code of a scheduled run that the daemon's own end cut short, recorded by the
-/// startup reconciliation (`policy_outcome.rs`).
-pub(crate) const POLICY_SETTLEMENT_INTERRUPTED: &str =
-    SharedCode::PolicySettlementInterrupted.as_str();
 
 /// Workflow #361 M6, review P5: whether a paused failure is the first interrupted settlement
-/// of its pair in a row, which the restart that recorded it lifts. The count is rebuilt by
-/// replay, so nothing persisted changes.
-pub(crate) fn interruption_lifted_by_restart(error_code: &str, consecutive: u16) -> bool {
-    error_code == POLICY_SETTLEMENT_INTERRUPTED && consecutive == 1
+/// of its pair in a row (`policy_settlement_interrupted`, recorded by the startup
+/// reconciliation in `policy_outcome.rs`), which the restart that recorded it lifts. The count
+/// is rebuilt by replay, so nothing persisted changes.
+pub(crate) fn interruption_lifted_by_restart(failure_code: &CodeStr, consecutive: u16) -> bool {
+    *failure_code == SharedCode::PolicySettlementInterrupted.code() && consecutive == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyExecutionInput {
     Succeeded,
+    /// A failed run (Workflow #378 A2-P): its failure as the policy records it (see
+    /// `PolicyFailureRecord`), the #336 failure identity of a live `linear_steps` settlement,
+    /// and the run's class.
     Failed {
-        error_code: String,
+        outcome: Outcome,
+        failure_identity: Option<String>,
         class: PolicyFailureClass,
     },
+}
+
+impl PolicyExecutionInput {
+    /// Whether `failure` records this input's failure: the same failure code
+    /// ([`scheduled_failure_code_str`]), the same failure identity and the same class. The
+    /// outcomes' other values are not compared, as a failure streak does not compare them.
+    pub(crate) fn names_failure(&self, failure: &PolicyFailureRecord) -> bool {
+        match self {
+            Self::Succeeded => false,
+            Self::Failed {
+                outcome,
+                failure_identity,
+                class,
+            } => {
+                failure.original_class == *class
+                    && failure.failure_identity == *failure_identity
+                    && scheduled_failure_code_str(&failure.outcome)
+                        == scheduled_failure_code_str(outcome)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +73,10 @@ pub(crate) struct PolicyExecutionTiming {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FailureStreak {
-    error_code: String,
+    /// The failure's code ([`scheduled_failure_code_str`]) and its #336 failure identity: with
+    /// the class, what makes a failure the same error as the previous one.
+    failure_code: CodeStr,
+    failure_identity: Option<String>,
     class: PolicyFailureClass,
     count: u16,
     escalation_streak: u16,
@@ -138,7 +163,7 @@ impl PolicyControlState {
         intent: &DispatchIntent,
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> bool {
-        if interruption_lifted_by_restart(&failure.error_code, failure.count) {
+        if interruption_lifted_by_restart(&failure.failure_code, failure.count) {
             return true;
         }
         let (Some(view), Some(paused_on)) = (lift, failure.paused_on.as_ref()) else {
@@ -458,9 +483,8 @@ impl PolicyControlState {
         let runtime_exceeded = runtime_budget_exceeded(intent, admission, runtime_ms)?;
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
-                error_code: actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED
-                    .as_str()
-                    .to_owned(),
+                outcome: Outcome::new(actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED),
+                failure_identity: None,
                 class: PolicyFailureClass::Severe,
             }
         } else {
@@ -468,13 +492,23 @@ impl PolicyControlState {
         };
         let outcome = match effective_input {
             PolicyExecutionInput::Succeeded => PolicyExecutionOutcome::Succeeded { runtime_ms },
-            PolicyExecutionInput::Failed { error_code, class } => {
+            PolicyExecutionInput::Failed {
+                outcome: failure_outcome,
+                failure_identity,
+                class,
+            } => {
                 let key = (intent.task_id.clone(), intent.instance_id.clone());
                 let previous = self.failure_streaks.get(&key);
+                // The same error: the same code, failure identity and class (never the whole
+                // outcome, whose other values may differ between runs).
+                let failure_code = scheduled_failure_code_str(&failure_outcome);
+                let same_error = |previous: &FailureStreak| {
+                    previous.failure_code == failure_code
+                        && previous.failure_identity == failure_identity
+                        && previous.class == class
+                };
                 let consecutive_same_error = match previous {
-                    Some(previous)
-                        if previous.error_code == error_code && previous.class == class =>
-                    {
+                    Some(previous) if same_error(previous) => {
                         previous.count.checked_add(1).ok_or_else(|| {
                             fatal(
                                 HostCode::PolicyFailureCountOverflow,
@@ -488,9 +522,7 @@ impl PolicyControlState {
                     && !task.sensitive
                     && perf_context.pressure_observed();
                 let escalation_streak = match previous {
-                    Some(previous)
-                        if previous.error_code == error_code && previous.class == class =>
-                    {
+                    Some(previous) if same_error(previous) => {
                         if performance_tax_exempt {
                             previous.escalation_streak
                         } else {
@@ -537,9 +569,12 @@ impl PolicyControlState {
                         };
                         (disposition, 0, None)
                     };
+                // The input's outcome and identity are recorded verbatim, so replay rebuilds
+                // the same record from them.
                 PolicyExecutionOutcome::Failed {
                     failure: PolicyFailureRecord {
-                        error_code,
+                        outcome: failure_outcome,
+                        failure_identity,
                         reported_success: runtime_exceeded
                             && matches!(input, PolicyExecutionInput::Succeeded),
                         original_class: class,
@@ -579,7 +614,8 @@ impl PolicyControlState {
                 PolicyExecutionInput::Succeeded
             }
             PolicyExecutionOutcome::Failed { failure } => PolicyExecutionInput::Failed {
-                error_code: failure.error_code.clone(),
+                outcome: failure.outcome.clone(),
+                failure_identity: failure.failure_identity.clone(),
                 class: failure.original_class,
             },
         };
@@ -637,7 +673,10 @@ impl PolicyControlState {
                     (failure.disposition == PolicyFailureDisposition::PausedTask).then(|| {
                         PausedOn {
                             package_digest: intent.package_digest.clone(),
-                            layers: FailureIdentity::parse(&failure.error_code)
+                            layers: failure
+                                .failure_identity
+                                .as_deref()
+                                .and_then(FailureIdentity::parse)
                                 .map(|identity| identity.layers)
                                 .unwrap_or_default(),
                         }
@@ -645,7 +684,8 @@ impl PolicyControlState {
                 self.failure_streaks.insert(
                     key,
                     FailureStreak {
-                        error_code: failure.error_code.clone(),
+                        failure_code: scheduled_failure_code_str(&failure.outcome),
+                        failure_identity: failure.failure_identity.clone(),
                         class: failure.original_class,
                         count: failure.consecutive_same_error,
                         escalation_streak: failure.escalation_streak,
@@ -661,12 +701,21 @@ impl PolicyControlState {
         Ok(())
     }
 
-    /// Workflow #336 L6: the failure code and dispatch of a pair's latest failed execution,
-    /// while no success has followed it.
-    pub(crate) fn latest_failure(&self, task_id: &str, instance_id: &str) -> Option<(&str, &str)> {
+    /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
+    /// latest failed execution, while no success has followed it.
+    pub(crate) fn latest_failure(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<(Option<&str>, &str)> {
         self.failure_streaks
             .get(&(task_id.to_owned(), instance_id.to_owned()))
-            .map(|failure| (failure.error_code.as_str(), failure.decision_id.as_str()))
+            .map(|failure| {
+                (
+                    failure.failure_identity.as_deref(),
+                    failure.decision_id.as_str(),
+                )
+            })
     }
 
     /// R22 eligibility is bounded by the original normal admission, including after replay.
@@ -679,7 +728,11 @@ impl PolicyControlState {
         let mut pairs = BTreeSet::new();
         for (pair, failure) in &self.failure_streaks {
             if failure.disposition != PolicyFailureDisposition::RetryScheduled
-                || FailureIdentity::parse(&failure.error_code).is_none()
+                || failure
+                    .failure_identity
+                    .as_deref()
+                    .and_then(FailureIdentity::parse)
+                    .is_none()
             {
                 continue;
             }
@@ -1177,7 +1230,8 @@ mod tests {
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
-                        error_code: "transient.capture".to_owned(),
+                        outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                        failure_identity: None,
                         class: PolicyFailureClass::Recoverable,
                     },
                     &unavailable(now + 100),
@@ -1270,7 +1324,8 @@ mod tests {
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
-                        error_code: "transient.capture".to_owned(),
+                        outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                        failure_identity: None,
                         class: PolicyFailureClass::Recoverable,
                     },
                     &pressured(now + 100),
@@ -1322,7 +1377,8 @@ mod tests {
                         runtime_ms: 0,
                     },
                     &PolicyExecutionInput::Failed {
-                        error_code: POLICY_SETTLEMENT_INTERRUPTED.to_owned(),
+                        outcome: Outcome::new(SharedCode::PolicySettlementInterrupted),
+                        failure_identity: None,
                         class: PolicyFailureClass::Severe,
                     },
                     &unavailable(now + 100),
@@ -1369,7 +1425,8 @@ mod tests {
                     runtime_ms: 100,
                 },
                 &PolicyExecutionInput::Failed {
-                    error_code: "transient.capture".to_owned(),
+                    outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                    failure_identity: None,
                     class: PolicyFailureClass::Recoverable,
                 },
                 &unavailable(NOW + 100),
@@ -1389,10 +1446,22 @@ mod tests {
         let catalog = catalog();
         let mut state = PolicyControlState::default();
         let mut now = NOW;
-        for (suffix, error_code, class) in [
-            (1, "transient.capture", PolicyFailureClass::Recoverable),
-            (2, "transient.network", PolicyFailureClass::Recoverable),
-            (3, "transient.capture", PolicyFailureClass::Severe),
+        for (suffix, failure_code, class) in [
+            (
+                1,
+                RuntimeErrorCode::CaptureFailed,
+                PolicyFailureClass::Recoverable,
+            ),
+            (
+                2,
+                RuntimeErrorCode::BackendOperationFailed,
+                PolicyFailureClass::Recoverable,
+            ),
+            (
+                3,
+                RuntimeErrorCode::CaptureFailed,
+                PolicyFailureClass::Severe,
+            ),
         ] {
             let intent = intent(&catalog, suffix);
             let admission = state
@@ -1408,7 +1477,8 @@ mod tests {
                         runtime_ms: 100,
                     },
                     &PolicyExecutionInput::Failed {
-                        error_code: error_code.to_owned(),
+                        outcome: Outcome::new(failure_code),
+                        failure_identity: None,
                         class,
                     },
                     &unavailable(now + 100),
@@ -1449,7 +1519,8 @@ mod tests {
                     runtime_ms: 100,
                 },
                 &PolicyExecutionInput::Failed {
-                    error_code: "transient.capture".to_owned(),
+                    outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                    failure_identity: None,
                     class: PolicyFailureClass::Recoverable,
                 },
                 &unavailable(NOW + 100),
@@ -1492,7 +1563,8 @@ mod tests {
                             runtime_ms: 100,
                         },
                         &PolicyExecutionInput::Failed {
-                            error_code: "transient.capture".to_owned(),
+                            outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                            failure_identity: None,
                             class: PolicyFailureClass::Recoverable,
                         },
                         &unavailable(now + 100),
@@ -1576,7 +1648,8 @@ mod tests {
                 &catalog, &intent, &admission,
                 PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
                 &PolicyExecutionInput::Failed {
-                    error_code: format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}"),
+                    outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
+                    failure_identity: Some(format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}")),
                     class: PolicyFailureClass::Recoverable,
                 },
                 &unavailable(now + 100),
@@ -1745,7 +1818,8 @@ mod tests {
                     &catalog, &dispatch, &admission,
                     PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
                     &PolicyExecutionInput::Failed {
-                        error_code: format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}"),
+                        outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
+                        failure_identity: Some(format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}")),
                         class: PolicyFailureClass::Recoverable,
                     },
                     &unavailable(now + 100),
@@ -1910,9 +1984,11 @@ mod tests {
         for input in [
             PolicyExecutionInput::Succeeded,
             PolicyExecutionInput::Failed {
-                error_code:
+                outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
+                failure_identity: Some(
                     "input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu000000000001"
                         .to_owned(),
+                ),
                 class: PolicyFailureClass::Recoverable,
             },
         ] {

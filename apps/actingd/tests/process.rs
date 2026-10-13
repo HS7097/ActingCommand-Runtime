@@ -2056,13 +2056,13 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         .iter()
         .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
         .expect("failed policy execution");
-    // Ledger revision 3: the policy execution record carries no outcome (its failure identity
-    // stays `error_code`), so its severity is its event type's category, info. This holds only
-    // until A2-P gives a failed execution its outcome (deviation 5); A2-P flips this assertion.
+    // Ledger revision 3 (Workflow #378 A2-P): a failed policy execution record carries its
+    // failure as its outcome, page_confirmation_failed (category error), so its severity is that
+    // category, as its task terminal's is, whatever the policy's class.
     assert_eq!(
         execution.severity,
-        EventSeverity::Info,
-        "the recoverable policy execution records its event type's category"
+        EventSeverity::Error,
+        "the recoverable policy execution records its failure's category"
     );
     let ProjectionPayload::Full(payload) = &execution.payload else {
         panic!("failed forensic execution payload")
@@ -2073,7 +2073,8 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
     let PolicyExecutionOutcome::Failed { failure } = payload.policy_result() else {
         panic!("expected failed policy outcome")
     };
-    assert_eq!(failure.error_code, "page_confirmation_failed");
+    assert_eq!(failure.outcome.code().as_str(), "page_confirmation_failed");
+    assert_eq!(failure.failure_identity, None);
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);
     assert_eq!(
@@ -2434,7 +2435,8 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             )?;
             for path in [
                 "/status",
-                "/outcome/policy/failure/error_code",
+                "/outcome/policy/failure/outcome/code",
+                "/outcome/policy/failure/failure_identity",
                 "/outcome/policy/failure/reported_success",
                 "/outcome/policy/failure/original_class",
                 "/outcome/policy/failure/effective_class",

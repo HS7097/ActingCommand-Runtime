@@ -1900,7 +1900,8 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
         }
     }
     let base = PolicyFailureRecord {
-        error_code: "transient.capture".to_owned(),
+        outcome: Outcome::new(crate::codes::RuntimeErrorCode::CaptureFailed),
+        failure_identity: None,
         reported_success: false,
         original_class: PolicyFailureClass::Recoverable,
         effective_class: PolicyFailureClass::Recoverable,
@@ -2045,7 +2046,8 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
 #[test]
 fn legacy_policy_failure_defaults_preserve_streak_and_explicitly_mark_context_unavailable() {
     let failure = PolicyFailureRecord {
-        error_code: "transient.capture".to_owned(),
+        outcome: Outcome::new(crate::codes::RuntimeErrorCode::CaptureFailed),
+        failure_identity: None,
         reported_success: false,
         original_class: PolicyFailureClass::Recoverable,
         effective_class: PolicyFailureClass::Recoverable,
