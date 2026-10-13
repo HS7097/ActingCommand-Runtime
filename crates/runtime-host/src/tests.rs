@@ -119,6 +119,8 @@ mod gate_381b;
 mod gate_383;
 mod gate_392_daa;
 mod gate_398_rd1a;
+// Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
+mod gate_403;
 mod gate_epoch_close;
 mod gate_p0;
 mod home_entry;

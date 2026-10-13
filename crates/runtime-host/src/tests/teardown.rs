@@ -167,7 +167,9 @@ fn readonly_sessions_close_through_real_resource_leases_without_input() {
     }
 }
 
-// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion. Workflow #403
+// (approved 2026-10-13): an unconfirmed close of the instance's own resources now fences that
+// instance instead of retaining the owner and ending the Runtime; the name stays for gate 6.
 #[test]
 fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
     // Workflow #342 D1 first red: issuecomment-5974667337. The formal preparation
@@ -220,25 +222,17 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         );
         let receipt = client.send(&request);
         let unconfirmed = operation_unconfirmed || backend_close_failure;
-        assert_eq!(
-            receipt.state(),
-            if unconfirmed {
-                RuntimeReceiptState::Failed
-            } else {
-                RuntimeReceiptState::Completed
-            }
+        // Workflow #403: an unconfirmed close fences the instance; the self-check still
+        // completes, as a failed one.
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+        let RuntimeResult::InstanceSelfChecked { selfcheck, .. } = receipt.result().unwrap() else {
+            panic!("formal self-check result");
+        };
+        assert!(!selfcheck.touch.ok);
+        assert!(
+            selfcheck.failure_code.is_some(),
+            "a closed resource is not a successful open"
         );
-        if !unconfirmed {
-            let RuntimeResult::InstanceSelfChecked { selfcheck, .. } = receipt.result().unwrap()
-            else {
-                panic!("formal self-check result");
-            };
-            assert!(!selfcheck.touch.ok);
-            assert!(
-                selfcheck.failure_code.is_some(),
-                "a closed resource is not a successful open"
-            );
-        }
         let events = host
             .query_persisted_events_for_test(EventQuery {
                 correlation_id: Some(correlation_id),
@@ -330,9 +324,13 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                 ..EventQuery::default()
             })
             .expect("preparation lease ledger");
+        // Workflow #403: the self-check's own key (the fence's ladder takes one of its own).
         let granted = lease_events
             .iter()
-            .filter(|event| event.event_type() == EventType::LeaseGranted)
+            .filter(|event| {
+                event.event_type() == EventType::LeaseGranted
+                    && event.links().request_id() == Some(&request.request_id())
+            })
             .collect::<Vec<_>>();
         assert_eq!(granted.len(), 1);
         let lease_id = granted[0].links().lease_id().expect("preparation lease");
@@ -344,11 +342,22 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                     && event.links().lease_id() == Some(lease_id)
             })
             .collect::<Vec<_>>();
-        assert_eq!(released.len(), usize::from(!unconfirmed));
+        // Workflow #403: the fence keeps the instance out of use, so the key is released.
+        assert_eq!(released.len(), 1);
         if let Some(released) = released.first() {
             assert!(closed.sequence() < released.sequence());
         }
-        assert_eq!(host.fatal_error().expect("health").is_some(), unconfirmed);
+        assert!(host.fatal_error().expect("health").is_none());
+        let fences = lease_events
+            .iter()
+            .filter(|event| {
+                matches!(event.payload(),
+                    EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+                        if record.outcome().code().as_str()
+                            == crate::codes::HostCode::InstanceResourcesFenced.as_str())
+            })
+            .count();
+        assert_eq!(fences, usize::from(unconfirmed));
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
         assert_eq!(
             state.close_count.load(Ordering::Acquire),
@@ -359,7 +368,7 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             0
         );
         drop(client);
-        assert_eq!(host.close().is_err(), unconfirmed);
+        host.close().expect("close host");
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 0);
         assert_eq!(
             state.close_count.load(Ordering::Acquire),
@@ -461,30 +470,17 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
 
         let failed = client.send(&request);
 
-        assert_eq!(failed.state(), RuntimeReceiptState::Failed);
-        assert!(failed.terminal().is_none());
-        assert!(
-            failed
-                .error_projection()
-                .expect("fatal close projection")
-                .fatal
+        // Workflow #403: the unconfirmed close fences the instance; the self-check completes
+        // as a failed one with the close's code and the Runtime keeps running.
+        assert_eq!(failed.state(), RuntimeReceiptState::Completed);
+        let Some(RuntimeResult::InstanceSelfChecked { selfcheck, .. }) = failed.result() else {
+            panic!("formal self-check result: {failed:?}");
+        };
+        assert_eq!(
+            selfcheck.failure_code.as_deref(),
+            Some("capture_backend_close_failed")
         );
-        let fatal = host
-            .fatal_error()
-            .expect("runtime health")
-            .expect("fatal state");
-        assert_eq!(fatal.code(), "capture_backend_close_failed");
-        assert_eq!(fatal.operation(), "close_execution_session");
-        assert!(fatal.is_fatal());
-        let shutdown = client.request(RuntimeOperation::RequestShutdown {
-            target: host.runtime_info().shutdown_target(),
-        });
-        let shutdown = host
-            .process_request_for_test(&shutdown, ConnectionId::new(177).expect("connection"))
-            .expect("fatal wins shutdown");
-        assert_eq!(shutdown.state(), RuntimeReceiptState::Failed);
-        assert_eq!(shutdown.error_projection(), Some(fatal.projection()));
-        assert!(shutdown.terminal().is_none());
+        assert!(host.fatal_error().expect("runtime health").is_none());
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
         let events = host
             .query_persisted_events_for_test(EventQuery {
@@ -542,16 +538,27 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                 .expect("public projection")
                 .contains("vendor_stdio\":")
         }));
-        assert!(!events.iter().any(|event| matches!(
-            event.event_type(),
-            EventType::TaskCompleted | EventType::LeaseReleased
-        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.event_type() == EventType::TaskCompleted)
+        );
+        // Workflow #403: the Runtime answers, and its status shows the instance's fence.
         let status = client.request(RuntimeOperation::Status);
-        let rejected = host
+        let answered = host
             .process_request_for_test(&status, ConnectionId::new(177).expect("connection"))
-            .expect("fatal receipt");
-        assert_eq!(rejected.state(), RuntimeReceiptState::Failed);
-        assert!(rejected.terminal().is_none());
+            .expect("status receipt");
+        assert_eq!(answered.state(), RuntimeReceiptState::Completed);
+        let Some(RuntimeResult::Status { status }) = answered.result() else {
+            panic!("status result: {answered:?}");
+        };
+        let fence = status
+            .instances()
+            .iter()
+            .find(|instance| instance.instance_alias() == "neutral.instance")
+            .and_then(actingcommand_contract::RuntimeInstanceStatus::resource_fence)
+            .expect("the instance's fence");
+        assert_eq!(fence.cause.as_str(), "capture_backend_close_failed");
 
         let takeover = RuntimeHost::start(
             config(&root),
@@ -562,10 +569,10 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
             )),
         )
         .err()
-        .expect("retained owner blocks takeover");
+        .expect("the running owner blocks takeover");
         assert_eq!(takeover.code(), "owner_conflict");
         drop(client);
-        assert!(host.close().is_err());
+        host.close().expect("close host");
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
         assert_eq!(
             state.unfenced_capture_close_count.load(Ordering::Acquire),

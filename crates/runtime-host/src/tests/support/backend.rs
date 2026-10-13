@@ -52,6 +52,9 @@ pub(super) struct FakeState {
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
     fail_application: AtomicBool,
+    // Workflow #403: the error the next application command returns, taken once, so one
+    // command can end with an unconfirmed close while later ones succeed.
+    application_error: std::sync::Mutex<Option<DeviceError>>,
     input_actions: std::sync::Mutex<Vec<InputAction>>,
     segmented_swipe_plans: std::sync::Mutex<Vec<PreparedSegmentedSwipePlan>>,
     // Workflow #369 review C-2: a discovery-bound instance with emulator control
@@ -977,6 +980,15 @@ impl ExecutionBackendProvider for FakeProvider {
             .get(instance_alias)
             .expect("resolved fake application instance");
         entry.state.application_count.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = entry
+            .state
+            .application_error
+            .lock()
+            .expect("application error")
+            .take()
+        {
+            return Err(error);
+        }
         if entry.state.fail_application.load(Ordering::Acquire) {
             Err(DeviceError::fatal("private application failure"))
         } else {
