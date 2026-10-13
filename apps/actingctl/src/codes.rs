@@ -118,5 +118,8 @@ actingcommand_contract::outcome_codes! {
         // Workflow #389 MCP-10: `actingctl start` and `actingctl restart`.
         StartRuntimeAlreadyRunning => "start_runtime_already_running": error / none,
         StartWaitIdleExpired => "start_wait_idle_expired": error / none,
+        // ---- Workflow #389 MCP-11: `packs` / `ac_packs`.
+        PackageBindingUnreadable => "package_binding_unreadable": warning / none,
+        // ---- end of MCP-11
     }
 }

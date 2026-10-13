@@ -1271,6 +1271,34 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "config_decode_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's configuration. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_read_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): reading the configuration file failed. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "consecutive_unchanged_threshold_reached": {
       "category": "info",
       "ladder_class": "none",

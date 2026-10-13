@@ -10,6 +10,7 @@ mod codes;
 mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
+mod packs;
 mod process_probe;
 // Workflow #389 MCP-10: `start` and `restart`.
 #[cfg(windows)]
@@ -85,6 +86,12 @@ fn main() -> ExitCode {
             return exit;
         }
     }
+    // ---- Workflow #389 MCP-11 (begin): `packs` reads the selected configuration offline and
+    // takes no `--state-root` (command table D5). ----
+    if let Some(exit) = packs::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-11 (end) ----
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {

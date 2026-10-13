@@ -11,8 +11,6 @@ actingcommand_contract::outcome_codes! {
     pub enum ActingdCode {
         ConfigUnavailable => "config_unavailable": error / none,
         ConfigSizeInvalid => "config_size_invalid": error / none,
-        ConfigReadFailed => "config_read_failed": error / none,
-        ConfigDecodeFailed => "config_decode_failed": error / none,
         InstallProviderRetired => "install_provider_retired": error / none,
         MaintenanceConfigInvalid => "maintenance_config_invalid": error / none,
         GovernanceCapabilityRetired => "governance_capability_retired": error / none,

@@ -12,6 +12,7 @@ mod lab;
 mod observe_export;
 mod observer;
 mod operator;
+mod packs;
 mod protocol;
 mod runs;
 mod runtime;
