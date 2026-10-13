@@ -133,14 +133,20 @@ impl Snapshot<'_> {
     /// of that spelling (or of `fallback_code` when the run has no terminal). A failure is
     /// spelled as the policy spells it (coordinator ruling 7): its code, or for
     /// `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the report
-    /// showed it before ledger revision 3.
+    /// showed it before ledger revision 3. Without a terminal, the run's failure severity is
+    /// its `runtime.failed` record's: the lifecycle failure of that spelling, else the run's
+    /// latest one (coordinator ruling, 2026-10-13); `None` when the run has neither.
     fn run_failure(
         &self,
         run_id: Option<RunId>,
         fallback_code: &str,
-    ) -> (Option<(String, EventSeverity)>, Value) {
+    ) -> (
+        Option<(String, EventSeverity)>,
+        Option<EventSeverity>,
+        Value,
+    ) {
         let Some(run_id) = run_id else {
-            return (None, Value::Null);
+            return (None, None, Value::Null);
         };
         let by_run = |event_type| EventQuery {
             event_type: Some(event_type),
@@ -164,28 +170,42 @@ impl Snapshot<'_> {
         let code = terminal
             .as_ref()
             .map_or(fallback_code, |(spelling, _)| spelling.as_str());
-        let detail = self
-            .ledger
-            .query(&by_run(EventType::RuntimeFailed))
+        let runtime_failures = self.ledger.query(&by_run(EventType::RuntimeFailed));
+        // Ledger revision 3: the lifecycle failure's code is the record's outcome and its
+        // native detail the `raw_text` of that outcome's direct foreign link.
+        let lifecycle_failures = runtime_failures
             .iter()
             .rev()
-            .find_map(|event| match event.payload() {
-                // Ledger revision 3: the lifecycle failure's code is the record's outcome and
-                // its native detail the `raw_text` of that outcome's direct foreign link.
+            .filter_map(|event| match event.payload() {
                 EventPayload::Runtime(RuntimePayload::Failed(payload))
                     if payload.lifecycle_failure().is_some()
                         && scheduled_failure_code(payload.outcome()) == code =>
                 {
-                    payload.outcome().causes().iter().find_map(|link| {
-                        link.outcome()
-                            .value("raw_text")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
+                    Some((event, payload))
                 }
                 _ => None,
-            });
-        (terminal, detail.map_or(Value::Null, Value::String))
+            })
+            .collect::<Vec<_>>();
+        let detail = lifecycle_failures.iter().find_map(|(_, payload)| {
+            payload.outcome().causes().iter().find_map(|link| {
+                link.outcome()
+                    .value("raw_text")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+        });
+        let severity = match &terminal {
+            Some((_, severity)) => Some(*severity),
+            None => lifecycle_failures
+                .first()
+                .map(|(event, _)| event.severity())
+                .or_else(|| runtime_failures.last().map(|event| event.severity())),
+        };
+        (
+            terminal,
+            severity,
+            detail.map_or(Value::Null, Value::String),
+        )
     }
 
     /// §12.4 scope and step re-derived from the run's rows, for display.
@@ -428,7 +448,7 @@ pub fn suspension_report(
             || failure.error_code.clone(),
             |identity| identity.base.clone(),
         );
-        let (terminal, detail) = snapshot.run_failure(current_run, &base);
+        let (terminal, run_severity, detail) = snapshot.run_failure(current_run, &base);
         let failure_spelling = terminal
             .as_ref()
             .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
@@ -505,11 +525,10 @@ pub fn suspension_report(
                 })
             });
             // Coordinator ruling 6: the severity of the run's failure terminal, which is its
-            // failure's category. The execution record carries no outcome (until A2-P), so its
-            // own severity is its event type's category; it stands in only without a terminal.
-            let severity = terminal
-                .as_ref()
-                .map_or(latest.severity, |(_, severity)| *severity);
+            // failure's category; without a terminal, the run's `runtime.failed` record's. The
+            // execution record carries no outcome (until A2-P), so its own severity is its event
+            // type's category; it stands in only when the run has neither.
+            let severity = run_severity.unwrap_or(latest.severity);
             suspended.push(json!({
                 "task_id": task_id,
                 "instance_id": instance_id,

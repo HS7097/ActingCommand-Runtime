@@ -3609,13 +3609,13 @@
                                     },
                                     "record_index": 2,
                                     "result": "ok",
-                                    "returned_bytes": 481
+                                    "returned_bytes": 425
                                   },
                                   "max_us": "<MICROSECONDS>",
                                   "status": {
                                     "state": "observed"
                                   },
-                                  "successful_returned_bytes": 882,
+                                  "successful_returned_bytes": 801,
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "framing": {
@@ -3775,13 +3775,13 @@
                                     },
                                     "record_index": 6,
                                     "result": "ok",
-                                    "returned_bytes": 252
+                                    "returned_bytes": 256
                                   },
                                   "max_us": "<MICROSECONDS>",
                                   "status": {
                                     "state": "observed"
                                   },
-                                  "successful_returned_bytes": 2478,
+                                  "successful_returned_bytes": 2482,
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "framing": {
