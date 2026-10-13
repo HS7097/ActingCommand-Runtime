@@ -6,6 +6,7 @@
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
+mod events;
 #[cfg(test)]
 mod gate_381a;
 #[cfg(feature = "mcp")]
@@ -74,6 +75,11 @@ fn main() -> ExitCode {
             return exit;
         }
     }
+    // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
+    if let Some(exit) = events::dispatch(&arguments) {
+        return exit;
+    }
+    // --- end MCP-1 ---
     // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
     // before `Invocation::parse`; `observe` without `--export` is unchanged.
     if let Some(exit) = observe_export::dispatch(&arguments) {

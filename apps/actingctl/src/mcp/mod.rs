@@ -6,6 +6,7 @@
 //! whether it is done come from the Runtime and runtime-client unchanged.
 
 mod child;
+mod events;
 mod jobs;
 mod lab;
 // Workflow #389 MCP-5a: ac_observe.
