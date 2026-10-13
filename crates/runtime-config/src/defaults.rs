@@ -6,9 +6,16 @@
 //! top-level required member; a member without parsing code is refused. Each section adds its
 //! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`).
 
+use crate::host_claims::HostClaimsFile;
+use crate::recovery_ladder::RecoveryLadderFile;
+use crate::resolve::member;
+use crate::table::find_row;
+use crate::value::parse_value;
+use actingcommand_contract::FactScalar;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 /// The defaults file the program embeds; the build ships the same bytes.
 pub const SHIPPED_DEFAULTS: &str = include_str!(concat!(
@@ -19,7 +26,12 @@ pub const SHIPPED_DEFAULTS: &str = include_str!(concat!(
 /// The defaults file's sections, each as strict as in the configuration file.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DefaultsFile {}
+pub struct DefaultsFile {
+    #[serde(default)]
+    pub recovery_ladder: Option<RecoveryLadderFile>,
+    #[serde(default)]
+    pub host_claims: Option<HostClaimsFile>,
+}
 
 /// A defaults file that is not a JSON object of known sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +52,24 @@ impl DefaultsFile {
     pub fn shipped() -> Result<(Self, Value), DefaultsInvalid> {
         Self::parse(SHIPPED_DEFAULTS)
     }
+}
+
+/// The embedded defaults file as JSON, parsed once; `None` when it does not parse (a start
+/// then refuses it, `DefaultsFile::shipped`).
+pub(crate) fn shipped_json() -> Option<&'static Value> {
+    static PARSED: OnceLock<Option<Value>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| DefaultsFile::shipped().ok().map(|(_, value)| value))
+        .as_ref()
+}
+
+/// The defaults file's value of `key`, as the key table reads it: the lowest layer of a key
+/// whose `default` is the file, for a configuration in effect that does not carry the key (a
+/// host started without actingd's manifest).
+pub(crate) fn shipped_scalar(key: &str) -> Option<FactScalar> {
+    let (row, _) = find_row(key)?;
+    let value = member(shipped_json()?, key)?;
+    parse_value(row, key, value).ok()
 }
 
 /// `sha256:<hex>` of `bytes`: how `config.selection` names the configuration and defaults files.

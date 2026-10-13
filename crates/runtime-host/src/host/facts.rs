@@ -834,6 +834,14 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
             return Err(error);
         }
+        // Workflow #387 D1c (M387 §3.4): direction ①'s count of the committed record, in memory
+        // under its own leaf lock; nothing is recorded and no ladder is admitted on the write
+        // path (the lease sweep admits what it registered).
+        if let Err(error) = self.count_stability_record(&event) {
+            self.lifecycle_append_failed.store(true, Ordering::Release);
+            self.fatal.mark(error.clone())?;
+            return Err(error);
+        }
         Ok(event)
     }
 

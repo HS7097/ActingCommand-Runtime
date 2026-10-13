@@ -1,1 +1,72 @@
-{}
+{
+  "recovery_ladder": {
+    "enabled": true,
+    "cooldown_secs": 600,
+    "trigger_defaults": {
+      "start": "immediately",
+      "start_rung": 1,
+      "respect_cooldown": true
+    },
+    "triggers": [
+      {
+        "id": "pack_logic",
+        "stages": ["task"],
+        "classes": ["pack_logic_mismatch"]
+      },
+      {
+        "id": "stability_burst",
+        "stages": ["stability_warnings"],
+        "classes": ["stability_warning", "environment_fault"],
+        "count": 3,
+        "window_ms": 600000
+      },
+      {
+        "id": "preparation_backend",
+        "stages": ["startup_preparation", "connection_preparation"],
+        "codes": [
+          "input_backend_open_failed",
+          "capture_backend_open_failed",
+          "paired_backend_open_failed",
+          "capture_backend_operation_failed"
+        ]
+      }
+    ],
+    "exclude_codes": [
+      "contained_task_prerequisite_*",
+      "contained_task_return_home_entry_unmatched"
+    ],
+    "rules": {
+      "direct_runs": "exempt",
+      "preparation_superseded": "suppress",
+      "already_running": "suppress",
+      "cooldown_opens_on": "admitted",
+      "entry_unavailable": "skip"
+    },
+    "rungs": [
+      {
+        "action": "return_home",
+        "configured_package_deadline_ms": 1800000
+      },
+      {
+        "action": "application_restart",
+        "adb_probe_ms": 30000,
+        "entry_hold_ms": 90000
+      },
+      {
+        "action": "emulator_restart",
+        "stop_bound_ms": 210000,
+        "start_bound_ms": 220000,
+        "readiness_window_ms": 120000,
+        "readiness_backoff_ms": [5000, 10000, 20000],
+        "readiness_poll_ms": 500
+      }
+    ],
+    "hold": {
+      "claim_ttl_ms": 120000,
+      "margin_ms": 5000
+    }
+  },
+  "host_claims": {
+    "renewal_slack_ms": 1000
+  }
+}

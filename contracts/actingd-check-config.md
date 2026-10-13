@@ -219,7 +219,8 @@ revision.
   `startup_package_invalid`. `stuck_recovery` and `stuck_recovery_cooldown_secs`
   are the instance's effective stuck-recovery ladder settings (slice #316-B4,
   `contracts/emulator-control.md`, "Stuck-recovery ladder"): the configured
-  values or the defaults `true` and `600`, on every instance. A cool-down
+  values or the `recovery_ladder` section's `enabled` and `cooldown_secs`
+  (Workflow #387 D1c; defaults file `true` and `600`), on every instance. A cool-down
   outside `1..=86400` fails assembly with `stuck_recovery_cooldown_invalid`;
   `false` turns the ladder off for the instance, and a fixture instance never
   starts one. The same values are the manifest parameters
@@ -338,10 +339,17 @@ revision.
     the registry's bounded `instance_id` (`instance_<32 hex>`; an alias may
     exceed the 128-byte key bound), each `explicit` when the instance named
     the field; since Workflow #387 D1b the configuration mechanism resolves
-    them (`instances[]` entry with the same `instance_id`) and they are the
-    only keys an instruction may change while the Runtime runs. They form the
-    section `instance`, which with every other section counts against its own
-    256-parameter bound ([runtime-config.md](runtime-config.md)). Every
+    them (`instances[]` entry with the same `instance_id`); a field the
+    instance does not name takes the `recovery_ladder` section's value. They form
+    the section `instance`, which with every other section counts against its own
+    256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
+    D1c adds, before the per-instance keys, the sections the mechanism resolves:
+    the 15 `recovery_ladder.*` keys and `host_claims.renewal_slack_ms` (settable,
+    `default` from `actingd.defaults.json` unless the file names them; a list is
+    one parameter of canonical JSON text) and `standard_packs.root` when the
+    file names it (not settable). A `recovery_ladder` section that breaks a rule
+    fails assembly with `recovery_ladder_config_invalid`
+    ([runtime-config.md](runtime-config.md), "The recovery ladder section"). Every
     value of the other keys is read back from the assembled `RuntimeHostConfig` (Workflow #318,
     cfg2), never copied from a library `Default`; a host that cannot report
     one (no performance monitor configuration installed) fails assembly with

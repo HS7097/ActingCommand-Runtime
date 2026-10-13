@@ -191,6 +191,7 @@ mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
 mod recovery_ladder;
+pub use recovery_ladder::recovery_ladder_device_bounds;
 mod requests;
 mod resource_close;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
@@ -1552,6 +1553,11 @@ impl RuntimeHost {
             resource_fences: Mutex::new(BTreeMap::new()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
             config_override_gate: Mutex::new(()),
+            recovery_ladder_config: Mutex::new(None),
+            stability_counter: Mutex::new(recovery_ladder::StabilityCounter::default()),
+            unclassified_codes: Mutex::new(BTreeSet::new()),
+            #[cfg(test)]
+            performance_hold_for_test: AtomicBool::new(false),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
@@ -1815,6 +1821,10 @@ impl RuntimeHost {
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
             }
+            // Workflow #387 D1c: the `recovery_ladder` section in effect (the defaults file's
+            // for a host started without a manifest), read and checked before any instance is
+            // prepared.
+            shared.refresh_ladder_config()?;
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
@@ -2086,8 +2096,20 @@ impl RuntimeHost {
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<actingcommand_contract::InstanceStuckRecovery> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest)?;
+        let ladder = shared.ladder_config()?;
+        shared.instance_stuck_recovery(instance_id, &ladder)
+    }
+
+    /// Workflow #387 D1c (§3.7): holds every instance back from performance release, or lets
+    /// it go, as performance control's suspension would.
+    #[cfg(test)]
+    pub(crate) fn hold_performance_for_test(&self, held: bool) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest)?
-            .instance_stuck_recovery(instance_id)
+            .performance_hold_for_test
+            .store(held, Ordering::Release);
+        Ok(())
     }
 
     /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
@@ -4015,6 +4037,17 @@ struct HostShared {
     // the records it leads to.
     runtime_config: Mutex<actingcommand_runtime_config::EffectiveConfig>,
     config_override_gate: Mutex<()>,
+    // Workflow #387 D1c: the `recovery_ladder` section in effect, read once per change of the
+    // configuration (a ladder takes it as its snapshot); direction ①'s per-instance windows, a
+    // leaf lock the append path takes under `fact_write_gate`; the codes the ladder met that the
+    // catalog does not list, each recorded once per process.
+    recovery_ladder_config: Mutex<Option<Arc<actingcommand_runtime_config::LadderConfig>>>,
+    stability_counter: Mutex<recovery_ladder::StabilityCounter>,
+    unclassified_codes: Mutex<BTreeSet<String>>,
+    // Workflow #387 D1c, test only: holds every instance back from performance release (§3.7),
+    // the stand-in for performance control's suspension.
+    #[cfg(test)]
+    performance_hold_for_test: AtomicBool,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
@@ -4514,6 +4547,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         // Workflow #403: every new resource fence goes to a recovery ladder or a person before
         // the sweep's pump grants anything.
         if let Err(error) = shared.hand_resource_fences_to_ladders() {
+            shared.fatal.mark(error.clone().into_fatal())?;
+            return Err(error);
+        }
+        // Workflow #387 D1c (§3.4): the bursts direction ① registered since the last tick are
+        // admitted here, outside every write lock, before the sweep's pump grants anything.
+        if let Err(error) = shared.admit_stability_bursts() {
             shared.fatal.mark(error.clone().into_fatal())?;
             return Err(error);
         }

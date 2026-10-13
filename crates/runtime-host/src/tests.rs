@@ -121,6 +121,8 @@ mod gate_381b;
 mod gate_383;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
+// Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
+mod gate_387_d1c;
 mod gate_392_daa;
 mod gate_398_rd1a;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.

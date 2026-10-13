@@ -25,16 +25,23 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
   shipped in the Runtime artifact beside the example configuration; the exact-SHA build checks
   that the shipped file's SHA-256 is the `defaults_sha256` `check-config` reports. It holds
   exactly the keys whose `default` is `file`, parsed by `DefaultsFile` (no required top-level
-  member; a member without parsing code is refused). D1b ships it empty (`{}`): no section with
-  file defaults exists yet.
+  member; a member without parsing code is refused). D1c fills it with the `recovery_ladder` and
+  `host_claims` sections (M387 §7.1).
 - **Merge.** A key the file names is `explicit`, otherwise `default` (from the defaults file, the
   section-level key or code). A list or object the file names replaces the default whole. The
-  example configuration stays a skeleton: a configuration names only the keys it changes.
+  example configuration stays a skeleton: a configuration names only the keys it changes. A key
+  whose default is a section-level key (`section:<key>`) and that the file does not name follows
+  that key's value in effect, its instruction value included (D1c); an instruction on the
+  section-level key records the dependent section again. A host started without a manifest
+  reads the defaults file's values.
 - **Checks.** After the merge each section passes its whole-section check, at start (a start and
   `check-config` refuse the same way, with the failure's own code) and after every instruction.
   A check that needs a fact of another crate reads it from the check context the caller fills
-  in: D1b's carries the scheduler's `maximum_client_heartbeat_interval_ms`; D1c adds the device
-  layer's bounds with the first check that reads them.
+  in: the scheduler's `maximum_client_heartbeat_interval_ms` and (D1c) the device layer's own
+  bounds of the application stop, the emulator Stop and the emulator Start
+  (`recovery_ladder_device_bounds`). A section's broken rule refuses a start or `check-config`
+  with the section's own code; the same values sent by an instruction are refused as
+  `config_value_invalid` with the same `config_key` and `config_value_problem`.
 
 ## Key table
 
@@ -52,10 +59,57 @@ One row per key ([v012-register.md](v012-register.md) §5 lists the sections):
 
 D1b's rows: every key the start-up manifest reported before it (none settable, M387 §12
 question 2: change it in the file, commit, restart) and the per-instance `stuck_recovery`
-(boolean) and `stuck_recovery_cooldown_secs` (integer 1..=86400), settable, default `code` until
-D1c gives them `section:recovery_ladder.*`. A manifest key the table does not have fails the
-start (`config_key_unknown`). The manifest lists the exact keys in row order, then each
-instance's per-instance keys together.
+(boolean) and `stuck_recovery_cooldown_secs` (integer 1..=86400), settable, default
+`section:recovery_ladder.enabled` and `section:recovery_ladder.cooldown_secs` (D1c). D1c's rows:
+the `recovery_ladder` and `host_claims` sections below (all settable, default `file`) and
+`standard_packs.root` (Workflow #373 NAV-6, moved here: string, default `none`, not settable,
+read once at assembly). A manifest key the table does not have fails the start
+(`config_key_unknown`). The manifest lists the exact keys in row order (`recovery_ladder`,
+`host_claims`, `standard_packs`), then each instance's per-instance keys together.
+
+## The recovery ladder section (D1c)
+
+Frozen model M387 v1.2 §3, §4, §7; [emulator-control.md](emulator-control.md), "Stuck-recovery
+ladder", describes what each key does. Every key can change while the Runtime runs; a ladder
+climbs by the section it was admitted with (§4.7).
+
+| Key | Type | Default (`actingd.defaults.json`) |
+|---|---|---|
+| `recovery_ladder.enabled` | boolean | `true` |
+| `recovery_ladder.cooldown_secs` | integer 1..=86400 | `600` |
+| `recovery_ladder.trigger_defaults.start` | `immediately` \| `after_performance_release` | `immediately` |
+| `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
+| `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
+| `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `pack_logic`, `stability_burst`, `preparation_backend` |
+| `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched` |
+| `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
+| `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |
+| `recovery_ladder.rules.already_running` | `suppress` \| `queue` | `suppress` |
+| `recovery_ladder.rules.cooldown_opens_on` | `admitted` \| `triggered` | `admitted` |
+| `recovery_ladder.rules.entry_unavailable` | `skip` \| `fail` | `skip` |
+| `recovery_ladder.rungs` | list of `{action, <bounds>}`, one to three, no action twice | return home (`configured_package_deadline_ms` 1 800 000), application restart (`adb_probe_ms` 30 000, `entry_hold_ms` 90 000), emulator restart (`stop_bound_ms` 210 000, `start_bound_ms` 220 000, `readiness_window_ms` 120 000, `readiness_backoff_ms` [5 000, 10 000, 20 000], `readiness_poll_ms` 500) |
+| `recovery_ladder.hold.claim_ttl_ms` | milliseconds | `120000` |
+| `recovery_ladder.hold.margin_ms` | milliseconds | `5000` |
+| `host_claims.renewal_slack_ms` | milliseconds | `1000` |
+
+The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
+`config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
+more of `task`, `startup_preparation`, `connection_preparation`, `stability_warnings`, each once
+(`stage_not_allowed`), and classes or codes (`match_missing`); every class is a ladder class and
+every code or prefix is in the embedded catalog (`code_unknown`, `code_retired`); `count` and
+`window_ms` are present, above 0, exactly on an item that names `stability_warnings`
+(`burst_invalid`); every start rung is within the rungs (`start_rung_out_of_range`); the rungs
+are one to three known actions, each once, each element naming only its own action's bounds
+(`rungs_invalid`); `configured_package_deadline_ms` is within a task's longest deadline,
+`adb_probe_ms` at least 1 000, `entry_hold_ms` at least the probe and the device's application
+stop, `stop_bound_ms` and `start_bound_ms` at least the device's own, `readiness_backoff_ms`
+non-empty without 0, `readiness_window_ms` at least its first wait and `readiness_poll_ms`
+within 100 and the window (`bound_out_of_range`); every other bound plus `hold.margin_ms` within
+the longest renewal, a task's longest deadline plus the heartbeat bound (`renewal_cap_exceeded`);
+`hold.claim_ttl_ms` above the heartbeat bound, within the longest renewal and not below the
+margin (`claim_ttl_out_of_range`). Elements a list leaves out take their schema values: a
+trigger item's `start`, `start_rung` and `respect_cooldown` from `trigger_defaults`, a rung's
+bounds from the defaults file's rung of the same action.
 
 ## Facts
 

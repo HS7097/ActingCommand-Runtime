@@ -274,9 +274,12 @@ impl LadderRun {
             .host
             .run_scheduled_contained_task(&self.context, &self.request)
             .expect_err("the scheduled run fails");
+        // Workflow #387 D1c: a code the default trigger item `pack_logic` matches by its class.
         assert!(
             !error.is_fatal()
-                && actingcommand_contract::is_stuck_recovery_trigger(&received_code(error.code())),
+                && actingcommand_runtime_config::ladder_class_of(
+                    received_code(error.code()).as_str()
+                ) == Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch),
             "a stuck-recovery trigger: {}",
             error.code()
         );
@@ -805,9 +808,11 @@ fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_sta
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
-    assert!(actingcommand_contract::is_stuck_recovery_trigger(
-        &received_code(error.code())
-    ));
+    // Workflow #387 D1c: a code the default trigger item `pack_logic` matches by its class.
+    assert_eq!(
+        actingcommand_runtime_config::ladder_class_of(received_code(error.code()).as_str()),
+        Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch)
+    );
     wait_for_rung_three_start(&ladder_state);
     assert_eq!(
         host.schedule_startup_package_for_test(STARTUP_ALIAS)

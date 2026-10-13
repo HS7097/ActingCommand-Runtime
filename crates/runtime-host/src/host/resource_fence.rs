@@ -10,7 +10,8 @@
 //! person at once; a ladder that ends with the instance still fenced leaves it waiting for a
 //! person. A fence that manual work met (a direct task run, a client lease, an application or
 //! input command, a Lab operation: the instance's key held by a person's claim) starts no ladder
-//! and waits for a person at once (M387 B1, Alice 10-10: the ladder exists for the routine).
+//! and waits for a person at once (M387 B1, Alice 10-10: the ladder exists for the routine),
+//! unless `recovery_ladder.rules.direct_runs` is `trigger` (Workflow #387 D1c).
 //! Only a preparation of the instance whose self-check passes proves the close and lifts the
 //! fence (`instance_resources_fence_lifted`): the ladder's re-preparation after an
 //! application or emulator restart, or a person's resume, emulator start or restart, or
@@ -177,10 +178,14 @@ impl HostShared {
         };
         let since_unix_ms = self.clock.sample()?.unix_ms;
         // M387 B1: manual work that met the fence starts no ladder; its instance waits for a
-        // person at once.
+        // person at once. Workflow #387 D1c (coordinator ruling 4): `rules.direct_runs` decides
+        // it, so under `trigger` such a fence goes to a ladder as a routine one does.
         let manual = lock(&self.scheduler, HostLocation::FenceInstanceResources)?
             .active_lease(instance_id)
             .is_some_and(|lease| manual_claim(lease.kind()));
+        let manual = manual
+            && self.ladder_config()?.rules.direct_runs
+                == actingcommand_runtime_config::DirectRuns::Exempt;
         let newly = match lock(&self.resource_fences, HostLocation::FenceInstanceResources)?
             .entry(instance_id)
         {

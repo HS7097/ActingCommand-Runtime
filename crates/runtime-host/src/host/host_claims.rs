@@ -29,9 +29,6 @@ use std::sync::mpsc;
 /// How often a granted claim retries a lifecycle admission that is still closed (a daemon
 /// start that is still preparing, an install hold) before its payload runs.
 const HOST_CLAIM_ADMISSION_POLL: Duration = Duration::from_millis(100);
-/// Workflow #369 Q-5: a key within this much of a step's bound is not renewed, so a claim
-/// granted a moment ago (its TTL already that bound) does not renew at once.
-const RENEWAL_SLACK_MS: u64 = 1_000;
 
 /// What a granted host claim runs on its instance's worker.
 pub(super) enum HostClaimWork {
@@ -341,8 +338,11 @@ impl HostShared {
     }
 
     /// Q-5 (B1): renews `key` to `lease_ttl_ms` (capped like every claim TTL) when less than
-    /// that remains, so a hold renews only before a step whose bound exceeds what is left. A
-    /// refusal (`lease_expired`, `lease_missing`) ends the hold at the caller.
+    /// that remains, so a hold renews only before a step whose bound exceeds what is left. A key
+    /// within `host_claims.renewal_slack_ms` (Workflow #387 D1c, the configuration in effect) of
+    /// the bound is not renewed, so a claim granted a moment ago (its TTL already that bound)
+    /// does not renew at once. A refusal (`lease_expired`, `lease_missing`) ends the hold at the
+    /// caller.
     pub(super) fn renew_host_key(
         &self,
         key: &mut HostKey,
@@ -353,6 +353,9 @@ impl HostShared {
             .maximum_client_heartbeat_interval_ms;
         let lease_ttl_ms = lease_ttl_ms
             .min(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS.saturating_add(reserve));
+        let renewal_slack_ms = self
+            .renewal_slack_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -360,7 +363,7 @@ impl HostShared {
             .token
             .expires_at_monotonic_ms()
             .saturating_sub(now)
-            .saturating_add(RENEWAL_SLACK_MS)
+            .saturating_add(renewal_slack_ms)
             >= lease_ttl_ms
         {
             return Ok(());

@@ -257,6 +257,33 @@ them `section:recovery_ladder.*`); every key the manifest reported before D1b ha
 (not settable). The defaults file ships empty (`{}`) until a section with `default = file`
 keys arrives (D1c on).
 
+### 1.17 Wave 4 slice D1c (#387 M387 §3, §4, §6, §7)
+
+D1c brings its own shapes (rows R1–R4 of §1.5, written here as built, and M398 §6.4's two
+items) and writes them; [emulator-control.md](emulator-control.md), "Stuck-recovery ladder",
+and [runtime-config.md](runtime-config.md), "The recovery ladder section", are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD1 | `RecoveryTriggerStage::StabilityWarnings` (`stability_warnings`) | new enum value (R1) | D1c | D1c | ladder records only: `instance_preparation_finished` refuses it (and `task`) |
+| LD2 | `RecoveryLadderTrigger` + `rule?` (token, the trigger item's `id`), `matched?` (`{by: "code"}` / `{by: "class", ladder_class}` / `{by: "warning_burst", count, window_ms, first_unix_ms, last_unix_ms}`), `start` (`immediately` / `after_performance_release`, required) | new members (R2) | D1c | D1c | `rule` and `matched` absent exactly on a `resource_fence` trigger (#403: a fence matches no item); validation checks the record agrees with itself, no code table |
+| LD3 | `recovery_ladder_started` `rungs` one to three in the configured order, no action twice; + `config_digest` (64 lowercase hex, the SHA-256 of the section's values; a configuration's hash, not a package digest); + `profile?` (token) | changed and new members (R3; M398 §6.4) | D1c | D1c | `profile` stays absent until RD-4's ladder profiles exist |
+| LD4 | `RecoveryRungSkipReason` + `before_start_rung`, + `device_not_ready` (M398 §6.4); outcomes `recovery_rung_skipped_before_start_rung`, `recovery_rung_skipped_device_not_ready` (info) | new enum values, new codes (R4) | D1c | D1c (`before_start_rung`); RD-5 (`device_not_ready`) | |
+| LD5 | `recovery_ladder_suppressed` + `rule?` | new member (R4) | D1c | D1c | absent for a fence's ladder |
+| LD6 | `recovery_ladder_finished` `rungs_tried` ≤ 3 | rule against the action vocabulary (`RecoveryRung::ALL`), not a fixed ladder | D1c | D1c | `RecoveryRung::LADDER` retired |
+| LD7 | `runtime.failed` of `recovery_ladder_code_unclassified` (warning, `raw_code`) | existing record type, new values on a D1b code | D1c | D1c | once per process and code; system links |
+| LD8 | `config.parameters.recovery_ladder` (15 rows), `config.parameters.host_claims` (1), `config.parameters.standard_packs` (`root`, when the file names it) | new sections of an existing fact family | D1c | D1c | lists as canonical JSON text; `standard_packs.root` moved from actingd's own configuration (NAV-6 deviation 5), not settable |
+| LD9 | `config_value_problem` + `duplicate_id`, `stage_not_allowed`, `match_missing`, `code_unknown`, `code_retired`, `burst_invalid`, `start_rung_out_of_range`, `rungs_invalid`, `bound_out_of_range`, `renewal_cap_exceeded`, `claim_ttl_out_of_range`; `recovery_ladder_config_invalid` + `config_value_problem?` | vocabulary tokens, an optional value | D1c | D1c | the same key and problem on `config_value_invalid` through an instruction |
+| LD10 | `InstanceStuckRecovery` loses `Default` and `DEFAULT_COOLDOWN_SECS`; `is_stuck_recovery_trigger` and `is_preparation_recovery_trigger` removed | contract API removal (M387 §6.3) | D1c | — | an instance's defaults are the section's `enabled` / `cooldown_secs` in effect |
+
+Configuration keys (§5): the `recovery_ladder.*` and `host_claims.*` rows of §5, as listed, in
+`distribution/windows/actingd.defaults.json`; the per-instance `stuck_recovery` and
+`stuck_recovery_cooldown_secs` take `section:recovery_ladder.enabled` / `.cooldown_secs`.
+Deviations from §5's defaults: rung 3's `stop_bound_ms` is 210 000 (today's bound since #381 B),
+not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h) and no
+`navigation_exhausted` item (its code `contained_task_navigation_recovery_exhausted` arrives
+with NAV-5).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

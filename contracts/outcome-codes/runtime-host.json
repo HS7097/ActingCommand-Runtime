@@ -18169,6 +18169,42 @@
       "description": "A value the configuration in effect holds, or an identity a configuration record needs, is not of the type the reader expects (an internal invariant).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recovery_rung_skipped_before_start_rung": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung before the start rung its trigger item names (the rung's recovery_rung_finished outcome; Workflow #387 D1c, recovery_ladder.triggers[].start_rung or trigger_defaults.start_rung).",
+      "common_causes": "A trigger item, or the trigger defaults, start the climb at a later rung.",
+      "handling": "Nothing to do; change the trigger item's start_rung to climb from an earlier rung."
+    },
+    "recovery_rung_skipped_device_not_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung whose entry the device-state gate holds: a locked screen, heat, a low battery or a device in use (the rung's recovery_rung_finished outcome; skip reason device_not_ready, Workflow #398 M398 section 6.4, registered with Workflow #387 D1c; the device-state slice emits it).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -24499,6 +24535,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: record the configuration facts at start (Workflow #387 D1b)."
+    },
+    "recovery_stability_count": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host stage: direction one of the recovery ladder counts a committed record on the append path (Workflow #387 D1c)."
+    },
+    "recovery_stability_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the lease sweep admits the warning bursts direction one of the recovery ladder registered (Workflow #387 D1c)."
+    },
+    "recovery_unclassified_note": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: record once a code the recovery ladder met that the embedded catalog does not list (Workflow #387 D1c)."
     }
   }
 }

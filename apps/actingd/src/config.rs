@@ -154,10 +154,17 @@ pub(super) struct ActingdConfigFile {
     /// Not a configuration fact; read at startup.
     #[serde(default)]
     return_home_packages: Option<Vec<ReturnHomePackageConfigFile>>,
-    /// Workflow #373 NAV-6: the installed standard packs (`standard_packs.root`). Not a
-    /// configuration fact; read at startup.
+    /// Workflow #373 NAV-6: the installed standard packs (`standard_packs.root`), read at
+    /// startup. Workflow #387 D1c: the section's file is `crates/runtime-config`'s, and the key
+    /// is reported in `config.parameters.standard_packs`.
     #[serde(default)]
-    standard_packs: Option<StandardPacksConfigFile>,
+    standard_packs: Option<actingcommand_runtime_config::StandardPacksFile>,
+    /// Workflow #387 D1c: the recovery ladder (`recovery_ladder.*`) and the Runtime-held keys
+    /// (`host_claims.*`), each member optional; the defaults file holds every default.
+    #[serde(default)]
+    recovery_ladder: Option<actingcommand_runtime_config::RecoveryLadderFile>,
+    #[serde(default)]
+    host_claims: Option<actingcommand_runtime_config::HostClaimsFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -265,6 +272,36 @@ struct ReturnHomePackageConfigFile {
 /// control character (`return_home_package_key_invalid`); each package id a key of
 /// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
 /// (`return_home_package_duplicate`).
+/// Workflow #387 D1c: one instance's stuck-recovery settings from the rows the configuration
+/// mechanism resolved: its `stuck_recovery` and `stuck_recovery_cooldown_secs`, which take the
+/// `recovery_ladder` section's values when the file names neither.
+fn stuck_recovery_settings(
+    parameters: &[actingcommand_contract::ConfigParameter],
+    instance_id: &str,
+) -> Result<actingcommand_contract::InstanceStuckRecovery, Code> {
+    let value = |member: &str| {
+        let key = actingcommand_runtime_config::instance_key(instance_id, member);
+        parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .map(|parameter| parameter.value.clone())
+    };
+    match (
+        value(actingcommand_runtime_config::STUCK_RECOVERY),
+        value(actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS),
+    ) {
+        (
+            Some(actingcommand_contract::FactScalar::Boolean(enabled)),
+            Some(actingcommand_contract::FactScalar::Integer(cooldown_secs)),
+        ) => Ok(actingcommand_contract::InstanceStuckRecovery {
+            enabled,
+            cooldown_secs: u32::try_from(cooldown_secs)
+                .map_err(|_| ActingdCode::StuckRecoveryCooldownInvalid.code())?,
+        }),
+        _ => Err(ActingdCode::ConfigManifestInvalid.code()),
+    }
+}
+
 fn assemble_return_home_packages(
     configured: Vec<ReturnHomePackageConfigFile>,
     prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
@@ -291,17 +328,6 @@ fn assemble_return_home_packages(
         }
     }
     Ok(packages)
-}
-
-/// `standard_packs { root }` (Workflow #373 NAV-6, model M-373 v1.1 §4.3): the directory that
-/// holds one root per game, `<root>/<game>/`, written once by the installer. A relative path
-/// resolves against the configuration file's directory; an empty one is refused
-/// (`config_decode_failed`). Without the section no standard-pack root is read. A startup key:
-/// changing it needs a restart.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StandardPacksConfigFile {
-    root: PathBuf,
 }
 
 /// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
@@ -1180,8 +1206,10 @@ impl ActingdConfigFile {
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
-        let mut stuck_recovery = BTreeMap::new();
         let mut instance_ids = Vec::with_capacity(instances.len());
+        // Workflow #387 D1c: each instance's alias and id, for the stuck-recovery settings the
+        // configuration mechanism resolves below.
+        let mut instance_aliases = Vec::with_capacity(instances.len());
         // Workflow #387 D1b: the members of the per-instance section as the file names them, the
         // file layer the configuration mechanism resolves (`instances[]` by `instance_id`).
         let mut instance_members = Vec::with_capacity(instances.len());
@@ -1197,17 +1225,18 @@ impl ActingdConfigFile {
                     adb_requirement.add_user(&instance.alias);
                 }
             }
-            let settings = actingcommand_contract::InstanceStuckRecovery {
-                enabled: instance.stuck_recovery.unwrap_or(true),
-                cooldown_secs: instance.stuck_recovery_cooldown_secs.unwrap_or(
-                    actingcommand_contract::InstanceStuckRecovery::DEFAULT_COOLDOWN_SECS,
-                ),
-            };
-            settings
+            // A cool-down the file names is checked here, as before; one it leaves out is the
+            // `recovery_ladder` section's (Workflow #387 D1c), resolved below.
+            if let Some(cooldown_secs) = instance.stuck_recovery_cooldown_secs {
+                actingcommand_contract::InstanceStuckRecovery {
+                    enabled: instance.stuck_recovery.unwrap_or_default(),
+                    cooldown_secs,
+                }
                 .validate()
                 .map_err(|_| ActingdCode::StuckRecoveryCooldownInvalid.code())?;
-            stuck_recovery.insert(instance.alias.clone(), settings);
+            }
             let instance_id = manifest::instance_id_text(instance.instance_id)?;
+            instance_aliases.push((instance.alias.clone(), instance_id.clone()));
             let mut members = serde_json::Map::new();
             members.insert(
                 "instance_id".to_owned(),
@@ -1300,6 +1329,17 @@ impl ActingdConfigFile {
                 .with_performance_monitor(performance_monitor)
                 .with_governance_policy(governance_policy);
         let instances_startup_package_count = startup_packages.len();
+        // Workflow #387 D1c: the sections the configuration mechanism resolves, as the file
+        // names them, before the standard-pack root is resolved against the file's directory.
+        let file_layer = serde_json::json!({
+            "instances": instance_members,
+            "recovery_ladder": serde_json::to_value(&self.recovery_ladder)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "host_claims": serde_json::to_value(&self.host_claims)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "standard_packs": serde_json::to_value(&self.standard_packs)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+        });
         let standard_packs_root = self
             .standard_packs
             .map(|section| {
@@ -1313,17 +1353,28 @@ impl ActingdConfigFile {
             })
             .transpose()?;
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
-        // itself (D1b: the per-instance section), from the members the file named.
+        // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections, then
+        // the per-instance section), from the members the file named.
         let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
             .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
         let mechanism_parameters = actingcommand_runtime_config::render_parameters(
-            actingcommand_runtime_config::mechanism_rows(),
+            &actingcommand_runtime_config::mechanism_rows(),
             &instance_ids,
             &defaults,
-            &serde_json::json!({ "instances": instance_members }),
-            &actingcommand_runtime_config::code_default,
+            &file_layer,
+            &|_| None,
         )
         .map_err(|failure| failure.failure_code().code())?;
+        // Each instance's stuck-recovery settings as the file layer resolves them: its own
+        // members, or the `recovery_ladder` section's (M387 §5.5 `section:`). The Runtime reads
+        // the values in effect; check-config reports these.
+        let stuck_recovery = instance_aliases
+            .iter()
+            .map(|(alias, instance_id)| {
+                stuck_recovery_settings(&mechanism_parameters, instance_id)
+                    .map(|settings| (alias.clone(), settings))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
         let config_selection =
             self.config_sha256
                 .map(|config_sha256| actingcommand_contract::ConfigSelection {
@@ -1374,6 +1425,7 @@ impl ActingdConfigFile {
             .and_then(|effective| {
                 effective.check(&actingcommand_runtime_config::CheckContext::new(
                     host.scheduler().maximum_client_heartbeat_interval_ms,
+                    actingcommand_runtime_host::recovery_ladder_device_bounds(),
                 ))
             })
             .map_err(|failure| failure.failure_code().code())?;

@@ -4882,6 +4882,21 @@ impl HostShared {
         ))?;
         let active_run =
             self.begin_contained_run(original.request_id(), resolved.instance_id(), true)?;
+        // Workflow #387 D1c (B1): a direct run's failed end starts a ladder only under
+        // `recovery_ladder.rules.direct_runs = trigger`, which `ladder_at_lease_end` reads.
+        let ladder_correlation_id = self
+            .events
+            .issuer()
+            .mint_correlation_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        active_run
+            .control
+            .note_ladder_source(super::recovery_ladder::LadderSource {
+                correlation_id: ladder_correlation_id,
+                recovery: task_request.recovery().cloned(),
+                direct: true,
+            })
+            .map_err(RequestFailure::poison_without_terminal)?;
         active_run
             .control
             .set_deadline(
@@ -4959,6 +4974,10 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #387 D1c (B1, M387 §3.4): the run's records count for direction ① only under
+        // `rules.direct_runs = trigger`.
+        self.track_direct_run(original.request_id(), true)
+            .map_err(RequestFailure::poison_without_terminal)?;
         let executed = self.execute_contained_task_with_lease(
             original,
             request,
@@ -4976,6 +4995,7 @@ impl HostShared {
             active_run.control(),
             None,
         );
+        let untracked = self.track_direct_run(original.request_id(), false);
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
         // that. Noted while the run is still registered, so a draining pause sees it.
@@ -4987,9 +5007,10 @@ impl HostShared {
             _ => Ok(()),
         };
         // Workflow #369-3 (coordinator ruling Q1): a direct run (CLI or console task-run, MCP
-        // `ac_run_pack`) never starts the stuck-recovery ladder; whoever ran it has the receipt
-        // and decides. Only scheduled runs stage one.
-        with_recovery_ladder_staging(executed, awaited)
+        // `ac_run_pack`) starts no stuck-recovery ladder by default; whoever ran it has the
+        // receipt and decides. Workflow #387 D1c: `rules.direct_runs = trigger` lets its failed
+        // end queue one (`ladder_after_direct_run`).
+        with_recovery_ladder_staging(executed, awaited.and(untracked))
     }
 
     pub(super) fn package_material_deadline(
@@ -5513,6 +5534,7 @@ impl HostShared {
             .note_ladder_source(super::recovery_ladder::LadderSource {
                 correlation_id: context.issued_correlation_id(),
                 recovery: task_request.recovery().cloned(),
+                direct: false,
             })
             .map_err(RequestFailure::poison_without_terminal)?;
         active_run

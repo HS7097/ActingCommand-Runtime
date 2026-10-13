@@ -10,8 +10,8 @@ use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest,
 };
 use actingcommand_runtime_config::{
-    CheckContext, EffectiveConfig, InstructionStamp, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
-    instance_key,
+    CheckContext, DeviceBounds, EffectiveConfig, InstructionStamp, STUCK_RECOVERY,
+    STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 use serde_json::json;
 
@@ -45,7 +45,16 @@ fn d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_se
         set_in_owner_epoch: "owner_epoch_of_the_test".to_owned(),
         request_id: "request_of_the_test".to_owned(),
     };
-    let context = CheckContext::new(20);
+    // The per-instance section's check reads neither the heartbeat bound nor the device
+    // layer's bounds (Workflow #387 D1c added the latter to the check context).
+    let context = CheckContext::new(
+        20,
+        DeviceBounds {
+            application_stop_ms: 0,
+            emulator_stop_ms: 0,
+            emulator_start_ms: 0,
+        },
+    );
 
     // `actingctl config set <key>=<json>…` and `ac_config_set {changes}`.
     let through_cli = crate::config_changes(
