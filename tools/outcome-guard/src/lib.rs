@@ -365,12 +365,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyFailureRecord.error_code",
-        &[Check::G2],
-        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
         "PolicyPlanningSignalEventData.fact_code",
         &[Check::G2],
         "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
@@ -398,12 +392,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "SchedulingOutcomeDeclaration.designated_operation",
         &[Check::G2],
         "B4: a package's operation id from its scheduling declaration (pack vocabulary, model section 8.1), not a Runtime location; B4 decides its typing with the package interface",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "Wire.error_code",
-        &[Check::G2],
-        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -1136,30 +1124,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "FailureIdentity::parse",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "encode_failure_base",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "failure_accumulates",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "failure_key",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-host/src/host.rs",
         "RuntimeLifecycleFailure::Process.code",
         &[Check::G2],
@@ -1214,12 +1178,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/host/failure_settlement.rs",
-        "recorded_failure_input",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-host/src/host/frame_retention.rs",
         "FrameRetentionWarning::stage",
         &[Check::G2],
@@ -1242,12 +1200,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "scheduling_resume_selfcheck",
         &[Check::G2],
         "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/policy_outcome.rs",
-        "HostShared::validate_scheduled_policy_terminal",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
     ),
     bridge(
         "crates/runtime-host/src/host/prerequisite.rs",
@@ -1376,24 +1328,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
     ),
     bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "FailureStreak.error_code",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "PolicyExecutionInput::Failed.error_code",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "interruption_lifted_by_restart",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-host/src/policy_host/clock_slot.rs",
         "Deferral.code",
         &[Check::G2],
@@ -1452,12 +1386,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "Snapshot::frames",
         &[Check::G3],
         "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
-    ),
-    bridge(
-        "crates/runtime-host/src/suspension_report.rs",
-        "Snapshot::run_failure",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
     ),
     bridge(
         "crates/runtime-host/src/suspension_report.rs",
@@ -2239,12 +2167,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "severe_policy_failure_codes",
         &[Check::G5],
         "B4: the policy's Severe code list (model section 8.1) spells other owners' codes; B4 reviews the list with the policy",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "scheduled_failure_code",
-        &[Check::G2],
-        "A2-P: the policy failure code of a failed run's terminal outcome (an unregistered relayed spelling keeps its raw_code), the base of the #336 failure identity `error_code`, a dynamic family A2-P splits into a fixed code and values",
     ),
     // End of the A3 entries.
 ];
