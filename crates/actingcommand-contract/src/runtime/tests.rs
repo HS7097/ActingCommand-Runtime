@@ -278,7 +278,11 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     assert_eq!(record.instance_id(), Some(instance));
     assert_eq!(record.entered_event_id(), Some(entered));
     assert_eq!(record.source(), "runtime_host");
-    assert_eq!(record.runtime_code(), Some(RuntimeErrorCode::RuntimeFatal));
+    // Ledger revision 3 (acceptance CL-M3): the receipt's Runtime code is the outcome's value.
+    assert_eq!(
+        outcome.outcome().value("runtime_code"),
+        Some(&serde_json::json!(RuntimeErrorCode::RuntimeFatal.as_str()))
+    );
     assert_eq!(
         record.cause().expect("cause").phase(),
         LifecycleFailurePhase::Reset

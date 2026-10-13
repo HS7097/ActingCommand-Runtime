@@ -32,7 +32,10 @@ pub enum ProviderStartupStage {
 
 /// A provider startup failure (ledger revision 3, model section 8.1): `outcome` is the failure
 /// with its native text as a `foreign_*` link, and `module` names the module that reported
-/// it. The category replaces the former `severity`; no Runtime text is kept.
+/// it. The category replaces the former `severity`; no Runtime text is kept. `module` stays a
+/// member: of the modules it names (`actingd.config`, `execution-kernel`, the device's
+/// `mumu_manager`, the host's `provider` and `emulator_control`) only the host's provider has
+/// an `origin_module` token (acceptance CL-M3, L5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderNativeFailure {

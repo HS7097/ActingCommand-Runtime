@@ -53,10 +53,12 @@ impl CatalogIndex {
     }
 }
 
-/// The location keys (`operation`, `stage`, `boundary`): they say where a result arose, which
-/// every result may say (spec section 6), so every code accepts them as optional keys while
-/// its entry is pending (Workflow #378 A3; the settlement in v0.12.1 lists them per code).
-const LOCATION_KEYS: [&str; 3] = ["operation", "stage", "boundary"];
+/// The keys every code accepts as optional while its entry is pending (Workflow #378 A3; the
+/// settlement in v0.12.1 lists them per code): the location keys (`operation`, `stage`,
+/// `boundary`), which say where a result arose, which every result may say (spec section 6),
+/// and `runtime_code`, the Runtime error code a receipt projects, which a `runtime.failed`
+/// record's outcome carries whatever the failure's code (M378 section 8.1).
+const CONTEXT_KEYS: [&str; 4] = ["operation", "stage", "boundary", "runtime_code"];
 
 /// The category of a registered code in the catalog this build embeds.
 pub(crate) fn code_category(spelling: &str) -> Option<Category> {
@@ -246,10 +248,10 @@ fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckF
     }
 }
 
-/// A key the entry lists, a location key, or the `<key>_total` of a listed list or records
+/// A key the entry lists, a context key, or the `<key>_total` of a listed list or records
 /// key.
 fn declared(key: &str, values: &HashMap<String, Presence>) -> bool {
-    if values.contains_key(key) || LOCATION_KEYS.contains(&key) {
+    if values.contains_key(key) || CONTEXT_KEYS.contains(&key) {
         return true;
     }
     key.strip_suffix("_total").is_some_and(|base| {

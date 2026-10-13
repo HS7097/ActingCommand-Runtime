@@ -3344,13 +3344,18 @@ fn revision_3_lifecycle_failure_links_its_os_error_and_keeps_the_runtime_code() 
     assert_eq!(
         failed
             .lifecycle_failure()
-            .map(RuntimeLifecycleFailureRecord::runtime_code),
-        Some(Some(crate::RuntimeErrorCode::RuntimeFatal))
+            .map(RuntimeLifecycleFailureRecord::source),
+        Some("runtime_host")
     );
     let outcome = failed.outcome();
     assert_eq!(
         outcome.value("operation"),
         Some(&serde_json::json!("control_instance"))
+    );
+    // Acceptance CL-M3: the receipt's Runtime code is the outcome's value `runtime_code`.
+    assert_eq!(
+        outcome.value("runtime_code"),
+        Some(&serde_json::json!("runtime_fatal"))
     );
     let [os_error] = outcome.causes() else {
         panic!("the OS error link")

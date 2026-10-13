@@ -1344,7 +1344,6 @@ impl RuntimeLifecycleFailureDraft {
                 adb_recovery: None,
                 owner_epoch,
                 source: source.into(),
-                runtime_code: None,
                 entered_event_id: None,
                 instance_id: None,
                 primary_detail: None,
@@ -1365,9 +1364,12 @@ impl RuntimeLifecycleFailureDraft {
         self.record.resource_dispositions = groups;
         self
     }
-    /// The Runtime error code a receipt for this failure projects.
+    /// The Runtime error code a receipt for this failure projects: the outcome's value
+    /// `runtime_code` (ledger revision 3, M378 section 8.1).
     pub fn with_runtime_code(mut self, code: Option<crate::RuntimeErrorCode>) -> Self {
-        self.record.runtime_code = code;
+        if let Some(code) = code {
+            self.outcome = self.outcome.runtime_code(code);
+        }
         self
     }
     pub fn with_entered_event_id(mut self, id: Option<EventId>) -> Self {
@@ -1443,7 +1445,9 @@ impl RuntimeLifecycleFailureDraft {
 }
 
 /// The typed context of a `runtime.failed` record; the failure itself is the payload's
-/// `outcome` (ledger revision 3).
+/// `outcome` (ledger revision 3), whose values carry the receipt's `runtime_code`. `source`
+/// stays a member: of the reporters it names (`runtime_host`, `runtime_client`, `actingd`)
+/// only the first has an `origin_module` token (M378 section 8.1; acceptance CL-M3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeLifecycleFailureRecord {
@@ -1457,8 +1461,6 @@ pub struct RuntimeLifecycleFailureRecord {
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    runtime_code: Option<crate::RuntimeErrorCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entered_event_id: Option<EventId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1489,9 +1491,6 @@ impl RuntimeLifecycleFailureRecord {
     }
     pub fn source(&self) -> &str {
         &self.source
-    }
-    pub const fn runtime_code(&self) -> Option<crate::RuntimeErrorCode> {
-        self.runtime_code
     }
     pub const fn entered_event_id(&self) -> Option<EventId> {
         self.entered_event_id
