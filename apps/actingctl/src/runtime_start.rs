@@ -15,7 +15,9 @@
 //! - `restart` takes the same installer check before it stops anything, waits until every
 //!   instance is idle (no lease, nothing queued) or refuses with nothing stopped, requests the
 //!   shutdown and waits for it as `request-shutdown --wait 60` does, then starts as `start`
-//!   does.
+//!   does. While it waits for idle it reads Status every 10 s and once more at the end of
+//!   `--wait-idle`: each Status appends a ledger observation (command table §2.5), so a long
+//!   wait must not read it every second.
 //!
 //! The root is an A/B installation (the selection of `install\active.json`, as the watchdog
 //! starts it) or, with `--config`, a verification root started with that config. Processes are
@@ -50,8 +52,10 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 /// A watchdog tick holds `run.lock` through its own start: wait for it as `watchdog uninstall`
 /// does, up to the tick's readiness window and its probes.
 const RUN_LOCK_WAIT: Duration = Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000);
-/// How often `restart --wait-idle` reads Status again.
-const IDLE_POLL: Duration = Duration::from_secs(1);
+/// How often `restart --wait-idle` reads Status again (train 4 review ruling): every Status
+/// appends a ledger observation (command table §2.5), so the wait reads it every 10 s, and once
+/// more when `--wait-idle` ends.
+const IDLE_POLL: Duration = Duration::from_secs(10);
 /// The bound of a configuration file (the bound of an installed selection's config).
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 

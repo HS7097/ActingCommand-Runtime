@@ -302,3 +302,78 @@ fn start_refuses_while_the_installer_holds_its_writer_lock_and_touches_nothing()
     assert_eq!(fixture.start_logs(), 0, "a Runtime was launched");
     drop(writer);
 }
+
+/// Train 4 review ruling on MCP-10: `restart` takes the installer check before it stops
+/// anything (coordinator ruling, row 7a). While acsetup holds `install\writer.lock`, restart is
+/// refused with `watchdog_installer_busy` and the live Runtime is not stopped: it still answers
+/// with the same owner epoch, no run lock was taken and no Runtime was launched.
+#[test]
+fn restart_refuses_while_the_installer_holds_its_writer_lock_and_stops_nothing() {
+    let fixture = Root::installation();
+    let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
+    let before = runtime.wait_ready(&fixture.state);
+    let writer = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.root.join("install").join("writer.lock"))
+        .expect("open writer lock");
+    writer.try_lock().expect("hold the writer lock");
+
+    let refused = fixture.actingctl(
+        "restart-installer-busy",
+        &["restart", "--root", Root::text(&fixture.root)],
+    );
+    let line = fatal_line(&refused);
+    assert!(
+        line.starts_with("FATAL actingctl: watchdog_installer_busy: "),
+        "{line}"
+    );
+    runtime.assert_alive();
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &fixture.state,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("the Runtime still answers");
+    assert_eq!(
+        client.health().expect("the Runtime still answers"),
+        before.owner_epoch(),
+        "the owner changed"
+    );
+    assert!(
+        !fixture.root.join("watchdog").exists(),
+        "a run lock was taken"
+    );
+    assert_eq!(fixture.start_logs(), 0, "a Runtime was launched");
+
+    drop(client);
+    drop(writer);
+    runtime.stop_clean();
+}
+
+/// Train 4 review ruling on MCP-10 (deviation 5): `restart` restarts a running Runtime only. On
+/// a state root whose Runtime has stopped (its clean close removed `runtime-info.json`), restart
+/// is refused with the runtime client's connection code `runtime_info_unavailable` and starts
+/// nothing: no run lock, no start log.
+#[test]
+fn restart_refuses_a_stopped_runtime_and_starts_nothing() {
+    let fixture = Root::installation();
+    let mut runtime = support::RuntimeChild::spawn(&fixture.state, "c4_runtime_child_process");
+    runtime.wait_ready(&fixture.state);
+    runtime.stop_clean();
+
+    let refused = fixture.actingctl(
+        "restart-stopped",
+        &["restart", "--root", Root::text(&fixture.root)],
+    );
+    let line = fatal_line(&refused);
+    assert!(
+        line.starts_with("FATAL actingctl: runtime_info_unavailable: "),
+        "{line}"
+    );
+    assert!(
+        !fixture.root.join("watchdog").exists(),
+        "a run lock was taken"
+    );
+    assert_eq!(fixture.start_logs(), 0, "a Runtime was launched");
+}
