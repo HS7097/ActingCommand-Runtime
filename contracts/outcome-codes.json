@@ -566,6 +566,22 @@
       "type": "vocab:text_read_budget",
       "description": "Which per-consumer text read budget ran out."
     },
+    "target_kind": {
+      "type": "vocab:target_kind",
+      "description": "Which kind of target a uniqueness check compared."
+    },
+    "score_milli": {
+      "type": "integer",
+      "description": "A best match's score in milli, rounded down: a template's normalized match score or a text block's confidence."
+    },
+    "second_score_milli": {
+      "type": "integer",
+      "description": "The score in milli, rounded down, of the second place found within the margin of the best match."
+    },
+    "margin_milli": {
+      "type": "integer",
+      "description": "A declared margin in milli below the best match's score."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -1516,6 +1532,10 @@
     "ladder_class": {
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
+    "device_state_probe": {
+      "type": "vocab:device_state_probe",
+      "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     }
   },
   "vocabularies": {
@@ -3242,6 +3262,21 @@
         }
       }
     },
+    "target_kind": {
+      "description": "Which kind of target a uniqueness check compared (Workflow #396 REC-2).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TargetMatchKind"
+      },
+      "tokens": {
+        "template": {
+          "description": "A template target: positions of its match score."
+        },
+        "ocr": {
+          "description": "A locate OCR target: text blocks and their confidence."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -4306,6 +4341,36 @@
         },
         "none": {
           "description": "7. Not applicable: a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error."
+        }
+      }
+    },
+    "device_state_probe": {
+      "description": "A device-state read of a handset (model-398 section 7.1).",
+      "source": {
+        "file": "crates/device/src/device_state.rs",
+        "enum": "DeviceStateProbe"
+      },
+      "tokens": {
+        "power": {
+          "description": "dumpsys power: the wakefulness."
+        },
+        "keyguard": {
+          "description": "dumpsys window policy: the keyguard section."
+        },
+        "battery": {
+          "description": "dumpsys battery."
+        },
+        "thermal": {
+          "description": "dumpsys thermalservice: the thermal status."
+        },
+        "foreground": {
+          "description": "The foreground query (dumpsys activity activities)."
+        },
+        "home": {
+          "description": "cmd package resolve-activity for the home intent."
+        },
+        "settings": {
+          "description": "settings get of a screen-timeout setting."
         }
       }
     }
@@ -6799,6 +6864,9 @@
       "lab",
       "pack-containment"
     ],
+    "target_match_": [
+      "recognition-pack"
+    ],
     "task_": [
       "actingctl",
       "actingledger",
@@ -7117,6 +7185,9 @@
     ],
     "pack_schedule_": [
       "policy"
+    ],
+    "scrcpy_": [
+      "device"
     ]
   },
   "codes": {
@@ -11504,6 +11575,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "capture_frame_stale": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#398 R1 RD-3i: a stream capture backend received no frame encoded after the capture floor (the completion of the last input, or the frame delivered last) within its fresh wait; the step makes no input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "capture_geometry_deadline_elapsed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -13168,14 +13253,14 @@
     "config_decode_failed": {
       "category": "error",
       "ladder_class": "none",
-      "owner": "actingd",
+      "owner": "contract",
       "layer": "config",
       "uncertain": false,
       "values": {},
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration file: it does not decode as actingd's configuration.",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's configuration. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -13280,14 +13365,14 @@
     "config_read_failed": {
       "category": "error",
       "ladder_class": "none",
-      "owner": "actingd",
+      "owner": "contract",
       "layer": "config",
       "uncertain": false,
       "values": {},
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration file: reading it failed.",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): reading the configuration file failed. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14474,76 +14559,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "contained_task_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package metadata failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_open_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_read_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package read failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_size_invalid": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "contained_task_package_state_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -15002,7 +15017,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Post-admission OCR results do not match the truth set.",
+      "description": "A post-admission OCR truth set is larger than its declared max_total_bytes; its declared SHA-256 is not compared (Workflow #336 PKG-S1).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -15678,20 +15693,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "contained_task_select_policy_hash_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A select step's selection policy document does not match its sealed digest.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "contained_task_select_policy_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -16210,6 +16211,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "content_directory_changed_during_read": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "pack-containment",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A package directory's root was replaced while it was being read (its file identity before and after the read differ); nothing read is admitted.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "content_directory_deadline": {
       "category": "error",
       "ladder_class": "budget_or_permission",
@@ -16235,20 +16250,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A content directory nests deeper than its limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "content_directory_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A content directory's computed digest differs from the expected package digest.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16319,20 +16320,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A content directory or its root does not exist or cannot be resolved.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "content_directory_name_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A content directory's name does not match the reference it is admitted under.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16903,48 +16890,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_file_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_file_too_large": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file too large.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_instance_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -16956,20 +16901,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package instance invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package metadata failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16987,20 +16918,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_path_not_absolute": {
       "category": "error",
       "ladder_class": "none",
@@ -17012,20 +16929,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package path not absolute.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17172,6 +17075,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "device_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration (#398 R1 RD-3i): an instance's device fields do not fit its device kind, for example capture_backend scrcpy on an emulator instance. Every configured instance is an emulator until RD-1b adds the key device.kind.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "device_diagnostic_owner_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -17200,6 +17117,38 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "device_keyguard_dismiss_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard without a credential still showed on the handset after one wm dismiss-keyguard and the settle time. The run does not start.",
+      "common_causes": "The phone does not dismiss its keyguard from the shell.",
+      "handling": "Set device_state.keyguard_insecure to wait, or remove the keyguard on the phone."
+    },
+    "device_locked": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
+      "common_causes": "The phone locked itself after its screen timeout.",
+      "handling": "Unlock the phone."
+    },
     "device_path_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -17213,6 +17162,38 @@
       "description": "actingd refused its configuration: a device_paths entry is not an existing absolute path.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "device_state_unreadable": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_state_probe": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A device-state read of a handset (model-398 section 7.1) failed, or its answer has a shape the parser does not know; device_state_probe names the read. When adb answered, the foreign_adb_error link keeps adb's failure output or the answer that could not be read; when adb could not run or did not finish there is no link. The state is never guessed.",
+      "common_causes": "The phone left adb (unplugged, offline, unauthorized); the phone vendor prints another dumpsys format than the parser knows.",
+      "handling": "Check the device link; for an unknown shape, add a neutral sample of the new format to the parser."
+    },
+    "device_wake_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The handset's screen was still not awake after one KEYCODE_WAKEUP and the configured settle time (device_state.wake_settle_ms). The run does not start and no other input is sent.",
+      "common_causes": "The settle time is shorter than the phone needs to turn the screen on; the wake key failed.",
+      "handling": "Raise device_state.wake_settle_ms, or check the phone."
     },
     "diagnostic_json_invalid": {
       "category": "error",
@@ -21694,6 +21675,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "install_preparation_instance_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. Until slice A2 turns it into a caused_by link, the self-check's failure is carried as the token cause=<code>, for example input_backend_open_failed. When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
+      "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
+      "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
+    },
     "install_preparation_not_authorized": {
       "category": "error",
       "ladder_class": "none",
@@ -21718,7 +21715,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports install preparation selfcheck failed.",
+      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1). When some prepared instance passed, the start goes on instead and each failed instance is recorded as install_preparation_instance_unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -32159,20 +32156,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "observation_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation hash invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "observation_package_deadline_overflow": {
       "category": "error",
       "ladder_class": "none",
@@ -32184,48 +32167,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports observation package deadline overflow.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_limit_exceeded": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package limit exceeded.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -32407,21 +32348,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A post-admission OCR dictionary file does not match its declared length or SHA-256 (the message of a package_invalid refusal).",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "ocr_fields_dictionary_hash_or_limit_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A post-admission OCR field's dictionary differs from its declared digest or limit.",
+      "description": "A post-admission OCR dictionary file's bytes differ in length from the file measured before they were read (the message of a package_invalid refusal); its declared SHA-256 is not compared (Workflow #336 PKG-S1).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -33560,6 +33487,23 @@
       "common_causes": "A row written for a package of another standard package or catalog generation.",
       "handling": "Nothing to repair; remove the row if it is no longer wanted."
     },
+    "package_binding_unreadable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl packs or ac_packs found a package binding of the selected configuration whose path does not exist or cannot be read (a package folder bound as a startup package also needs a control.json naming its package_id); the row says readable false and the rest of the answer is read as usual. alias names the instance of a per-instance binding.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_bundle_applications_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -33672,20 +33616,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "package_deadline": {
-      "category": "error",
-      "ladder_class": "budget_or_permission",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Reading a legacy package file passed its admission deadline.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "package_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -33697,34 +33627,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime's wire error code (receipt projection `code`): package invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file's metadata could not be read.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_open_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file could not be opened.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -33753,20 +33655,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): package reference invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "package_size_invalid": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A legacy package file is not a regular file, or exceeds the compressed size limit.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -48066,20 +47954,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "saved_ocr_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "saved_ocr_package_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -48091,48 +47965,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports saved ocr package invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_limit": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -49508,6 +49340,62 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "scrcpy_server_digest_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy server the executable carries does not match the SHA-256 pinned in scripts/windows-tools/windows-tool-sources.v1.json, or the build embedded none; the scrcpy capture backend of the instance that opens it does not open, and the server is never pushed to the device. A damaged or incomplete installation. Only that instance's scrcpy capture backend is unavailable; the Runtime goes on (coordinator ruling 10-13, board #403 direction).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_server_start_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy capture backend could not start: pushing the server, the adb forward, starting the server, connecting to it, its stream header or its first frame failed within the start timeout. The open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_stream_ended": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy video stream stopped: the server exited, the socket closed, a packet was malformed or H.264 decoding failed. No frame is delivered from a stream that ended; the capture fails instead of falling back to another backend. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_video_size_mismatch": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy stream's video size is not the unscaled size requested (the display, or its centred crop to the size alignment), so its frames would be scaled; the stream is refused instead of downsampled. When it happens at the start, the open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13 09:2x: every scrcpy code is instance-level).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "screenshot_directory_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -50501,6 +50389,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "start_runtime_already_running": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl start or restart: a live process holds the owner lock of the state root (path), so nothing was started and nothing was changed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "start_timeout": {
       "category": "error",
       "ladder_class": "none",
@@ -50512,6 +50416,23 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime the watchdog started did not answer in time.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_wait_idle_expired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "aliases": "required",
+        "timeout_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl restart: after --wait-idle (timeout_ms) the instances named in aliases still held a lease or queued requests, so nothing was stopped.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52253,6 +52174,45 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "target_match_not_unique": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "target_kind": "required",
+        "score_milli": "required",
+        "second_score_milli": "required",
+        "margin_milli": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A target that declares unique did not pass: a second place scores at least the best match's score minus margin_milli (Workflow #396 REC-2). For a template, a position whose box does not intersect the best match's and that meets the target's own acceptance condition; for a locate OCR target, another block whose text matches, its confidence counted as 0 when absent. Scores are in milli, rounded down. Carried as the target evaluation's failure; a guard refuses its input with it as the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "target_match_search_incomplete": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "timeout_ms": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The exact score map of a template target that declares unique was not complete within the search limit timeout_ms (Workflow #396 REC-2). An evaluation error: the target never passes on a partial search.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "target_not_evaluated": {
       "category": "error",
       "ladder_class": "none",
@@ -52863,7 +52823,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
+      "description": "A locate OCR target's detection found more boxes than the model folder's max_boxes, and the dropped boxes could change the conclusion: no block matched (Workflow #396 REC-1), or a block matched and the target declares unique (Workflow #396 REC-2). count is the number of boxes detected, limit_count the folder's max_boxes. An evaluation error.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -60761,14 +60721,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read lab operation cleanup lease."
     },
-    "read_lab_operation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read lab operation package."
-    },
     "read_lab_operation_run": {
       "owner": "runtime-host",
       "layer": "host",
@@ -60872,14 +60824,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read monitor status."
-    },
-    "read_observation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read observation package."
     },
     "read_observed_binding": {
       "owner": "runtime-host",
@@ -64352,6 +64296,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: take host claim work."
+    },
+    "target_match_unique": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Searching a second place within the declared margin of a unique target's best match, or the exact score map that search reads (Workflow #396 REC-2)."
     },
     "target_resolve": {
       "owner": "device",
