@@ -55,12 +55,15 @@ impl McpServer {
         Self::start(command)
     }
 
-    /// `program mcp-serve` with these environment variables and no flag (Workflow #389 MCP-7:
-    /// an install's own actingctl, started as the fixed entry starts it, with the inherited
-    /// install root and selection).
-    pub fn spawn_program(program: &Path, environment: &[(&str, &str)]) -> Self {
+    /// `program mcp-serve <arguments>` with these environment variables (Workflow #389 MCP-7: an
+    /// install's own actingctl, started as the fixed entry starts it, with the inherited install
+    /// root and selection).
+    pub fn spawn_program(program: &Path, arguments: &[&str], environment: &[(&str, &str)]) -> Self {
         let mut command = Command::new(program);
-        command.arg("mcp-serve").envs(environment.iter().copied());
+        command
+            .arg("mcp-serve")
+            .args(arguments)
+            .envs(environment.iter().copied());
         Self::start(command)
     }
 

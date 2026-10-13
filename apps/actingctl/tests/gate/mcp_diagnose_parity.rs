@@ -989,27 +989,38 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
             .is_none_or(|id| links.lease_id() == Some(&id))
 }
 
-/// The generation test: an install root with slots A and B, generation 1 selected on slot A. The
-/// MCP server is the install's own actingctl in slot A, started as the fixed entry
-/// `<root>\runtime\actingctl.exe` starts it: with the install root and the selection of its
-/// start inherited, which it holds for its whole life. `actingcommand-actingd.exe` is a stand-in,
-/// actingctl itself, which refuses `suspended --config <path>` as usage and prints no report
-/// (exit 1, no JSON), so the report status says that a program ran. Then a deploy selects
-/// generation 2 on slot B, and the stand-in now stands only in slot B: the next ac_diagnose of
-/// the same server runs it there. Had the server kept the generation it started with, it would
-/// find no program in slot A (`suspended_report_spawn_failed`).
+/// The generation test (Workflow #389 MCP-7 and its scope extension): an install root with slots A
+/// and B, generation 1 selected on slot A. The MCP server is the install's own actingctl in slot A,
+/// started as the fixed entry `<root>\runtime\actingctl.exe` starts it: with the install root and
+/// the selection of its start inherited, which it holds for its whole life. The programs it runs
+/// are stand-ins, actingctl itself, which refuses their arguments as usage and prints nothing
+/// (exit 1, no JSON): `<slot>\runtime\actingcommand-actingd.exe` (actingd suspended, actingd
+/// check-config) and `<root>\tools\actinglab.exe` (the Lab tools, ac_run_pack's package digest).
+///
+/// A deploy then selects generation 2 on slot B, and the actingd stand-in now stands only in
+/// slot B. Each tool answers the generation selected now: ac_diagnose and ac_binding_draft's
+/// check-config run slot B's program (with the start generation they would find none in slot A
+/// and answer a spawn failure), and ac_packs names generation 2's configuration. When the install
+/// root then has no selection at all, ac_packs, ac_binding_draft and ac_run_pack answer the CLI's
+/// `install_selection_unavailable`: each reads `install\active.json` at the call (with the start
+/// selection, ac_run_pack would run its package digest child instead). The actinglab children
+/// differ only in the selection handed to them, which a stand-in cannot report; they take it from
+/// the same per-call reading.
 #[cfg(windows)]
 #[test]
-fn gate_ac_diagnose_runs_actingd_suspended_of_the_generation_selected_at_each_call() {
+fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected_now() {
     use actingcommand_contract::{INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
 
     let temp = TempDir::new().expect("tempdir");
     let root = temp.path().join("install");
     let state = root.join("state");
+    let package = temp.path().join("neutral-package");
     for directory in [
         state.clone(),
+        package.clone(),
         root.join("A").join("runtime"),
         root.join("B").join("runtime"),
+        root.join("tools"),
         root.join("install").join("generations").join("1"),
         root.join("install").join("generations").join("2"),
     ] {
@@ -1019,18 +1030,23 @@ fn gate_ac_diagnose_runs_actingd_suspended_of_the_generation_selected_at_each_ca
         fs::write(root.join("install").join(format!("slot-{slot}.lock")), b"")
             .expect("write slot lock");
     }
+    let actingctl = env!("CARGO_BIN_EXE_actingctl");
     let server = root.join("A").join("runtime").join("actingctl.exe");
-    fs::copy(env!("CARGO_BIN_EXE_actingctl"), &server).expect("place the server");
+    fs::copy(actingctl, &server).expect("place the server");
+    fs::copy(actingctl, root.join("tools").join("actinglab.exe"))
+        .expect("place the actinglab stand-in");
     let stand_in = |slot: &str| root.join(slot).join("runtime").join(ACTINGD);
-    fs::copy(env!("CARGO_BIN_EXE_actingctl"), stand_in("A")).expect("place the stand-in");
+    fs::copy(actingctl, stand_in("A")).expect("place the actingd stand-in");
+    let config_path =
+        |generation: u64| format!("install/generations/{generation}/actingd.config.json");
     // Writes the slot's members and the generation's configuration, selects them in
     // `install\active.json` and returns the selection.
     let select = |slot: &str, generation: u64| -> String {
         let members = format!(r#"{{"fixture":"diagnose-generation","slot":"{slot}"}}"#);
         fs::write(root.join(slot).join("MEMBERS.json"), &members).expect("write members");
-        let config = json!({"state_root": state, "generation": generation}).to_string();
-        let config_path = format!("install/generations/{generation}/actingd.config.json");
-        fs::write(root.join(&config_path), &config).expect("write the configuration");
+        let config =
+            json!({"state_root": state, "instances": [], "generation": generation}).to_string();
+        fs::write(root.join(config_path(generation)), &config).expect("write the configuration");
         let selection = json!({
             "schema_version": "actingcommand.install-selection.v1",
             "slot": slot,
@@ -1040,7 +1056,7 @@ fn gate_ac_diagnose_runs_actingd_suspended_of_the_generation_selected_at_each_ca
                 "sha256": format!("{:x}", Sha256::digest(members.as_bytes())),
             },
             "config": {
-                "path": config_path,
+                "path": config_path(generation),
                 "sha256": format!("{:x}", Sha256::digest(config.as_bytes())),
             },
         })
@@ -1050,11 +1066,24 @@ fn gate_ac_diagnose_runs_actingd_suspended_of_the_generation_selected_at_each_ca
         selection
     };
     let started_with = select("A", 1);
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let instance = issuer.mint_instance_id().expect("instance id");
     let runtime = ScriptedRuntime::start(
         &state,
         Arc::new(Ledger {
             events: Vec::new(),
-            instances: Vec::new(),
+            instances: vec![
+                RuntimeInstanceStatus::new(
+                    ALIAS_A,
+                    *instance.transport(),
+                    false,
+                    0,
+                    false,
+                    false,
+                    false,
+                )
+                .expect("instance status"),
+            ],
             instance_a: Value::Null,
             every_runs_grouped: Value::Null,
             every_failures_grouped: Value::Null,
@@ -1064,34 +1093,97 @@ fn gate_ac_diagnose_runs_actingd_suspended_of_the_generation_selected_at_each_ca
     );
     let mut mcp = McpServer::spawn_program(
         &server,
+        &["--tier", "observer,operator,author"],
         &[
             (INSTALL_ROOT_ENV, root.to_str().expect("UTF-8 fixture root")),
             (INSTALL_SELECTION_ENV, started_with.as_str()),
         ],
     );
     mcp.initialize();
-    let report = |mcp: &mut McpServer, id: u64| {
-        let answer = mcp.call_tool(id, "ac_diagnose", json!({}));
-        accepted(&answer, "ac_diagnose")["suspended_report"].clone()
+    let mut id = 1;
+    let mut call = |mcp: &mut McpServer, tool: &str, arguments: Value| {
+        id += 1;
+        mcp.call_tool(id, tool, arguments)
     };
+    let report = |answer: &Value| accepted(answer, "ac_diagnose")["suspended_report"].clone();
+    let packs_config = |answer: &Value| {
+        accepted(answer, "ac_packs")["source"]["config"]
+            .as_str()
+            .unwrap_or_else(|| panic!("ac_packs named no configuration: {answer}"))
+            .replace('\\', "/")
+    };
+    let record_stop = json!({
+        "lab": {
+            "binding_example": {
+                "scheduled_execution": {"package_path": package.display().to_string()},
+            },
+            "prerequisite_entry_example": {},
+            "catalog_on_failure_example": {},
+            "package_ref": format!("sha256:{}", "0".repeat(64)),
+            "binding_requires": [],
+        },
+    });
 
-    // Generation 1: slot A's program runs.
-    let before = report(&mut mcp, 2);
+    // Generation 1: slot A's actingd runs, and ac_packs names generation 1's configuration.
+    let before = report(&call(&mut mcp, "ac_diagnose", json!({})));
     assert_eq!(
         (before["code"].clone(), before["exit_code"].clone()),
         (json!("suspended_report_unreadable"), json!(1)),
-        "the stand-in in slot A ran: {before}"
+        "the actingd stand-in in slot A ran: {before}"
+    );
+    let config = packs_config(&call(&mut mcp, "ac_packs", json!({})));
+    assert!(
+        config.ends_with(&config_path(1)),
+        "ac_packs read {config}, not generation 1"
     );
 
-    // A deploy selects generation 2 on slot B; the program now stands only there.
-    fs::rename(stand_in("A"), stand_in("B")).expect("move the stand-in to slot B");
+    // A deploy selects generation 2 on slot B; the actingd stand-in now stands only there.
+    fs::rename(stand_in("A"), stand_in("B")).expect("move the actingd stand-in to slot B");
     select("B", 2);
-    let after = report(&mut mcp, 3);
+    let after = report(&call(&mut mcp, "ac_diagnose", json!({})));
     assert_eq!(
         (after["code"].clone(), after["exit_code"].clone()),
         (json!("suspended_report_unreadable"), json!(1)),
         "ac_diagnose ran actingd suspended of the generation it started with, not of the one selected now: {after}"
     );
+    let config = packs_config(&call(&mut mcp, "ac_packs", json!({})));
+    assert!(
+        config.ends_with(&config_path(2)),
+        "ac_packs read {config}, not generation 2 selected now"
+    );
+    let answer = call(
+        &mut mcp,
+        "ac_binding_draft",
+        json!({"record_stop": record_stop.clone()}),
+    );
+    let check_config = accepted(&answer, "ac_binding_draft")["check_config"].clone();
+    assert_eq!(
+        (
+            check_config["error"]["code"].clone(),
+            check_config["error"]["details"]["exit_code"].clone(),
+        ),
+        (json!("check_config_failed"), json!(1)),
+        "ac_binding_draft ran actingd check-config of the generation it started with, not of the one selected now: {check_config}"
+    );
+
+    // The install root no longer has a selection: each tool reads that at the call and answers
+    // the CLI's code.
+    fs::remove_file(root.join("install").join("active.json")).expect("remove the selection");
+    for (tool, arguments) in [
+        ("ac_packs", json!({})),
+        ("ac_binding_draft", json!({"record_stop": record_stop})),
+        (
+            "ac_run_pack",
+            json!({"instance": ALIAS_A, "package": package.display().to_string()}),
+        ),
+    ] {
+        let answer = call(&mut mcp, tool, arguments);
+        assert_eq!(
+            answer["result"]["structuredContent"]["error"]["code"],
+            json!("install_selection_unavailable"),
+            "{tool} without a selection: {answer}"
+        );
+    }
 
     mcp.close_input();
     drop(mcp);

@@ -24,7 +24,7 @@ use crate::codes::ActingctlCode;
 use crate::events::{self, CursorBinding};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::packs;
-use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CommandPayload, DiagnosticOutcomePayload, EventActor, EventPayload, EventQuery, EventSource,
@@ -207,18 +207,12 @@ impl SuspensionReport {
 }
 
 /// The program root, the configuration and the installation of the generation selected now; or
-/// the report status that says why there is none.
-///
-/// An installed process holds the selection of its start for its whole life: the one the fixed
-/// entry `<root>\runtime\actingctl.exe` handed it, or the one its slot read when it started. A
-/// long-running MCP server would so still find the generation it started with, and
-/// `packs::selected_config` keeps a handed selection too. For an installed process the selection
-/// is therefore read again from its install root's `install\active.json` as it is now, as a fresh
-/// `actingctl diagnose` through the fixed entry gets it; `--root`, when given, must be that root
-/// (`install_process_root_mismatch`, as `actingctl packs`). Any other process finds the
-/// configuration as `actingctl packs` does, with its codes: `--root`'s selection as it is now, or
-/// `<root>\actingd.config.json`, which the child reads anew at every call and whose folder is the
-/// program root.
+/// the report status that says why there is none, with the codes `actingctl packs` answers.
+/// `packs::selected_config` reads an installed process's selection again from
+/// `install\active.json` as it is now (`packs::current_selection`), not the one the process holds
+/// from its start, which the fixed entry `<root>\runtime\actingctl.exe` may have handed it.
+/// Without an install selection the configuration is `<root>\actingd.config.json`, which the
+/// child reads anew at every call and whose folder is the program root.
 fn suspension_source(
     root: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf, Option<InstalledProcess>), Value> {
@@ -229,59 +223,18 @@ fn suspension_source(
             "message": message,
         })
     };
-    let Ok(Some(process)) = actingcommand_contract::process_installation() else {
-        let (installation, config) = packs::selected_config(root)
-            .map_err(|error| unavailable(error.code(), error.message().to_owned()))?;
-        let program_root = match &installation {
-            Some(selected) => selected.program_root(),
-            None => config.parent().map(Path::to_path_buf).ok_or_else(|| {
-                unavailable(
-                    ActingctlCode::InstallRootUnresolved.code(),
-                    format!("the configuration {} has no folder", config.display()),
-                )
-            })?,
-        };
-        return Ok((program_root, config, installation));
-    };
-    let install_root = process.root();
-    if let Some(root) = root {
-        let given = fs::canonicalize(root).map_err(|error| {
+    let (installation, config) = packs::selected_config(root)
+        .map_err(|error| unavailable(error.code(), error.message().to_owned()))?;
+    let program_root = match &installation {
+        Some(selected) => selected.program_root(),
+        None => config.parent().map(Path::to_path_buf).ok_or_else(|| {
             unavailable(
                 ActingctlCode::InstallRootUnresolved.code(),
-                format!("--root {}: {error}", root.display()),
+                format!("the configuration {} has no folder", config.display()),
             )
-        })?;
-        if given != install_root {
-            return Err(unavailable(
-                ActingctlCode::InstallProcessRootMismatch.code(),
-                format!(
-                    "--root {} is not the install root {} this actingctl runs from",
-                    given.display(),
-                    install_root.display()
-                ),
-            ));
-        }
-    }
-    let current = InstalledProcess::read_active(install_root)
-        .map_err(|error| {
-            unavailable(
-                error.code(),
-                format!(
-                    "the install selection of {} cannot be read",
-                    install_root.display()
-                ),
-            )
-        })?
-        .ok_or_else(|| {
-            unavailable(
-                SharedCode::InstallSelectionUnavailable.code(),
-                format!(
-                    "the install root {} no longer has a selection",
-                    install_root.display()
-                ),
-            )
-        })?;
-    Ok((current.program_root(), current.config_path(), Some(current)))
+        })?,
+    };
+    Ok((program_root, config, installation))
 }
 
 /// One diagnosis, read with `client` until `deadline`, of the window from `since_unix_ms`.

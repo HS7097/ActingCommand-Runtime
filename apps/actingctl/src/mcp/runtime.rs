@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Installation inputs are pinned at process startup (#352); the first tool call connects
+//! Installation inputs are pinned at process startup (#352), except where a tool starts a child
+//! of the install or reads its configuration: those read the generation selected at the call
+//! (`locate_now`, Workflow #389 MCP-7 scope extension). The first tool call connects
 //! with `RuntimeClient::connect`, which checks the owner epoch against `runtime-info.json`.
 //! A connection the client has locked after a failure is dropped, and the next call
 //! connects again; cursors issued on the old connection then answer `cursor_invalid`.
@@ -157,6 +159,27 @@ impl RuntimeAccess {
             state_root,
             slot: Mutex::new(Slot::default()),
         }
+    }
+
+    /// `locate`, with the install selection read again from `install\active.json` as it is now
+    /// (Workflow #389 MCP-7 scope extension): the program root, the configuration and the
+    /// selection handed to children are those of the generation selected at this call, not the
+    /// one this server holds from its start (also when the fixed entry handed it that one). The
+    /// state root stays the one this server reads. A selection that cannot be read answers the
+    /// CLI's codes (`packs::current_selection`).
+    pub(super) fn locate_now(&self) -> Result<Location, ToolError> {
+        let mut location = self.locate();
+        location.check()?;
+        let Some(start) = &location.installation else {
+            return Ok(location);
+        };
+        let current = crate::packs::current_selection(start.root())
+            .map_err(|error| ToolError::usage(error.code(), error.message()))?;
+        location.root = Some(current.program_root());
+        location.install_root = Some(current.root().to_path_buf());
+        location.config = Some(current.config_path());
+        location.installation = Some(current);
+        Ok(location)
     }
 
     /// The `--root` this server was started with, as given (train 4 review ruling on MCP-11).
