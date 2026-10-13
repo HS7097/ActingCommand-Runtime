@@ -1191,7 +1191,7 @@ fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
 fn task_geometry_conclusion_error(conclusion: TaskGeometryConclusion) -> RuntimeHostError {
     task_geometry_error(match conclusion {
         TaskGeometryConclusion::AspectMismatch { .. } => {
-            HostCode::ContainedTaskGeometryAspectMismatch
+            HostCode::ContainedTaskGeometryFrameDisplayMismatch
         }
         TaskGeometryConclusion::Unknown { .. } => HostCode::ContainedTaskGeometryUnknown,
         TaskGeometryConclusion::Unavailable => HostCode::ContainedTaskGeometryUnavailable,
@@ -1405,14 +1405,9 @@ impl RuntimeContainedTask<'_> {
         if self.geometry_initial.is_some() {
             return Ok(());
         }
-        let result = if frame.backend_name != CaptureBackendName::FixtureSimulation
-            && u64::from(extent.width()) * 9 != u64::from(extent.height()) * 16
-        {
-            // The delivered frame already disproves the prerequisite; no display read is needed.
-            Ok(frame.geometry.clone())
-        } else {
-            self.read_task_geometry(true)
-        };
+        // Workflow #392 DA-A: no frame is refused for its aspect ratio, so every first frame
+        // reads its display's geometry.
+        let result = self.read_task_geometry(true);
         let (conclusion, event) =
             self.record_task_geometry(TaskGeometryPhase::Initial, None, None, &result)?;
         match (conclusion, result) {
@@ -1420,6 +1415,16 @@ impl RuntimeContainedTask<'_> {
                 TaskGeometryConclusion::Pass | TaskGeometryConclusion::FixtureNotApplicable,
                 Ok(value),
             ) => {
+                if conclusion == TaskGeometryConclusion::Pass {
+                    self.host
+                        .publish_display_facts(
+                            self.token.instance_id(),
+                            self.instance_alias,
+                            extent,
+                            &value,
+                        )
+                        .map_err(|error| task_geometry_request_failure(error, Some(&event)))?;
+                }
                 // Only a confirmed GlobalLedger commit opens the input prerequisite.
                 self.geometry_initial = Some((extent, value));
                 Ok(())
@@ -3489,12 +3494,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 TaskPayloadDraft::semantic(TaskSemanticFact::RunStarted, AuditInput::new()),
             ),
             ContainedTaskTrace::EntryRecognition {
-                required_page,
-                matched,
+                required_pages,
+                matched_page,
             } => {
+                let matched = matched_page.is_some();
                 self.record_entry_fact(TaskSemanticFact::EntryRecognition {
                     phase: TaskEntryRecognitionPhase::Initial,
-                    required_page,
+                    required_pages,
+                    matched_page,
                     matched,
                 })?;
                 if self.entry_preflight_recorded {
@@ -5645,7 +5652,7 @@ impl HostShared {
             // Workflow #336 L2b: only a `linear_steps` package has prerequisite packages, and
             // it has no required home entry page.
             prerequisite::run_linear_gated(&prepared, &prerequisites, &mut runtime)
-        } else if prepared.required_home_entry_page().is_some()
+        } else if prepared.required_entry_pages().is_some()
             && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
         {
             self.run_preflighted_contained_task(
@@ -6183,15 +6190,18 @@ impl HostShared {
         prepared: &PreparedContainedTask,
         runtime: &mut RuntimeContainedTask<'_>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
-        let Some(required_home) = prepared.required_home_entry_page().map(str::to_owned) else {
+        // Workflow #373 NAV-3b: the required entry is one page or an entry page set.
+        let Some(required_pages) = prepared.required_entry_pages().map(<[String]>::to_vec) else {
             return prepared.run(runtime);
         };
 
-        let initial_home = prepared.recognize_required_home(runtime)?;
+        let initial_page = prepared.recognize_required_entry(runtime)?;
+        let initial_home = initial_page.is_some();
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecognition {
                 phase: TaskEntryRecognitionPhase::Initial,
-                required_page: required_home.clone(),
+                required_pages: required_pages.clone(),
+                matched_page: initial_page,
                 matched: initial_home,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
@@ -6435,18 +6445,21 @@ impl HostShared {
         // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
         // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
         let configured_linear = configured && recovery.execution_mode() == "linear_steps";
-        if !configured_linear && !prepared.terminal_matches_required_home(&final_page) {
+        // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry.
+        if !configured_linear && !prepared.terminal_in_required_entry(&final_page) {
             return fail_contained_task_entry(
                 runtime,
                 HostCode::ContainedTaskHomeRecoveryTerminalNonHome.as_str(),
             );
         }
 
-        let post_recovery_home = prepared.recognize_required_home(runtime)?;
+        let post_recovery_page = prepared.recognize_required_entry(runtime)?;
+        let post_recovery_home = post_recovery_page.is_some();
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecognition {
                 phase: TaskEntryRecognitionPhase::PostRecovery,
-                required_page: required_home,
+                required_pages,
+                matched_page: post_recovery_page,
                 matched: post_recovery_home,
             })
             .map_err(ContainedTaskRunError::Boundary)?;

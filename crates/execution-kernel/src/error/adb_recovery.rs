@@ -35,6 +35,7 @@ pub(crate) fn adb_recovery_record(
                         stdout_lossy_decode: command.stdout_lossy_decode,
                         stderr_lossy_decode: command.stderr_lossy_decode,
                         state: state(command.state),
+                        raw_text_redacted: command.raw_text_redacted,
                     }),
             })
             .collect(),

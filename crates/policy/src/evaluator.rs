@@ -15,7 +15,7 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codes::PolicyCode;
+use crate::codes::{PolicyCode, SchedulingRulePolicyCode};
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
@@ -1296,8 +1296,10 @@ const MAX_DECISION_RECORD_CANDIDATES: usize = 8;
 const TRUNCATED_DETAIL_BYTES: usize = 1_010;
 const TRUNCATION_MARK: &str = "…[truncated]";
 
-/// Appends the dispatch decision record after `ranked` on every selected chain (Workflow #308
-/// RT-S1c) and keeps each selected decision's reasons equal to its chain: `rank_breakdown`,
+/// Closes the round's explanations. First every decision left without a reason is settled with
+/// `decision_reason_missing` (Workflow #386 SR-6a), so no record below names `none`. Then the
+/// dispatch decision record is appended after `ranked` on every selected chain (Workflow #308
+/// RT-S1c), and each selected decision's reasons are kept equal to its chain: `rank_breakdown`,
 /// `decision_record`, then `candidate_not_selected:<task>` for at most eight related
 /// candidates. A chain without room for the first two appends nothing and says so in `ranked`.
 /// No other decision gains a reason.
@@ -1307,6 +1309,7 @@ fn append_decision_records(
     selected: &[(usize, usize)],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
 ) -> PolicyEvaluationResult<()> {
+    settle_decisions_left_without_reason(work);
     for &(chain_index, work_index) in selected {
         let length = reason_chains
             .get(chain_index)
@@ -1347,6 +1350,33 @@ fn append_decision_records(
         work[work_index].reasons.clone_from(chain);
     }
     Ok(())
+}
+
+/// Workflow #386 SR-6a (scheduling model v1.4.2 §8.2 item 2): every decision that is not
+/// selected carries at least one reason, its last one being why it does not run. A path that left
+/// one without any reason is a programming error. The decision gets `decision_reason_missing`
+/// (error; `task_id`, `instance_id`) and stays unselected; an eligible one is deferred. The round
+/// goes on, and the gap is visible in the decision and in every dispatch decision record that
+/// lists it.
+fn settle_decisions_left_without_reason(work: &mut [TaskWork]) {
+    for entry in work.iter_mut() {
+        if entry.state == SchedulingDecisionState::Selected || !entry.reasons.is_empty() {
+            continue;
+        }
+        // Only `TaskWork::blocked_without_instance` builds a decision without an instance, and
+        // always with its reason.
+        let Some(instance_id) = entry.instance_id.as_deref() else {
+            continue;
+        };
+        let detail = format!("task_id={} instance_id={instance_id}", entry.task_id);
+        entry.reasons.push(reason(
+            SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
+            detail,
+        ));
+        if entry.state == SchedulingDecisionState::Eligible {
+            entry.state = SchedulingDecisionState::Deferred;
+        }
+    }
 }
 
 /// A work entry's rank and rank record, when it reached the ranking.
@@ -1456,12 +1486,14 @@ fn decision_record(
     Ok(reasons)
 }
 
-/// Every path that leaves a candidate unselected ends with the reason that settled it.
+/// Every path that leaves a candidate unselected ends with the reason that settled it, and a
+/// decision left without one has been given `decision_reason_missing` before any record names it
+/// (`settle_decisions_left_without_reason`), so `why` is never `none` (Workflow #386 SR-6a).
 fn last_reason_code(entry: &TaskWork) -> &str {
-    entry
-        .reasons
-        .last()
-        .map_or("none", |reason| reason.code.as_str())
+    entry.reasons.last().map_or(
+        SchedulingRulePolicyCode::DecisionReasonMissing.as_str(),
+        |reason| reason.code.as_str(),
+    )
 }
 
 /// The ranking terms shared by `rank_breakdown` and a ranked `candidate_not_selected`. Under an
@@ -2512,12 +2544,14 @@ fn score_candidates(
                     ))
                 })?;
             // The facts a score read: a `fact` source carries its own bound, an instance-fact
-            // field its record's expiry; a fixed field has none.
+            // field its record's expiry; a fixed field has none. A `keyed_fact` read never comes
+            // back here (the collect option refuses a record-list document), so it is a fact
+            // source only to keep the match total.
             let known_until_unix_ms = result
                 .known_inputs
                 .iter()
                 .filter_map(|known| match &known.input {
-                    ValueRef::Fact { .. } => known.known_until_unix_ms,
+                    ValueRef::Fact { .. } | ValueRef::KeyedFact { .. } => known.known_until_unix_ms,
                     ValueRef::Field { field } => projection.field_expiries.get(field).copied(),
                 })
                 .min();
@@ -2559,7 +2593,11 @@ fn unknown_input_reasons(
         .iter()
         .map(|unknown| {
             let (key, unknown_reason) = match &unknown.input {
-                ValueRef::Fact { fact_key } => (fact_key.as_str(), unknown.reason),
+                // The collect option refuses a record-list document, so a `keyed_fact` input is
+                // never listed; its list's fact key keeps the match total.
+                ValueRef::Fact { fact_key } | ValueRef::KeyedFact { fact_key, .. } => {
+                    (fact_key.as_str(), unknown.reason)
+                }
                 // A field that names an instance fact whose record has expired is read as
                 // expired, not as missing (decision D1).
                 ValueRef::Field { field }
@@ -6998,6 +7036,66 @@ pub(crate) mod tests {
                 "forbidden source token {forbidden}"
             );
         }
+    }
+
+    /// P-1 G10 (Workflow #386 SR-6a; model-sched-rules.md v1.4.2 §8.2 item 2): the close of a
+    /// round in which one path left a decision without any reason, the programming error the
+    /// evaluator guards against. `fixture.observe` was selected on `fixture-instance-a`;
+    /// `fixture.observe-secondary` reached the close of the round on the same instance without a
+    /// reason. No catalog or input reaches this state through `evaluate`, so the round is built
+    /// here and closed by the evaluator's own `append_decision_records`.
+    pub(crate) fn round_with_a_decision_left_without_a_reason()
+    -> PolicyEvaluationResult<(Vec<TaskDecision>, Vec<DecisionReasonChain>)> {
+        let rank = TaskRank {
+            priority: 100,
+            aging_ms: 0,
+            strategic_weight_milli: 1_000,
+            urgency_milli: 0,
+            load_cost_milli: 300,
+            contention_penalty: 0,
+            total_score: 101_000_000,
+            effective_milli: 0,
+        };
+        let mut selected = TaskWork::new(
+            "fixture.observe".to_owned(),
+            "fixture-instance-a".to_owned(),
+        );
+        selected.eligibility = EligibilityState::True;
+        selected.state = SchedulingDecisionState::Selected;
+        selected.reasons = vec![
+            reason("eligible", "trigger passed and feedback stop did not fire"),
+            reason(
+                PolicyCode::PlacementSelected.as_str(),
+                "instance 'fixture-instance-a' satisfies scope, capability, affinity, and host budget",
+            ),
+            reason("ranked", "deterministic total score 101000000"),
+        ];
+        selected.record = Some(RankRecord {
+            base_total: rank.total_score,
+            stage: None,
+            resources: None,
+            promoted: false,
+            affinity: false,
+            tie_breaker: 1,
+        });
+        selected.rank = Some(rank);
+        let mut reason_chains = vec![DecisionReasonChain {
+            id: "reason:fixture-round".to_owned(),
+            decision_id: "decision:fixture-round".to_owned(),
+            reasons: selected.reasons.clone(),
+        }];
+        let mut work = vec![
+            selected,
+            TaskWork::new(
+                "fixture.observe-secondary".to_owned(),
+                "fixture-instance-a".to_owned(),
+            ),
+        ];
+        append_decision_records(&mut work, &mut reason_chains, &[(0, 0)], &BTreeMap::new())?;
+        Ok((
+            work.into_iter().map(TaskDecision::from).collect(),
+            reason_chains,
+        ))
     }
 
     pub(crate) fn decision_for<'a>(
