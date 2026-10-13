@@ -139,9 +139,11 @@ that Scene. The text reads of locate targets (section Located text) are remember
 request within that Scene; other OCR output is not cached, and callers cannot import an
 old template result.
 The context is bounded by admitted target identities and is released with the frame.
-Best-match score, threshold and the existing color check govern the anchor. This API
-does not establish match uniqueness. Resource authors choose discriminating icons and
-search areas and calibrate offsets for their actual layouts.
+Best-match score, threshold and the existing color check govern the anchor. An anchor that
+declares `unique` (`resource-declarations.md`, section Task schema `0.9` unique matches) is
+matched only while no second place lies within its margin; otherwise this API does not
+establish match uniqueness. Resource authors choose discriminating icons and search areas
+and calibrate offsets for their actual layouts.
 
 An unmatched anchor, checked-coordinate overflow, or out-of-frame ROI produces
 `region_unresolved` with its typed reason and no OCR invocation/execution evidence.
@@ -398,7 +400,10 @@ A locate target that does not pass carries its typed reason as `failure`:
 rectangle when `cells` is declared, and `truncated`. When the detector found more boxes
 than the folder's `max_boxes`, a read without a hit fails with the evaluation error
 `text_read_blocks_truncated` (`count` boxes detected, `limit_count` the folder's
-`max_boxes`); a hit passes with `truncated: true`. The task diagnostic stream records
+`max_boxes`), and so does a hit of a target that declares `unique` (Workflow #396 REC-2); any
+other hit passes with `truncated: true`. A target that declares `unique` fails with
+`target_match_not_unique` when another matching block lies within its margin
+(`resource-declarations.md`, section Task schema `0.9` unique matches). The task diagnostic stream records
 `failure` on the target row, `located` on its OCR row and the outcome of an evaluation
 error on its recognition error row.
 

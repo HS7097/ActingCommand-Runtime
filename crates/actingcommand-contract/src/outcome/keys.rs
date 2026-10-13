@@ -148,6 +148,11 @@ outcome_keys! {
     // Workflow #396 REC-1.
     target_id: id,
     text_read_budget: vocab(text_read_budget),
+    // Workflow #396 REC-2.
+    target_kind: vocab(target_kind),
+    score_milli: integer,
+    second_score_milli: integer,
+    margin_milli: integer,
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

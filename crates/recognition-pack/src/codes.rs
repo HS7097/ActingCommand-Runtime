@@ -26,6 +26,10 @@ actingcommand_contract::outcome_codes! {
         TextLocateOutsideCells => "text_locate_outside_cells": error / pack_logic_mismatch,
         TextReadBudgetExceeded => "text_read_budget_exceeded": error / budget_or_permission,
         TextReadBlocksTruncated => "text_read_blocks_truncated": error / budget_or_permission,
+        // Workflow #396 REC-2: a target that declares `unique`. A second place is the
+        // target's `failure`; a search past its limit is an evaluation error.
+        TargetMatchNotUnique => "target_match_not_unique": error / pack_logic_mismatch,
+        TargetMatchSearchIncomplete => "target_match_search_incomplete": error / budget_or_permission,
     }
 }
 
@@ -43,6 +47,9 @@ actingcommand_contract::outcome_locations! {
         /// Checking one consumer's text read budget before calling the OCR provider.
         TextReadRequest => "text_read_request",
         // Workflow #396 REC-1 (end).
+        // Workflow #396 REC-2.
+        /// Checking that a target declaring `unique` has no second place within its margin.
+        TargetMatchUnique => "target_match_unique",
     }
 }
 
@@ -54,5 +61,16 @@ actingcommand_contract::outcome_vocabulary! {
         Calls => "calls",
         /// The summed region area of one consumer, in pixels.
         Area => "area",
+    }
+}
+
+// Workflow #396 REC-2.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which kind of target a uniqueness check compared (`target_kind`).
+    pub enum TargetMatchKind: "target_kind" {
+        /// A template target: positions of its match score.
+        Template => "template",
+        /// A locate OCR target: text blocks and their confidence.
+        Ocr => "ocr",
     }
 }
