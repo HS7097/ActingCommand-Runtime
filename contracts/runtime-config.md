@@ -80,7 +80,7 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.trigger_defaults.start` | `immediately` \| `after_performance_release` | `immediately` |
 | `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
 | `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
-| `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `pack_logic`, `stability_burst`, `preparation_backend` |
+| `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend` |
 | `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched` |
 | `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
 | `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |
@@ -90,7 +90,6 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.rungs` | list of `{action, <bounds>}`, one to three, no action twice | return home (`configured_package_deadline_ms` 1 800 000), application restart (`adb_probe_ms` 30 000, `entry_hold_ms` 90 000), emulator restart (`stop_bound_ms` 210 000, `start_bound_ms` 220 000, `readiness_window_ms` 120 000, `readiness_backoff_ms` [5 000, 10 000, 20 000], `readiness_poll_ms` 500) |
 | `recovery_ladder.hold.claim_ttl_ms` | milliseconds | `120000` |
 | `recovery_ladder.hold.margin_ms` | milliseconds | `5000` |
-| `host_claims.renewal_slack_ms` | milliseconds | `1000` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -110,6 +109,39 @@ the longest renewal, a task's longest deadline plus the heartbeat bound (`renewa
 margin (`claim_ttl_out_of_range`). Elements a list leaves out take their schema values: a
 trigger item's `start`, `start_rung` and `respect_cooldown` from `trigger_defaults`, a rung's
 bounds from the defaults file's rung of the same action.
+
+The digest a ladder records (`recovery_ladder_started` `config_digest`) is the SHA-256 of the
+canonical JSON of the section's values in effect when the ladder was admitted; a ladder climbs by
+that snapshot to its end, its wait in the queue included, and the next trigger reads the values
+in effect then (M387 §4.7, §5.8).
+
+## The `host_claims` section (D1c)
+
+Frozen model M387 v1.2 §2.1 row 8, §4.3: what every Runtime-held key (a recovery ladder's, a
+startup package's) leaves alone before a step. Its own section, since both renew through the same
+function.
+
+| Key | Type | Default (`actingd.defaults.json`) |
+|---|---|---|
+| `host_claims.renewal_slack_ms` | milliseconds, settable (read at the next renewal) | `1000` |
+
+Before a step a Runtime-held key renews to the step's bound (capped at a task's longest deadline
+plus the heartbeat bound, as every claim TTL), unless its remaining time plus
+`renewal_slack_ms` already covers that bound. The value is read at each renewal; a value that is
+not milliseconds is refused (`config_value_invalid`, `wrong_type`).
+
+## The `standard_packs` section (Workflow #373 NAV-6; moved by D1c)
+
+| Key | Type | Default |
+|---|---|---|
+| `standard_packs.root` | string (a path), not settable (read once at assembly) | none: without it no standard-pack root is read |
+
+The directory that holds one root per game (`<root>/<game>/`), written once by the installer. A
+relative path resolves against the configuration file's directory; an empty one is refused.
+D1c moves the section's structure from actingd's own configuration into this crate (NAV-6
+deviation 5); the file member and its meaning are unchanged, and `config.parameters.standard_packs`
+reports it as the file writes it when the file names it. Changing it needs a commit and a
+restart.
 
 ## Facts
 

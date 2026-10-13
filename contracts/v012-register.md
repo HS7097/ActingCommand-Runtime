@@ -317,9 +317,10 @@ Configuration keys (§5): the `recovery_ladder.*` and `host_claims.*` rows of §
 `distribution/windows/actingd.defaults.json`; the per-instance `stuck_recovery` and
 `stuck_recovery_cooldown_secs` take `section:recovery_ladder.enabled` / `.cooldown_secs`.
 Deviations from §5's defaults: rung 3's `stop_bound_ms` is 210 000 (today's bound since #381 B),
-not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h) and no
-`navigation_exhausted` item (its code `contained_task_navigation_recovery_exhausted` arrives
-with NAV-5).
+not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h); the item
+`navigation_exhausted` (M-373 §15 ruling 1, `start_rung` 3) comes first, its code
+`contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
+`pack_logic_mismatch`) for NAV-5 to emit.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

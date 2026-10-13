@@ -1113,35 +1113,34 @@ fn n6_9_end_run_ends_the_run_escalated_after_its_handler() {
     assert_eq!(ladders, 0, "a direct run starts no ladder");
 }
 
-/// N6-9, the ladder half NAV-6 left to Workflow #387 D1c (coordinator ruling 2):
-/// `contained_task_interrupt_escalated` is class `pack_logic_mismatch`, so a run the ladder
-/// handles as a routine one that ends `end_run` starts the ladder by the default trigger item
-/// `pack_logic`. NAV-6's fixture runs directly, so the run is made routine by
-/// `recovery_ladder.rules.direct_runs = trigger` (B1); under the default `exempt` it starts none
-/// (`n6_9_end_run_ends_the_run_escalated_after_its_handler`).
+/// N6-9, the ladder half NAV-6 left to Workflow #387 D1c (coordinator ruling 2): a scheduled
+/// run that ends `end_run` ends with `contained_task_interrupt_escalated`, class
+/// `pack_logic_mismatch`, so its failed lease end starts the ladder by the default trigger item
+/// `pack_logic` (M387 §3.3, §7.1; M373 §9.4).
 #[test]
-fn n6_9_an_escalated_run_the_ladder_handles_starts_the_ladder_by_pack_logic() {
+fn n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic() {
     let state = Arc::new(FakeState::default());
     let temp = TempDir::new().expect("tempdir");
     let root = notice_root(temp.path(), json!("end_run"), 1);
+    let (host_config, request) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &away_to_home());
     overlay_then_away_then_home(&state, 0, Overlay::Notice);
     state.physical_task_geometry.store(true, Ordering::Release);
     let host = RuntimeHost::start(
-        config(&temp)
-            .with_standard_packs_root(Some(root.root.clone()))
-            .with_config_manifest(super::gate_387_d1c::ladder_manifest(
-                json!({"rules": {"direct_runs": "trigger"}}),
-            )),
-        Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))),
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
     )
     .expect("runtime host");
-    let run = run(&host, &temp, "run", &away_to_home());
-    assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
-    assert_eq!(
-        run.failure().code().as_str(),
-        "contained_task_interrupt_escalated"
-    );
-    super::instance_workers::wait_for_ladder_end(&host, ALIAS);
+    let context = super::instance_workers::admit_ladder_run(&host, &request);
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert!(!error.is_fatal(), "{}", error.code());
+    super::instance_workers::wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
     let events = host
         .query_persisted_events_for_test(EventQuery::default())
         .expect("ledger events");
@@ -1156,6 +1155,11 @@ fn n6_9_an_escalated_run_the_ladder_handles_starts_the_ladder_by_pack_logic() {
     let [trigger] = triggers.as_slice() else {
         panic!("one ladder: {triggers:?}");
     };
+    assert_eq!(
+        trigger.stage,
+        actingcommand_contract::RecoveryTriggerStage::Task
+    );
+    assert!(trigger.run_id.is_some(), "the failed run's ladder");
     assert_eq!(
         trigger.failure_code.as_str(),
         "contained_task_interrupt_escalated"

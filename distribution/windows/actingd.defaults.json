@@ -9,6 +9,12 @@
     },
     "triggers": [
       {
+        "id": "navigation_exhausted",
+        "stages": ["task"],
+        "codes": ["contained_task_navigation_recovery_exhausted"],
+        "start_rung": 3
+      },
+      {
         "id": "pack_logic",
         "stages": ["task"],
         "classes": ["pack_logic_mismatch"]

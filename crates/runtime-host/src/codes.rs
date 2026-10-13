@@ -170,6 +170,11 @@ actingcommand_contract::outcome_codes! {
         /// screen, heat, a low battery, a device in use; the rung's `recovery_rung_finished`
         /// outcome). The skip reason is registered with D1c (M398 §6.4); RD-5 emits it.
         RecoveryRungSkippedDeviceNotReady => "recovery_rung_skipped_device_not_ready": info / none,
+        /// Error. A run's navigation recovery chain ran out without reaching its entry page (keys
+        /// `count`, the steps run; caused by the last locate's code; Workflow #373 M-373 §5, §9).
+        /// Registered with D1c for its default trigger item `navigation_exhausted` (M-373 §15
+        /// ruling 1); NAV-5 emits it.
+        ContainedTaskNavigationRecoveryExhausted => "contained_task_navigation_recovery_exhausted": error / pack_logic_mismatch,
         // Workflow #387 D1c end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,

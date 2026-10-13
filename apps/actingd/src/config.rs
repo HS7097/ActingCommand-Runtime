@@ -267,11 +267,6 @@ struct ReturnHomePackageConfigFile {
     package_id: String,
 }
 
-/// The return-home package ids by (game, server): at most `MAX_TASKS` entries
-/// (`return_home_packages_size_invalid`); game and server not empty, at most 64 bytes, with no
-/// control character (`return_home_package_key_invalid`); each package id a key of
-/// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
-/// (`return_home_package_duplicate`).
 /// Workflow #387 D1c: one instance's stuck-recovery settings from the rows the configuration
 /// mechanism resolved: its `stuck_recovery` and `stuck_recovery_cooldown_secs`, which take the
 /// `recovery_ladder` section's values when the file names neither.
@@ -302,6 +297,11 @@ fn stuck_recovery_settings(
     }
 }
 
+/// The return-home package ids by (game, server): at most `MAX_TASKS` entries
+/// (`return_home_packages_size_invalid`); game and server not empty, at most 64 bytes, with no
+/// control character (`return_home_package_key_invalid`); each package id a key of
+/// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
+/// (`return_home_package_duplicate`).
 fn assemble_return_home_packages(
     configured: Vec<ReturnHomePackageConfigFile>,
     prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,

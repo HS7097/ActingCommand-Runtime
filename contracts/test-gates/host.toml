@@ -481,6 +481,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_387_d1c::h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs",
     "actingcommand-runtime-host::lib::tests::gate_387_d1c::d1_l2_d1_l3_a_ladder_that_waits_for_release_climbs_by_the_configuration_it_was_admitted_with",
     "actingcommand-runtime-host::lib::tests::gate_387_d1c::d1_l4_a_broken_ladder_value_by_instruction_is_refused_whole_and_the_runtime_goes_on",
-    "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_an_escalated_run_the_ladder_handles_starts_the_ladder_by_pack_logic",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
 ]
 incident = ["#387"]

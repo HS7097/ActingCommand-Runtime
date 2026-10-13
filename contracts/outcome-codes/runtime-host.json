@@ -18351,6 +18351,25 @@
       "description": "A stuck-recovery ladder skipped a rung whose entry the device-state gate holds: a locked screen, heat, a low battery or a device in use (the rung's recovery_rung_finished outcome; skip reason device_not_ready, Workflow #398 M398 section 6.4, registered with Workflow #387 D1c; the device-state slice emits it).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_navigation_recovery_exhausted": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's navigation recovery chain ran out without reaching its entry page (count is the number of steps run; caused by the last locate's code; Workflow #373 M-373 sections 5 and 9). Registered with Workflow #387 D1c for its default trigger item navigation_exhausted; NAV-5 emits it.",
+      "common_causes": "The game shows a page the standard pack's navigation data cannot leave, or its recovery chain is too short.",
+      "handling": "The recovery ladder's trigger item navigation_exhausted starts at the emulator restart rung by default; check the standard pack's navigation data if it recurs."
     }
   },
   "locations": {

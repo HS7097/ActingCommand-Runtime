@@ -437,7 +437,10 @@ ladder; when none does, nothing starts and nothing is recorded. A code the embed
 not list reads as class `none` and is recorded once per process as
 `recovery_ladder_code_unclassified` (warning, `raw_code`).
 
-The defaults (M387 §7.1): `pack_logic` (stage `task`, class `pack_logic_mismatch`);
+The defaults (M387 §7.1): `navigation_exhausted` (stage `task`, code
+`contained_task_navigation_recovery_exhausted`, `start_rung` 3: a navigation recovery chain
+already returned home and restarted the application, so the climb starts at the emulator restart;
+Workflow #373 M-373 §15 ruling 1); `pack_logic` (stage `task`, class `pack_logic_mismatch`);
 `stability_burst` (stage `stability_warnings`, classes `stability_warning` and
 `environment_fault`, 3 records within 600 000 ms); `preparation_backend` (the two preparation
 stages, codes `input_backend_open_failed`, `capture_backend_open_failed`,

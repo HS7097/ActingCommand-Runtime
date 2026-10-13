@@ -206,10 +206,18 @@ fn ladder_fixture_with(
 /// the scheduled package as the procedure's primary and as the instance's startup package) and
 /// the scheduled run's request, which binds the return-home package.
 pub(super) fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
-    let package = neutral_contained_task_package(true);
+    ladder_setup_with_package(root, &neutral_contained_task_package(true))
+}
+
+/// `ladder_setup` with `package` as the scheduled package and the instance's startup package
+/// (Workflow #387 D1c: a scheduled run of NAV-6's run package, N6-9's ladder half).
+pub(super) fn ladder_setup_with_package(
+    root: &Path,
+    package: &[u8],
+) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package_path = root.join("physical-scheduled-task.zip");
-    fs::write(&package_path, &package).expect("write scheduled package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    fs::write(&package_path, package).expect("write scheduled package");
+    let package_sha256 = format!("{:x}", Sha256::digest(package));
     let return_home = neutral_non_home_start_contained_task_package(true);
     let return_home_path = root.join("return-home.zip");
     fs::write(&return_home_path, &return_home).expect("write return-home package");
@@ -222,7 +230,7 @@ pub(super) fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequ
     let host_config = RuntimeHostConfig::new(root, b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_procedure_manifest(procedure_manifest_with_primary(
-            &package,
+            package,
             vec!["after_observation".to_owned()],
         ))
         .with_io_timeout(Duration::from_millis(500))
