@@ -1549,7 +1549,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it before anything else is read or written.",
+      "description": "The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after reading only its format: before any ledger row is read or written and, at the Runtime's start, before the owner journal and the writer lock.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

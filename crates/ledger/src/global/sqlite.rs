@@ -48,8 +48,9 @@ pub use release_source::*;
 // Ledger revision 3 (Workflow #378 A3): SQLite format 2 (`user_version` 2).
 const FORMAL_FORMAT_VERSION: i64 = 2;
 /// The format v0.11 wrote (ledger revision 2). A database whose ledger tables exist under it is
-/// refused with `ledger_format_unsupported` before anything else is read or written; there is no
-/// compatibility path (Workflow #378 A3, model section 8.1).
+/// refused with `ledger_format_unsupported` after reading only its format and before any ledger
+/// row is read or written, and the Runtime's start refuses it before its owner journal or writer
+/// lock; there is no compatibility path (Workflow #378 A3, model section 8.1).
 const UNSUPPORTED_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
 const INTEGER_ENCODING: &str = "ordered-u64-v1";

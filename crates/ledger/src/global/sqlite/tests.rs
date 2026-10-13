@@ -352,7 +352,8 @@ fn sqlite_integrity_matrix_rejects_changed_and_missing_material() {
 
 /// Workflow #378 A3 (model section 8.1; ORD section 10): ledger revision 3 is SQLite format 2,
 /// and a database holding a format-1 ledger is refused with `ledger_format_unsupported` (fatal)
-/// before anything of it is read or written; there is no compatibility path.
+/// after reading only its format, before any ledger row is read or written; there is no
+/// compatibility path.
 #[test]
 fn a_format_1_ledger_is_refused_and_a_new_ledger_is_format_2() {
     let format = |database: &RuntimeDatabase| -> i64 {
