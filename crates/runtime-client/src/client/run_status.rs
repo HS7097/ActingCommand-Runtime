@@ -13,6 +13,8 @@ const RUN_STATUS_SCHEMA: &str = "actingcommand.run-status.v1";
 const RUN_STATUS_OPERATION: Location = ClientLocation::ContainedRunStatus.location();
 const RECENT_RUNS_OPERATION: Location = ClientLocation::RecentRuns.location();
 const MAX_RECENT_RUNS: usize = 10;
+/// The most runs one page of a run list holds (Workflow #389 MCP-3).
+const MAX_RUN_LIST: usize = 100;
 const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
 /// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
 /// its terminal. A run without an entry check starts with its main admission, a run with one
@@ -153,6 +155,59 @@ pub struct RecentContainedRuns {
     pub snapshot_ledger_position: u64,
 }
 
+/// What a run list keeps (Workflow #389 MCP-3, `actingctl runs` / `ac_runs`); an unset member
+/// keeps every run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunListFilter {
+    /// Runs on this instance only.
+    pub instance_id: Option<InstanceId>,
+    /// Scheduled runs whose policy task id (`catalog_task_id`) starts with this text; a manual
+    /// run has none and never matches.
+    pub task_prefix: Option<String>,
+    pub dispatch: Option<RunDispatch>,
+    /// Runs in one of these states; empty keeps every state.
+    pub states: Vec<ContainedRunState>,
+}
+
+/// Where a page of a run list starts: the snapshot its first page was read at and, on a later
+/// page, the order sequence of the last run the page before it examined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunListPosition {
+    pub snapshot_ledger_position: u64,
+    pub before_sequence: u64,
+}
+
+/// One run of a run list: its brief run status, the policy task id of a scheduled run, its order
+/// and its two times.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedContainedRun {
+    pub status: ContainedRunStatus,
+    /// The policy task a scheduled run was dispatched for: the `task_id` of its
+    /// `policy.dispatch_intent`, named `catalog_task_id` where it stands beside the run's own
+    /// task_id (`SchedulingOutcomeIdentity`). An opaque string from the resource side. Absent
+    /// for a manual run.
+    pub catalog_task_id: Option<String>,
+    /// What the list orders by, newest first: the sequence of the run's first listing fact in
+    /// the window (its main admission, or its entry check when it has one).
+    pub order_sequence: u64,
+    /// When the run recorded its first fact.
+    pub first_fact_unix_ms: u64,
+    /// When the run recorded its terminal, once it has one.
+    pub terminal_unix_ms: Option<u64>,
+}
+
+/// One page of a run list, newest first, read at one snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainedRunPage {
+    pub runs: Vec<ListedContainedRun>,
+    /// Where the next page starts; absent once every listed run was examined.
+    pub next: Option<RunListPosition>,
+    /// The deadline ended the page before it held `limit` runs and before every listed run was
+    /// examined; `next` continues after the last run it examined.
+    pub incomplete: bool,
+    pub snapshot_ledger_position: u64,
+}
+
 struct StatusPages {
     events: Vec<ProjectedEvent>,
     snapshot: u64,
@@ -177,6 +232,7 @@ struct RunListing {
 struct ReadRunStatus {
     status: ContainedRunStatus,
     first_fact_timestamp_unix_ms: Option<u64>,
+    terminal_timestamp_unix_ms: Option<u64>,
 }
 
 impl RuntimeClient {
@@ -224,6 +280,7 @@ impl RuntimeClient {
                 from_timestamp_unix_ms: Some(since_unix_ms),
                 ..EventQuery::default()
             },
+            None,
             Some(deadline),
         )?;
         let mut incomplete = !listing.complete;
@@ -264,13 +321,144 @@ impl RuntimeClient {
         })
     }
 
+    /// One page of the contained runs first recorded from `since_unix_ms` to `until_unix_ms`
+    /// (Workflow #389 MCP-3, `actingctl runs` / `ac_runs`). The runs of the window are listed by
+    /// run, as `recent_runs` lists them, and examined newest first by their order sequence: each
+    /// is read in brief mode and kept when `filter` keeps it, until `limit` (1-100) are kept.
+    /// A scheduled run also gets its policy task id, from its dispatch intent; `task_prefix`
+    /// matches that id, so a run without one is not kept and not read. `from` continues an
+    /// earlier page at that page's snapshot. `deadline` is checked between runs; reaching it ends
+    /// the page `incomplete`. Read-only.
+    pub fn list_contained_runs(
+        &self,
+        since_unix_ms: u64,
+        until_unix_ms: Option<u64>,
+        filter: &RunListFilter,
+        from: Option<RunListPosition>,
+        limit: usize,
+        deadline: Instant,
+    ) -> RuntimeClientResult<ContainedRunPage> {
+        if limit == 0 || limit > MAX_RUN_LIST {
+            return Err(RuntimeClientError::fatal(
+                ClientCode::RecentRunsLimitInvalid,
+                RECENT_RUNS_OPERATION,
+            ));
+        }
+        let listing = self.list_runs(
+            &EventQuery {
+                instance_id: filter.instance_id,
+                from_timestamp_unix_ms: Some(since_unix_ms),
+                to_timestamp_unix_ms: until_unix_ms,
+                ..EventQuery::default()
+            },
+            from.map(|position| position.snapshot_ledger_position),
+            Some(deadline),
+        )?;
+        let before = from.map_or(u64::MAX, |position| position.before_sequence);
+        let mut page = ContainedRunPage {
+            runs: Vec::new(),
+            next: None,
+            incomplete: false,
+            snapshot_ledger_position: listing.snapshot,
+        };
+        let position = |before_sequence| RunListPosition {
+            snapshot_ledger_position: listing.snapshot,
+            before_sequence,
+        };
+        // A partial listing may miss a run between two it holds: no run is examined, and the
+        // next page starts where this one did.
+        if !listing.complete {
+            page.incomplete = true;
+            page.next = Some(position(before));
+            return Ok(page);
+        }
+        let mut examined = before;
+        for listed in listing
+            .runs
+            .iter()
+            .rev()
+            .filter(|listed| listed.sequence < before)
+        {
+            if page.runs.len() == limit {
+                page.next = Some(position(examined));
+                break;
+            }
+            if Instant::now() >= deadline {
+                page.incomplete = true;
+                page.next = Some(position(examined));
+                break;
+            }
+            let identity = listed.identity;
+            // Workflow #389 MCP-3 ruling: task_prefix matches the policy task id, which only a
+            // scheduled run has. A run without one, or whose one does not start with the
+            // prefix, is not read.
+            let mut catalog_task_id = None;
+            if let Some(prefix) = &filter.task_prefix {
+                match self.dispatched_catalog_task_id(identity, listing.snapshot)? {
+                    Some(found) if found.starts_with(prefix.as_str()) => {
+                        catalog_task_id = Some(found);
+                    }
+                    _ => {
+                        examined = listed.sequence;
+                        continue;
+                    }
+                }
+            }
+            let Some(read) = self.read_contained_run_status(
+                RunKey::RequestId(identity.request_id),
+                RunStatusMode::Brief,
+                Some(listing.snapshot),
+                Some(deadline),
+            )?
+            else {
+                page.incomplete = true;
+                page.next = Some(position(examined));
+                break;
+            };
+            examined = listed.sequence;
+            // A run first recorded before the window is not one of its runs.
+            let Some(first_fact_unix_ms) = read
+                .first_fact_timestamp_unix_ms
+                .filter(|first| *first >= since_unix_ms)
+            else {
+                continue;
+            };
+            if filter
+                .dispatch
+                .is_some_and(|dispatch| read.status.dispatch != dispatch)
+                || (!filter.states.is_empty() && !filter.states.contains(&read.status.state))
+            {
+                continue;
+            }
+            // Only a scheduled run carries a policy task id; a manual one never matches a
+            // task_prefix.
+            let catalog_task_id = match (read.status.dispatch, catalog_task_id) {
+                (RunDispatch::Scheduled, Some(found)) => Some(found),
+                (RunDispatch::Scheduled, None) => {
+                    self.dispatched_catalog_task_id(identity, listing.snapshot)?
+                }
+                _ if filter.task_prefix.is_some() => continue,
+                _ => None,
+            };
+            page.runs.push(ListedContainedRun {
+                status: read.status,
+                catalog_task_id,
+                order_sequence: listed.sequence,
+                first_fact_unix_ms,
+                terminal_unix_ms: read.terminal_timestamp_unix_ms,
+            });
+        }
+        Ok(page)
+    }
+
     /// The runs `window` holds a listing fact of (Workflow #391 item 3), one query per listing
-    /// fact type, all at the first query's snapshot; each run once, under the identity checks of
-    /// a run's own read. A later fact inside the window does not list an older run first: the
-    /// order is by each run's first listing fact in the window.
+    /// fact type, all at `snapshot` or else at the first query's; each run once, under the
+    /// identity checks of a run's own read. A later fact inside the window does not list an
+    /// older run first: the order is by each run's first listing fact in the window.
     fn list_runs(
         &self,
         window: &EventQuery,
+        snapshot: Option<u64>,
         deadline: Option<Instant>,
     ) -> RuntimeClientResult<RunListing> {
         let mut listing = RunListing {
@@ -278,7 +466,7 @@ impl RuntimeClient {
             snapshot: 0,
             complete: true,
         };
-        let mut snapshot = None;
+        let mut snapshot = snapshot;
         let mut listed = BTreeMap::<RequestId, usize>::new();
         let mut runs_seen = BTreeSet::new();
         for event_type in RUN_LISTING_EVENT_TYPES {
@@ -326,6 +514,38 @@ impl RuntimeClient {
         Ok(listing)
     }
 
+    /// The policy task id of the run `identity` names (Workflow #389 MCP-3 ruling): the `task_id`
+    /// of its one `policy.dispatch_intent`. The intent is linked to the run and its task but
+    /// recorded under the admission request, not the run's own request, so it is read with one
+    /// bounded query by run at `snapshot`. A run dispatched by hand has none. The id is an
+    /// opaque string from the resource side and is never parsed.
+    fn dispatched_catalog_task_id(
+        &self,
+        identity: TaskRunIdentity,
+        snapshot: u64,
+    ) -> RuntimeClientResult<Option<String>> {
+        let query = EventQuery {
+            run_id: Some(identity.run_id),
+            event_type: Some(EventType::PolicyDispatchIntent),
+            ..EventQuery::default()
+        };
+        let intents = self.first_status_events(query, 2, snapshot)?;
+        let intent = match intents.as_slice() {
+            [] => return Ok(None),
+            [intent] => intent,
+            _ => return Err(status_error(ClientCode::RunStatusIdentityAmbiguous)),
+        };
+        if intent.links.task_id() != Some(&identity.task_id) {
+            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
+        }
+        match full_payload(intent)? {
+            EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => {
+                Ok(Some(payload.task_id().to_owned()))
+            }
+            _ => Err(status_error(ClientCode::RunStatusIdentityMissing)),
+        }
+    }
+
     /// `None` only when `deadline` ended a paged read before its last page.
     fn read_contained_run_status(
         &self,
@@ -367,6 +587,7 @@ impl RuntimeClient {
                                 read.snapshot,
                             ),
                             first_fact_timestamp_unix_ms: None,
+                            terminal_timestamp_unix_ms: None,
                         }));
                     }
                     [request_id] => (*request_id, Some(read.snapshot)),
@@ -388,6 +609,7 @@ impl RuntimeClient {
             return Ok(Some(ReadRunStatus {
                 status: ContainedRunStatus::not_found(Some(request_id), None, snapshot),
                 first_fact_timestamp_unix_ms: None,
+                terminal_timestamp_unix_ms: None,
             }));
         }
 
@@ -399,6 +621,7 @@ impl RuntimeClient {
         let mut step_started = false;
         let mut first_fact = None;
         let mut first_fact_timestamp_unix_ms = None;
+        let mut terminal_timestamp_unix_ms = None;
         for event in &events {
             if let Some(found) = request_origin(event)
                 && origin.replace(found).is_some()
@@ -483,6 +706,7 @@ impl RuntimeClient {
                     if terminal.replace(found).is_some() {
                         return Err(status_error(ClientCode::RunStatusTerminalStateInconsistent));
                     }
+                    terminal_timestamp_unix_ms = Some(event.timestamp_unix_ms);
                 }
                 _ => {}
             }
@@ -564,6 +788,7 @@ impl RuntimeClient {
                 },
             },
             first_fact_timestamp_unix_ms,
+            terminal_timestamp_unix_ms,
         }))
     }
 

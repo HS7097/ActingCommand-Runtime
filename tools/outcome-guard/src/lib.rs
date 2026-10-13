@@ -800,6 +800,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A6a: suspended v1 JSON key; A6a's outcome replaces code and operation",
     ),
     bridge(
+        "apps/actingctl/src/mcp/events.rs",
+        "result_schema",
+        &[Check::G3],
+        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
+    ),
+    bridge(
         "apps/actingctl/src/mcp/lab.rs",
         "binding_draft_result",
         &[Check::G3],
@@ -952,12 +958,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     bridge(
         "apps/actingctl/src/mcp/tools.rs",
         "ToolError::to_value",
-        &[Check::G3],
-        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
-    ),
-    bridge(
-        "apps/actingctl/src/mcp/tools.rs",
-        "events_result",
         &[Check::G3],
         "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
     ),
