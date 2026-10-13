@@ -494,8 +494,10 @@ fn rd5b_t2_an_insecure_keyguard_is_dismissed_once_or_left_waiting() {
             &mut shell,
             &witness(),
             policy(settle, InsecureKeyguardAction::Wait),
-        );
-        assert!(waiting.is_err(), "{waiting:?}");
+        )
+        .expect_err("a person is needed");
+        assert_eq!(waiting.code().as_str(), "device_locked");
+        assert_labelled(&waiting);
         assert_eq!(
             shell.sent,
             [
