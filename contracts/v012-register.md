@@ -233,7 +233,7 @@ once the Runtime is shutting down, still write `unconfirmed`.
 | F4 | `RecoveryRungSkipReason::ResourceFence` (`resource_fence`) | new enum value of the rung plan's skip reason | #403 | #403 | the return-home rung of a fence's ladder, which never re-prepares the instance; its `recovery_rung_finished` outcome is `recovery_rung_skipped_resource_fence` (info) |
 | F5 | `RuntimeInstanceStatus.resource_fence` (`InstanceResourceFence`) | new optional member of the status projection (also in the runtime state observation of `command.validated`) | #403 | #403 | `{cause, since_unix_ms, awaiting_person}` (`deny_unknown_fields`), absent when the instance is not fenced; `cause` is the unconfirmed failure's code; `awaiting_person` once the fence's ladder ended without proof or none could start; `ac_overview` shows it as the row's `resource_fence` |
 
-### 1.12 Wave 3 slices (D1b, #387 M387 §5–§6)
+### 1.14 Wave 3 slices (D1b, #387 M387 §5–§6)
 
 D1b brings its own shapes (rows R5, R6 of §1.5 and W3 of §3, written here as built) and writes
 them; [runtime-config.md](runtime-config.md) is the contract.
@@ -377,9 +377,10 @@ from D1b on, and each section fact holds at most 256 rows.
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 
 `ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals); `runtime-client` [2, 2] (§3 W1–W4, W8–W11: A4, U-1,
-D2-S5, P-m); `actingd-config` 5 (§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5,
-D2-S2/S3); `install-control` stays [0, 1] until U-4. AO-0 changes no declaration.
+table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14);
+`runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3); `actingd-config` 5
+(§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
+[0, 1] until U-4. AO-0 changes no declaration.
 
 ## 7 What AO-0 does not register, and why
 
