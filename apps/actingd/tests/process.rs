@@ -2057,7 +2057,8 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
         .expect("failed policy execution");
     // Ledger revision 3: the policy execution record carries no outcome (its failure identity
-    // stays `error_code`), so its severity is its event type's category, info.
+    // stays `error_code`), so its severity is its event type's category, info. This holds only
+    // until A2-P gives a failed execution its outcome (deviation 5); A2-P flips this assertion.
     assert_eq!(
         execution.severity,
         EventSeverity::Info,
