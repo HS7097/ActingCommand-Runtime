@@ -263,7 +263,7 @@ incident = []
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
-key = "52"
+key = "42"
 coverage = "Y"
 tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_session",

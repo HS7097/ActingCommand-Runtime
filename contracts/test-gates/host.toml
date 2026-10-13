@@ -438,6 +438,10 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_12_a_handler_unfit_for_its_part_ends_the_run_before_any_input",
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_13_without_interrupts_a_run_records_what_it_records_without_a_root",
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_15_root_files_replaced_in_place_take_effect_at_the_next_run",
+    "actingcommand-execution-kernel::lib::contained_task::text_locate_tests::n6_14_two_interrupt_pages_on_one_located_read_call_the_provider_once",
+    "actingcommand-contract::lib::standard_pack::tests::n6_1_valid_root_files_are_read",
+    "actingcommand-contract::lib::standard_pack::tests::n6_1_each_root_file_violation_is_its_problem_at_its_pointer",
+    "actingcommand-actingd::process::check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one",
 ]
 incident = ["#373"]
 
