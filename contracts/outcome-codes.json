@@ -32475,6 +32475,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "observe_identity_limit_exceeded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "actual_bytes": "required",
+        "limit_bytes": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
+      "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
+      "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
+    },
     "ocr_field_low_confidence": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
