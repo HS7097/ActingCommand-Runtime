@@ -229,9 +229,11 @@ impl Ledger {
             instance_a,
             Dispatched::Cli,
             vec![
+                // Workflow #373 NAV-3b: the entry's pages as a set; none matched.
                 TaskSemanticFact::EntryRecognition {
                     phase: TaskEntryRecognitionPhase::Initial,
-                    required_page: "neutral/entry".to_owned(),
+                    required_pages: vec!["neutral/entry".to_owned()],
+                    matched_page: None,
                     matched: false,
                 },
                 TaskSemanticFact::EntryTargetDisposition {
@@ -275,9 +277,11 @@ impl Ledger {
                 catalog_task_id: POLICY_TASK_B,
             },
             vec![
+                // Workflow #373 NAV-3b: the entry's pages as a set; its one page matched.
                 TaskSemanticFact::EntryRecognition {
                     phase: TaskEntryRecognitionPhase::Initial,
-                    required_page: "neutral/home".to_owned(),
+                    required_pages: vec!["neutral/home".to_owned()],
+                    matched_page: Some("neutral/home".to_owned()),
                     matched: true,
                 },
                 TaskSemanticFact::EntryRecoveryDecision { required: false },
