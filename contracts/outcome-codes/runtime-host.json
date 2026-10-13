@@ -557,7 +557,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "instance_id": "required"
+        "instance_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -573,7 +576,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "instance_id": "required"
+        "instance_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -17321,7 +17327,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17956,7 +17966,10 @@
         "game": "required",
         "count": "required",
         "added_package_ids": "optional",
-        "removed_package_ids": "optional"
+        "removed_package_ids": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -17973,7 +17986,10 @@
       "uncertain": false,
       "values": {
         "game": "optional",
-        "path": "required"
+        "path": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -17991,7 +18007,10 @@
       "values": {
         "package_id": "required",
         "navigation_role": "required",
-        "navigation_problem": "required"
+        "navigation_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18008,7 +18027,10 @@
       "uncertain": false,
       "values": {
         "page_id": "required",
-        "count": "required"
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18024,7 +18046,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "page_ids": "required"
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18042,7 +18067,10 @@
       "values": {
         "page_id": "required",
         "count": "required",
-        "limit_count": "required"
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18058,7 +18086,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "page_id": "required"
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18073,7 +18104,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18087,7 +18122,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18101,7 +18140,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -18115,7 +18158,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
