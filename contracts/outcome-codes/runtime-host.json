@@ -2528,11 +2528,13 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry aspect mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "contained_task_geometry_frame_display_mismatch",
+      "description": "Retired (Workflow #392 DA-A). A contained task's first frame was not 16:9, or its aspect ratio differed from the logical display it was captured from, and the run was refused before any input. Since 0.12.0 the frame's own aspect ratio is recorded and never refused; the remaining mismatch is contained_task_geometry_frame_display_mismatch.",
+      "common_causes": "A device or emulator display that is not 16:9, or a capture backend whose frame did not match its display.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_geometry_budget_unavailable": {
       "category": "error",
@@ -2545,6 +2547,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task geometry budget unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_geometry_frame_display_mismatch": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task's frame and the logical display it was captured from have different aspect ratios (the task geometry conclusion aspect_mismatch, reason frame_and_logical_display_differ), so the run is refused before any input. The frame's own aspect ratio is never checked (Workflow #392 DA-A): any ratio is recorded in the instance's display facts and passes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -15828,6 +15844,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
     },
+    "hand_off_to_claim": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand off to claim."
+    },
     "hand_off_to_ladder": {
       "owner": "runtime-host",
       "layer": "host",
@@ -16508,6 +16532,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: open owner file."
     },
+    "open_policy_wakes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: open the host's business notifications that wake the policy driver (Workflow #383 AO-7)."
+    },
     "open_recovery_ladder_window": {
       "owner": "runtime-host",
       "layer": "host",
@@ -16651,6 +16683,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: prepare application resources."
+    },
+    "prepare_claim_hand_off": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: prepare claim hand off."
     },
     "prepare_cleanup_transfer": {
       "owner": "runtime-host",
@@ -17355,6 +17395,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read due monitors."
+    },
+    "read_emulator_control_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read emulator control claim ttl."
     },
     "read_execution_close_result": {
       "owner": "runtime-host",

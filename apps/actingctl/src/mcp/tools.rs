@@ -399,6 +399,20 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: material_result,
         run: observer::material,
     },
+    // Workflow #389 MCP-5a (MCP-0 command table v1.1 §4.5): ac_observe ↔ actingctl observe --export.
+    ToolDef {
+        name: "ac_observe",
+        title: "Observe one frame",
+        tier: Tier::Observer,
+        description: "Takes one frame of one instance now, as actingctl observe --export does: instance (alias, instance_id or ADB port) is resolved with one status read, the Runtime captures the frame read-only (no input, no run, nothing started or stopped) and records it in its ledger and material store, and the frame is read back verified and written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.png. Returns {width, height, verdict, capture_backend, frame {ref, media_type, size, sha256}, export {path, sha256, size}}; frame.ref is a materials ref for ac_material. Every call captures a new frame. A frame over 32 MiB answers material_too_large and writes nothing.",
+        read_only: true,
+        destructive: false,
+        idempotent: false,
+        input_schema: instance_only_input,
+        result_schema: super::observe_export::result,
+        run: super::observe_export::observe,
+    },
+    // End of MCP-5a.
     ToolDef {
         name: "ac_get_run",
         title: "Run status",

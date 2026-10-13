@@ -9,6 +9,8 @@ mod child;
 mod events;
 mod jobs;
 mod lab;
+// Workflow #389 MCP-5a: ac_observe.
+mod observe_export;
 mod observer;
 mod operator;
 mod protocol;

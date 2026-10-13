@@ -186,6 +186,8 @@ mod planning;
 mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
+// Workflow #383 AO-7: the host's business notifications that wake the policy driver.
+mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
@@ -239,6 +241,9 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
+// Workflow #383 AO-7.
+pub(crate) use policy_wake::PolicyWakeSignal;
+pub use policy_wake::{PolicyWakes, policy_trigger_for_event, policy_trigger_for_family};
 use recovery_ladder::with_recovery_ladder_staging;
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
@@ -1211,11 +1216,14 @@ impl RuntimeHost {
             }
             return Err(original);
         }
+        // Workflow #383 AO-7: the capacity monitor's records raise wakes too.
+        let policy_wakes = Arc::new(PolicyWakeSignal::default());
         let performance = (|| {
             PerformanceMonitor::preflight_capacity(
                 crate::performance::CapacityPreflightConfig {
                     performance: config.performance_monitor.clone(),
                     thresholds: config.capacity_thresholds,
+                    policy_wakes: Arc::clone(&policy_wakes),
                 },
                 crate::performance::CapacityRoots::new(
                     owner_epoch,
@@ -1452,6 +1460,9 @@ impl RuntimeHost {
             agent_dispatcher_config: config.agent_dispatcher.clone(),
             agent_dispatcher: Mutex::new(AgentDispatcherState::default()),
             events,
+            policy_wakes,
+            #[cfg(any(test, feature = "test-hooks"))]
+            event_subscriptions_for_test: AtomicU64::new(0),
             execution: OnceLock::new(),
             registered_instances: Mutex::new(BTreeMap::new()),
             monitor_registry: OnceLock::new(),
@@ -1899,6 +1910,25 @@ impl RuntimeHost {
     pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
         self.shared_ref(HostLocation::ReadLifecycleDraining)?
             .lifecycle_draining()
+    }
+
+    /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
+    /// Opening them is the monitor's starting point; the wakes raised before are dropped.
+    pub fn open_policy_wakes(&self) -> RuntimeHostResult<PolicyWakes> {
+        Ok(self
+            .shared_ref(HostLocation::OpenPolicyWakes)?
+            .open_policy_wakes())
+    }
+
+    /// Workflow #383 AO7-c, test builds and the `test-hooks` feature only: the event
+    /// subscriptions (`SubscribeEvents`) this host has served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn event_subscriptions_for_test(&self) -> u64 {
+        self.shared
+            .as_ref()
+            .expect("test Runtime host is open")
+            .event_subscriptions_for_test
+            .load(Ordering::Acquire)
     }
 
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
@@ -2842,10 +2872,9 @@ impl RuntimeHost {
         Ok((claim, result))
     }
 
-    /// Workflow #369 H-6: the tail of an emulator `start` / `restart` without the provider
-    /// (the test fakes have no emulator control): under the instance's admission guard the
-    /// startup package's scheduling intent is recorded and its claim queued, then the guard is
-    /// let go and the queue pumped, exactly as `drive_emulator_control` does.
+    /// A startup package's claim without the emulator control (Workflow #369 S6b): its
+    /// scheduling intent is recorded and the claim queued (`schedule_startup_package`, the path
+    /// of a start that hands it no key); on a free instance it is granted at once.
     #[cfg(test)]
     pub(crate) fn schedule_startup_package_for_test(
         &self,
@@ -2870,18 +2899,11 @@ impl RuntimeHost {
             .mint_request_id()
             .map_err(|_| runtime_identifier_error())?
             .transport();
-        let instance_guard = shared
-            .instance_guard(instance_id)
-            .map_err(|failure| *failure.error)?;
-        let admission = lock(
-            &instance_guard,
-            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
-        )?;
         let pending = shared
             .prepare_startup_package(&resolved, links, control_request_id)
             .map_err(|failure| *failure.error)?;
         shared
-            .schedule_startup_under_guard(instance_id, pending, admission)
+            .schedule_startup_package(pending)
             .map_err(|failure| *failure.error)
     }
 
@@ -3855,6 +3877,12 @@ struct HostShared {
     agent_dispatcher: Mutex<AgentDispatcherState>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
+    /// Workflow #383 AO-7: the policy driver's wakes raised at the append points and not yet
+    /// taken by the daemon's policy monitor.
+    policy_wakes: Arc<PolicyWakeSignal>,
+    /// Workflow #383 AO7-c, tests only: the event subscriptions (`SubscribeEvents`) served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    event_subscriptions_for_test: AtomicU64,
     execution: OnceLock<ExecutionKernel>,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
     monitor_registry: OnceLock<Mutex<MonitorRegistry>>,

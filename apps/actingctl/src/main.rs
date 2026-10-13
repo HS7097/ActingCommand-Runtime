@@ -9,13 +9,19 @@ mod codes;
 mod events;
 #[cfg(test)]
 mod gate_381a;
-mod instance_selector;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod process_probe;
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
+
+// Workflow #389 MCP-5a: `observe --export` (MCP `ac_observe`), with the instance selector and the
+// material export writer it shares with MCP.
+mod instance_selector;
+mod material_export;
+mod observe_export;
+// End of MCP-5a.
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -70,6 +76,11 @@ fn main() -> ExitCode {
         return exit;
     }
     // --- end MCP-1 ---
+    // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
+    // before `Invocation::parse`; `observe` without `--export` is unchanged.
+    if let Some(exit) = observe_export::dispatch(&arguments) {
+        return exit;
+    }
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {

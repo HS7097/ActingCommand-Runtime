@@ -180,7 +180,7 @@ fn tool_error(error: EventsError) -> ToolError {
     let message = error.message();
     match error {
         EventsError::Argument { field, problem } => invalid_argument(&field, &problem.to_string()),
-        EventsError::Selector { error, .. } => ToolError::usage(error.code(), message),
+        EventsError::Selector { miss, .. } => ToolError::usage(miss.code(), message),
         EventsError::Query(error) => {
             ToolError::usage(error.code(), message).with_detail("field", json!(error.field()))
         }

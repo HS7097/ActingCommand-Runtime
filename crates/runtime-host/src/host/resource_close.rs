@@ -2,6 +2,7 @@
 
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
+use super::recovery_ladder::PendingRecoveryLadder;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::RuntimeErrorCode;
@@ -626,8 +627,9 @@ impl HostShared {
     // client lease: under the instance admission guard it takes a dedicated preparation lease (the
     // close-lease precedent: a resource-close-only lease of a fixed Runtime connection, granted
     // with `CapacityUse::Drain`; a waiting lease queue is `TransferNotSafe`; Workflow #369 W-3: a
-    // resume's reconnect and a self-check run on their operator claim's key instead, and a
-    // stuck-recovery ladder on its own key), closes a session a
+    // resume's reconnect and a self-check run on their operator claim's key instead, H-4 (S6b):
+    // an emulator start or restart on its control's key, and a stuck-recovery ladder on its own
+    // key), closes a session a
     // lease-free path retained (a read-only observe keeps its capture open, sc2; Workflow #191
     // h3) through the fenced close path, opens the instance's input and capture backends through
     // `ExecutionKernel::open_instance_backends` (a Nemu pair once) so the opens cover every
@@ -720,7 +722,7 @@ impl HostShared {
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-        let (check, cooldown_until, _, _) = self.prepare_instance_connection_with_cooldown(
+        let prepared = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
@@ -728,10 +730,10 @@ impl HostShared {
             actingcommand_contract::RecoveryTriggerStage::StartupPreparation,
             PreparationLease::Dedicated(ClaimKind::DaemonStartPreparation),
         )?;
-        if cooldown_until.is_none() {
-            self.require_install_selfcheck(instance_id, &check)?;
+        if prepared.cooldown_until.is_none() {
+            self.require_install_selfcheck(instance_id, &prepared.selfcheck)?;
         }
-        Ok(cooldown_until)
+        Ok(prepared.cooldown_until)
     }
 
     /// Trigger (d): `SelfCheckInstance` — the operator's manual reconnect and self-check of one
@@ -809,8 +811,10 @@ impl HostShared {
     /// Workflow #369 W-3: the preparation phase of one physical instance on an operator claim's
     /// key: the admission guard is taken for the preparation's device steps only, the
     /// preparation takes no dedicated lease, and the key is released afterwards (the release
-    /// hands it on, or pumps). An unconfirmed close or a failed record fails the request and
-    /// leaves the key held, as a dedicated preparation lease is left then.
+    /// hands it on, or pumps). A failed preparation's admitted ladder gets the key straight from
+    /// that release (H-1, P1; `release_to_preparation_ladder`). An unconfirmed close or a failed
+    /// record fails the request and leaves the key held, as a dedicated preparation lease is left
+    /// then.
     pub(super) fn prepare_on_operator_claim(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -837,32 +841,50 @@ impl HostShared {
             },
         );
         drop(admission);
-        let (selfcheck, _, _, _) = prepared.map_err(RequestFailure::poison_without_terminal)?;
-        self.release_lease(request, request_id, token, connection_id, None)?;
-        Ok(selfcheck)
+        let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
+        match prepared.ladder {
+            Some(ladder) => self.release_to_preparation_ladder(
+                request,
+                request_id,
+                token,
+                connection_id,
+                ladder,
+            )?,
+            None => {
+                self.release_lease(request, request_id, token, connection_id, None)?;
+            }
+        }
+        Ok(prepared.selfcheck)
     }
 
     /// The preparation phase of one physical instance; the caller holds its admission guard.
-    /// The opens are recorded under `links` (which name the instance). `kind` names the
-    /// preparation lease's holder (Workflow #369 Q-2; review L2: emulator control). Returns the
-    /// self-check projected from the opens it made, with the code of the failing step, if any.
+    /// The opens are recorded under `links` (which name the instance). Workflow #369 H-4 (S6b):
+    /// it runs on the key of the operator's emulator control (`token` on `connection_id`), takes
+    /// no dedicated lease and releases nothing. Returns the self-check projected from the opens
+    /// it made, with the code of the failing step, if any, and the ladder a failed preparation
+    /// admitted, which the control's release hands its key to (H-1, P1;
+    /// `release_to_preparation_ladder`).
     pub(super) fn prepare_instance_connection(
         &self,
         instance_alias: &str,
         instance_id: InstanceId,
         links: EventLinksDraft,
         admission: &MutexGuard<'_, ()>,
-        kind: ClaimKind,
-    ) -> RuntimeHostResult<SchedulingResumeSelfCheck> {
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<(SchedulingResumeSelfCheck, Option<PendingRecoveryLadder>)> {
         self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
             links,
             admission,
             actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
-            PreparationLease::Dedicated(kind),
+            PreparationLease::Held {
+                token,
+                connection_id,
+            },
         )
-        .map(|(selfcheck, _, _, _)| selfcheck)
+        .map(|prepared| (prepared.selfcheck, prepared.ladder))
     }
 
     /// The stuck-recovery ladder's preparation (stage `recovery_preparation`): the self-check,
@@ -887,7 +909,7 @@ impl HostShared {
                 connection_id: key.connection_id,
             },
         )
-        .map(|(check, _, event, recoverable)| (check, event, recoverable))
+        .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
@@ -902,12 +924,7 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
         stage: actingcommand_contract::RecoveryTriggerStage,
         lease: PreparationLease<'_>,
-    ) -> RuntimeHostResult<(
-        SchedulingResumeSelfCheck,
-        Option<u64>,
-        Option<TerminalEvent>,
-        bool,
-    )> {
+    ) -> RuntimeHostResult<PreparationAttempt> {
         lock(
             &self.recovery_ladders,
             HostLocation::BeginPreparationAttempt,
@@ -966,12 +983,13 @@ impl HostShared {
                     _ => None,
                 };
                 self.record_connection_preparation_failure(instance_id, links, error)?;
-                return Ok((
-                    scheduling_resume_selfcheck(&[], Some(failure_code)),
+                return Ok(PreparationAttempt {
+                    selfcheck: scheduling_resume_selfcheck(&[], Some(failure_code)),
                     cooldown_until,
-                    None,
-                    false,
-                ));
+                    event: None,
+                    recoverable: false,
+                    ladder: None,
+                });
             }
         };
         // Workflow #191 h3: the preparation phase starts from a closed session. A session a
@@ -1097,7 +1115,7 @@ impl HostShared {
         }
         let selfcheck = scheduling_resume_selfcheck(&observations, failure_code);
         let recoverable = recoverable && confirmed && cleanup_succeeded;
-        let event = self.record_preparation_finished(
+        let (event, ladder) = self.record_preparation_finished(
             instance_id,
             links,
             stage,
@@ -1105,7 +1123,23 @@ impl HostShared {
             &selfcheck,
             recoverable,
         )?;
-        Ok((selfcheck, None, Some(event), recoverable))
+        // Workflow #369 H-1: a dedicated lease was released above, so a daemon-start
+        // preparation's ladder waits as a claim and the pump grants it on the free instance. On
+        // a held key the ladder goes back to the key's holder, whose release hands it the key.
+        let ladder = match ladder {
+            Some(ladder) if !held => {
+                self.enqueue_ladder_claim(ladder)?;
+                None
+            }
+            ladder => ladder,
+        };
+        Ok(PreparationAttempt {
+            selfcheck,
+            cooldown_until: None,
+            event: Some(event),
+            recoverable,
+            ladder,
+        })
     }
 
     /// A preparation step other than an open failed without being fatal (the preparation lease
@@ -1127,6 +1161,20 @@ impl HostShared {
         )?;
         self.withhold_policy_instance_availability(instance_id)
     }
+}
+
+/// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).
+struct PreparationAttempt {
+    selfcheck: SchedulingResumeSelfCheck,
+    /// The monotonic deadline of the takeover cooldown that refused the dedicated lease.
+    cooldown_until: Option<u64>,
+    /// The attempt's `instance_preparation_finished`, when the preparation got that far.
+    event: Option<TerminalEvent>,
+    /// Whether a failed open is one the preparation rule calls recoverable.
+    recoverable: bool,
+    /// Workflow #369 H-1, P1: on a held key, the ladder the failed preparation admitted, to
+    /// which the key's holder hands the key at its release (`release_to_preparation_ladder`).
+    ladder: Option<PendingRecoveryLadder>,
 }
 
 /// Workflow #369: whose lease a connection preparation runs under: a dedicated lease of the

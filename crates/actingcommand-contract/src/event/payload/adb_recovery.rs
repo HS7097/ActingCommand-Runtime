@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{LifecycleNativeDetail, SanitizationError};
+use super::{LifecycleNativeDetail, SanitizationError, is_false};
 use crate::codes::SanitizationCode;
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +40,10 @@ pub struct AdbCommandEvidence {
     pub stdout_lossy_decode: bool,
     pub stderr_lossy_decode: bool,
     pub state: AdbTransportState,
+    /// Workflow #398 RD-1a: a device serial the Runtime holds a binding for was replaced by its
+    /// label token `[device:<label>]` in `stdout` or `stderr`. Omitted when nothing was replaced.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub raw_text_redacted: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

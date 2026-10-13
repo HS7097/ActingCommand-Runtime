@@ -12,14 +12,14 @@
 //! (#721) has merged (coordinator ruling Q4).
 
 use crate::codes::ActingctlCode;
-use crate::instance_selector::{self, SelectorError};
+use crate::instance_selector::{self, SelectorMiss};
+use crate::material_export;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSeverity, EventSource, EventType, InstanceId,
-    LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedArtifactReference,
-    ProjectedEvent, ProjectionPayload, ProjectionProfile, RequestId, RunId,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    SanitizationError, TaskId,
+    LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, RequestId, RunId, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, SanitizationError, TaskId,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde::de::DeserializeOwned;
@@ -176,7 +176,7 @@ pub(crate) enum EventsError {
     },
     /// The instance selector names no single instance.
     Selector {
-        error: SelectorError,
+        miss: SelectorMiss,
         selector: String,
     },
     /// The filters break the query rule the Runtime holds every query to
@@ -202,7 +202,7 @@ impl EventsError {
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Argument { field, problem } => format!("argument {field} {problem}"),
-            Self::Selector { error, selector } => error.message(selector),
+            Self::Selector { miss, selector } => miss.message(selector),
             Self::Query(error) => format!("the Runtime refuses this event query: {error}"),
             Self::CursorInvalid => "this cursor belongs to another query, Runtime connection or process; read again from the first page, or from after_sequence, without a cursor".to_owned(),
             Self::CursorEncode(reason) => format!("cannot form the next cursor: {reason}"),
@@ -567,7 +567,7 @@ pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
             .iter()
             .map(|artifact| {
                 json!({
-                    "ref": material_ref(event, artifact),
+                    "ref": material_export::material_ref(event, artifact),
                     "media_type": artifact.media_type,
                     "size": artifact.byte_count,
                 })
@@ -576,23 +576,6 @@ pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
         row.insert("materials".to_owned(), Value::Array(materials));
     }
     Value::Object(row)
-}
-
-/// `<seq>:<event_id>:<artifact_id>`: enough to find the material again in the ledger.
-fn material_ref(event: &ProjectedEvent, artifact: &ProjectedArtifactReference) -> String {
-    format!(
-        "{}:{}:{}",
-        event.sequence,
-        text_of(json!(event.event_id)),
-        text_of(json!(artifact.artifact_id))
-    )
-}
-
-fn text_of(value: Value) -> String {
-    match value {
-        Value::String(text) => text,
-        other => other.to_string(),
-    }
 }
 
 /// `actingctl events …` when the first argument is `events`: one page as one line of JSON on
@@ -657,7 +640,7 @@ impl std::fmt::Display for CliError {
 fn cli_code(error: &EventsError) -> Code {
     match error {
         EventsError::Argument { .. } => ActingctlCode::ActingctlUsageInvalid.code(),
-        EventsError::Selector { error, .. } => error.code(),
+        EventsError::Selector { miss, .. } => miss.code(),
         EventsError::Query(error) => error.code(),
         EventsError::CursorInvalid => ActingctlCode::CursorInvalid.code(),
         EventsError::CursorEncode(_) => ActingctlCode::CursorEncodeFailed.code(),
@@ -679,9 +662,9 @@ fn run_cli(arguments: &[OsString]) -> Result<Value, CliError> {
         Some(selector) => {
             let status = client.status().map_err(EventsError::Runtime)?;
             let instance =
-                instance_selector::select(status.instances(), selector).map_err(|error| {
+                instance_selector::select(status.instances(), selector).map_err(|miss| {
                     EventsError::Selector {
-                        error,
+                        miss,
                         selector: selector.clone(),
                     }
                 })?;
