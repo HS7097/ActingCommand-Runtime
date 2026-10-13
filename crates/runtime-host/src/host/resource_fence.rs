@@ -21,7 +21,11 @@
 //! other instance is affected.
 //!
 //! An unconfirmed failure that names no registered instance, or that comes with a ledger
-//! failure, still retains the owner and ends the whole Runtime, as before.
+//! failure, still retains the owner and ends the whole Runtime, as before. So does every
+//! unconfirmed failure once the Runtime is shutting down (a requested shutdown, or after a
+//! fatal): the fence would end with the process before a ladder or a person could take it, and
+//! forgetting the kernel's record of the close would drop it from the shutdown's own owner
+//! retention, so the owner journal would not say `unconfirmed`.
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -152,6 +156,11 @@ impl HostShared {
         if error.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
             return Ok(UnconfirmedResources::Confirmed);
         }
+        // During shutdown a fence would outlive nothing: the whole Runtime retains its owner,
+        // as before.
+        if self.fatal.is_shutdown_requested() {
+            return self.retain_unconfirmed_owner(error, links);
+        }
         let owner = error.lifecycle.instance_id.or(instance_id);
         let registered = match owner {
             Some(instance_id) => lock(
@@ -222,13 +231,22 @@ impl HostShared {
             links,
             None,
         );
+        let retained = self.retain_owner_unconfirmed(&error);
+        lifecycle_result?;
+        retained?;
+        Ok(UnconfirmedResources::Retained)
+    }
+
+    /// The owner retained and the Runtime marked fatal by `error`, which the caller records.
+    pub(super) fn retain_owner_unconfirmed(
+        &self,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
         let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
             .and_then(|mut owner| owner.retain_unconfirmed());
-        let fatal_result = self.fatal.mark(error);
-        lifecycle_result?;
+        let fatal_result = self.fatal.mark(error.clone().into_fatal());
         retain_result?;
-        fatal_result?;
-        Ok(UnconfirmedResources::Retained)
+        fatal_result
     }
 
     /// Whether `instance_id` is fenced.

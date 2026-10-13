@@ -4134,9 +4134,9 @@ impl HostShared {
                                 .map_err(|failure| *failure.error)?;
                             let admission =
                                 lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-                            // Workflow #403: an unconfirmed close at shutdown fences its
-                            // instance; the close reports the fence's non-fatal failure and
-                            // the next start prepares the instance again.
+                            // Workflow #403: shutdown is under way, so an unconfirmed close
+                            // retains the owner as before (`settle_unconfirmed_resources`);
+                            // only an instance fenced earlier reports its fence.
                             match self.close_retained_instance_while_guarded(
                                 instance_id,
                                 EventLinksDraft::default(),

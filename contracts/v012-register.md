@@ -205,7 +205,8 @@ An unconfirmed close of one instance's own resources fences that instance instea
 whole Runtime. The slice brings its own shapes and writes them. The fence itself is memory only
 (a restart prepares and self-checks every instance again, as every start does), and the owner
 journal's record shape does not change: while any fence holds the owner's disposition stays
-`in_use`, and only unconfirmed resources that no single instance owns still write `unconfirmed`.
+`in_use`, and only unconfirmed resources that no single instance owns, or an unconfirmed close
+once the Runtime is shutting down, still write `unconfirmed`.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|

@@ -388,6 +388,14 @@ impl HostShared {
                     None,
                 );
                 if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
+                    // Workflow #403: during shutdown the whole Runtime retains its owner, as
+                    // before (`settle_unconfirmed_resources`); the failure is recorded above.
+                    if self.fatal.is_shutdown_requested() {
+                        let retained = self.retain_owner_unconfirmed(&error);
+                        lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
+                        retained.map_err(RequestFailure::poison_without_terminal)?;
+                        return Ok(Err(execution_error));
+                    }
                     lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
                     // Workflow #403: the instance's own resources fence only that instance; its
                     // close step ends as after any failed close once its write authority is

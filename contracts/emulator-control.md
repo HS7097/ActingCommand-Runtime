@@ -484,7 +484,10 @@ way. A ladder that ends with the instance still fenced, or a fence no ladder may
 instance waiting for a person (`Status`: `resource_fence.awaiting_person`). The fence is memory
 only: a restart prepares and self-checks the instance again, as every start does. Unconfirmed
 resources that no single registered instance owns, and ledger failures, still retain the owner
-and end the Runtime.
+and end the Runtime. So does any unconfirmed close once the Runtime is shutting down (a
+requested shutdown, or after a fatal): a fence would end with the process before a ladder or a
+person could take it, so the shutdown records the close failure and the owner journal says
+`unconfirmed`, as before.
 
 Instance aliases, indices, tool paths and addresses come from formal configuration and the
 registered provider binding. Provider control polls discover the current process state and
