@@ -723,8 +723,11 @@ fn run(arguments: &[OsString]) -> Result<(), PacksError> {
 /// The selected configuration generation, found as mcp-serve finds it (`mcp/runtime.rs`): this
 /// process's install selection; else the install selection of `--root`; else
 /// `<root>\actingd.config.json` of a root without one, `--root` or the install root this
-/// executable runs from. `ac_packs` calls it at every call with the server's `--root`, so both
-/// read the generation selected now (train 4 review ruling).
+/// executable runs from. An installed process reads its root's selection again here (the
+/// launcher's snapshot when one was inherited, otherwise `install\active.json` as it is now),
+/// not the one pinned when the process started: `ac_packs` calls this at every call with the
+/// server's `--root`, so a long-running mcp-serve answers the generation selected now, as a
+/// fresh `actingctl packs` does (train 4 review ruling).
 pub(crate) fn selected_config(
     root: Option<&Path>,
 ) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
@@ -753,7 +756,27 @@ pub(crate) fn selected_config(
                 ));
             }
         }
-        return Ok((Some(selected.clone()), selected.config_path()));
+        let current = InstalledProcess::read(selected.root())
+            .map_err(|error| {
+                PacksError::new(
+                    error.code(),
+                    format!(
+                        "the install selection of {} cannot be read",
+                        selected.root().display()
+                    ),
+                )
+            })?
+            .ok_or_else(|| {
+                PacksError::new(
+                    SharedCode::InstallSelectionUnavailable,
+                    format!(
+                        "the install root {} no longer has a selection",
+                        selected.root().display()
+                    ),
+                )
+            })?;
+        let config = current.config_path();
+        return Ok((Some(current), config));
     }
     if let Some(root) = root {
         let selected = InstalledProcess::read(root).map_err(|error| {

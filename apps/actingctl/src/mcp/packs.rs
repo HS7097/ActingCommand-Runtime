@@ -7,9 +7,10 @@
 //! exported whole (§2.2, both presentation differences).
 //!
 //! Unlike the other tools, whose installation inputs are pinned when the server starts (#352),
-//! `ac_packs` finds the selected generation again at every call, as the CLI does (train 4 review
-//! ruling): after a deploy changes `install\active.json`, an open session answers the new
-//! generation, and a selection that cannot be read answers the CLI's codes.
+//! `ac_packs` finds the selected generation again at every call, as a fresh `actingctl packs`
+//! does (train 4 review ruling): after a deploy changes `install\active.json`, an open session
+//! answers the new generation (an installed server too: `selected_config` reads its root's
+//! selection again), and a selection that cannot be read answers the CLI's codes.
 
 use super::observer;
 use super::tools::{
