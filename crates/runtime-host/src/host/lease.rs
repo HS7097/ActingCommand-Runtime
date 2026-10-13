@@ -3553,6 +3553,16 @@ impl HostShared {
         else {
             return Ok(false);
         };
+        self.ladder_claim_awaits_release(request_id, instance_id)
+    }
+
+    /// Workflow #387 D1c (M387 §3.7): whether the ladder claim of `request_id`, whose work is
+    /// registered, waits for performance release while `instance_id` is not released.
+    fn ladder_claim_awaits_release(
+        &self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<bool> {
         let awaits = matches!(
             lock(&self.host_claim_work, HostLocation::TakeHostClaimWork)?.get(&request_id),
             Some(HostClaimWork::RecoveryLadder(ladder)) if ladder.awaits_performance_release()
@@ -3809,11 +3819,18 @@ impl HostShared {
                 }
                 Err(_) => false,
             };
+        // Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item starts it after
+        // performance release is queued, not granted at once, while its instance is not
+        // released; the pump grants it after the release.
+        let awaits_release = claim.kind == ClaimKind::Ladder
+            && self
+                .ladder_claim_awaits_release(request.request_id, instance_id)
+                .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.try_lock_admission(&instance_guard, instance_id)?;
         let order_lock = self.queue_order_lock(instance_id)?;
         let order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
-        if admission.is_some() && capacity_free {
+        if admission.is_some() && capacity_free && !awaits_release {
             let preparation = lock(&self.scheduler, HostLocation::PrepareHostClaim)?
                 .prepare_claim_acquire(request, gate, self.monotonic_ms()?);
             match preparation {

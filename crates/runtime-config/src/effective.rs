@@ -109,7 +109,7 @@ impl ConfigFailure {
 
     /// The failure as an instruction meets it (M387 §5.6): a section's broken rule refuses the
     /// whole request as `config_value_invalid`, keeping its key and why.
-    fn as_instruction(self) -> Self {
+    fn into_instruction(self) -> Self {
         match self.code {
             ConfigCode::RecoveryLadderConfigInvalid => Self {
                 code: ConfigCode::ConfigValueInvalid,
@@ -405,7 +405,7 @@ impl EffectiveConfig {
             }
         }
         next.check_sections(&sections, context)
-            .map_err(ConfigFailure::as_instruction)?;
+            .map_err(ConfigFailure::into_instruction)?;
         let settings = changes
             .iter()
             .map(|change| {

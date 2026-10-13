@@ -684,7 +684,7 @@ impl HostShared {
                     .operation(HostLocation::RecoveryUnclassifiedNote),
                 DiagnosticDetailDraft::new(
                     "recovery_ladder",
-                    HostLocation::RecoveryUnclassifiedNote.as_str(),
+                    HostLocation::RecoveryUnclassifiedNote,
                     "runtime_host",
                     HostLocation::RecoveryUnclassifiedNote.as_str(),
                 ),
