@@ -14,7 +14,7 @@ use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export::{self, MAX_EXPORT_BYTES, WriteFailure};
 use actingcommand_contract::{
     EventActor, EventSource, LedgerEventPosition, ProjectedEvent, ReadonlyObservation,
-    RuntimeMaterialReadState, RuntimeResult,
+    RuntimeMaterialReadFailure, RuntimeMaterialReadState, RuntimeResult,
 };
 use actingcommand_runtime_client::{
     RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeFlowOutput,
@@ -209,18 +209,8 @@ fn read_frame(client: &RuntimeClient, frame: &ObservedFrame<'_>) -> Result<Vec<u
             error: Some(error), ..
         }
         | RuntimeMaterialCompleteResult::Failed { error, .. } => Err(Failure::Runtime(error)),
-        // As ac_material relays it: the Runtime's typed failure, or actingctl's own
-        // `material_<state>` family when it gave none.
         RuntimeMaterialCompleteResult::NotProvided { failure, .. } => Err(Failure::NotProvided {
-            relayed_code: failure.map_or_else(
-                || {
-                    format!(
-                        "material_{}",
-                        state_text(RuntimeMaterialReadState::NotProvided)
-                    )
-                },
-                |failure| failure.code,
-            ),
+            failure: failure.map(Box::new),
         }),
     }
 }
@@ -251,8 +241,10 @@ enum Failure {
     TooLarge {
         byte_count: u64,
     },
+    /// The Runtime answered the read without the frame. Its typed failure is kept as it came,
+    /// so the code it carries is relayed unchanged (A5 relays it as an outcome link).
     NotProvided {
-        relayed_code: String,
+        failure: Option<Box<RuntimeMaterialReadFailure>>,
     },
     Write(WriteFailure),
     Output(io::Error),
@@ -280,11 +272,19 @@ impl fmt::Display for Failure {
                 "{}: the frame has {byte_count} bytes; an export writes at most {MAX_EXPORT_BYTES}",
                 ActingctlCode::MaterialTooLarge.as_str()
             ),
-            Self::NotProvided { relayed_code } => write!(
-                formatter,
-                "{relayed_code}: the Runtime did not provide the frame (state {})",
-                state_text(RuntimeMaterialReadState::NotProvided)
-            ),
+            // As ac_material relays it: the Runtime's typed failure, or actingctl's own
+            // `material_<state>` family when it gave none (A5 splits that family).
+            Self::NotProvided { failure } => {
+                let state = state_text(RuntimeMaterialReadState::NotProvided);
+                match failure {
+                    Some(failure) => write!(formatter, "{}", failure.code),
+                    None => write!(formatter, "material_{state}"),
+                }?;
+                write!(
+                    formatter,
+                    ": the Runtime did not provide the frame (state {state})"
+                )
+            }
             Self::Write(failure) => write!(
                 formatter,
                 "{}: {}",
