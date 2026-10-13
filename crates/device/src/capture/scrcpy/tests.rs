@@ -48,7 +48,8 @@ fn media_packet(pts: u64, config: bool, payload: &[u8]) -> Vec<u8> {
     packet
 }
 
-/// Pumps `bytes` until the stream ends; returns how it ended.
+/// Runs the reader loop the stream thread runs over `bytes` until the stream ends; returns how
+/// it ended (the loop records the end in `slot`).
 fn pump_all(
     bytes: Vec<u8>,
     expected: ExpectedVideo,
@@ -57,18 +58,13 @@ fn pump_all(
 ) -> StreamEnd {
     let mut reader = Cursor::new(bytes);
     let mut decoder = FakeDecoder { size: decoded };
-    let mut pump = StreamPump::new(expected);
     let base = Instant::now();
     let tick = Cell::new(0u64);
     let arrival = || {
         tick.set(tick.get() + 1);
         base + Duration::from_millis(tick.get())
     };
-    loop {
-        if let Err(end) = pump.pump_one(&mut reader, &mut decoder, slot, &arrival) {
-            return end;
-        }
-    }
+    StreamPump::new(expected).run(&mut reader, &mut decoder, slot, &arrival)
 }
 
 #[test]
@@ -95,12 +91,30 @@ fn fake_stream_publishes_each_decoded_frame_with_its_sequence_and_presentation_t
     assert_eq!(state.video, Some((1080, 2336)));
 }
 
+/// One way a stream stops: its bytes, the decoded size, the end and the code a capture gets.
+type StreamEndCase = (
+    &'static str,
+    Vec<u8>,
+    (u32, u32),
+    StreamEnd,
+    StreamCaptureCode,
+);
+
+/// Each way a stream stops ends it with the code its failure requires, and a capture on the
+/// ended stream gets that code instead of a frame. Coordinator ruling 10-13 (the instance-level
+/// rule of board #403): `scrcpy_stream_ended` fails only this instance's run and the ladder
+/// handles it (an error of class `environment_fault`); the capture's error is a transient device
+/// error, never the non-transient one the host treats as fatal for the Runtime.
 #[test]
 fn fake_stream_ends_with_the_code_its_failure_requires() {
+    use actingcommand_contract::outcome::{Category, LadderClass};
+    let ended = StreamCaptureCode::ScrcpyStreamEnded;
+    assert_eq!(ended.category(), Category::Error);
+    assert_eq!(ended.ladder_class(), LadderClass::EnvironmentFault);
     let crop = aligned_crop(1080, 2340, 8);
     let expected = ExpectedVideo::of(crop, (1080, 2340));
     let session = session_packet(1080, 2336);
-    let cases: Vec<(&str, Vec<u8>, (u32, u32), StreamEnd, StreamCaptureCode)> = vec![
+    let cases: Vec<StreamEndCase> = vec![
         (
             "a session of another size than the unscaled crop",
             session_packet(1080, 2328),
@@ -144,13 +158,22 @@ fn fake_stream_ends_with_the_code_its_failure_requires() {
     for (case, bytes, decoded, end, code) in cases {
         let slot = FrameSlot::new(Instant::now(), Duration::from_secs(10));
         assert_eq!(pump_all(bytes, expected, decoded, &slot), end, "{case}");
-        let error = end.error(false);
+        let failure = slot
+            .wait_fresh(None, Duration::ZERO, Duration::ZERO, &SystemSlotClock)
+            .expect_err(case);
+        assert_eq!(failure, FreshWaitFailure::Ended(end), "{case}");
+        let error = detached_backend(Duration::from_secs(2)).fresh_failure(failure);
         assert!(
             error.message().starts_with(code.as_str()),
             "{case}: {}",
             error.message()
         );
-        assert_eq!(error.severity(), DeviceErrorSeverity::Fatal, "{case}");
+        let severity = if code == ended {
+            DeviceErrorSeverity::Transient
+        } else {
+            DeviceErrorSeverity::Fatal
+        };
+        assert_eq!(error.severity(), severity, "{case}");
     }
 }
 
@@ -553,4 +576,38 @@ fn a_server_that_is_not_the_pinned_one_makes_only_this_instance_backend_unavaila
     assert_eq!(error.severity(), DeviceErrorSeverity::Transient);
     assert!(error.resource_quiescence().is_none());
     assert!(error.resource_close_causes().is_empty());
+}
+
+/// Coordinator ruling 10-13 (the instance-level rule of board #403): a scrcpy server that does
+/// not start fails only the open of this instance's capture backend, and so only its run, with
+/// its code; the ladder handles it (an error of class `environment_fault`) and the Runtime goes
+/// on. The open's error is a transient device error, never the non-transient one the host
+/// treats as fatal on a capture open, also when the failing step is an adb command.
+#[test]
+fn a_server_that_does_not_start_fails_only_this_instance_run() {
+    use actingcommand_contract::outcome::{Category, LadderClass};
+    let code = StreamCaptureCode::ScrcpyServerStartFailed;
+    assert_eq!(code.category(), Category::Error);
+    assert_eq!(code.ladder_class(), LadderClass::EnvironmentFault);
+    let failures = [
+        (
+            "adb forward reports no local port",
+            parse_forward_port("").expect_err("no port"),
+        ),
+        (
+            "an adb step of the start fails",
+            start_failure_from(
+                DeviceError::fatal("adb push exited with status 1"),
+                "capture.scrcpy.server.push",
+            ),
+        ),
+    ];
+    for (case, error) in failures {
+        assert!(
+            error.message().starts_with(code.as_str()),
+            "{case}: {}",
+            error.message()
+        );
+        assert_eq!(error.severity(), DeviceErrorSeverity::Transient, "{case}");
+    }
 }

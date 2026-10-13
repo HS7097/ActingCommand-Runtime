@@ -347,7 +347,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "#402 RD-3: the scrcpy capture backend could not start: pushing the server, the adb forward, starting the server, connecting to it, its stream header or its first frame failed within the start timeout. The open fails as capture_backend_open_failed.",
+      "description": "#402 RD-3: the scrcpy capture backend could not start: pushing the server, the adb forward, starting the server, connecting to it, its stream header or its first frame failed within the start timeout. The open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -361,7 +361,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "#402 RD-3: the scrcpy video stream stopped: the server exited, the socket closed, a packet was malformed or H.264 decoding failed. No frame is delivered from a stream that ended; the capture fails instead of falling back to another backend.",
+      "description": "#402 RD-3: the scrcpy video stream stopped: the server exited, the socket closed, a packet was malformed or H.264 decoding failed. No frame is delivered from a stream that ended; the capture fails instead of falling back to another backend. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -237,6 +237,10 @@ pub(crate) fn server_arguments(
 }
 
 /// Why a stream stopped delivering. Every end is `scrcpy_stream_ended` except the size refusal.
+///
+/// `scrcpy_stream_ended` is a transient device error (coordinator ruling 10-13, the
+/// instance-level rule of board #403): only that instance's run fails and the ladder handles
+/// it; the host never treats it as fatal for the Runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamEnd {
     SocketClosed,
@@ -286,7 +290,12 @@ impl StreamEnd {
                 "the stream's video size is not the unscaled size requested",
             ),
         };
-        coded_error(code, DeviceErrorSeverity::Fatal, detail).with_diagnostic(category, step)
+        let severity = if matches!(code, StreamCaptureCode::ScrcpyStreamEnded) {
+            DeviceErrorSeverity::Transient
+        } else {
+            DeviceErrorSeverity::Fatal
+        };
+        coded_error(code, severity, detail).with_diagnostic(category, step)
     }
 }
 
@@ -540,7 +549,7 @@ impl FrameSlot {
     /// waiting capture reports it.
     pub(crate) fn update(&self, change: impl FnOnce(&mut SlotState)) {
         if let Ok(mut state) = self.state.lock() {
-            change(&mut *state);
+            change(&mut state);
         }
         self.ready.notify_all();
     }
@@ -662,6 +671,25 @@ impl StreamPump {
         }
         Ok(())
     }
+
+    /// Pumps packets until the stream ends, then records the end in `slot`, so every capture
+    /// from then on fails with it and no frame of the ended stream is delivered (#398 R1 §5.4).
+    /// Returns the end.
+    pub(crate) fn run(
+        &mut self,
+        reader: &mut dyn Read,
+        decoder: &mut dyn StreamDecoder,
+        slot: &FrameSlot,
+        arrival: &dyn Fn() -> Instant,
+    ) -> StreamEnd {
+        let end = loop {
+            if let Err(end) = self.pump_one(reader, decoder, slot, arrival) {
+                break end;
+            }
+        };
+        slot.update(|state| state.end(end));
+        end
+    }
 }
 
 fn read_stream(reader: &mut dyn Read, buffer: &mut [u8]) -> Result<(), StreamEnd> {
@@ -671,18 +699,12 @@ fn read_stream(reader: &mut dyn Read, buffer: &mut [u8]) -> Result<(), StreamEnd
 }
 
 fn run_stream(mut socket: TcpStream, slot: Arc<FrameSlot>, expected: ExpectedVideo) {
-    let end = match h264::OpenH264Decoder::open() {
-        Err(end) => end,
+    match h264::OpenH264Decoder::open() {
+        Err(end) => slot.update(|state| state.end(end)),
         Ok(mut decoder) => {
-            let mut pump = StreamPump::new(expected);
-            loop {
-                if let Err(end) = pump.pump_one(&mut socket, &mut decoder, &slot, &Instant::now) {
-                    break end;
-                }
-            }
+            StreamPump::new(expected).run(&mut socket, &mut decoder, &slot, &Instant::now);
         }
-    };
-    slot.update(|state| state.end(end));
+    }
 }
 
 struct StreamHandle {
@@ -851,7 +873,7 @@ impl ScrcpyBackend {
             .with_diagnostic(DeviceErrorCategory::Response, "capture.scrcpy.fresh_wait"),
             FreshWaitFailure::Poisoned => coded_error(
                 StreamCaptureCode::ScrcpyStreamEnded,
-                DeviceErrorSeverity::Fatal,
+                DeviceErrorSeverity::Transient,
                 "the stream state lock was poisoned",
             )
             .with_diagnostic(DeviceErrorCategory::Native, "capture.scrcpy.stream.state"),
@@ -1144,15 +1166,21 @@ fn coded_error(
     DeviceError::with_severity(severity, format!("{}: {detail}", code.as_str()))
 }
 
+/// `scrcpy_server_start_failed` is a transient device error (coordinator ruling 10-13, the
+/// instance-level rule of board #403): only the open of that instance's capture backend, and so
+/// that instance's run, fails and the ladder handles it; the host never treats it as fatal for
+/// the Runtime. A device resource left unconfirmed keeps its own handling.
 fn start_failure(step: &'static str, detail: impl Display) -> DeviceError {
     coded_error(
         StreamCaptureCode::ScrcpyServerStartFailed,
-        DeviceErrorSeverity::Fatal,
+        DeviceErrorSeverity::Transient,
         detail,
     )
     .with_diagnostic(DeviceErrorCategory::BackendLaunch, step)
 }
 
+/// An adb step of the start failed: `scrcpy_server_start_failed`, transient as in
+/// [`start_failure`], keeping the adb error's resource summary.
 fn start_failure_from(error: DeviceError, step: &'static str) -> DeviceError {
     let message = format!(
         "{}: {}",
@@ -1160,7 +1188,7 @@ fn start_failure_from(error: DeviceError, step: &'static str) -> DeviceError {
         error.message()
     );
     error
-        .with_severity_and_message(DeviceErrorSeverity::Fatal, message)
+        .with_severity_and_message(DeviceErrorSeverity::Transient, message)
         .with_diagnostic(DeviceErrorCategory::BackendLaunch, step)
 }
 

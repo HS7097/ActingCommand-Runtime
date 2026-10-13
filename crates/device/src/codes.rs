@@ -51,10 +51,13 @@ actingcommand_contract::outcome_codes! {
         /// build embedded none). Only that instance's scrcpy capture backend is unavailable;
         /// the Runtime goes on (coordinator ruling 10-13, board #403 direction).
         ScrcpyServerDigestMismatch => "scrcpy_server_digest_mismatch": error / none,
-        /// Pushing, forwarding or starting the scrcpy server, or its first frame, failed.
+        /// Pushing, forwarding or starting the scrcpy server, or its first frame, failed. Only
+        /// that instance's run fails and the ladder handles it; the Runtime goes on
+        /// (coordinator ruling 10-13, the instance-level rule of board #403).
         ScrcpyServerStartFailed => "scrcpy_server_start_failed": error / environment_fault,
         /// The stream stopped: the server exited, the socket closed, a packet was malformed or
-        /// decoding failed.
+        /// decoding failed. Only that instance's run fails and the ladder handles it; the
+        /// Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).
         ScrcpyStreamEnded => "scrcpy_stream_ended": error / environment_fault,
         /// The encoder produced another video size than the unscaled crop requested, so a frame
         /// would be scaled; it is refused instead.
