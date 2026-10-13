@@ -53,9 +53,11 @@ fn gate_recent_runs_of_an_instance_with_more_lab_events_than_one_read_keeps_come
     // One run whose entry page did not match ends failed before its package is admitted; then
     // the Lab works on the same instance.
     let run_facts = [
+        // Workflow #373 NAV-3b: the entry's pages as a set, and no matched page.
         TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::Initial,
-            required_page: ENTRY_PAGE.to_owned(),
+            required_pages: vec![ENTRY_PAGE.to_owned()],
+            matched_page: None,
             matched: false,
         },
         TaskSemanticFact::EntryTargetDisposition {
