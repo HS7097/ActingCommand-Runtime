@@ -12,6 +12,8 @@ mod held_runtime;
 
 mod emulator_restart;
 mod install_transition;
+// Workflow #389 MCP-7: `actingctl diagnose` ↔ `ac_diagnose`.
+mod mcp_diagnose_parity;
 mod mcp_events_parity;
 mod mcp_harness;
 mod mcp_instance_alias;
