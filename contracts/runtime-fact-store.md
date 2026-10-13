@@ -328,16 +328,17 @@ The result `ForensicRuntimeFactsResult` is one of:
   `position`).
 - `not_available { position, latest_sequence, reason }` — `ledger_empty` (the
   snapshot holds no event) or `position_beyond_snapshot`.
-- `failed { position, code, operation, detail, io_kind? }` — position 0
-  (`runtime_fact_ledger_position_invalid`), an empty state root
+- `failed { position, outcome, detail, io_kind? }` — `outcome` is the failure
+  as a code with its `operation` (ledger revision 3; was `code` and `operation`):
+  position 0 (`runtime_fact_ledger_position_invalid`), an empty state root
   (`invalid_state_root`), the ledger's own open and read codes (`ledger_io` for
   an absent ledger, `ledger_read_budget_exceeded`), a source that is not
   completely readable (`runtime_facts_source_incomplete`), no event at the
   position (`runtime_facts_position_missing`), the cooperative deadline
   (`runtime_facts_read_budget_exceeded`), or `runtime_fact_replay_failed`.
   When a deadline runs out (`ledger_read_budget_exceeded` or
-  `runtime_facts_read_budget_exceeded`), `operation` names the phase it ran out
-  in.
+  `runtime_facts_read_budget_exceeded`), the outcome's `operation` names the
+  phase it ran out in.
 
 `actingledger --state-root <state-root> facts --at <sequence>` prints the
 result as one JSON line under `command: facts`, with 30 s for each phase. It exits

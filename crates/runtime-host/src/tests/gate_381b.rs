@@ -638,7 +638,9 @@ fn gate_an_errcode_refusal_on_a_running_instance_reads_its_state_once_and_keeps_
 /// G19 row 1, the busy row (Workflow #369 H-4, W-3, S6b): an emulator control behind a holder
 /// waits at most 5 s for its turn in the instance's queue; at the cap it is refused Denied
 /// `lease_queue_expired`, naming the holder and its queue position, with one `scheduler.denied`
-/// `lease.queue_expired` at Warning, no `emulator_control_busy` pair and no provider call.
+/// `lease.queue_expired`, no `emulator_control_busy` pair and no provider call. Ledger revision
+/// 3 (#378 A3): the record's severity is its outcome's category, `lease_queue_expired`'s
+/// `error` (was Warning).
 #[test]
 fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_provider_call() {
     // A frozen clock, so the holder's lease does not lapse while the control waits.
@@ -678,7 +680,7 @@ fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_pro
     let events = request_events(&run.host, &receipt);
     let denied = of_type(&events, EventType::SchedulerDenied);
     assert_eq!(denied.len(), 1, "{events:?}");
-    assert_eq!(denied[0].severity(), EventSeverity::Warning);
+    assert_eq!(denied[0].severity(), EventSeverity::Error);
     assert!(matches!(
         denied[0].payload(),
         EventPayload::Scheduler(SchedulerPayload::Denied(payload))

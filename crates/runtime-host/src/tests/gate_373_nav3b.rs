@@ -250,9 +250,12 @@ fn entry_recognitions(
         .collect()
 }
 
+/// The code of the terminal's outcome (ledger revision 3, #378 A3; was its `failure_code`).
 fn terminal_failure_code(facts: &[&TaskSemanticFact]) -> Option<String> {
     facts.iter().find_map(|fact| match fact {
-        TaskSemanticFact::TerminalCommitted { failure_code, .. } => failure_code.clone(),
+        TaskSemanticFact::TerminalCommitted { outcome, .. } => outcome
+            .as_ref()
+            .map(|outcome| outcome.code().as_str().to_owned()),
         _ => None,
     })
 }
@@ -394,12 +397,13 @@ fn entry_recovery_lands_in_the_set_and_the_run_goes_on_from_that_stage() {
     assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     let facts = task_facts(&run.events);
+    // Ledger revision 3 (#378 A3): the fail-closed disposition carries the failure as `outcome`.
     assert!(facts.iter().any(|fact| matches!(
         fact,
         TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::FailClosed,
-            failure_code: Some(code),
-        } if code == "contained_task_home_recovery_terminal_non_home"
+            outcome: Some(outcome),
+        } if outcome.code().as_str() == "contained_task_home_recovery_terminal_non_home"
     )));
     assert!(staged_steps(&facts).is_empty());
 }

@@ -1584,12 +1584,19 @@ fn a_start_of_a_stopped_instance_is_granted_its_claim_without_an_error_record() 
         )),
         "no Error record: {since_start:#?}"
     );
+    // Ledger revision 3 (#378 A3): a failure's codes are its `runtime.failed` outcome's, not
+    // tokens of a diagnostic message.
     assert!(
         since_start
             .iter()
             .copied()
-            .filter_map(failure_message)
-            .all(|message| !message.contains("instance_not_running")),
+            .filter_map(failure_outcome)
+            .all(|outcome| {
+                !outcome
+                    .codes()
+                    .iter()
+                    .any(|code| code.as_str() == "instance_not_running")
+            }),
         "no instance_not_running"
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
