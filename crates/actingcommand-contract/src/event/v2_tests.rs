@@ -3274,6 +3274,20 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
             Some(crate::RuntimeErrorCode::BackendOperationFailed.code()),
         ),
         (
+            ProviderPayloadDraft::observed(ProviderStartupRecord {
+                owner_epoch: epoch,
+                backend: ProviderBackend::Configured,
+                observation: ProviderStartupObservation::ModelFolderInvalid {
+                    outcome: Outcome::relayed("vision_model_folder_invalid")
+                        .path("C:/fixture/vision/models/neutral.partial")
+                        .model_name("neutral.partial"),
+                },
+            })
+            .into(),
+            EventType::ProviderStartupObserved,
+            crate::outcome::Code::relayed("vision_model_folder_invalid"),
+        ),
+        (
             SchedulerPayloadDraft::denied(
                 EventAction::RuntimeAction,
                 DiagnosticCode::LeaseBusy,

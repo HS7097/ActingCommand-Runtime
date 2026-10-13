@@ -15,7 +15,7 @@ use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
-use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY};
+use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY, VisionListingCode};
 
 impl ConfiguredProvider {
     /// Provider startup: completes the discovery-bound instances, constructs the vision
@@ -488,17 +488,17 @@ fn assemble_vision_provider(
             },
         )?;
     }
-    // An invalid folder's name or path may not be UTF-8; its fact carries the lossy form.
+    // Ledger revision 3: an invalid folder is its registered code with the folder's path (lossy
+    // when it is not UTF-8) and its name when the name fits the key table's name rule (at most
+    // 256 bytes, no control character); vision-ffi's reason stays in check-config's report.
     for folder in &inventory.listing.invalid {
-        startup.record(
-            backend,
-            Observation::Binding {
-                field: format!("invalid_model:{}", folder.name),
-                configured: format!("invalid: {}", folder.reason),
-                base: models_dir.clone(),
-                resolved: folder.path.to_string_lossy().into_owned(),
-            },
-        )?;
+        let outcome = Outcome::new(VisionListingCode::VisionModelFolderInvalid).path(&folder.path);
+        let outcome = if folder.name.len() <= 256 && !folder.name.chars().any(char::is_control) {
+            outcome.model_name(folder.name.as_str())
+        } else {
+            outcome
+        };
+        startup.record(backend, Observation::ModelFolderInvalid { outcome })?;
     }
     if inventory.listing.ocr.is_empty() {
         startup.record(ProviderBackend::FastdeployPpocr, Observation::NotConfigured)?;

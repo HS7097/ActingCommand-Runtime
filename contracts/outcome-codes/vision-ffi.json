@@ -35,11 +35,14 @@
       "owner": "vision-ffi",
       "layer": "vision",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "model_name": "optional",
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it).",
+      "description": "A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it). Startup records each such folder with its path and, when it fits the name rule, its model_name.",
       "common_causes": "TBD",
       "handling": "TBD"
     }

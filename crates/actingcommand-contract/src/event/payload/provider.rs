@@ -80,6 +80,13 @@ pub enum ProviderStartupObservation {
         stage: ProviderStartupStage,
         failure: ProviderNativeFailure,
     },
+    /// A folder under the vision root's `models` that breaks the folder rule (ledger revision
+    /// 3, Workflow #378 A3): `outcome` is `vision_model_folder_invalid` with the folder's
+    /// `path` and, when it fits the name rule, its `model_name`. Startup goes on; only the
+    /// requests that name the folder fail. The specific reason is `check-config`'s report only.
+    ModelFolderInvalid {
+        outcome: Outcome,
+    },
     /// One successful `MuMuManager` discovery run per startup (Workflow #316).
     InstanceDiscovery {
         source: String,
@@ -236,6 +243,7 @@ impl PayloadDetail for ProviderPayload {
     fn outcome(&self) -> Option<&Outcome> {
         match &self.record.observation {
             ProviderStartupObservation::Failed { failure, .. } => Some(&failure.outcome),
+            ProviderStartupObservation::ModelFolderInvalid { outcome } => Some(outcome),
             _ => None,
         }
     }
