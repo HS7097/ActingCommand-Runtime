@@ -779,8 +779,9 @@ fn n6_2_a_broken_game_root_never_stops_the_runtime() {
 
 /// N6-3: the run waits for its step's destination when a notice covers it: the handler runs as
 /// a layer of the run (`role: interrupt_handler`), and the step goes on waiting with its own
-/// budget: the handling (longer than that budget) is not counted, so the destination that
-/// shows later than the budget after the step's input still confirms the step.
+/// budget: the handling (its 800 ms `post_delay_ms` alone is longer than the step's 600 ms
+/// budget) is not counted, so the destination that shows later than the budget after the step's
+/// input still confirms the step.
 #[test]
 fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
     let state = Arc::new(FakeState::default());
@@ -808,17 +809,15 @@ fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
             1
         )]));
     // After the run's input the notice covers the page; after the handler's input the page is
-    // dark for 300 ms, then `home` shows.
-    let dark_since = std::sync::Mutex::new(None::<Instant>);
-    script(&state, move |_, inputs| match inputs {
+    // dark (the handler's destination) for ten captures, then `home` shows. Captures are
+    // counted, the clock is not read (test plan v2.2 §2.1 guard 3).
+    let dark_from = std::sync::Mutex::new(None::<usize>);
+    script(&state, move |capture, inputs| match inputs {
         0 => frame(RED, None),
         1 => frame(RED, Some(Overlay::Notice)),
         _ => {
-            let since = *dark_since
-                .lock()
-                .expect("dark since")
-                .get_or_insert_with(Instant::now);
-            if since.elapsed() < Duration::from_millis(300) {
+            let first = *dark_from.lock().expect("dark from").get_or_insert(capture);
+            if capture < first + 10 {
                 frame(BLACK, None)
             } else {
                 frame(BLUE, None)
@@ -1160,8 +1159,12 @@ fn n6_10_then_run_runs_its_package_after_the_handler_and_resumes() {
     assert_eq!(completed, ["neutral/away", "neutral/home"]);
 }
 
-/// N6-11: a handler that fails ends the run with its own code, recorded as the layer's
-/// `EntryRecoveryFailed` with `role: interrupt_handler`.
+/// N6-11 (M-373 §6.2 item 3, §6.3): a handler that fails ends the run with its own code,
+/// recorded as the layer's `EntryRecoveryFailed` with `role: interrupt_handler`. The notice
+/// never leaves: the handler's one step (`retryable: false`) sees its own page `notice` again
+/// instead of its destination, which is the handler's `contained_task_step_unconfirmed`. The run
+/// itself never started a step: without the notice it would have ended on its unknown page
+/// (`contained_task_page_unknown`), and its only input is the handler's.
 #[test]
 fn n6_11_a_failed_handler_ends_the_run_with_its_own_code() {
     let state = Arc::new(FakeState::default());
@@ -1173,26 +1176,34 @@ fn n6_11_a_failed_handler_ends_the_run_with_its_own_code() {
     host.close().expect("close runtime host");
 
     assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
-    assert_eq!(run.failure().code().as_str(), "page_confirmation_failed");
     let (admitted, completed, failed) = run.handler_layers();
     assert_eq!(admitted, 1);
     assert!(completed.is_empty());
+    let [handler_failure] = failed.as_slice() else {
+        panic!("one failed handler layer: {failed:?}");
+    };
     assert_eq!(
-        failed
-            .iter()
-            .map(|outcome| outcome.code().as_str())
-            .collect::<Vec<_>>(),
-        ["page_confirmation_failed"]
+        handler_failure.code().as_str(),
+        "contained_task_step_unconfirmed"
     );
+    assert_eq!(
+        run.failure().code(),
+        handler_failure.code(),
+        "the run ends with the handler's own code"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     assert!(run.handled().is_empty());
 }
+
+/// How an N6-12 case lays out the handler `close_notice` in the game root.
+type ArrangeHandler = Box<dyn Fn(&mut GameRoot)>;
 
 /// N6-12: a handler that cannot be admitted, is not eligible as a layer of the run, or whose
 /// entry does not hold its page ends the run with `contained_task_navigation_package_invalid`
 /// (`navigation_role: handler`) before any input.
 #[test]
 fn n6_12_a_handler_unfit_for_its_part_ends_the_run_before_any_input() {
-    let cases: [(&str, Box<dyn Fn(&mut GameRoot)>, &str); 4] = [
+    let cases: [(&str, ArrangeHandler, &str); 4] = [
         (
             "listed, not installed",
             Box::new(|root: &mut GameRoot| {
