@@ -16,7 +16,7 @@ outcome_keys! {
     aliases: list(name),
     instance_id: id,
     instance_index: integer,
-    device_label: token,
+    device_label: name,
     path: path,
     install_root: path,
     state_root: path,

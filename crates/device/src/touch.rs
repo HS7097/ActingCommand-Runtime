@@ -1068,7 +1068,7 @@ impl TouchBackendFactory for AdbShellInputFactory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AdbShellInputBackend {
     input_parameters: Option<actingcommand_contract::BackendInputParameterCheck>,
     recovery: Option<crate::AdbTargetRecovery>,
@@ -1079,6 +1079,25 @@ pub struct AdbShellInputBackend {
     connect_geometry: Option<AdbInputConnectGeometry>,
     connected: bool,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
+}
+
+/// Workflow #398 RD-1a (model-398 v1.1 §3.5 rule 1): `serial` holds the raw adb argument, so
+/// `Debug` shows the target's label in its place, as [`crate::DeviceSerial`] does.
+impl std::fmt::Debug for AdbShellInputBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdbShellInputBackend")
+            .field("input_parameters", &self.input_parameters)
+            .field("recovery", &self.recovery)
+            .field("adb_config", &self.adb_config)
+            .field("target", &self.target)
+            .field("serial", &self.target.label())
+            .field("bounds", &self.bounds)
+            .field("connect_geometry", &self.connect_geometry)
+            .field("connected", &self.connected)
+            .field("close_result", &self.close_result)
+            .finish()
+    }
 }
 
 impl AdbShellInputBackend {

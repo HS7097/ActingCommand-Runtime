@@ -5,7 +5,7 @@
 //! `raw_text_redacted`, and the key table agrees with the catalog header. With row T1's stored
 //! form: the adb command observation round-trips its `raw_text_redacted` flag.
 
-use actingcommand_contract::outcome::{KeyKind, key_kind};
+use actingcommand_contract::outcome::{KeyKind, Record, key_kind};
 use actingcommand_contract::{AdbCommandEvidence, AdbTransportState, LifecycleNativeDetail};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -21,7 +21,18 @@ fn catalog_file(name: &str) -> Value {
 
 #[test]
 fn rd1a_t6_device_label_replaces_adb_serial_in_keys_and_foreign_adb_error() {
-    assert_eq!(key_kind("device_label"), Some(KeyKind::Token));
+    // A label carries the instance alias as configured (`handset:<alias>`, upper case and
+    // CJK allowed) or an IPv6 `HOST:PORT`, so the key takes the alias key's type, `name`
+    // (train 3 review fix), and such labels pass the key check.
+    assert_eq!(key_kind("device_label"), Some(KeyKind::Name));
+    assert_eq!(key_kind("device_label"), key_kind("alias"));
+    for label in ["handset:Bench-\u{6d4b}\u{8bd5}", "[2001:db8::42]:16416"] {
+        let record = Record::new().device_label(label);
+        assert_eq!(
+            record.values().get("device_label").and_then(Value::as_str),
+            Some(label)
+        );
+    }
     assert_eq!(key_kind("raw_text_redacted"), Some(KeyKind::Boolean));
     assert_eq!(key_kind("adb_serial"), None);
 
@@ -30,7 +41,7 @@ fn rd1a_t6_device_label_replaces_adb_serial_in_keys_and_foreign_adb_error() {
         header
             .pointer("/keys/device_label/type")
             .and_then(Value::as_str),
-        Some("token")
+        Some("name")
     );
     assert_eq!(
         header

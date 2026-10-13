@@ -2267,12 +2267,18 @@ mod tests {
         use actingcommand_runtime_host::RuntimeHost;
 
         // Workflow #398 RD-1a: a configured serial is bound for the whole test process and
-        // redacted wherever it appears, so the configured values are neutral fake serials.
-        for (capture, endpoint) in [
-            (false, "TESTSERIAL0006"),
-            (true, "TESTSERIAL0007"),
-            (true, "TESTSERIAL0008"),
-            (true, "TESTSERIAL0009"),
+        // redacted wherever it appears, so the serial rows are neutral fake serials. A target
+        // configured by host and port is labelled `HOST:PORT` and kept as it is, so the address
+        // forms (IPv4, IPv6, host name) are rows configured that way (train 3 review fix).
+        for (capture, by_serial, endpoint) in [
+            (false, true, "TESTSERIAL0006"),
+            (true, true, "TESTSERIAL0007"),
+            (true, true, "TESTSERIAL0008"),
+            (true, true, "TESTSERIAL0009"),
+            (false, false, "127.0.0.1:16384"),
+            (true, false, "198.51.100.42:16416"),
+            (true, false, "[2001:db8::42]:16416"),
+            (true, false, "device.example.test:16416"),
         ] {
             let root = TempDir::new().expect("tempdir");
             let id = IdentifierIssuer::new()
@@ -2280,17 +2286,25 @@ mod tests {
                 .mint_instance_id()
                 .expect("instance id");
             let missing_adb = root.path().join("missing-adb.exe");
+            let mut instance = json!({
+                "alias": "neutral.device", "instance_id": id.transport(),
+                "application_id": "neutral.application", "adb_path": missing_adb,
+                "connect": false,
+                "touch_backend": "adb_shell_input", "capture_backend": "adb"
+            });
+            if by_serial {
+                instance["serial"] = json!(endpoint);
+            } else {
+                let (host, port) = endpoint.rsplit_once(':').expect("HOST:PORT");
+                instance["host"] = json!(host);
+                instance["port"] = json!(port.parse::<u16>().expect("port"));
+            }
             let value = json!({
                 "schema_version": CONFIG_SCHEMA_VERSION,
                 "state_root": root.path(),
                 "bind_host": "127.0.0.1", "bind_port": 0,
                 "secret_fingerprint_salt": "0123456789abcdef",
-                "instances": [{
-                    "alias": "neutral.device", "instance_id": id.transport(),
-                    "application_id": "neutral.application", "adb_path": missing_adb,
-                    "serial": endpoint, "connect": false,
-                    "touch_backend": "adb_shell_input", "capture_backend": "adb"
-                }]
+                "instances": [instance]
             });
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             let assembly = config.assemble().expect("runtime assembly");
@@ -2390,9 +2404,14 @@ mod tests {
             assert!(!native.truncated());
             assert!(native.text().contains("failed to spawn adb"));
             // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
-            // reaches the native cause only as its label token.
-            assert!(!native.text().contains(endpoint));
-            assert!(native.text().contains("[device:handset:neutral.device]"));
+            // reaches the native cause only as its label token; a `HOST:PORT` target keeps its
+            // address there, as before.
+            if by_serial {
+                assert!(!native.text().contains(endpoint));
+                assert!(native.text().contains("[device:handset:neutral.device]"));
+            } else {
+                assert!(native.text().contains(endpoint));
+            }
             if !capture {
                 assert!(native.text().contains("child_operation=ensure_device"));
             }

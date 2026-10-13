@@ -38,7 +38,7 @@
       "description": "An emulator instance index."
     },
     "device_label": {
-      "type": "token",
+      "type": "name",
       "description": "The label of an adb target: HOST:PORT for an emulator, handset:<alias> for a device addressed by its serial. Never the serial itself (Workflow #398)."
     },
     "path": {
