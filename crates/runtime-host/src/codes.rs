@@ -652,7 +652,6 @@ actingcommand_contract::outcome_codes! {
         PerformanceControlWorkloadInvalid => "performance_control_workload_invalid": error / none,
         PerformanceDispatchGateInvalid => "performance_dispatch_gate_invalid": error / none,
         PerformanceDurationOverflow => "performance_duration_overflow": error / none,
-        PerformanceEventTypeEncodeFailed => "performance_event_type_encode_failed": error / none,
         PerformanceFrameGapMissing => "performance_frame_gap_missing": error / none,
         PerformanceHeavyCountOverflow => "performance_heavy_count_overflow": error / none,
         PerformanceInstanceTrackingExhausted => "performance_instance_tracking_exhausted": error / none,
@@ -1133,6 +1132,10 @@ actingcommand_contract::outcome_codes! {
         /// optional `request_id`, `instance_id`).
         PackRegistryDispatchWithdrawn => "pack_registry_dispatch_withdrawn": info / none,
         // ---- end of #389 U-0 registrations
+        /// Error. A performance observation event the contract refused was dropped and the
+        /// performance monitor degraded instead of ending the Runtime (keys `event_type`; its
+        /// `caused_by` link is the contract's sanitization outcome; Workflow #378 A2-P).
+        PerformanceEventRejected => "performance_event_rejected": error / none,
     }
 }
 

@@ -249,12 +249,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/artifact-store/src/frame_store.rs",
-        "RecognitionState::Failed.reason",
-        &[Check::G2],
-        "A2-P: carries the page detector's English error text (the Display of PageDetectorError or BatchLevelError, cut to 256 characters) as a frame's recognition failure reason; giving it a registered code changes the timeline's reason text",
-    ),
-    bridge(
-        "crates/artifact-store/src/frame_store.rs",
         "RecognitionState::as_json",
         &[Check::G3],
         "B3: a frame store timeline JSON key (reason, pinned_reason); B3 builds the timeline from typed records",
@@ -296,12 +290,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "task_evidence_report",
-        &[Check::G5],
-        "A2-P: the report gap token artifact_verification_failed shares its spelling with a contract code; A2-P renames one side (model section 2.2)",
-    ),
-    bridge(
         "apps/ledger-forensics/src/lib.rs",
         "CliError.code",
         &[Check::G2],
@@ -327,18 +315,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     // A2a part 1 bridges: channels of the contract crate and runtime-client that stay strings
     // until the slice the reason names removes the entry (brief-a2a.md A2a-9).
-    bridge(
-        "crates/actingcommand-contract/src/emulator.rs",
-        "EmulatorVersionEvidence::Unavailable.reason",
-        &[Check::G2],
-        "A2-P: the unavailable version's reason is English text (the device layer's offline fake, the host's backend registry) sent in Status capabilities; a typed reason changes that emitted value, so A2-P replaces it (A2e keeps every emitted string)",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticRecognitionError.code",
-        &[Check::G2],
-        "A2-P: a recognition pack error's PascalCase spelling (`InvalidPackage`, ...) in the task-diagnostic artifact; A2-P registers and renames these spellings, then the row carries an outcome",
-    ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft.operation",
@@ -542,12 +518,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "project_observation",
         &[Check::G3],
         "B4: the Lab page projection's json keys blocked_reason and reason hold registered PageProjectionCode spellings; B4 converts the Lab sites",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/ppocr_diagnostic.rs",
-        "PpocrCpuAssignedNodeDiagnostic.placement_reason",
-        &[Check::G2],
-        "A2-P: carries the vision provider's placement token unavailable, which breaks the form; A2-P renames it (or makes it a vocabulary), then the field is retyped",
     ),
     bridge(
         "crates/actingcommand-contract/src/primitive.rs",
@@ -1085,7 +1055,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/vision-provider-check/src/main.rs",
         "InvalidModelReport.reason",
         &[Check::G2],
-        "A2-P: carries vision-ffi's model folder refusal, English text that the tool prints as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     // A2b bridges: channels of runtime-host, the scheduler and host-metrics that stay strings
     // until the slice the reason names removes the entry (brief-a2bcd.md; the A2a pattern).
@@ -1164,18 +1134,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "RuntimeLifecycleFailure::Process.code",
         &[Check::G2],
         "A2b/A2c merge follow-up: actingd's own failure code may be a runtime host code that actingd holds as a spelling (ErrorCode::Host, filled from RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
-        "EntryRecoveryRuntime::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
-        "RuntimeContainedTask::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
     ),
     bridge(
         "crates/runtime-host/src/host/contained_task.rs",
@@ -1316,18 +1274,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/host/task_diagnostic.rs",
-        "RuntimeContainedTask::diagnostic_guard",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/task_diagnostic.rs",
-        "RuntimeContainedTask::diagnostic_guard_inner",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
         "crates/runtime-host/src/ledger_maintenance.rs",
         "LedgerMaintenanceFailure.code",
         &[Check::G2],
@@ -1344,36 +1290,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "OwnerUnlockFailure.stage",
         &[Check::G2],
         "A2-P: the one-word unlock stages journal and ledger break the form; A2-P renames them (unlock-owner v2 is A6a's)",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "PerformanceMonitor::ingest_monitor_failure",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "PerformanceMonitor::record_monitor_failure",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "rejected_event_code",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "valid_error_code",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance/capacity.rs",
-        "PerformanceMonitor::degrade_for_rejected_summary",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
     ),
     bridge(
         "crates/runtime-host/src/policy_control.rs",
@@ -1499,12 +1415,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host passes its own code, still a spelling (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train), into a contained task failure; then the constructor takes Code",
     ),
     bridge(
-        "crates/execution-kernel/src/contained_task.rs",
-        "ContainedTaskRuntime::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the guard evaluation reason is a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is; A2-P renames it, then types the parameter",
-    ),
-    bridge(
         "crates/execution-kernel/src/contained_task/linear.rs",
         "optional_runs",
         &[Check::G2],
@@ -1521,12 +1431,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "read_policy",
         &[Check::G2],
         "B4: the error is the English text of a selection policy document refusal, which the caller reports under contained_task_select_policy_invalid; B4 types it",
-    ),
-    bridge(
-        "crates/execution-kernel/src/environment.rs",
-        "EnvironmentStateErrorKind::reason",
-        &[Check::G2],
-        "A2-P: the reason set includes the single word expired and the spelling low_confidence that other owners use as a vocabulary token, which the kernel cannot register as they are; A2-P renames them, then types the getter",
     ),
     bridge(
         "crates/execution-kernel/src/environment.rs",
@@ -1560,21 +1464,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/execution-kernel/src/recovery.rs",
-        "NodeOutcome::reason",
-        &[Check::G2],
-        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
-    ),
-    bridge(
-        "crates/execution-kernel/src/recovery.rs",
         "RecoveryExecutionReport.terminal_reason",
         &[Check::G2],
         "B4: not an outcome code: English text saying why a recovery graph run ended",
-    ),
-    bridge(
-        "crates/execution-kernel/src/recovery.rs",
-        "RecoveryRuntime::save_on_error",
-        &[Check::G2],
-        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
     ),
     bridge(
         "crates/execution-kernel/src/run.rs",
@@ -1793,28 +1685,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: not an outcome code: English text saying why a target cannot be measured, written into the failure's detail",
     ),
     bridge(
-        "crates/recognition-pack/src/lib.rs",
-        "UnsupportedRecognitionTarget.reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
-    ),
-    bridge(
-        "crates/recognition-pack/src/lib.rs",
-        "unsupported_template_reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
-    ),
-    bridge(
         "crates/recognition-pack/src/target_consensus.rs",
         "TargetConsensus::validate",
         &[Check::G2],
         "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
-    ),
-    bridge(
-        "crates/resource-tooling/src/api.rs",
-        "UnsupportedRecognitionTargetResponse.reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
     ),
     bridge(
         "crates/resource-tooling/src/authoring.rs",
@@ -1907,12 +1781,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the restore provenance record's json keys stage and code hold a Lab operation failure's stage and code; B4 converts the Lab sites and builds the record from typed members",
     ),
     bridge(
-        "crates/resource-tooling/src/resource_restore.rs",
-        "restore_authoring_draft",
-        &[Check::G5],
-        "A2-P: the restore report's record_gaps token input_failed has the spelling of the contract's input_failed code with another meaning; resource tooling's side is the more specific one and A2-P renames it (CD-8), which changes the report",
-    ),
-    bridge(
         "crates/selection-policy/src/evaluator.rs",
         "Assessment::Aborted.reason",
         &[Check::G2],
@@ -1952,43 +1820,43 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/vision-ffi/src/models.rs",
         "InvalidModelFolder.reason",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "VisionModelDescription::validate",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "VisionModelDescription::validate_params",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "classify_folder",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "directory",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "read_description",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "regular_file",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "providers/ppocr-onnx-json/src/lib.rs",
@@ -2227,12 +2095,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "InputAction::Text.text",
         &[Check::G6],
         "B4: the text an input action types (data; a task record persists it only as [redacted]), not Runtime prose; B4 settles the input records",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/emulator.rs",
-        "EmulatorVersionEvidence::Unavailable.reason",
-        &[Check::G6],
-        "A2-P: the unavailable version's reason is English text (the same channel as its G2 bridge); A2-P replaces it with a typed reason",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",

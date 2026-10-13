@@ -25,7 +25,7 @@ impl OcrInvocationId {
     }
 
     pub fn validate(&self) -> VisionFfiResult<()> {
-        validate_opaque_id("ocr-invocation", "invocation_id", &self.0)
+        validate_opaque_id("ocr_invocation", "invocation_id", &self.0)
     }
 }
 
@@ -43,7 +43,7 @@ impl OcrSessionId {
     }
 
     pub fn validate(&self) -> VisionFfiResult<()> {
-        validate_opaque_id("ocr-session", "session_id", &self.0)
+        validate_opaque_id("ocr_session", "session_id", &self.0)
     }
 }
 
@@ -59,7 +59,7 @@ impl CudaDeviceSelector {
         if usize::try_from(self.ordinal).map_or(true, |ordinal| ordinal >= MAX_CUDA_DEVICES) {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidRequest,
-                "ocr-device-selector",
+                "ocr_device_selector",
                 format!(
                     "CUDA ordinal {} exceeds the bounded device range 0..{}",
                     self.ordinal,
@@ -68,7 +68,7 @@ impl CudaDeviceSelector {
             ));
         }
         validate_provider_identity(
-            "ocr-device-selector",
+            "ocr_device_selector",
             "expected_stable_identity",
             &self.expected_stable_identity,
         )
@@ -88,7 +88,7 @@ impl CudaDeviceIdentity {
         if usize::try_from(self.ordinal).map_or(true, |ordinal| ordinal >= MAX_CUDA_DEVICES) {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidResponse,
-                "ocr-device-inventory",
+                "ocr_device_inventory",
                 format!(
                     "CUDA inventory ordinal {} exceeds the bounded device range",
                     self.ordinal
@@ -96,12 +96,12 @@ impl CudaDeviceIdentity {
             ));
         }
         validate_provider_identity(
-            "ocr-device-inventory",
+            "ocr_device_inventory",
             "stable_identity",
             &self.stable_identity,
         )?;
         if let Some(pci_bus_id) = &self.pci_bus_id {
-            validate_provider_identity("ocr-device-inventory", "pci_bus_id", pci_bus_id)?;
+            validate_provider_identity("ocr_device_inventory", "pci_bus_id", pci_bus_id)?;
         }
         Ok(())
     }
@@ -119,14 +119,14 @@ impl CudaDeviceInventory {
         if self.driver_version == 0 {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::ProviderUnavailable,
-                "ocr-device-inventory",
+                "ocr_device_inventory",
                 "CUDA driver version must be non-zero",
             ));
         }
         if self.devices.is_empty() || self.devices.len() > MAX_CUDA_DEVICES {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::ProviderUnavailable,
-                "ocr-device-inventory",
+                "ocr_device_inventory",
                 format!("CUDA inventory must contain 1..={MAX_CUDA_DEVICES} usable devices"),
             ));
         }
@@ -137,14 +137,14 @@ impl CudaDeviceInventory {
             if !ordinals.insert(device.ordinal) {
                 return Err(VisionFfiError::fatal_with_code(
                     VisionFfiErrorCode::InvalidResponse,
-                    "ocr-device-inventory",
+                    "ocr_device_inventory",
                     format!("CUDA inventory repeats ordinal {}", device.ordinal),
                 ));
             }
             if !identities.insert(device.stable_identity.as_str()) {
                 return Err(VisionFfiError::fatal_with_code(
                     VisionFfiErrorCode::InvalidResponse,
-                    "ocr-device-inventory",
+                    "ocr_device_inventory",
                     format!(
                         "CUDA inventory contains ambiguous stable identity '{}'",
                         device.stable_identity
@@ -165,14 +165,14 @@ impl CudaDeviceInventory {
             .ok_or_else(|| {
                 VisionFfiError::fatal_with_code(
                     VisionFfiErrorCode::ProviderUnavailable,
-                    "ocr-device-selector",
+                    "ocr_device_selector",
                     format!("CUDA ordinal {} is unavailable", selector.ordinal),
                 )
             })?;
         if device.stable_identity != selector.expected_stable_identity {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::ProviderUnavailable,
-                "ocr-device-selector",
+                "ocr_device_selector",
                 format!(
                     "CUDA ordinal {} resolved to '{}' instead of expected '{}'",
                     selector.ordinal, device.stable_identity, selector.expected_stable_identity
@@ -280,29 +280,29 @@ impl OcrSessionKey {
 
     pub fn validate(&self) -> VisionFfiResult<()> {
         validate_sha256(
-            "ocr-session-key",
+            "ocr_session_key",
             "provider_library_sha256",
             &self.provider_library_sha256,
         )?;
         validate_provider_identity(
-            "ocr-session-key",
+            "ocr_session_key",
             "runtime_library_path",
             &self.runtime_library_path,
         )?;
         validate_sha256(
-            "ocr-session-key",
+            "ocr_session_key",
             "runtime_library_sha256",
             &self.runtime_library_sha256,
         )?;
         validate_provider_identity(
-            "ocr-session-key",
+            "ocr_session_key",
             "onnxruntime_version",
             &self.onnxruntime_version,
         )?;
-        validate_provider_identity("ocr-session-key", "model_ref", &self.model_ref)?;
-        validate_sha256("ocr-session-key", "model_sha256", &self.model_sha256)?;
+        validate_provider_identity("ocr_session_key", "model_ref", &self.model_ref)?;
+        validate_sha256("ocr_session_key", "model_sha256", &self.model_sha256)?;
         validate_sha256(
-            "ocr-session-key",
+            "ocr_session_key",
             "provider_options_sha256",
             &self.provider_options_sha256,
         )?;
@@ -311,7 +311,7 @@ impl OcrSessionKey {
                 if self.requested_cuda_device.is_some() || self.resolved_cuda_device.is_some() {
                     return Err(VisionFfiError::fatal_with_code(
                         VisionFfiErrorCode::InvalidRequest,
-                        "ocr-session-key",
+                        "ocr_session_key",
                         "CPU session must not contain CUDA selector or resolved CUDA identity",
                     ));
                 }
@@ -320,14 +320,14 @@ impl OcrSessionKey {
                 let selector = self.requested_cuda_device.as_ref().ok_or_else(|| {
                     VisionFfiError::fatal_with_code(
                         VisionFfiErrorCode::InvalidRequest,
-                        "ocr-session-key",
+                        "ocr_session_key",
                         "CUDA session is missing the requested device selector",
                     )
                 })?;
                 let resolved = self.resolved_cuda_device.as_ref().ok_or_else(|| {
                     VisionFfiError::fatal_with_code(
                         VisionFfiErrorCode::InvalidRequest,
-                        "ocr-session-key",
+                        "ocr_session_key",
                         "CUDA session is missing the resolved device identity",
                     )
                 })?;
@@ -338,7 +338,7 @@ impl OcrSessionKey {
                 {
                     return Err(VisionFfiError::fatal_with_code(
                         VisionFfiErrorCode::InvalidRequest,
-                        "ocr-session-key",
+                        "ocr_session_key",
                         "CUDA session selector and resolved device identity do not match",
                     ));
                 }
@@ -382,7 +382,7 @@ impl OcrSessionBinding {
         if self.generation == 0 {
             return Err(VisionFfiError::fatal_with_code(
                 VisionFfiErrorCode::InvalidRequest,
-                "ocr-session",
+                "ocr_session",
                 "OCR session generation must be non-zero",
             ));
         }
@@ -484,7 +484,7 @@ pub fn ppocr_model_set_sha256(
         ("classifier_model_sha256", classifier_model_sha256),
     ] {
         if let Some(hash) = hash {
-            validate_sha256("fastdeploy-ppocr", field, hash)?;
+            validate_sha256("fastdeploy_ppocr", field, hash)?;
         }
     }
     let mut hasher = Sha256::new();

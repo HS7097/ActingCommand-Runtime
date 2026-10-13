@@ -10,8 +10,8 @@ use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
-    EmulatorInstanceAction, EmulatorVersionEvidence, FencedWrite, InstanceId,
-    MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
+    EmulatorInstanceAction, EmulatorVersionEvidence, EmulatorVersionUnavailableReason, FencedWrite,
+    InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
@@ -806,7 +806,7 @@ fn capability_profile(
     EmulatorCapabilityProfile::new(
         "runtime.execution_backend_registry",
         EmulatorVersionEvidence::Unavailable {
-            reason: "Backend versions have not been probed.".to_owned(),
+            reason: EmulatorVersionUnavailableReason::NotProbed,
         },
         evidence,
     )

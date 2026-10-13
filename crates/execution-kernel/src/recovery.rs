@@ -7,6 +7,7 @@
 //! tested without opening ADB, capture, MaaTouch, OCR, resources, or game logic.
 
 use crate::codes::ExecutionKernelCode;
+use actingcommand_contract::outcome::Code;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -129,7 +130,9 @@ pub trait RecoveryRuntime {
         interval: Option<Duration>,
         timeout: Option<Duration>,
     ) -> RecoveryResult<RecoverySignal>;
-    fn save_on_error(&mut self, node_id: &str, reason: &str) -> RecoveryResult<()>;
+    /// Saves the failure of a node that declares `save_on_error`: its registered code
+    /// (`detect_failed` or `action_failed`).
+    fn save_on_error(&mut self, node_id: &str, code: Code) -> RecoveryResult<()>;
 }
 
 pub fn execute_recovery_graph(
@@ -171,8 +174,7 @@ pub fn execute_recovery_graph(
         attempts += 1;
         visited_nodes.push(current.to_string());
 
-        let outcome = run_recovery_node(node, runtime)?;
-        if outcome == NodeOutcome::Succeeded {
+        let Some(failure) = run_recovery_node(node, runtime)?.failure_code() else {
             match node.next.as_deref() {
                 Some(next) => current = next,
                 None => {
@@ -184,21 +186,21 @@ pub fn execute_recovery_graph(
                     });
                 }
             }
-        } else if let Some(next) = node.on_error.as_deref() {
-            if node.save_on_error {
-                runtime.save_on_error(&node.id, outcome.reason())?;
+            continue;
+        };
+        if node.save_on_error {
+            runtime.save_on_error(&node.id, failure)?;
+        }
+        match node.on_error.as_deref() {
+            Some(next) => current = next,
+            None => {
+                return Ok(RecoveryExecutionReport {
+                    status: RecoveryStatus::Failed,
+                    visited_nodes,
+                    attempts,
+                    terminal_reason: Some(format!("node '{}' failed: {failure}", node.id)),
+                });
             }
-            current = next;
-        } else {
-            if node.save_on_error {
-                runtime.save_on_error(&node.id, outcome.reason())?;
-            }
-            return Ok(RecoveryExecutionReport {
-                status: RecoveryStatus::Failed,
-                visited_nodes,
-                attempts,
-                terminal_reason: Some(format!("node '{}' failed: {}", node.id, outcome.reason())),
-            });
         }
     }
 }
@@ -211,11 +213,12 @@ enum NodeOutcome {
 }
 
 impl NodeOutcome {
-    fn reason(self) -> &'static str {
+    /// The registered failure code of a node that failed; a node that succeeded has none.
+    const fn failure_code(self) -> Option<Code> {
         match self {
-            Self::Succeeded => "succeeded",
-            Self::DetectFailed => ExecutionKernelCode::DetectFailed.as_str(),
-            Self::ActionFailed => ExecutionKernelCode::ActionFailed.as_str(),
+            Self::Succeeded => None,
+            Self::DetectFailed => Some(ExecutionKernelCode::DetectFailed.code()),
+            Self::ActionFailed => Some(ExecutionKernelCode::ActionFailed.code()),
         }
     }
 }
@@ -414,7 +417,10 @@ mod tests {
         assert_eq!(report.visited_nodes, ["check", "recover"]);
         assert_eq!(
             runtime.saved_errors,
-            [("check".to_string(), "detect_failed".to_string())]
+            [(
+                "check".to_string(),
+                ExecutionKernelCode::DetectFailed.code()
+            )]
         );
     }
 
@@ -531,7 +537,7 @@ mod tests {
         detects: BTreeMap<String, RecoverySignal>,
         actions: BTreeMap<String, RecoverySignal>,
         waits: BTreeMap<u32, RecoverySignal>,
-        saved_errors: Vec<(String, String)>,
+        saved_errors: Vec<(String, Code)>,
         wait_calls: Vec<(u32, Option<Duration>, Option<Duration>)>,
     }
 
@@ -603,9 +609,8 @@ mod tests {
                 .unwrap_or(&RecoverySignal::ActionFailed))
         }
 
-        fn save_on_error(&mut self, node_id: &str, reason: &str) -> RecoveryResult<()> {
-            self.saved_errors
-                .push((node_id.to_string(), reason.to_string()));
+        fn save_on_error(&mut self, node_id: &str, code: Code) -> RecoveryResult<()> {
+            self.saved_errors.push((node_id.to_string(), code));
             Ok(())
         }
     }

@@ -1517,7 +1517,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     let damaged_tree = tree_bytes(state_root);
     let damaged = evidence(0, None, 1024);
     assert!(!damaged.failures.is_empty());
-    assert!(damaged.gaps.contains(&"artifact_verification_failed"));
+    assert!(damaged.gaps.contains(&"artifact_unverifiable"));
     assert_eq!(tree_bytes(state_root), damaged_tree);
     fs::write(before.path(), saved_frame).unwrap();
     append_bytes(&latest_segment(&ledger_root), b"damaged-tail");

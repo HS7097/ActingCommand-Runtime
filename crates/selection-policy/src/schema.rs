@@ -124,7 +124,7 @@ impl SelectionError {
 
 impl fmt::Display for SelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}: {}", self.code, self.detail)
+        write!(formatter, "{}: {}", self.code.as_str(), self.detail)
     }
 }
 

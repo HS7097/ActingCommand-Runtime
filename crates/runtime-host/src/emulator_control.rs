@@ -65,7 +65,7 @@ mod tests {
     use super::*;
     use actingcommand_device::{
         DeviceError, EmulatorCapabilityAvailability, EmulatorCapabilityEvidence,
-        EmulatorVersionEvidence, FakeEmulatorCapabilityBackend,
+        EmulatorVersionEvidence, EmulatorVersionUnavailableReason, FakeEmulatorCapabilityBackend,
     };
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
         let profile = EmulatorCapabilityProfile::new(
             "neutral.fake",
             EmulatorVersionEvidence::Unavailable {
-                reason: "offline fake has no vendor version".to_string(),
+                reason: EmulatorVersionUnavailableReason::NotProbed,
             },
             evidence,
         )

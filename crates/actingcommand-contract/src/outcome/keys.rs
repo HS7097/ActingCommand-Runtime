@@ -380,4 +380,6 @@ outcome_keys! {
     device_state_probe: vocab(device_state_probe),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
+    // Workflow #378 A2-P: a ledger event type (the rejected performance event's).
+    event_type: vocab(event_type),
 }

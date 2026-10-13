@@ -2,7 +2,7 @@
 
 use super::{
     PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent, PerformanceTick,
-    rejected_event_code, system_performance_sampler,
+    rejected_event_outcome, system_performance_sampler,
 };
 use crate::codes::{HostCode, HostLocation};
 use crate::events::{RuntimeEvents, is_sanitization_failure};
@@ -468,10 +468,10 @@ impl PerformanceMonitor {
                 if !is_sanitization_failure(&error) || self.config.is_none() {
                     return Err(error);
                 }
-                let code = rejected_event_code(error.code(), EventType::PerformanceSummary)?;
+                let failure = rejected_event_outcome(&error, EventType::PerformanceSummary);
                 return self.degrade_for_rejected_summary(
                     now.unix_ms,
-                    &code,
+                    failure,
                     ledger,
                     events,
                     &wakes,
@@ -490,18 +490,18 @@ impl PerformanceMonitor {
         Ok(())
     }
 
-    /// The dropped summary is visible as `perf.monitor_degraded` carrying the contract's
-    /// sanitization code and `perf.summary`; a degraded event that fails itself is fatal as
-    /// before.
+    /// The dropped summary is visible as `perf.monitor_degraded` whose outcome is
+    /// `performance_event_rejected` with `perf.summary`, caused by the contract's sanitization
+    /// outcome; a degraded event that fails itself is fatal as before.
     fn degrade_for_rejected_summary(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &str,
+        failure: Outcome,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
         wakes: &PolicyWakeSignal,
     ) -> RuntimeHostResult<()> {
-        let tick = self.record_monitor_failure(observed_at_unix_ms, code, None)?;
+        let tick = self.record_monitor_failure(observed_at_unix_ms, failure, None)?;
         for event in &tick.events {
             let persisted = append(ledger, events, wakes, event.severity(), event.payload())?;
             self.record_event_reference(event, *persisted.event_id())?;

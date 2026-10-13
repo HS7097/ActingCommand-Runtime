@@ -13,7 +13,7 @@ use serde::Serialize;
 use std::env;
 use std::path::{Path, PathBuf};
 
-const MODULE: &str = "vision-provider-check";
+const MODULE: &str = "vision_provider_check";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CheckOptions {
@@ -279,7 +279,7 @@ mod tests {
     fn missing_manifest_arg_is_fatal() {
         let err = parse_args(Vec::<String>::new()).expect_err("missing mode rejected");
 
-        assert_eq!(err.module(), "vision-provider-check");
+        assert_eq!(err.module(), "vision_provider_check");
         assert!(
             err.message()
                 .contains("--models-root or --state-root is required")
