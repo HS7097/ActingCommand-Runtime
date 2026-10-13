@@ -696,7 +696,10 @@ fn n6_1_the_root_reader_records_its_problems_and_refuses_a_run_that_needs_a_brok
     let host = start(&temp, &state, Some(&root));
     let run = run(&host, &temp, "run", &away_to_home());
     assert_eq!(run.receipt.state(), RuntimeReceiptState::Denied);
-    run.receipt.error_projection().expect("refusal projection");
+    assert!(
+        run.receipt.error_projection().is_some(),
+        "refusal projection"
+    );
     // Receipt v2 (Workflow #378 A4): the refusal is the top of the receipt's outcome.
     assert_eq!(
         run.receipt.outcome().code().as_str(),
