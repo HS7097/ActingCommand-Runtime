@@ -310,7 +310,7 @@ write stdout and stderr to such a log (X3):
 | the console | `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` |
 | a logon script | `<root>\actingd-autostart-<stamp>.out.log` and `.err.log` |
 | an operator's WMI restart script | `<root>\actingd-wmi-<stamp>.log` |
-| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`) | `<root>\actingd-<ms>.log` |
+| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`; while acsetup holds `install\writer.lock` both refuse as row 7a does, with `watchdog_installer_busy`, `restart` before it stops anything) | `<root>\actingd-<ms>.log` |
 | the watchdog | `<root>\watchdog\actingd-<ms>.log` |
 | acsetup's Startup-folder launcher, a hand start in a terminal | none: a FATAL shows only as `formal_close_unlogged` in `status` |
 

@@ -15,9 +15,10 @@ use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::json;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::SystemTime;
 use tempfile::TempDir;
 
 const ENTRY: &str = "actingcommand-actingd.exe";
@@ -141,6 +142,25 @@ impl Root {
             })
             .count()
     }
+
+    /// Every path under the root with its length and modification time, sorted.
+    fn tree(&self) -> Vec<(PathBuf, u64, SystemTime)> {
+        let mut entries = Vec::new();
+        let mut pending = vec![self.root.clone()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).expect("read a fixture directory") {
+                let path = entry.expect("fixture entry").path();
+                let metadata = fs::metadata(&path).expect("fixture metadata");
+                if metadata.is_dir() {
+                    pending.push(path.clone());
+                }
+                let modified = metadata.modified().expect("modification time");
+                entries.push((path, metadata.len(), modified));
+            }
+        }
+        entries.sort();
+        entries
+    }
 }
 
 /// The developer line of a failed command: `FATAL actingctl: <code>: <detail>`, exit 1.
@@ -248,4 +268,37 @@ fn restart_refuses_while_an_instance_is_busy_and_stops_nothing() {
     holder.release_lease(&token).expect("release the instance");
     drop(holder);
     runtime.stop_clean();
+}
+
+/// Coordinator ruling on MCP-10 (review of deviation 6): `start` refuses while acsetup holds
+/// `install\writer.lock`, exactly as the watchdog refuses a start (row 7a), with its
+/// `watchdog_installer_busy`. Nothing under the root changes: no run lock, and no start log,
+/// which every launch of the fixed entry creates first, so no Runtime was launched.
+#[test]
+fn start_refuses_while_the_installer_holds_its_writer_lock_and_touches_nothing() {
+    let fixture = Root::installation();
+    let writer = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.root.join("install").join("writer.lock"))
+        .expect("open writer lock");
+    writer.try_lock().expect("hold the writer lock");
+    let before = fixture.tree();
+
+    let refused = fixture.actingctl(
+        "start-installer-busy",
+        &["start", "--root", Root::text(&fixture.root)],
+    );
+    let line = fatal_line(&refused);
+    assert!(
+        line.starts_with("FATAL actingctl: watchdog_installer_busy: "),
+        "{line}"
+    );
+    assert_eq!(fixture.tree(), before, "the refused start changed the root");
+    assert!(
+        !fixture.root.join("watchdog").exists(),
+        "a run lock was taken"
+    );
+    assert_eq!(fixture.start_logs(), 0, "a Runtime was launched");
+    drop(writer);
 }

@@ -6,13 +6,16 @@
 //! and leave before `Invocation::parse`.
 //!
 //! - `start` refuses a state root whose owner lock a live process holds, and then changes
-//!   nothing. Otherwise it holds the watchdog's `<root>\watchdog\run.lock`, so no tick starts
-//!   beside it, starts through the watchdog's manual start (WMI `Win32_Process.Create`, hidden
-//!   window, outside the caller's job, stdout and stderr appended to a log), waits for an
-//!   answering owner and reads Status once for the pauses the new owner restored.
-//! - `restart` waits until every instance is idle (no lease, nothing queued) or refuses with
-//!   nothing stopped, requests the shutdown and waits for it as `request-shutdown --wait 60`
-//!   does, then starts as `start` does.
+//!   nothing. While acsetup holds `install\writer.lock` it refuses as the watchdog does (row
+//!   7a, `watchdog_installer_busy`), again with nothing changed. Otherwise it holds the
+//!   watchdog's `<root>\watchdog\run.lock`, so no tick starts beside it, starts through the
+//!   watchdog's manual start (WMI `Win32_Process.Create`, hidden window, outside the caller's
+//!   job, stdout and stderr appended to a log), waits for an answering owner and reads Status
+//!   once for the pauses the new owner restored.
+//! - `restart` takes the same installer check before it stops anything, waits until every
+//!   instance is idle (no lease, nothing queued) or refuses with nothing stopped, requests the
+//!   shutdown and waits for it as `request-shutdown --wait 60` does, then starts as `start`
+//!   does.
 //!
 //! The root is an A/B installation (the selection of `install\active.json`, as the watchdog
 //! starts it) or, with `--config`, a verification root started with that config. Processes are
@@ -368,9 +371,25 @@ fn refuse_live(state_root: &Path) -> Result<(), Failed> {
     ))
 }
 
+/// Row 7a as the watchdog decides it (`watchdog/decide.rs`), through its own probe: while
+/// acsetup holds `install\writer.lock` nothing starts, refused with the watchdog's
+/// `watchdog_installer_busy`. A free lock comes back held shared, so acsetup cannot begin
+/// before the guard is dropped, as during a tick's start (review L4).
+fn refuse_installer_busy(root: &Path) -> Result<Option<File>, Failed> {
+    match observe::writer_lock(root).map_err(Failed::from)? {
+        observe::WriterProbe::Free(guard) => Ok(guard),
+        observe::WriterProbe::Busy => Err(Failed::new(
+            ActingctlCode::WatchdogInstallerBusy,
+            "acsetup holds install\\writer.lock; start the Runtime after it finishes",
+        )),
+    }
+}
+
 fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartReport, Failed> {
     // 1. A live Runtime refuses; nothing has been touched yet.
     refuse_live(&located.state_root)?;
+    // Row 7a: an installer write refuses too, still before anything is touched.
+    let writer = refuse_installer_busy(&located.root)?;
     start::preflight(target).map_err(Failed::from)?;
     // 2. The watchdog's run lock, so no tick starts beside this start.
     let directory = located.root.join("watchdog");
@@ -391,6 +410,7 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
         .join(format!("actingd-{spawn_at_unix_ms}.log"));
     let outcome = start::start_target(target, &log, spawn_at_unix_ms, false);
     drop(run_lock);
+    drop(writer);
     let owner = outcome.result.map_err(Failed::from)?;
     let ready_ms = observe::unix_ms(SystemTime::now()).saturating_sub(spawn_at_unix_ms);
     // 5. One Status: the pauses the new owner restored.
@@ -430,7 +450,9 @@ fn restart_runtime(
     target: &start::Target<'_>,
     wait_idle: Duration,
 ) -> Result<Report, Failed> {
-    // What the start needs is checked before anything stops.
+    // What the start needs is checked before anything stops: no installer write (row 7a),
+    // held off until the restart ends, and the fixed entry and its paths.
+    let _writer = refuse_installer_busy(&located.root)?;
     start::preflight(target).map_err(Failed::from)?;
     let client = connect(&located.state_root)?;
     // 1. Every instance idle: no lease, nothing queued; past `--wait-idle` nothing is stopped.
