@@ -917,8 +917,8 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     // until the slice the reason names removes the entry (brief-a2bcd.md; the A2a pattern).
     // A2b/A2c merge follow-up: the runtime host error still relays the ledger, state,
     // artifact-store and kernel codes, which carry the host's codes back, so both sides take
-    // Code together after the A2 train; A2-P: an emitted spelling that only a rename or a family
-    // split can type without changing output.
+    // Code together after the A2 train. A2-P (Workflow #378) removed the bridges whose spelling
+    // only a rename or a family split could type.
     bridge(
         "crates/runtime-host/src/error.rs",
         "HostErrorCode::Relayed.relayed_code",
@@ -1119,7 +1119,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         reason: "standing: the configuration manifest's subsystem names are vocabulary tokens, not codes or locations (model section 2.1); the subsystem runtime_fact_snapshot equals the runtime client's location of that spelling",
     },
     // A2d bridges: channels of the execution and recognition group that stay strings until the
-    // slice the reason names removes the entry (brief-a2bcd.md; A2-P changes emitted strings).
+    // slice the reason names removes the entry (brief-a2bcd.md).
     bridge(
         "crates/execution-kernel/src/contained_task.rs",
         "ContainedTaskCode::Host.host_code",
