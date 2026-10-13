@@ -346,9 +346,22 @@ fn state_root_unresolved(outcome: Outcome) -> ToolError {
 /// A Runtime client failure as a tool error (Workflow #378 A5): its class is the client's own
 /// `RuntimeClientError::disposition()` (R6), the same class CLI, UI and Lab report, and its
 /// outcome the client's: a denied or failed receipt's outcome on top as the Runtime wrote it,
-/// else the client's code.
+/// else the client's code. A refusal's top also carries its receipt's `receipt_state` and
+/// `request_id` (coordinator ruling on A5): a consumer judges refusal by the state (A4), and the
+/// request id is a run's handle for `ac_get_run`.
 pub(super) fn client_error(error: &RuntimeClientError) -> ToolError {
-    ToolError::outcome(error.disposition().as_str(), error.outcome())
+    let outcome = error.outcome();
+    let outcome = match (error.receipt_outcome(), error.received_receipt()) {
+        (Some(_), Some(receipt)) => {
+            let outcome = outcome.receipt_state(receipt.state());
+            match serde_json::to_value(receipt.request_id()) {
+                Ok(Value::String(request_id)) => outcome.request_id(request_id),
+                _ => outcome,
+            }
+        }
+        _ => outcome,
+    };
+    ToolError::outcome(error.disposition().as_str(), outcome)
 }
 
 /// actingd does not answer for this state root: no `runtime-info.json`, or nothing listens

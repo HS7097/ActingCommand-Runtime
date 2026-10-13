@@ -11,7 +11,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -30,7 +32,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -49,7 +53,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -68,7 +74,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -87,7 +95,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -106,7 +116,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -125,7 +137,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -144,7 +158,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -163,7 +179,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -182,7 +200,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -201,7 +221,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -220,7 +242,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -239,7 +263,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -258,7 +284,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -277,7 +305,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -296,7 +326,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -315,7 +347,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -334,7 +368,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -353,7 +389,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -372,7 +410,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -391,7 +431,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -410,7 +452,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -429,7 +473,9 @@
         "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -447,7 +493,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -465,7 +513,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -483,7 +533,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -501,7 +553,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -519,7 +573,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -538,7 +594,9 @@
         "device_state_probe": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -557,7 +615,9 @@
         "device_label": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -576,7 +636,9 @@
         "device_label": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -595,7 +657,9 @@
         "device_label": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",

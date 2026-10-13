@@ -6,6 +6,11 @@
 //! byte-for-byte. The Runtime is the c4 fake child process (`tests/support/c4_runtime.rs`); the
 //! MCP server is the real binary over pipes. Every wait returns as soon as its message arrives;
 //! `GATE_WAIT` only bounds a broken run.
+//!
+//! Workflow #378 A5 (coordinator ruling): a Runtime refusal through MCP carries its receipt's
+//! `receipt_state` and `request_id` on the refusal's top outcome. A second `ac_resume` with the
+//! revision the first one already lifted is refused (#338 R4: a conditional resume lifts only the
+//! pause the caller saw).
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
@@ -105,6 +110,33 @@ fn gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias() {
             "client.action record of {control}: {records:?}"
         );
     }
+
+    let stale = mcp.call_tool(
+        4,
+        "ac_resume",
+        json!({
+            "instance": ALIAS,
+            "expected_owner_epoch": owner_epoch,
+            "expected_revision": revision,
+        }),
+    );
+    assert_eq!(
+        stale["result"]["isError"],
+        json!(true),
+        "a resume of a lifted pause was not refused: {stale}"
+    );
+    let values = &stale["result"]["structuredContent"]["error"]["outcome"]["values"];
+    assert_eq!(
+        values["receipt_state"],
+        json!("denied"),
+        "the refusal does not carry its receipt state: {stale}"
+    );
+    assert!(
+        values["request_id"]
+            .as_str()
+            .is_some_and(|request_id| !request_id.is_empty()),
+        "the refusal does not carry its request_id: {stale}"
+    );
 
     mcp.close_input();
     runtime.stop_clean();
