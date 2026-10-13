@@ -8,6 +8,10 @@
 //! a running daemon is not disturbed. Each pair is judged with the same lift rule as live
 //! admission (§12.7), against the configuration the caller loaded. Error frames are read
 //! read-only and compared again for display; the recorded failure identity stays the verdict.
+//!
+//! Workflow #372 K3 adds `clock_slots`: the clock-slot records of K2 (`goal_missed` planning
+//! signals whose `signal_id` starts with `signal:clock_slot:`) of the 48 h before the ledger's
+//! latest event, each with the fate its pair's next admitted dispatch settles.
 
 use crate::RuntimeHostConfig;
 use crate::codes::{HostCode, HostLocation};
@@ -17,11 +21,11 @@ use crate::failure_identity::{
 };
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, CodeStr, Location};
 use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
-    PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord, PolicyPayload, RunId,
-    RuntimePayload, TaskPayload, TaskSemanticFact,
+    PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
+    PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
@@ -29,13 +33,21 @@ use actingcommand_ledger::{
     PersistedEvent,
 };
 use actingcommand_policy::{CatalogSources, compile_catalog};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
 const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v1";
 const LIFTS_WHEN: &str = "main_digest_changes_or_any_layer_changes";
+/// `clock_slots` reads the records of this span before the ledger's latest event (#372 K3).
+const CLOCK_SLOT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
+/// `clock_slots` keeps at most this many entries, newest first; `clock_slots_total` then counts
+/// them all.
+const CLOCK_SLOT_LIMIT: usize = 200;
+/// The `signal_id` prefix of a clock-slot record (#372 K2).
+const CLOCK_SLOT_SIGNAL_PREFIX: &str = "signal:clock_slot:";
 
 /// What `actingd suspended` reads: the loaded configuration and when its file last changed.
 pub struct SuspensionReportRequest<'a> {
@@ -530,7 +542,8 @@ pub fn suspension_report(
             "detail": detail,
         }));
     }
-    Ok(json!({
+    let (clock_slots, clock_slots_total) = clock_slots(&snapshot)?;
+    let mut report = json!({
         "schema_version": SCHEMA_VERSION,
         "status": "ok",
         "config_path": request.config_path.to_string_lossy(),
@@ -541,7 +554,12 @@ pub fn suspension_report(
         "lifted": lifted,
         "repeating": repeating,
         "warnings": warnings,
-    }))
+        "clock_slots": clock_slots,
+    });
+    if let Some(total) = clock_slots_total {
+        report["clock_slots_total"] = json!(total);
+    }
+    Ok(report)
 }
 
 /// The main package digest a pair was paused on and has now, and each recorded layer.
@@ -584,4 +602,280 @@ fn execution_disposition(outcome: &PolicyExecutionOutcome) -> Value {
 /// A value's wire form, as its records serialize it.
 fn wire(value: &impl serde::Serialize) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+/// One admitted dispatch of a pair: the run that settles a clock-slot record (#372 K3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct SlotDispatch {
+    pub(crate) sequence: u64,
+    pub(crate) admitted_at_unix_ms: u64,
+}
+
+/// One clock-slot record as the ledger holds it (#372 K2).
+pub(crate) struct SlotSignal<'a> {
+    pub(crate) sequence: u64,
+    pub(crate) recorded_at_unix_ms: u64,
+    pub(crate) signal_id: &'a str,
+    pub(crate) task_id: Option<&'a str>,
+    pub(crate) instance_id: &'a str,
+    /// The `fact_code` token: the record's code followed by `:<key>=<value>` pairs.
+    pub(crate) token: &'a str,
+}
+
+/// A clock-slot record's values, deserialized from its typed map.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClockSlotRecord {
+    code: CodeStr,
+    task_id: String,
+    instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gate_code: Option<CodeStr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget_dimension: Option<PolicyBudgetDimension>,
+    occurrence_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window_start_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window_end_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_eligible_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_occurrence_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_run: Option<bool>,
+}
+
+/// What became of a clock slot (model-372 §3.2, §3.3): a refused or deferred record's
+/// occurrence is served in the same window, served in the next one, collapsed into the next
+/// occurrence, or not known yet; an owed record's selection was served or absorbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SlotFate {
+    SameWindow,
+    NextWindow,
+    Collapsed,
+    Pending,
+    Served,
+    Absorbed,
+}
+
+#[derive(Serialize)]
+struct ClockSlotEntry {
+    #[serde(flatten)]
+    record: ClockSlotRecord,
+    slot_fate: SlotFate,
+    slot_fate_settled: bool,
+    recorded_sequence: u64,
+    recorded_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_dispatch: Option<SlotDispatch>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ParseState {
+    Unparsed,
+}
+
+/// A record whose token does not read back; it adds no report-level warning.
+#[derive(Serialize)]
+struct UnparsedClockSlot<'a> {
+    parse_state: ParseState,
+    signal_id: &'a str,
+    raw_token: &'a str,
+}
+
+impl ClockSlotRecord {
+    /// K2's token read back (model-372 §4.5): the code and its `key=value` pairs go into a map
+    /// whose values are typed by their key (times as numbers, `first_run` as a boolean, codes
+    /// and vocabulary tokens as strings), the payload's task and instance join them, and the
+    /// record is deserialized from it. `None` when a step fails, when the code is not a
+    /// clock-slot code, or when a value its code requires is absent.
+    fn parse(signal: &SlotSignal<'_>) -> Option<Self> {
+        let mut parts = signal.token.split(':');
+        let mut map = Map::new();
+        map.insert("code".to_owned(), Value::String(parts.next()?.to_owned()));
+        for part in parts {
+            let (key, text) = part.split_once('=').filter(|(_, text)| !text.is_empty())?;
+            let value = match key {
+                "gate_code" | "budget_dimension" => Value::String(text.to_owned()),
+                "first_run" => Value::Bool(text.parse().ok()?),
+                _ => Value::from(text.parse::<u64>().ok()?),
+            };
+            if map.insert(key.to_owned(), value).is_some() {
+                return None;
+            }
+        }
+        for (key, value) in [
+            ("task_id", signal.task_id?),
+            ("instance_id", signal.instance_id),
+        ] {
+            if map
+                .insert(key.to_owned(), Value::String(value.to_owned()))
+                .is_some()
+            {
+                return None;
+            }
+        }
+        let record = serde_json::from_value::<Self>(Value::Object(map)).ok()?;
+        let complete = if record.code == HostCode::ClockSlotOwed.code() {
+            record.window_start_unix_ms.is_some()
+        } else {
+            (record.code == HostCode::ClockSlotRefused.code()
+                || record.code == HostCode::ClockSlotDeferred.code())
+                && record.gate_code.is_some()
+        };
+        complete.then_some(record)
+    }
+
+    /// The fate, and whether it is settled: by the pair's next admitted dispatch, or, without
+    /// one, by the reference time reaching the next occurrence. An unsettled refused or deferred
+    /// record shows the fate its own `next_eligible_unix_ms` predicts.
+    fn fate(
+        &self,
+        next_dispatch: Option<SlotDispatch>,
+        reference_unix_ms: u64,
+    ) -> (SlotFate, bool) {
+        let reaches_next = |time: u64| {
+            self.next_occurrence_unix_ms
+                .is_some_and(|next_occurrence| time >= next_occurrence)
+        };
+        if self.code == HostCode::ClockSlotOwed.code() {
+            return match next_dispatch {
+                Some(dispatch) if reaches_next(dispatch.admitted_at_unix_ms) => {
+                    (SlotFate::Absorbed, true)
+                }
+                Some(_) => (SlotFate::Served, true),
+                None if reaches_next(reference_unix_ms) => (SlotFate::Absorbed, true),
+                None => (SlotFate::Pending, false),
+            };
+        }
+        // A time at or after the next occurrence collapses into it; before it, the end of the
+        // activity window the record was written in separates the same window from the next.
+        let classify = |time: u64| {
+            if reaches_next(time) {
+                SlotFate::Collapsed
+            } else if self.window_end_unix_ms.is_some_and(|end| time < end) {
+                SlotFate::SameWindow
+            } else {
+                SlotFate::NextWindow
+            }
+        };
+        match next_dispatch {
+            Some(dispatch) => (classify(dispatch.admitted_at_unix_ms), true),
+            None if reaches_next(reference_unix_ms) => (SlotFate::Collapsed, true),
+            None => (
+                self.next_eligible_unix_ms
+                    .map_or(SlotFate::Pending, classify),
+                false,
+            ),
+        }
+    }
+}
+
+/// One `clock_slots` entry: the record with its fate, `next_dispatch` when the pair was
+/// admitted after it, or an unparsed entry that carries the raw token.
+pub(crate) fn clock_slot_entry(
+    signal: &SlotSignal<'_>,
+    next_dispatch: Option<SlotDispatch>,
+    reference_unix_ms: u64,
+) -> Value {
+    match ClockSlotRecord::parse(signal) {
+        Some(record) => {
+            let (slot_fate, slot_fate_settled) = record.fate(next_dispatch, reference_unix_ms);
+            wire(&ClockSlotEntry {
+                record,
+                slot_fate,
+                slot_fate_settled,
+                recorded_sequence: signal.sequence,
+                recorded_at_unix_ms: signal.recorded_at_unix_ms,
+                next_dispatch,
+            })
+        }
+        None => wire(&UnparsedClockSlot {
+            parse_state: ParseState::Unparsed,
+            signal_id: signal.signal_id,
+            raw_token: signal.token,
+        }),
+    }
+}
+
+/// `clock_slots` (model-372 §4.5): the clock-slot records of the 48 h before the ledger's
+/// latest event, newest first and at most 200, and how many there are when the list is cut.
+/// A record's next dispatch is its pair's first admitted dispatch after it in the ledger; the
+/// reference time is the latest event's time. Records are selected by their kind and their
+/// `signal_id` prefix, never by their token.
+fn clock_slots(
+    snapshot: &Snapshot<'_>,
+) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
+    let Some(reference_unix_ms) = snapshot
+        .ledger
+        .events()
+        .last()
+        .map(PersistedEvent::timestamp_unix_ms)
+    else {
+        return Ok((Vec::new(), None));
+    };
+    let in_window = |event_type| EventQuery {
+        event_type: Some(event_type),
+        from_timestamp_unix_ms: Some(reference_unix_ms.saturating_sub(CLOCK_SLOT_WINDOW_MS)),
+        ..EventQuery::default()
+    };
+    let mut dispatches = BTreeMap::<(String, String), Vec<SlotDispatch>>::new();
+    for event in snapshot.query(in_window(EventType::PolicyDispatchAdmitted))? {
+        if let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = event.payload()
+            && let Some(admission) = payload.admission()
+        {
+            dispatches
+                .entry((
+                    payload.task_id().to_owned(),
+                    payload.instance_id().to_owned(),
+                ))
+                .or_default()
+                .push(SlotDispatch {
+                    sequence: event.sequence(),
+                    admitted_at_unix_ms: admission.activity.admitted_at_unix_ms,
+                });
+        }
+    }
+    let mut entries = Vec::new();
+    for event in snapshot
+        .query(in_window(EventType::PolicyPlanningSignalObserved))?
+        .iter()
+        .rev()
+    {
+        let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
+        else {
+            continue;
+        };
+        if payload.kind() != PolicyPlanningSignalKind::GoalMissed
+            || !payload.signal_id().starts_with(CLOCK_SLOT_SIGNAL_PREFIX)
+        {
+            continue;
+        }
+        let next_dispatch = payload
+            .task_id()
+            .and_then(|task_id| {
+                dispatches.get(&(task_id.to_owned(), payload.instance_id().to_owned()))
+            })
+            .and_then(|admitted| {
+                admitted
+                    .iter()
+                    .find(|dispatch| dispatch.sequence > event.sequence())
+                    .copied()
+            });
+        let signal = SlotSignal {
+            sequence: event.sequence(),
+            recorded_at_unix_ms: event.timestamp_unix_ms(),
+            signal_id: payload.signal_id(),
+            task_id: payload.task_id(),
+            instance_id: payload.instance_id(),
+            token: payload.fact_code(),
+        };
+        entries.push(clock_slot_entry(&signal, next_dispatch, reference_unix_ms));
+    }
+    let total = entries.len();
+    entries.truncate(CLOCK_SLOT_LIMIT);
+    Ok((entries, (total > CLOCK_SLOT_LIMIT).then_some(total)))
 }

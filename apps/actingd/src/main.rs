@@ -26,14 +26,15 @@ mod gate_397;
 // Test-only: Workflow #378 A2a, registered refusal codes and the env-override warning.
 #[cfg(test)]
 mod gate_a2a;
+// Test-only: Workflow #383 AO-7, the policy monitor wakes the driver from host notifications.
+#[cfg(test)]
+mod gate_383;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Category, Code, Detail, Location, Outcome};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    EventActor, EventFamily, EventQuery, EventSource, EventType, GovernanceIdentityCard,
-    MAX_RUNTIME_SUBSCRIPTION_EVENTS, PolicyExecutionEventData, ProjectedEvent, ProjectionProfile,
-    RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPageRequest, RuntimeReceipt,
-    RuntimeSubscriptionRequest, SchedulingOutcomeProjection, SubscriptionCursor,
+    EventActor, EventSource, GovernanceIdentityCard, PolicyExecutionEventData, RunId,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt, SchedulingOutcomeProjection,
 };
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::{
@@ -41,14 +42,11 @@ use actingcommand_runtime_client::{
 };
 use actingcommand_runtime_host::{
     PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
-    PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, RuntimeHost, RuntimeHostError,
-    RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
+    PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, PolicyWakes, RuntimeHost,
+    RuntimeHostError, RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
 use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
-use monitor_retry::{
-    MonitorRequestFailure, MonitorRetries, MonitorRetryStep, PolicyMonitorSettings, RuntimeIdentity,
-};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::error::Error;
@@ -126,7 +124,6 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host,
         provider,
         policy,
-        policy_monitor,
         resource_packages,
         adb_requirement,
         ..
@@ -193,7 +190,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         host.runtime_info().port()
     );
     match (policy, initial_policy_cycle) {
-        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle, policy_monitor),
+        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
         (None, None) => monitor(host),
         _ => {
             let mut error = ActingdError::process(ActingdCode::PolicyBootstrapStateInvalid);
@@ -563,31 +560,18 @@ fn monitor_policy(
     host: RuntimeHost,
     policy: PolicyBootstrap,
     initial_cycle: PolicyCycleExecution,
-    monitor: PolicyMonitorSettings,
 ) -> Result<(), ActingdError> {
     let host = Arc::new(host);
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
-    // Workflow #397: the monitor's connection reaches this Runtime only.
-    let runtime = RuntimeIdentity::of(host.runtime_info());
     let setup = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
-        let client = connect_policy_monitor(&policy, monitor).map_err(ActingdError::client)?;
-        check_policy_monitor_runtime(&client, runtime)?;
-        let initial_page = client
-            .query_event_page(
-                EventQuery::default(),
-                ProjectionProfile::Concise,
-                RuntimeEventQueryPageRequest::new(1, None).map_err(|_| {
-                    ActingdError::process(ActingdCode::PolicySubscriptionCursorInvalid)
-                })?,
-            )
-            .map_err(ActingdError::client)?;
-        let cursor = SubscriptionCursor {
-            after_sequence: initial_page.snapshot_ledger_position(),
-        };
+        // Workflow #383 AO-7: the monitor wakes the driver from the host's business
+        // notifications, opened where its ledger subscription used to start (the ledger head):
+        // the initial cycle has evaluated everything before.
+        let wakes = host.open_policy_wakes().map_err(ActingdError::runtime)?;
         let driver = thread::Builder::new()
             .name("actingd-policy-driver".to_string())
             .spawn({
@@ -597,9 +581,9 @@ fn monitor_policy(
                 move || drive_policy(host, policy, control, initial_cycle)
             })
             .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSpawnFailed))?;
-        Ok(Some((client, cursor, driver)))
+        Ok(Some((wakes, driver)))
     })();
-    let (mut client, mut cursor, driver) = match setup {
+    let (wakes, driver) = match setup {
         Ok(Some(setup)) => setup,
         Ok(None) => return close_policy_host(host),
         Err(error) => {
@@ -617,30 +601,60 @@ fn monitor_policy(
         }
     };
 
+    let monitor_result = run_policy_monitor(&host, &control, &wakes, &driver);
+
+    let recorded = match &monitor_result {
+        Err(error) => {
+            error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
+        }
+        Ok(()) => Ok(()),
+    };
+    let shutdown_result = control.shutdown();
+    let driver_result = match driver.join() {
+        Ok(result) => result,
+        Err(_) => Err(ActingdError::process(ActingdCode::PolicyDriverPanicked)),
+    };
+    drop(wakes);
+    drop(policy);
+    drop(control);
+    finish_policy_closeout(
+        host,
+        monitor_result,
+        shutdown_result,
+        driver_result,
+        recorded,
+    )
+}
+
+/// Workflow #383 AO-7 (model-ledger-observer §3.7): the policy monitor's loop. It watches the
+/// host's health and hands the host's business notifications (`wakes`) to the driver. It has
+/// no Runtime client and sends no request: it does not subscribe to the ledger, so a slow or
+/// paused ledger never holds a wake back. It ends with `Ok` once the host has accepted a
+/// shutdown, and with the error otherwise.
+fn run_policy_monitor(
+    host: &RuntimeHost,
+    control: &PolicyDriverControl,
+    wakes: &PolicyWakes,
+    driver: &thread::JoinHandle<Result<(), ActingdError>>,
+) -> Result<(), ActingdError> {
     let mut waiting_for_install = false;
-    let mut refusals = PolicySubscriptionRefusals::default();
-    // Workflow #397: the transient failures of the monitor's own requests in a row, and when the
-    // next attempt, on a fresh connection, is due.
-    let mut retries = MonitorRetries::new(monitor);
-    let mut reconnect_at: Option<Instant> = None;
-    let monitor_result = loop {
+    loop {
         match host.fatal_error() {
-            Ok(Some(error)) => break Err(ActingdError::runtime(error)),
+            Ok(Some(error)) => return Err(ActingdError::runtime(error)),
             Ok(None) => {}
-            Err(error) => break Err(ActingdError::runtime(error)),
+            Err(error) => return Err(ActingdError::runtime(error)),
         }
         match host.is_shutdown_requested() {
-            Ok(true) => break Ok(()),
+            Ok(true) => return Ok(()),
             Ok(false) => {}
-            Err(error) => break Err(ActingdError::runtime(error)),
+            Err(error) => return Err(ActingdError::runtime(error)),
         }
         if driver.is_finished() {
-            break Err(ActingdError::process(ActingdCode::PolicyDriverStopped));
+            return Err(ActingdError::process(ActingdCode::PolicyDriverStopped));
         }
-        // Workflow #376 M1: an install drain closes root admission and would refuse the
-        // subscription. Wait without subscribing and keep the cursor, so an abort or a drain
-        // timeout resumes exactly here; only the accepted `commit_shutdown` (the shutdown check
-        // above) ends the monitor.
+        // Workflow #376 M1: during an install drain the monitor holds the driver's wakes back
+        // (they stay pending in the host); an abort or a drain timeout resumes exactly here, and
+        // only the accepted `commit_shutdown` (the shutdown check above) ends the monitor.
         match host.is_lifecycle_draining() {
             Ok(true) => {
                 if !waiting_for_install {
@@ -656,136 +670,31 @@ fn monitor_policy(
                     report_policy_monitor("resumed");
                 }
             }
-            Err(error) => break Err(ActingdError::runtime(error)),
+            Err(error) => return Err(ActingdError::runtime(error)),
         }
-        // Workflow #397: a retry waits here in poll-sized steps, so the checks above keep their
-        // pace; once due, the request goes out again on a fresh connection, the latched one
-        // being dropped.
-        if let Some(due) = reconnect_at {
-            let now = Instant::now();
-            if now < due {
-                thread::sleep(
-                    due.saturating_duration_since(now)
-                        .min(Duration::from_millis(POLICY_EVENT_WAIT_MS)),
-                );
-                continue;
-            }
-            reconnect_at = None;
-            match connect_policy_monitor(&policy, monitor) {
-                Ok(fresh) => {
-                    if let Err(error) = check_policy_monitor_runtime(&fresh, runtime) {
-                        break Err(error);
-                    }
-                    client = fresh;
-                }
-                Err(error) => match retry_policy_monitor_request(&mut retries, runtime, error) {
-                    Ok(due) => {
-                        reconnect_at = Some(due);
-                        continue;
-                    }
-                    Err(error) => break Err(error),
-                },
-            }
-        }
-        let request = match RuntimeSubscriptionRequest::new(
-            EventQuery::default(),
-            ProjectionProfile::Concise,
-            cursor,
-            0,
-            MAX_RUNTIME_SUBSCRIPTION_EVENTS,
-        ) {
-            Ok(request) => request,
-            Err(_) => {
-                break Err(ActingdError::process(
-                    ActingdCode::PolicySubscriptionRequestInvalid,
-                ));
-            }
-        };
-        let batch = match client.subscribe_events(request) {
-            Ok(batch) => {
-                refusals.succeeded();
-                retries.succeeded();
-                batch
-            }
-            Err(error) => {
-                match host.fatal_error() {
-                    Ok(Some(fatal)) | Err(fatal) => break Err(ActingdError::runtime(fatal)),
-                    Ok(None) => {}
-                }
-                let shutdown_requested = match host.is_shutdown_requested() {
-                    Ok(requested) => requested,
-                    Err(fatal) => break Err(ActingdError::runtime(fatal)),
-                };
-                let draining = match host.is_lifecycle_draining() {
-                    Ok(draining) => draining,
-                    Err(fatal) => break Err(ActingdError::runtime(fatal)),
-                };
-                // Workflow #376 M2. A non-fatal rejection does not latch the connection, so
-                // the same client subscribes again after a wait or a retry.
-                match refusals.failed(
-                    shutdown_requested,
-                    is_admission_refusal(error.code(), error.projection()),
-                    draining,
-                ) {
-                    PolicySubscriptionFailureAction::End => break Ok(()),
-                    PolicySubscriptionFailureAction::Wait => continue,
-                    PolicySubscriptionFailureAction::RetryOnce => {
-                        report_policy_monitor("retry runtime_unavailable");
-                        thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
-                        continue;
-                    }
-                    // Workflow #397: a transient I/O failure of this request is retried on a
-                    // fresh connection up to the configured bound; any other failure ends the
-                    // monitor as before.
-                    PolicySubscriptionFailureAction::Fail => {
-                        match retry_policy_monitor_request(&mut retries, runtime, error) {
-                            Ok(due) => {
-                                reconnect_at = Some(due);
-                                continue;
-                            }
-                            Err(error) => break Err(error),
-                        }
-                    }
-                }
-            }
-        };
-        cursor = batch.next_cursor();
-        if let Some(trigger) = policy_trigger_for_events(batch.events())
-            && let Err(error) = control.notify(trigger)
-        {
-            break Err(error);
-        }
-        if batch.events().is_empty() {
-            // Idle policy waiting belongs to the daemon, outside in-flight IPC admission.
-            thread::sleep(Duration::from_millis(POLICY_EVENT_WAIT_MS));
-        }
-    };
-
-    let recorded = match &monitor_result {
-        Err(error) => {
-            error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
-        }
-        Ok(()) => Ok(()),
-    };
-    let shutdown_result = control.shutdown();
-    let driver_result = match driver.join() {
-        Ok(result) => result,
-        Err(_) => Err(ActingdError::process(ActingdCode::PolicyDriverPanicked)),
-    };
-    drop(client);
-    drop(policy);
-    drop(control);
-    finish_policy_closeout(
-        host,
-        monitor_result,
-        shutdown_result,
-        driver_result,
-        recorded,
-    )
+        forward_policy_wakes(control, wakes, Duration::from_millis(POLICY_EVENT_WAIT_MS))?;
+    }
 }
 
-/// Workflow #376 M2: what the policy monitor does after its subscription failed and the host
-/// reported no fatal error (a fatal host error ends the monitor with that error first).
+/// Workflow #383 AO-7: hands the wakes the host raised since the last pass to the driver as one
+/// trigger, coalesced as the triggers of a batch of ledger events were. It waits at most `wait`
+/// for a wake, so the monitor's checks keep their pace while nothing happens.
+fn forward_policy_wakes(
+    control: &PolicyDriverControl,
+    wakes: &PolicyWakes,
+    wait: Duration,
+) -> Result<(), ActingdError> {
+    match wakes.take(wait).into_iter().reduce(coalesce_policy_trigger) {
+        Some(trigger) => control.notify(trigger),
+        None => Ok(()),
+    }
+}
+
+/// Workflow #376 M2: what the policy monitor did after its subscription failed and the host
+/// reported no fatal error (a fatal host error ended the monitor with that error first).
+/// Workflow #383 AO-7: the monitor no longer subscribes, so nothing decides with this table any
+/// more; it stays, with its test (#376 T2), until the coordinator retires both (ORD 376-B2).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PolicySubscriptionFailureAction {
     /// Report the failure: `runtime.failed` and a FATAL exit, as before.
@@ -800,11 +709,14 @@ enum PolicySubscriptionFailureAction {
 }
 
 /// Admission refusals in a row that neither a drain nor a shutdown explains (Q4: one retry).
+/// Unused since AO-7, as [`PolicySubscriptionFailureAction`].
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Default)]
 struct PolicySubscriptionRefusals {
     retried: bool,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl PolicySubscriptionRefusals {
     fn succeeded(&mut self) {
         self.retried = false;
@@ -836,6 +748,8 @@ impl PolicySubscriptionRefusals {
 
 /// The host's typed refusal of a request it did not admit (`begin_request` gave no work): a
 /// non-fatal `RuntimeUnavailable` rejection. An install drain refuses a subscription this way.
+/// Unused since AO-7, as [`PolicySubscriptionFailureAction`].
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_admission_refusal(code: Code, projection: Option<&RuntimeErrorProjection>) -> bool {
     code == ClientCode::RuntimeRequestRejected.code()
         && projection.is_some_and(|projection| {
@@ -848,74 +762,6 @@ fn is_admission_refusal(code: Code, projection: Option<&RuntimeErrorProjection>)
 /// lines, a failed stdout write does not stop the daemon.
 fn report_policy_monitor(state: &str) {
     let _ = writeln!(std::io::stdout().lock(), "actingd policy_monitor {state}");
-}
-
-/// Workflow #397: the policy monitor's connection to its Runtime, with its configured I/O
-/// timeout (`policy.monitor.io_timeout_ms`).
-fn connect_policy_monitor(
-    policy: &PolicyBootstrap,
-    monitor: PolicyMonitorSettings,
-) -> Result<RuntimeClient, RuntimeClientError> {
-    RuntimeClient::connect(
-        RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
-            .with_io_timeout(monitor.io_timeout),
-    )
-}
-
-/// Workflow #397: the monitor's connection must reach the Runtime this daemon hosts; another
-/// owner epoch or process ends the monitor (`policy_monitor_runtime_identity_changed`).
-fn check_policy_monitor_runtime(
-    client: &RuntimeClient,
-    runtime: RuntimeIdentity,
-) -> Result<(), ActingdError> {
-    if RuntimeIdentity::of(client.runtime_info()) == runtime {
-        Ok(())
-    } else {
-        Err(ActingdError::process(
-            ActingdCode::PolicyMonitorRuntimeIdentityChanged,
-        ))
-    }
-}
-
-/// Workflow #397: the monitor's answer to a failed request of its own. A transient I/O failure
-/// under the bound reports its warning and returns when to send the request again, on a fresh
-/// connection; past the bound it reports the give-up and ends the monitor with the request's
-/// failure, as every other failure does at once.
-fn retry_policy_monitor_request(
-    retries: &mut MonitorRetries,
-    runtime: RuntimeIdentity,
-    error: RuntimeClientError,
-) -> Result<Instant, ActingdError> {
-    match retries.failed(&MonitorRequestFailure::of(&error), runtime) {
-        MonitorRetryStep::Retry { warning, backoff } => {
-            report_policy_monitor_outcome(&warning);
-            Ok(Instant::now() + backoff)
-        }
-        MonitorRetryStep::GiveUp { outcome } => {
-            report_policy_monitor_outcome(&outcome);
-            Err(ActingdError::client(error))
-        }
-        MonitorRetryStep::Fail => Err(ActingdError::client(error)),
-    }
-}
-
-/// Workflow #397: one daemon outcome of the policy monitor (#378 spec section 9): its developer
-/// line and its `OUTCOME actingd:` envelope on stderr, in one write. Like the monitor's stdout
-/// lines, a failed write does not stop the daemon.
-fn report_policy_monitor_outcome(outcome: &Outcome) {
-    let level = match outcome.category() {
-        Category::Success | Category::Info => "INFO",
-        Category::Warning => "WARN",
-        Category::Error => "ERROR",
-        Category::Fatal => "FATAL",
-    };
-    let lines = match serde_json::to_string(&outcome.envelope(Detail::Full)) {
-        Ok(envelope) => format!("{level} actingd: {outcome}\nOUTCOME actingd: {envelope}\n"),
-        Err(_) => format!(
-            "{level} actingd: {outcome}\nWARN actingd: the outcome envelope could not be encoded\n"
-        ),
-    };
-    let _ = std::io::stderr().lock().write_all(lines.as_bytes());
 }
 
 fn finish_policy_closeout(
@@ -987,53 +833,9 @@ fn combine_monitor_results(
     failure.map_or(Ok(()), Err)
 }
 
-fn policy_trigger_for_events(events: &[ProjectedEvent]) -> Option<PolicyTrigger> {
-    events
-        .iter()
-        .filter_map(|event| policy_trigger_for_event(event.event_type))
-        .reduce(coalesce_policy_trigger)
-}
-
-/// Workflow #369 W-1: a lease end returns a key, so a held instance's deferred candidates may
-/// run: the driver wakes on `lease.released`, `lease.transferred` and `lease.expired`, and on
-/// no other lease, scheduler, capture or runtime record.
-fn policy_trigger_for_event(event_type: EventType) -> Option<PolicyTrigger> {
-    match event_type {
-        EventType::LeaseReleased | EventType::LeaseTransferred | EventType::LeaseExpired => {
-            Some(PolicyTrigger::ResourcesChanged)
-        }
-        other => policy_trigger_for_family(other.family()),
-    }
-}
-
-fn policy_trigger_for_family(family: EventFamily) -> Option<PolicyTrigger> {
-    match family {
-        EventFamily::Catalog => Some(PolicyTrigger::CatalogChanged),
-        EventFamily::Performance | EventFamily::ResourceAuthoring => {
-            Some(PolicyTrigger::ResourcesChanged)
-        }
-        EventFamily::Fact | EventFamily::Approval => Some(PolicyTrigger::FactsChanged),
-        EventFamily::Runtime
-        | EventFamily::Provider
-        | EventFamily::Monitor
-        | EventFamily::Command
-        | EventFamily::Scheduler
-        | EventFamily::Policy
-        | EventFamily::Lease
-        | EventFamily::Task
-        | EventFamily::Application
-        | EventFamily::Input
-        | EventFamily::Capture
-        | EventFamily::Recognition
-        | EventFamily::Artifact
-        | EventFamily::Client
-        | EventFamily::State
-        | EventFamily::Release
-        | EventFamily::Agent
-        | EventFamily::Ledger => None,
-    }
-}
-
+// Workflow #383 AO-7: the event-to-trigger mapping moved to the host with the wake source
+// (`actingcommand_runtime_host::policy_trigger_for_event`); the monitor coalesces the
+// host's wakes with the priority below, as it coalesced a batch of ledger events.
 fn coalesce_policy_trigger(left: PolicyTrigger, right: PolicyTrigger) -> PolicyTrigger {
     if trigger_priority(right) > trigger_priority(left) {
         right
@@ -1885,8 +1687,9 @@ mod tests {
     use super::*;
     use crate::config::ScheduledProcedureTask;
     use actingcommand_contract::{
-        ApplicationLifecycleAction, ContainedTaskRequest, EventPayload, EventType,
-        IdentifierIssuer, PolicyPayload, ProjectionPayload,
+        ApplicationLifecycleAction, ContainedTaskRequest, EventFamily, EventPayload, EventQuery,
+        EventType, IdentifierIssuer, PolicyPayload, ProjectionPayload, ProjectionProfile,
+        RuntimeEventQueryPageRequest,
     };
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend};
     use actingcommand_policy::{
@@ -1898,6 +1701,8 @@ mod tests {
         ResolvedExecutionInstance, RuntimeHostConfig,
     };
     use actingcommand_runtime_host::{PolicyRecomputeDirective, PolicyRecomputeReason};
+    // Workflow #383 AO-7: the wake mapping moved to the host; its tests here are unchanged.
+    use actingcommand_runtime_host::{policy_trigger_for_event, policy_trigger_for_family};
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, VecDeque};

@@ -92,7 +92,7 @@ incident = ["#382 P-1"]
 key = "8"
 coverage = "Y"
 tests = [
-    "actingcommand-scheduler::lib::tests::closed_gate_skips_routine_entries_and_passes_operator_startup_and_continuation",
+    "actingcommand-scheduler::lib::tests::closed_gate_skips_routine_entries_and_the_startup_claim_and_passes_operator_and_continuation",
 ]
 incident = []
 
@@ -342,6 +342,16 @@ tests = [
     "actingcommand-policy::lib::strategy::tests::report_identity_rejects_mutated_instance_state",
 ]
 incident = []
+
+# Explanation: every decision that is not Selected carries a registered reason (#386 SR-6a)
+[[gate]]
+key = "38"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_p1::gate_p1_g10_every_decision_that_is_not_selected_carries_a_registered_reason",
+    "actingcommand-policy::lib::tests::gate_p1::gate_p1_g10_a_decision_left_without_a_reason_is_deferred_with_decision_reason_missing",
+]
+incident = ["#382 P-1", "#386"]
 
 # Canonical JSON
 [[gate]]

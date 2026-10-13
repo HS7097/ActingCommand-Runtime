@@ -268,6 +268,16 @@ Original text and block text are counted before extraction. An over-budget obser
 retains the existing truncation failure; a shorter extracted value cannot avoid it.
 This capability does not increase or reset a resource's declared limits.
 
+A field accepts a value only when its observation meets the `minimum_confidence` that its
+OCR target declares in the recognition pack (Workflow R-11). The check runs after parsing,
+dictionary mapping and any extraction have resolved a value. If the observation's aggregate
+confidence is missing or below that minimum, the field stays unresolved with the reason
+`low_confidence`. It then has no value, but keeps its raw text, trimmed text and any
+extraction evidence. Like any other unresolved reason, `low_confidence` fails a required
+field and stays visible on an optional one. When the report's `failure` is `low_confidence`,
+the task fails with `ocr_field_low_confidence`; every other field failure still fails with
+`contained_task_ocr_fields_unresolved`. The check makes no further OCR call.
+
 Limits retain the existing maxima: 256 frames, 4096 observations, 4096 bytes per string,
 4 MiB total observed text/error detail, and 4096 dictionary entries. Aliases are bounded to
 1024 per dictionary. Total loaded dictionary bytes are also bounded by `max_total_bytes`.
@@ -325,8 +335,8 @@ remains in the receipt. The CLI writes the structured JSON and uses the receipt'
 to exit nonzero. No field projection can turn a failed task into success.
 
 For failed runs, the client establishes fields mode from verified observation markers,
-the typed report schema or the existing fields-failure terminal before requiring a
-fields report. Fields-mode missing, malformed, mismatched or unverified evidence fails
+the typed report schema or a fields-failure terminal (`contained_task_ocr_fields_unresolved`
+or `ocr_field_low_confidence`) before requiring a fields report. Fields-mode missing, malformed, mismatched or unverified evidence fails
 explicitly. A 0.7 collection run with partial observations and a later ordinary provider
 failure retains its original nonfatal rejection and terminal; it does not require a
 final comparison report. Other Runtime errors retain their existing error behavior.

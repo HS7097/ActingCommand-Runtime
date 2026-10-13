@@ -128,6 +128,44 @@ Runtime-scoped record (the configuration inventory) is durable (see
 [Durability classes](ledger-store.md#durability-classes-workflow-191-i)).
 Anything not appended is gone with the process (iron rule 13).
 
+> **Superseded by Workflow #383** (this section, "Startup replay", "Takeover invalidation" and
+> "Periodic snapshot"): see "Accept-first rule (Workflow #383 target)" below. AO-4 replaces the
+> append-first rule and the core's snapshot; AO-6 replaces the startup replay; each deletes the
+> old text when it merges.
+
+## Accept-first rule (Workflow #383 target)
+
+The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1–§3.2, §8, §14.3).
+
+1. **Accept first.** `record` and `invalidate` apply the change to the store under
+   `fact_write_gate` with today's acceptance rules (identical → `Unchanged` and nothing captured;
+   older or equal observation → `runtime_fact_stale`; full store → `runtime_fact_capacity_exceeded`;
+   absent key → `runtime_fact_missing`). An accepted change raises the workbench `revision` by one.
+2. **Copy.** The gate G3 captures `runtime.fact_recorded` / `runtime.fact_invalidated` with the
+   workbench (lineage, revision); nothing waits for the ledger. `runtime_fact_store_desync`
+   ("the ledger holds a change the store refuses") cannot happen any more and is not emitted.
+3. **Lineage.** The workbench opens a new lineage at every process start; its base record is the
+   lifecycle phase `tagged_state_loaded`.
+4. **Persistence across a restart** is the tag: only keys that match
+   `ledger_observer.tag.workbench_patterns` are loaded at start, from the ledger index
+   ([ledger-observer.md §11](ledger-observer.md#11-tags-and-the-index-table-ao-2-maintains-ao-5-rules-and-seeding-ao-6-loads)):
+   the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
+   `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
+   `host.perf_baseline.*`, `host.perf_calibration.*` and `host.config_overrides`. Keys under
+   `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
+   `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
+   loaded: this start observes or replays them again, so the takeover invalidation of
+   `device.`/`backend.`/`application.` and `task.page` has nothing left to drop. Any other key is
+   not loaded and reports `ledger_tag_key_unclassified` once per prefix.
+5. **Snapshot.** The core stops sealing `runtime.fact_snapshot` (AO-4); the ledger seals it itself
+   when a revision changed (probe T2, AO-8), so the offline "latest snapshot plus later records"
+   read keeps working.
+6. **Workbench changes use only** `runtime.fact_recorded` / `runtime.fact_invalidated`; the key
+   tells what changed (no per-feature record type).
+
+**Capacity of `config.parameters`.** The one-revision v0.12.0 configuration adds about 170 keys;
+the row budget (256 per `record_list`) is booked in [the v0.12.0 register](v012-register.md#51-capacity-of-configparameters).
+
 ## Startup replay
 
 `recover_runtime_fact_store` runs during `start_with_provider`, after
@@ -245,8 +283,14 @@ is unchanged; `--config` on any other command is a usage error.
 `actingcommand_ledger_forensics::runtime_facts_at(state_root, position,
 deadline)` is the single offline implementation of the startup replay above,
 bound to a ledger position (inclusive) instead of the latest one. The UI and
-every other offline consumer call it; none folds `runtime.fact_*` events
-itself.
+every other offline consumer call it, or `runtime_facts_at_per_phase(state_root,
+position, budget)`, the same read with a deadline per phase; none folds
+`runtime.fact_*` events itself. Its three steps are its phases (Workflow #395),
+named `read_runtime_facts_position`, `read_runtime_fact_snapshot_set` and
+`read_runtime_fact_changes`. `runtime_facts_at`'s one `deadline` bounds them
+together; `runtime_facts_at_per_phase` gives each phase its budget from the
+phase's own start, and the snapshot serves each later phase under that phase's
+deadline (`GlobalLedgerMetadata::set_read_deadline`).
 
 1. It opens one read-only metadata snapshot of the state root
    (`GlobalLedger::open_metadata`, the source `actingledger views` uses) and
@@ -291,9 +335,12 @@ The result `ForensicRuntimeFactsResult` is one of:
   completely readable (`runtime_facts_source_incomplete`), no event at the
   position (`runtime_facts_position_missing`), the cooperative deadline
   (`runtime_facts_read_budget_exceeded`), or `runtime_fact_replay_failed`.
+  When a deadline runs out (`ledger_read_budget_exceeded` or
+  `runtime_facts_read_budget_exceeded`), `operation` names the phase it ran out
+  in.
 
 `actingledger --state-root <state-root> facts --at <sequence>` prints the
-result as one JSON line under `command: facts`, with a 30 s deadline. It exits
+result as one JSON line under `command: facts`, with 30 s for each phase. It exits
 0 only for `available`; otherwise the result is printed first and the tool
 exits nonzero with `runtime_facts_not_available` or the failure code.
 

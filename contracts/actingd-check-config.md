@@ -87,6 +87,10 @@ The optional `policy.monitor` (Workflow #397) sets the policy monitor's own conn
 Runtime: the subscription through which the daemon learns of new ledger events and wakes its
 policy driver.
 
+Since Workflow #383 AO-7 the policy monitor wakes the driver from the host's business
+notifications and sends no request to its Runtime. The keys below are still read, checked and
+reported as described, but nothing uses them until they are retired.
+
 ```json
 {"policy":{"monitor":{"io_timeout_ms":15000,"retry_limit":5,"retry_backoff_ms":1000,"retry_backoff_max_ms":30000}}}
 ```

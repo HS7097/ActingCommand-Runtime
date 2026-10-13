@@ -37,9 +37,14 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `emulator-control.md` — explicit emulator instance start/stop/restart: origin gate, per-instance fence, close-before-stop, tool timeouts and wait criteria, event shape, the `device.connected` program fact and `actingctl emulator`.
 - `scheduling-pause.md` — operator scheduling pause / resume: origin gate, the dispatch gate and its `Deferred` presentation, the instance drain with `contained_task_paused`, status fields, persistence across a restart (the runtime fact `host.scheduling_pause`, restored at the next start; Workflow #361 B1) with no expiry, and `actingctl pause` / `resume`.
 - `linear-steps.md` — the `linear_steps` execution mode: its control declaration and the operation `transition` and `optional` fields, admission rules, step-by-step execution with intermediate states, optional steps with their settle and retries for a swallowed input, failure codes and the mapping onto existing ledger records.
-- `policy-suspension.md` — the failure identity a scheduled `linear_steps` task's settlement records as its `error_code`, which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report.
+- `policy-suspension.md` — the failure identity a scheduled `linear_steps` task's settlement records as its `error_code`, which failures accumulate toward a pause, the immediate rerun, lifting a pause by a package update, and the read-only `actingd suspended` report; and, specified ahead of their code (Workflow #386), the suspension of a task package that admission refuses, condition terminations with their owed reruns, and the `scheduling.rerun.*` / `pack_admission.*` keys.
+- `scheduling-blackout.md` — scheduling blackouts (catalog `maintenance` events and host entries) and complete silence: which requesters wait, which are dropped and which pass, gradual quiet before a blackout, the safety net at its start, the order of the scheduling deferrals, the `scheduling.blackout.*` keys and codes (Workflow #386, ahead of slices SR-4a and SR-4b).
+- `cost-commit.md` — the `task.json` member `cost_commit` (entry-cost tasks): declaration, the task-to-entry-step table, ranking, the pacing-stage gate, the time check before the entry step and the `scheduling.cost_commit.*` keys (Workflow #386, ahead of slice SR-10).
 - `lab-recording.md` — the Lab recording (`actinglab record start` / `mark` / `status` / `stop` and `--record` on the device commands): marks and their self-test, steps, intermediate states, application and optional steps, the recording lock, and the `linear_steps` package `record stop` generates, checks and writes as a content container (`package-reference.md`, "Containers") with its binding snippets.
 - `application-lifecycle.md` — the `application` effect of task packages (launch / restart / stop of the instance's assigned application), the foreground gate before every pointer input with the `application.foreground` program fact, and the startup package the host schedules after emulator `start` / `restart`.
+- `ledger-observer.md` — the ledger as an observer (Workflow #383, target of slices AO-1 to AO-9): the two memory stores, the capture interface and the four host calls with their architecture guard, the silent gates G1–G16, the direct-write exception table (W1, W2), the capture queue with three watermark tiers and spilling, flush order and revisioned sources, write failure (retry, dump, fatal, import) and the dump file, gap records, tags and the `ledger_index` table, start and shutdown order, probes and status blocks, the `ledger_observer.*` keys, the observer's outcome codes and the call-site inventory.
+- `v012-register.md` — the v0.12.0 register (Workflow #383 AO-0): every new persisted shape of ledger revision 3 with its code and writer slices, the removals of task-package digests (option 丙) and failure identity v2, the wire shapes handed to AO-0, the new fact keys and their tag class, every key of `actingd-config` revision 5 with its parsing slice, and the row capacity of `config.parameters`.
+- `runtime-interface.md` — the unified interface (Workflow #389): one door, the three counters (`cli`, `mcp`, `ui`) of the general interface and the Lab channel; channel binding (`BindChannel`, `via`, the transition until U-6); the block of every request kind and the instance fact key families; the two Lab options (`lab_module_authoring`, `lab_module_debugging`) and the gate's decision; G14's `channel` and `via`; the clean mapping of actingctl, MCP, the console and actinglab; the upgrade state; pack load and unload; the outcome codes; the shapes handed to #383 AO-0, the wording handed to #386 SR-0 and the installer page handed to the UI.
 - `runtime-outcomes.md` — the `actingcommand.outcome.v1` envelope (one code and category per result, typed values, cause links, codes mode), the surfaces and the slices that adopt it, the outcome catalog (`outcome-codes/catalog.json`, the owner fragments, the generated `outcome-codes.json`, release snapshots) and the drift guard `tools/outcome-guard` (Workflow #378).
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 - `test-gates/` — the gate map (test plan v2.2 §2.1): exactly six fragments, one per test inventory, `contract.toml`, `ledger.toml`, `host.toml`, `policy.toml`, `exec.toml` and `apps.toml`; each `[[gate]]` row has exactly four keys: `key` (its inventory's own id as a string: `K1`…, `R1`…, `O1`…, `A1`… in `contract.toml`, plain numbers such as `"31"` in the other five; one row per key), `coverage` (`"Y"`, or `"P"` only for "tested only on the cfg(test) Segment backend", never for "partial"), `tests` (a non-empty list of `<package>::<target>::<libtest path>`, target `lib`, `bin:<name>` or the integration test, each a live test without `#[ignore]`) and `incident` (a list of strings, `[]` when none). A test goes into the fragment of the inventory whose key it covers. A slice appends its tests to the existing row of a key and leaves its coverage unchanged; it creates a row only for a key without one, with `"Y"` when its tests cover that key's whole requirement, and otherwise lists the key in its report; a key no inventory id fits continues that inventory's numbering (say so in the PR body). Every row a slice creates or appends to gets that slice's own incident label once (lists are append-only, no duplicates). A row leaves only when its feature retires, said in the PR body. `gate_map_names_live_tests` and `gate_tests_are_deterministic` (`tools/actinglab-architecture/tests/gate_map.rs`) and `ci/gate_check.py` (check `rust`) enforce it.
@@ -85,10 +90,18 @@ existing byte-vector read interfaces retain their behavior.
 Each formal contained task records its effective configuration before entry
 preflight as `actingcommand.runtime.effective-task-configuration.v1` in a
 GlobalLedger-linked DiagnosticJson artifact. Registered device configurations
-retain their requested backends, configured ADB and serial, resolved target,
-timeouts and explicit MuMu path inputs. Providers without a registered device
-configuration carry an explicit absent device observation; task timing remains
-recorded. The production registry supplies its parsed configuration directly.
+retain their requested backends, configured ADB, the configured serial's label,
+resolved target, timeouts and explicit MuMu path inputs. Providers without a
+registered device configuration carry an explicit absent device observation;
+task timing remains recorded. The production registry supplies its parsed
+configuration directly.
+
+Device serials (Workflow #398 RD-1a): a target is named by its label, never by a
+device serial. A target addressed by `HOST:PORT` keeps `HOST:PORT`; a target
+addressed by an adb serial is `handset:<alias>`. The serial members of the
+effective configuration (`configured_serial`, `resolved_serial`,
+`selected_serial`, the input selection's `serial`) and the capture geometry's ADB
+source carry the label.
 
 The task interpreter and the record share the same effective timing view:
 task/control timeout declarations, control/default task and step budgets,
@@ -98,10 +111,11 @@ deadline are separate; Host remaining time is measured at the stated monotonic
 observation time. Recording does not move any timer's start or polling boundary.
 
 The first successful capture adds the same Frame producer's selected backend,
-resolved ADB/serial and resolved MuMu installation root, ADB path, capture DLL
-path and installation source. Ordinary Frame constructors leave the selection
-unobserved. The first InputCommitted adds the successful input backend's name
-and selected serial through the existing session and critical-action return.
+resolved ADB and target label and resolved MuMu installation root, ADB path,
+capture DLL path and installation source. Ordinary Frame constructors leave the
+selection unobserved. The first InputCommitted adds the successful input
+backend's name and selected target label through the existing session and
+critical-action return.
 Configured values do not substitute for these actual observations. A bound
 entry recovery records its own timing and package identity when used. The task
 emits at most four configuration artifacts, each at most 1 MiB; encoding, size
@@ -207,6 +221,24 @@ Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
+
+Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task
+(`navigable_route`, `in_page_guard`, `recognize_only`) may declare `entry_page` as
+an array of 1–16 distinct pages instead of one page; `any` is never a member and
+each member must resolve to exactly one page of the package. A `linear_steps` task
+keeps one entry page, and `"any"` keeps its meaning (no entry check; never with
+phases). A set is always checked before the run: one frame evaluates only the set's
+pages; exactly one match starts the run, none goes to entry recovery, and more than
+one fails with `contained_task_recognition_conflict` before any input. An entry
+recovery package must end on a page of the set, and the recheck accepts any page
+of it. In a phased task each page of the set starts the one stage that lists an
+operation whose `from` is that page, and the run enters at the stage of the page it
+matched; static reachability is checked from every such start. A single entry page
+still starts the first stage. Admission refuses a set with
+`contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,
+`duplicate`, `any_in_set`, `unresolved`, `phase_start_missing`,
+`phase_start_ambiguous`). The `EntryRecognition` record carries `required_pages`
+and, when one matched, `matched_page`.
 
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.
 Existing StepStarted/StepFinished ledger facts carry optional `phase` evidence

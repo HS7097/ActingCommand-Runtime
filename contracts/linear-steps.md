@@ -125,8 +125,8 @@ through every observation, sample and backend call. Optional settling retains it
 extension from the first skip-target observation. Guard evaluation uses the deadline fixed at
 the dispatched step's start. Captures, backend evaluations and sample waits consume these
 budgets and retain their typed records and timing. Sample exhaustion, expired budgets,
-cancellation, changed geometry or lost permission end the observation before any following
-input. Undeclared paths retain their single-frame behavior.
+cancellation or changed geometry end the observation before any following input. Undeclared
+paths retain their single-frame behavior.
 
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.
@@ -451,7 +451,7 @@ field:
 - A `TaskEntryPreflight` fact belongs to the innermost prerequisite package that was opened by
   `EntryRecoveryPackageAdmitted` and not yet closed by `EntryRecoveryCompleted` or
   `EntryRecoveryFailed`; with none open it belongs to the dependent package. An
-  `EntryRecognition`'s `required_page` is that package's first step's page.
+  `EntryRecognition`'s `required_pages` is that package's first step's page alone.
 - The packages of one chain have different package ids, so their content references differ;
   each run prerequisite package has its own `EntryRecovery { package reference }` record.
 - Every package's step indices are a range of their own, as long as its

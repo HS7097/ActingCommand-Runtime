@@ -175,32 +175,32 @@ fn deadline_check(deadline: Instant) -> GlobalLedgerResult<()> {
     Ok(())
 }
 
-/// Why an owner without a native proof is closed anyway. `None` leaves a scope whose last
-/// native record still declares resources in use or unconfirmed untouched; a block the
-/// native reader could not have produced is an error, never a silent skip.
-fn classify_unproven(
-    block: Option<&OwnerEpochBlock>,
-) -> GlobalLedgerResult<Option<UnprovenReason>> {
+/// Why an owner without a native proof is closed anyway: every unproven prior epoch closes
+/// (Workflow #394 EPOCH-CLOSE; #332 Q5, Alice's choice (a) of 09-30). A block the native
+/// reader could not have produced is an error, never a silent skip.
+fn classify_unproven(block: Option<&OwnerEpochBlock>) -> GlobalLedgerResult<UnprovenReason> {
     let Some(block) = block else {
-        return Ok(Some(UnprovenReason::ProofMissing));
+        return Ok(UnprovenReason::ProofMissing);
     };
     if block.legacy {
-        return Ok(Some(UnprovenReason::LegacyJournal));
+        return Ok(UnprovenReason::LegacyJournal);
     }
     match (block.last_active, block.last_disposition) {
-        (true, Some(OwnerResourceDisposition::InUse | OwnerResourceDisposition::Unconfirmed)) => {
-            Ok(None)
-        }
-        (false, Some(OwnerResourceDisposition::None))
+        // A last record that still declares resources in use or unconfirmed reaches this
+        // start only after OwnerGuard found its process gone (`release_exited_owner`):
+        // released by process exit, like an epoch that ends in a normal exit record.
+        (true, Some(OwnerResourceDisposition::InUse | OwnerResourceDisposition::Unconfirmed))
+        | (false, Some(OwnerResourceDisposition::None))
             if block.consistent && !block.confirmed_closed =>
         {
-            Ok(Some(UnprovenReason::ProcessExitOnly))
+            Ok(UnprovenReason::ProcessExitOnly)
         }
-        (false, Some(OwnerResourceDisposition::None))
+        (true, Some(OwnerResourceDisposition::InUse | OwnerResourceDisposition::Unconfirmed))
+        | (false, Some(OwnerResourceDisposition::None))
         | (
             true,
             Some(OwnerResourceDisposition::None | OwnerResourceDisposition::ConfirmedClosed),
-        ) => Ok(Some(UnprovenReason::ProofMissing)),
+        ) => Ok(UnprovenReason::ProofMissing),
         _ => Err(invalid(LedgerCode::PriorEpochUnprovenUnclassified.code())),
     }
 }
@@ -260,16 +260,16 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                 return Err(invalid(LedgerCode::PriorEpochNativeProofMissing.code()));
             }
             let current = match native {
-                Some(_) => Some(PriorEpochCloseBasis::Proven),
-                None => classify_unproven(journal.block(scope.owner))?
-                    .map(|reason| PriorEpochCloseBasis::Unproven { reason }),
+                Some(_) => PriorEpochCloseBasis::Proven,
+                None => PriorEpochCloseBasis::Unproven {
+                    reason: classify_unproven(journal.block(scope.owner))?,
+                },
             };
             if let Some((_, proof)) = sealed {
                 let supported = match proof.basis {
                     PriorEpochCloseBasis::Proven => journal.supports(&proof.evidence),
                     PriorEpochCloseBasis::Unproven { .. } => {
-                        current == Some(proof.basis)
-                            && journal.supports_observation(&proof.evidence)
+                        current == proof.basis && journal.supports_observation(&proof.evidence)
                     }
                 };
                 if !supported
@@ -283,9 +283,6 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                     continue;
                 }
             } else {
-                let Some(basis) = current else {
-                    continue;
-                };
                 let Some(upper) = self.retention.prior_epoch_upper(scope.owner) else {
                     continue;
                 };
@@ -297,7 +294,7 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
                         Some(proof) => proof.clone(),
                         None => journal.observation(scope.owner),
                     },
-                    basis,
+                    basis: current,
                     through_sequence: self.retention.through_sequence,
                     scope_upper_sequence: upper,
                 };

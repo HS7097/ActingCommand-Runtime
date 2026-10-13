@@ -3,6 +3,7 @@
   "codes": {
     "arithmetic_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
@@ -16,6 +17,7 @@
     },
     "float_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
@@ -29,6 +31,7 @@
     },
     "integer_out_of_range": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,
@@ -42,6 +45,7 @@
     },
     "read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "selection-policy",
       "layer": "policy",
       "uncertain": false,

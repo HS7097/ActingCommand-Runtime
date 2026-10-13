@@ -102,6 +102,7 @@ mod approvals;
 mod capture_failure;
 mod capture_sequence;
 mod client_events;
+mod clock_slot_report;
 mod contained_tasks;
 mod crash_recovery;
 mod detection;
@@ -109,9 +110,16 @@ mod facts;
 mod forward_projection;
 mod gate_369s5;
 mod gate_372k2;
+// Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
+mod gate_373_nav3b;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #383 AO-7, test row AO7-b.
+mod gate_383;
+mod gate_392_daa;
+mod gate_398_rd1a;
+mod gate_epoch_close;
 mod gate_p0;
 mod home_entry;
 mod input;

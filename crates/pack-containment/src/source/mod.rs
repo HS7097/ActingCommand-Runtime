@@ -1057,7 +1057,7 @@ impl OperationParser {
         let mut pages = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in &self.bundles {
-            if let Some(anchor_id) = bundle.data.get("entry_page").and_then(Value::as_str) {
+            for anchor_id in entry_page_ids(bundle) {
                 add_page(
                     &self.game,
                     anchor_id,
@@ -2529,8 +2529,11 @@ fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) 
 /// ID `<game>/<page>` that the load-site check compares exactly, and it must be a page the
 /// declaring task itself declares, so every build of that task holds it. Each slot target is
 /// a target of the derived pack that can be evaluated, and a `measure_milli` feature never
-/// reads a composite. As for OCR targets, the same layout ID with an identical derived
-/// definition is kept once; any other reuse of the ID is refused at the reusing entry.
+/// reads a composite. A feature's own target, read at an offset, is a template, color,
+/// color_digest or OCR target (an `nn` or composite feature cannot move), and a
+/// `repeated_anchor` layout's anchor is a template. As for OCR targets, the same layout ID
+/// with an identical derived definition is kept once; any other reuse of the ID is refused at
+/// the reusing entry.
 fn derive_candidate_layouts(
     targets: &HashMap<String, Value>,
     bundles: &[Bundle],
@@ -2568,7 +2571,7 @@ fn derive_candidate_layouts(
             }
             let mut features = Vec::new();
             let mut values = HashMap::new();
-            for feature in array_field(layout, "features") {
+            for (feature_index, feature) in array_field(layout, "features").iter().enumerate() {
                 let name = required_string(feature, "name")?;
                 let value = required_string(feature, "value")?;
                 values.insert(name.clone(), value.clone());
@@ -2576,12 +2579,89 @@ fn derive_candidate_layouts(
                     ("name", Value::String(name)),
                     ("value", Value::String(value)),
                 ]);
+                if let Some(target) = feature.get("target") {
+                    let target_id = target.as_str().ok_or_else(|| {
+                        CliError::package_invalid(
+                            "candidate layout feature target must be a string",
+                        )
+                    })?;
+                    match targets
+                        .get(target_id)
+                        .and_then(|target| target.get("type"))
+                        .and_then(Value::as_str)
+                    {
+                        Some("template" | "color" | "color_digest" | "ocr") => {}
+                        Some(kind) => {
+                            return Err(refuse(
+                                &format!("features/{feature_index}/target"),
+                                &format!(
+                                    "a feature read at an offset cannot read the {kind} target '{target_id}'"
+                                ),
+                            ));
+                        }
+                        None => {
+                            return Err(refuse(
+                                &format!("features/{feature_index}/target"),
+                                &format!(
+                                    "target '{target_id}' is not a recognition target of the pack"
+                                ),
+                            ));
+                        }
+                    }
+                    generated["target"] = target.clone();
+                    generated["offset"] = required_field(feature, "offset")?.clone();
+                }
                 for key in ["identity", "consensus", "integer"] {
                     if let Some(value) = feature.get(key) {
                         generated[key] = value.clone();
                     }
                 }
                 features.push(generated);
+            }
+            if required_string(layout, "kind")? == "repeated_anchor" {
+                let anchor = required_string(layout, "anchor")?;
+                if targets
+                    .get(&anchor)
+                    .and_then(|target| target.get("type"))
+                    .and_then(Value::as_str)
+                    != Some("template")
+                {
+                    return Err(refuse(
+                        "anchor",
+                        &format!("anchor '{anchor}' is not a template target of the pack"),
+                    ));
+                }
+                let mut derived = ordered_object([
+                    ("id", Value::String(id.clone())),
+                    ("page_id", Value::String(page_id)),
+                    ("kind", required_field(layout, "kind")?.clone()),
+                    ("anchor", Value::String(anchor)),
+                    (
+                        "max_instances",
+                        required_field(layout, "max_instances")?.clone(),
+                    ),
+                    ("order", required_field(layout, "order")?.clone()),
+                ]);
+                if let Some(value) = layout.get("suppress_iou_milli") {
+                    derived["suppress_iou_milli"] = value.clone();
+                }
+                for (key, label) in [
+                    ("instance_rect", "candidate instance rect"),
+                    ("click", "candidate instance click"),
+                ] {
+                    derived[key] = canonical_ocr_rect(required_field(layout, key)?, label)?;
+                }
+                if let Some(band) = layout.get("readable_band") {
+                    derived["readable_band"] = canonical_ocr_rect(band, "candidate readable band")?;
+                }
+                derived["features"] = Value::Array(features);
+                for key in ["unknown_identity", "sample_interval_ms"] {
+                    if let Some(value) = layout.get(key) {
+                        derived[key] = value.clone();
+                    }
+                }
+                keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
+                continue;
             }
             let mut slots = Vec::new();
             for (slot_index, slot) in array_field(layout, "slots").iter().enumerate() {
@@ -2675,24 +2755,34 @@ fn derive_candidate_layouts(
                     derived[key] = value.clone();
                 }
             }
-            match layouts
-                .iter()
-                .find(|existing| existing["id"] == derived["id"])
-            {
-                Some(existing) if existing == &derived => {}
-                Some(_) => {
-                    return Err(refuse(
-                        "id",
-                        &format!(
-                            "candidate layout id '{id}' conflicts with an earlier candidate layout"
-                        ),
-                    ));
-                }
-                None => layouts.push(derived),
-            }
+            keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
         }
     }
     Ok(layouts)
+}
+
+/// Keeps one derived candidate layout: the same ID with an identical definition once, any other
+/// reuse of the ID refused at the reusing entry.
+fn keep_candidate_layout(
+    layouts: &mut Vec<Value>,
+    derived: Value,
+    id: &str,
+    refuse: impl Fn(&str, &str) -> CliError,
+) -> CliOutcome<()> {
+    match layouts
+        .iter()
+        .find(|existing| existing["id"] == derived["id"])
+    {
+        Some(existing) if existing == &derived => {}
+        Some(_) => {
+            return Err(refuse(
+                "id",
+                &format!("candidate layout id '{id}' conflicts with an earlier candidate layout"),
+            ));
+        }
+        None => layouts.push(derived),
+    }
+    Ok(())
 }
 
 /// `0.7` when a target uses a construct of pack schema `0.7` or a candidate layout is declared;
@@ -2908,15 +2998,58 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .unwrap_or(false),
         });
     }
+    let game = bundle.data["game"].as_str().unwrap_or_default();
+    // Workflow #373 NAV-3b: each page of an entry page set starts the one stage it is mapped to;
+    // a single entry page starts the first stage.
+    let entries = match &bundle.data["entry_page"] {
+        Value::Array(_) => {
+            let pages = entry_page_ids(bundle);
+            let declared = pages
+                .iter()
+                .map(|page| (*page).to_owned())
+                .collect::<Vec<_>>();
+            let refused = |problem: actingcommand_contract::EntryProblem| {
+                CliError::package_invalid(format!("entry_problem={problem}"))
+            };
+            if declared.len() != bundle.data["entry_page"].as_array().map_or(0, Vec::len) {
+                return Err(CliError::package_invalid(
+                    "entry_page entries must be strings",
+                ));
+            }
+            actingcommand_contract::validate_entry_page_set(game, &declared).map_err(refused)?;
+            pages
+                .into_iter()
+                .map(|page| {
+                    actingcommand_contract::phase_entry_start(game, page, &phases, &operations)
+                        .map(|phase| actingcommand_contract::TaskPhaseEntry { phase, page })
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(refused)?
+        }
+        value => vec![actingcommand_contract::TaskPhaseEntry {
+            phase: 0,
+            page: value.as_str().unwrap_or_default(),
+        }],
+    };
     actingcommand_contract::validate_phased_route(
-        bundle.data["game"].as_str().unwrap_or_default(),
-        bundle.data["entry_page"].as_str().unwrap_or_default(),
+        game,
+        &entries,
         &phases,
         &declared_terminal_page_ids(bundle)?.unwrap_or_default(),
         &operations,
         &scheduling,
     )
     .map_err(|code| CliError::package_invalid(code.as_str()))
+}
+
+/// The pages a task's `entry_page` names: one page, or each page of an entry page set
+/// (Workflow #373 NAV-3b).
+fn entry_page_ids(bundle: &Bundle) -> Vec<&str> {
+    match bundle.data.get("entry_page") {
+        Some(Value::String(page)) => vec![page.as_str()],
+        Some(Value::Array(pages)) => pages.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
@@ -3999,7 +4132,7 @@ fn has_page_anchor(page: &str, declared_anchor_ids: &BTreeSet<String>) -> bool {
 fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut pages = BTreeSet::new();
     for bundle in bundles {
-        if let Some(page) = bundle.data.get("entry_page").and_then(Value::as_str) {
+        for page in entry_page_ids(bundle) {
             insert_selected_page_id(game, page, &mut pages);
         }
         for page in declared_terminal_page_ids(bundle)?.into_iter().flatten() {

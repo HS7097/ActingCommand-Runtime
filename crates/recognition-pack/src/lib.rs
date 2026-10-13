@@ -41,7 +41,7 @@ pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, Candidat
 
 pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, normalize_name,
+    CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
 };
 
 pub use codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget};
@@ -49,7 +49,8 @@ pub use codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, T
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
     CandidateFeatureDeclaration, CandidateFeatureValue, CandidateIntegerDeclaration,
-    CandidateLayout, CandidateProjectionFailure, CandidateSlot, UnknownIdentityHandling,
+    CandidateLayout, CandidateOrder, CandidateProjectionFailure, CandidateSlot, TargetSearch,
+    UnknownIdentityHandling,
 };
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
@@ -1011,6 +1012,8 @@ pub struct SceneEvaluation<'a> {
     consensus_results: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
     sample_deadline: Option<std::time::Instant>,
     text_reads: RefCell<text_locate::TextReads>,
+    /// The clock an anchor search reads its time limit from.
+    search_clock: fn() -> std::time::Instant,
     /// Workflow #396 REC-2: the transforms of the regions unique templates search in.
     spectra: RefCell<recognition::RegionSpectra>,
 }
@@ -1208,6 +1211,7 @@ impl RecognitionEvaluator {
             consensus_results: RefCell::new(HashMap::new()),
             sample_deadline: None,
             text_reads: RefCell::new(text_locate::TextReads::default()),
+            search_clock: std::time::Instant::now,
             spectra: RefCell::new(recognition::RegionSpectra::default()),
         }
     }
@@ -6034,5 +6038,405 @@ mod tests {
             "expected '{needle}' in '{}'",
             err.message()
         );
+    }
+
+    /// Workflow #308 list selector slice L1: `repeated_anchor` layouts on synthetic neutral
+    /// frames, drawn noise markers and color squares only.
+    mod repeated_anchor {
+        use super::*;
+        use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
+        use actingcommand_contract::CandidateFeature;
+        use actingcommand_contract::candidate_projection::{
+            CandidateLayoutKind, CandidateProjection, CandidateRect,
+        };
+        use actingcommand_contract::outcome::Category;
+        use serde_json::json;
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        const MARKER: &str = "assets/marker.png";
+
+        #[derive(Debug)]
+        struct MarkerAssets(Vec<u8>);
+
+        impl AssetResolver for MarkerAssets {
+            fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+                if path == MARKER {
+                    Ok(self.0.clone())
+                } else {
+                    Err(RecognitionPackError::fatal(format!("no asset {path}")))
+                }
+            }
+        }
+
+        /// An 8x6 block of deterministic noise: a shifted copy correlates with it near zero.
+        fn marker() -> RgbImage {
+            let mut state = 0x2545_f491_4f6c_dd1d_u64;
+            let mut channel = || {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 56) as u8
+            };
+            let mut image = blank_image(8, 6, [0, 0, 0]);
+            for y in 0..6 {
+                for x in 0..8 {
+                    image.set(x, y, [channel(), channel(), channel()]);
+                }
+            }
+            image
+        }
+
+        fn rows_pack(layout: Value) -> Value {
+            json!({
+                "schema_version": "0.7",
+                "coordinate_space": {"width": 96, "height": 72},
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {"type": "template", "id": "ui/row_marker", "template_path": MARKER,
+                     "region": "full_frame", "threshold": 0.95},
+                    {"type": "color", "id": "state/row_open",
+                     "region": {"x": 0, "y": 0, "width": 4, "height": 4}, "expected": [0, 200, 0]},
+                    {"type": "nn", "id": "model/row_kind", "region": "full_frame",
+                     "model_ref": "fixture-page-model", "model_sha256": "b".repeat(64),
+                     "candidate_labels": ["open", "closed"], "minimum_score": 0.75,
+                     "selection": "label", "expected_label": "open", "timeout_ms": 1000},
+                    {"type": "composite", "id": "check/row_ready", "mode": "all_of",
+                     "members": ["state/row_open", "ui/row_marker"]}
+                ],
+                "candidate_layouts": [layout]
+            })
+        }
+
+        fn rows_layout() -> Value {
+            json!({
+                "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                "anchor": "ui/row_marker", "max_instances": 4, "order": "top_to_bottom",
+                "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+                "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+                "features": [{"name": "open", "value": "passed", "target": "state/row_open",
+                              "offset": {"x": 30, "y": 1}}]
+            })
+        }
+
+        fn rows_evaluator(layout: Value) -> RecognitionPackResult<RecognitionEvaluator> {
+            let pack = load_pack_from_json_str(&rows_pack(layout).to_string())?;
+            RecognitionEvaluator::with_asset_resolver(
+                pack,
+                Arc::new(MarkerAssets(encode_png(&marker()))),
+            )
+        }
+
+        /// Markers at (4, 10) with its open square, (50, 10), (4, 40) and (60, 62); the last
+        /// instance rectangle reaches past the right edge of the frame.
+        fn rows_scene() -> Scene {
+            let mut frame = blank_image(96, 72, [30, 31, 32]);
+            for (x, y) in [(4, 10), (50, 10), (4, 40), (60, 62)] {
+                paste(&mut frame, &marker(), x, y);
+            }
+            for y in 11..15 {
+                for x in 34..38 {
+                    frame.set(x, y, [0, 200, 0]);
+                }
+            }
+            Scene::from_png(&encode_png(&frame)).expect("scene")
+        }
+
+        fn project(layout: Value) -> CandidateProjection {
+            rows_evaluator(layout)
+                .expect("layout admitted")
+                .scene_context(&rows_scene())
+                .project_candidates("layout/rows")
+                .expect("projection")
+        }
+
+        /// Each candidate's rectangle origin, whether it is actionable, and its `open` value.
+        fn summary(projection: &CandidateProjection) -> Vec<(i32, i32, bool, Option<bool>)> {
+            projection
+                .candidates()
+                .iter()
+                .map(|candidate| {
+                    let open = match candidate.features.get("open") {
+                        None => None,
+                        Some(CandidateFeature::Boolean { value, .. }) => Some(*value),
+                        Some(other) => panic!("unexpected feature {other:?}"),
+                    };
+                    (
+                        candidate.rect.x,
+                        candidate.rect.y,
+                        candidate.actionable,
+                        open,
+                    )
+                })
+                .collect()
+        }
+
+        /// Reads the start instant for the anchor search and its checks before rows 0..=10, then
+        /// a time past the 5 s limit.
+        fn clock_past_row_ten() -> Instant {
+            thread_local! {
+                static START: Instant = Instant::now();
+                static CALLS: Cell<u32> = const { Cell::new(0) };
+            }
+            let calls = CALLS.with(|calls| {
+                let current = calls.get();
+                calls.set(current + 1);
+                current
+            });
+            let start = START.with(|start| *start);
+            if calls <= 11 {
+                start
+            } else {
+                start + Duration::from_secs(6)
+            }
+        }
+
+        #[test]
+        fn repeated_anchor_projects_every_instance_with_edge_and_band_actionability() {
+            let projection = project(rows_layout());
+            assert_eq!(
+                projection.layout_kind(),
+                CandidateLayoutKind::RepeatedAnchor
+            );
+            // top_to_bottom numbers the matches by (y, x). The last instance reaches past the
+            // frame, so it is not actionable and carries no features.
+            assert_eq!(
+                summary(&projection),
+                [
+                    (2, 8, true, Some(true)),
+                    (48, 8, true, Some(false)),
+                    (2, 38, true, Some(false)),
+                    (58, 60, false, None),
+                ]
+            );
+            assert_eq!(
+                projection.candidates()[0].click,
+                CandidateRect {
+                    x: 14,
+                    y: 10,
+                    width: 20,
+                    height: 6
+                }
+            );
+            assert_eq!(projection.candidates()[3].id, "layout/rows#03");
+            assert_eq!(
+                projection.candidate_set_sha256(),
+                "69a3bdfe911c4871f42bbfa7f080253dac4f8416a286c4ac18435a457fb381c8"
+            );
+
+            // A readable band that ends above the third row leaves that row unreadable.
+            let mut banded = rows_layout();
+            banded["readable_band"] = json!({"x": 0, "y": 0, "width": 96, "height": 40});
+            assert_eq!(
+                summary(&project(banded)),
+                [
+                    (2, 8, true, Some(true)),
+                    (48, 8, true, Some(false)),
+                    (2, 38, false, None),
+                    (58, 60, false, None),
+                ]
+            );
+
+            // left_to_right numbers the same matches by (x, y).
+            let mut columns = rows_layout();
+            columns["order"] = json!("left_to_right");
+            assert_eq!(
+                project(columns)
+                    .candidates()
+                    .iter()
+                    .map(|candidate| (candidate.rect.x, candidate.rect.y))
+                    .collect::<Vec<_>>(),
+                [(2, 8), (2, 38), (48, 8), (58, 60)]
+            );
+        }
+
+        #[test]
+        fn repeated_anchor_overflow_and_search_limit_fail_without_a_partial_set() {
+            let scene = rows_scene();
+            let mut three = rows_layout();
+            three["max_instances"] = json!(3);
+            let overflow = rows_evaluator(three)
+                .expect("layout admitted")
+                .scene_context(&scene)
+                .project_candidates("layout/rows")
+                .expect_err("four matches exceed three instances");
+            assert_eq!(
+                overflow.code().as_str(),
+                "candidate_projection_budget_exceeded"
+            );
+            assert_eq!(overflow.item(), "candidates");
+            assert_eq!(
+                overflow.detail(),
+                "layout_id=layout/rows count=4 limit_count=3"
+            );
+
+            let evaluator = rows_evaluator(rows_layout()).expect("layout admitted");
+            let incomplete = evaluator
+                .scene_context(&scene)
+                .with_search_clock(clock_past_row_ten)
+                .project_candidates("layout/rows")
+                .expect_err("the search runs past its limit at row 11");
+            assert_eq!(
+                incomplete.code(),
+                RecognitionPackCode::CandidateSearchIncomplete.code()
+            );
+            assert_eq!(
+                RecognitionPackCode::CandidateSearchIncomplete.category(),
+                Category::Error
+            );
+            assert_eq!(incomplete.item(), "anchor");
+            // Rows 0..=10 hold the two upper markers.
+            assert_eq!(
+                incomplete.detail(),
+                format!(
+                    "stage={} timeout_ms=5000 count=2",
+                    RecognitionPackLocation::CandidateSearchRepeatedAnchor.as_str()
+                )
+            );
+        }
+
+        /// The rows layout with six OCR features, each read at its own offset, built without a
+        /// vision provider.
+        fn ocr_rows_evaluator(readable_band: Option<Value>) -> RecognitionEvaluator {
+            let mut layout = rows_layout();
+            layout["features"] = (0..6)
+                .map(|index| {
+                    json!({
+                        "name": format!("label_{index}"), "value": "passed",
+                        "target": "text/row_label", "offset": {"x": 2 + 5 * index, "y": 1}
+                    })
+                })
+                .collect();
+            if let Some(band) = readable_band {
+                layout["readable_band"] = band;
+            }
+            let mut pack = rows_pack(layout);
+            pack["targets"]
+                .as_array_mut()
+                .expect("targets")
+                .push(json!({
+                    "type": "ocr", "id": "text/row_label",
+                    "region": {"x": 0, "y": 0, "width": 4, "height": 4},
+                    "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
+                    "expected": ["open"], "case_sensitive": false, "minimum_confidence": 0.9,
+                    "model_ref": "PP-OCRv6_medium", "model_sha256": "a".repeat(64)
+                }));
+            RecognitionEvaluator::with_asset_resolver(
+                load_pack_from_json_str(&pack.to_string()).expect("pack"),
+                Arc::new(MarkerAssets(encode_png(&marker()))),
+            )
+            .expect("layout admitted")
+        }
+
+        #[test]
+        fn repeated_anchor_provider_budget_counts_every_actionable_instance() {
+            let scene = rows_scene();
+            // Six OCR evaluations per instance on the three actionable rows make 18.
+            let over = ocr_rows_evaluator(None)
+                .scene_context(&scene)
+                .project_candidates("layout/rows")
+                .expect_err("18 OCR evaluations exceed the budget of 16");
+            assert_eq!(over.code().as_str(), "candidate_projection_budget_exceeded");
+            assert_eq!(over.item(), "provider_evaluations");
+            assert_eq!(
+                over.detail(),
+                "layout_id=layout/rows count=18 limit_count=16"
+            );
+
+            // A readable band that leaves two rows actionable needs 12, within the budget, so
+            // the features are read; offline, without a provider, that is refused as such.
+            let within =
+                ocr_rows_evaluator(Some(json!({"x": 0, "y": 0, "width": 96, "height": 40})))
+                    .scene_context(&scene)
+                    .project_candidates("layout/rows")
+                    .expect_err("no vision provider reads the OCR features");
+            assert_eq!(within.code().as_str(), "candidate_feature_provider_missing");
+        }
+
+        #[test]
+        fn repeated_anchor_declarations_are_refused_with_their_pointer() {
+            let edit = |change: fn(&mut Value)| {
+                let mut layout = rows_layout();
+                change(&mut layout);
+                layout
+            };
+            let fixed_slots = json!({
+                "id": "layout/slots", "page_id": "list_page", "kind": "fixed_slots",
+                "readable_band": {"x": 0, "y": 0, "width": 96, "height": 40},
+                "features": [{"name": "open", "value": "passed"}],
+                "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "click": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "targets": {"open": "state/row_open"}}]
+            });
+            // The wire shape is refused while the pack is read, at the field's pointer.
+            for (layout, pointer) in [
+                (
+                    edit(|layout| layout["kind"] = json!("grid")),
+                    "/candidate_layouts/0/kind",
+                ),
+                (
+                    edit(|layout| layout["slots"] = json!([])),
+                    "/candidate_layouts/0/slots",
+                ),
+                (
+                    edit(|layout| layout["order"] = json!("row_major")),
+                    "/candidate_layouts/0/order",
+                ),
+                (fixed_slots, "/candidate_layouts/0/readable_band"),
+            ] {
+                let error =
+                    load_pack_from_json_str(&rows_pack(layout).to_string()).expect_err(pointer);
+                assert_eq!(
+                    error
+                        .declaration_issue()
+                        .map(|issue| issue.field_path.as_str()),
+                    Some(pointer)
+                );
+            }
+            // The package rules are refused when the evaluator is built, led by the pointer.
+            for (layout, message) in [
+                (
+                    edit(|layout| layout["max_instances"] = json!(65)),
+                    "/candidate_layouts/0/max_instances must be 1..=64",
+                ),
+                (
+                    edit(|layout| layout["anchor"] = json!("state/row_open")),
+                    "/candidate_layouts/0/anchor: 'state/row_open' is not a template target",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["offset"] = json!({"x": 36, "y": 1})),
+                    "/candidate_layouts/0/features/0/offset: the feature region lies outside instance_rect",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["target"] = json!("model/row_kind")),
+                    "/candidate_layouts/0/features/0/target: target 'model/row_kind' cannot be read at an offset",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["target"] = json!("check/row_ready")),
+                    "/candidate_layouts/0/features/0/target: target 'check/row_ready' cannot be read at an offset",
+                ),
+                (
+                    edit(|layout| {
+                        layout["sample_interval_ms"] = json!(1);
+                        layout["features"][0]["consensus"] = json!({
+                            "samples": [{"frame": 0}, {"frame": 1}],
+                            "aggregate": {"kind": "k_of_n", "k": 2}
+                        });
+                    }),
+                    "/candidate_layouts/0/features/0/consensus: a repeated_anchor layout samples one frame",
+                ),
+                (
+                    edit(|layout| {
+                        layout["features"][0]
+                            .as_object_mut()
+                            .expect("feature object")
+                            .remove("offset");
+                    }),
+                    "/candidate_layouts/0/features/0: a repeated_anchor feature reads a target at an offset",
+                ),
+            ] {
+                assert_fatal_contains(rows_evaluator(layout).expect_err(message), message);
+            }
+        }
     }
 }

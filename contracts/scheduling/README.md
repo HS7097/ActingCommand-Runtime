@@ -486,8 +486,8 @@ decision gains a reason.
    - `why` is the candidate's last reason, the one that settled it
      (`instance_already_selected`, `host_budget_deferred`,
      `heavy_scene_budget_deferred`, an admission eligibility code,
-     `score_deferred`, `task_cooldown_active`, `trigger_false`, …); `none`
-     without a reason.
+     `score_deferred`, `task_cooldown_active`, `trigger_false`, …); it is
+     never `none` ("Why A Candidate Does Not Run" below).
 
 A stored `actingcommand.resource-targets.v2` policy is named
 `targets=active.v2:<sha>@<applied_at>` or `expired.v2:<sha>@<applied_at>`; while
@@ -510,6 +510,40 @@ policy dispatch events of an admission attempt (`policy.dispatch_intent`, then
 so a poll that dispatches nothing records nothing. Ranks, states, intents
 (decision identity and prerequisites), wake times and selections are unchanged
 by it.
+
+## Why A Candidate Does Not Run
+
+Workflow #386 (scheduling model v1.4.2 §8; slice SR-6a). Every decision that is not selected
+carries at least one reason, and its last reason is a registered outcome code
+(`contracts/outcome-codes.json`, the policy fragment for the evaluator's own codes): that is the
+code `why` names in a dispatch decision record, and it is never `none`. An evaluator path that
+would end a decision without a reason is a programming error: the candidate is still deferred,
+with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
+on, so the gap is visible instead of silent. The order in which the deferrals of the scheduling
+rules are decided, and so which code a deferred candidate carries, is in
+[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Evaluations
+stay out of the ledger; a person sees the reason in the instance's not-running row of the status
+and of MCP (slice SR-6b).
+
+Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
+but has not started is withdrawn when its task package is unloaded, and its decision record and
+reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, optional
+`request_id`, `instance_id`; Workflow #389 U-3, [`runtime-interface.md`](../runtime-interface.md),
+"Unloading a package in use"). It is not a deferral, so it has no place in the order above.
+
+**Status.** Written ahead of its code (documentation slice SR-0) and in force since SR-6a
+(v0.12.0). A reason counts as registered when its spelling is an active code of the outcome
+catalog; the evaluator's existing reason spellings are registered by the outcome-code typing of
+the policy crate (Workflow #378 A2d).
+
+The evaluator gives `decision_reason_missing` as it closes the round, before it writes any
+dispatch decision record. A decision left eligible becomes deferred. So `why`, and the codes
+`omitted_why` counts, never name `none`; `omitted_why=none` still means that no candidate was
+omitted. `why` is always the last reason the evaluator wrote. The host can add reasons to a
+cycle's decisions after the evaluation: `eligible_since_unknown` ("Settlement Feedback And
+Eligibility Age" below) and `policy_instance_fact_missing:<key>`
+([`instance-fact-store.md`](../instance-fact-store.md), "Explanation"). These follow the
+evaluator's reasons and do not replace the reason that settled the decision.
 
 ## Settlement Feedback And Eligibility Age
 
@@ -678,9 +712,32 @@ Every clock schedule declares exactly one source:
 
 A clock occurrence is owed from the moment it occurs until the task is next dispatched; it has no expiry (Workflow #361). Several occurrences missed in a row collapse into the latest one. An occurrence that fell while the task's activity window was closed, or while no Runtime was running, is dispatched once at the first admissible evaluation of the next window, and that dispatch counts against the loop budget of that window's day. A timeline reset invalidates the task's settled state but does not settle a missed occurrence. A catalog that must skip a missed occurrence instead of replaying it gates each occurrence with its own timeline window (`timeline_active`); no expiry rule exists in the catalog schema yet.
 
+A due occurrence that a gate stops, or that a dispatch serves after its activity window opened, leaves one record (Workflow #372; "Clock-slot records" below).
+
 The catalog contains the effective DST offset instead of consulting a hidden timezone database. The base UTC offset is bounded to `[-840, 840]` minutes and the explicit DST offset is independently bounded to `[-120, 120]` minutes; their effective sum is therefore bounded to `[-960, 960]` minutes. A DST transition, server-clock correction, reveal change, or maintenance delay creates a new immutable catalog generation and triggers full recomputation. `maintenance_drift_ms` shifts nominal occurrences and is bounded to seven days. Calendar and absolute schedules cannot use `local`, because monotonic coordinates do not identify wall-clock instants and are not portable across host boot epochs.
 
 `next_wake_unix_ms` remains the earliest lower bound across timeline and predicate wakes. When a task wake is known, `preload_hint` pairs that lower bound with the task ID, its `procedure_ref` as `package_ref`, and an explicit confidence. A preload hint is advisory only and never constitutes admission or execution permission.
+
+### Clock-slot records
+
+A due clock occurrence that is not dispatched leaves one trace (Workflow #372). The trace is an informational `policy.planning_signal_observed` record of kind `goal_missed`: like every planning signal it consumes no failure tax, advances no failure streak, pauses nothing and wakes no agent. `actingd suspended` lists the records with their settled fate (`../policy-suspension.md`), and MCP `ac_diagnose` shows up to 10 of an instance's.
+
+- **Came due, served, owed.** An occurrence O came due for a (task, instance) pair when an evaluation ranks the pair as a candidate (its trigger is true) and O is its due occurrence. A pair whose trigger is false did not come due and leaves nothing: a follower after a failed head or after its group's reset, an occurrence outside its own `timeline_active` window, a true `feedback_stop`. O is served by the pair's first admitted dispatch after O. A selected dispatch is owed when its O lies before the start of the activity window it is selected in; it is a first run when the pair had no dispatch.
+- **Codes.** `clock_slot_refused` (warning): a persistent gate refused a due O. `clock_slot_deferred` (info): a transient gate held it back. `clock_slot_owed` (info): the first evaluation that selects the pair for an owed O. A pair with a dispatch in flight gets no record.
+
+| gate | codes | recorded as | when |
+|---|---|---|---|
+| persistent | `policy_budget_exhausted` (with its `budget_dimension`), `policy_activity_window_closed`, `policy_task_paused`; at placement `instance_override_disabled`, `capability_missing`, `activity_profile_missing` | `clock_slot_refused` | first sight |
+| operator pause | `dispatch_paused_global`, `dispatch_paused_instance` | `clock_slot_deferred` | first sight |
+| queue wait | `dispatch_instance_held`, `policy_retry_backoff_active`, `policy_activity_interval_active` and any other eligibility deferral; at placement `instance_unavailable` | `clock_slot_deferred` | only at an evaluation where the pair's activity window is closed: the wait outlasted the window |
+| waiting in the round | the evaluator's own deferrals (another candidate selected, host or scene budgets, capacity, score, cooldown) | nothing | once the window closes, such a candidate meets `policy_activity_window_closed` |
+
+- **A pair with no dispatch** gets refused and deferred records only at an evaluation where its activity window is open, or when it has no activity profile. An occurrence before that, for example from an activation at night, is covered by the owed record of the pair's first run, which carries `first_run`.
+- **Once per occurrence.** The record's `signal_id` is `signal:clock_slot:<refused|deferred|owed>:<hex>`, where `<hex>` is the lowercase SHA-256 of the UTF-8 bytes `task \0 instance \0 O`, with O in decimal ASCII. It is checked against the planning-signal projection before the record is written, so each kind is written at most once per (pair, O), across restarts too. A refused record stops later deferred ones. A deferred record stops a later refused one only for `policy_activity_window_closed`, the consequence of the pause or wait, not a new cause; a later budget, task-paused or configuration refusal is still written. Within a class the first gate seen wins.
+- **Token.** The record's `instance_id` is the instance alias and its `task_id` the task. `fact_code` is the code followed by `:<key>=<value>` for each present value, in the order `gate_code`, `budget_dimension`, `occurrence_unix_ms`, `window_start_unix_ms`, `window_end_unix_ms`, `next_eligible_unix_ms`, `next_occurrence_unix_ms`, `first_run`; an absent value is left out, never written as `none` or `null`. Refused and deferred records carry `gate_code` and `occurrence_unix_ms`, and when known `budget_dimension`, `window_end_unix_ms` (E, the end of the activity window open at the record), `next_eligible_unix_ms` (N) and `next_occurrence_unix_ms` (X). Owed records carry `occurrence_unix_ms` and `window_start_unix_ms`, `next_occurrence_unix_ms` (X) when known, and `first_run=true` for a first run. The values are code spellings, vocabulary tokens, decimal integers or `true`.
+- **Fate.** A refused or deferred record predicts `same_window` when E is present and N < min(E, X): served late in the same window; `next_window` when N < X and E is absent or N ≥ E: served in the next window as an owed run, which for a daily-limited task displaces that day's own slot; `collapsed` when N ≥ X: absorbed by the next occurrence; and `pending` without N (a pause, a wait, an unavailable instance, a paused task, the configuration). The pair's first admitted dispatch D after the record settles it: `collapsed` when D ≥ X, `same_window` when D < E, `next_window` otherwise; without D, `collapsed` once X has passed. An owed record settles as `served` when D < X, and as `absorbed` when D ≥ X or, without D, once X has passed.
+- **Fact invalidation.** Planning signals are appended without an instance link, so a clock-slot record invalidates every active fact whose `invalidate_on` lists `policy.planning_signal_observed`, on any instance.
+- **Not recorded.** An occurrence collapsed into the next one with no gate ever seen, which needs no Runtime running across two occurrences, and an occurrence a catalog skips by making its trigger false.
 
 ## Runtime Boundary
 

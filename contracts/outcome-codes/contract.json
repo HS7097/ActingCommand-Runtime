@@ -3,6 +3,7 @@
   "codes": {
     "foreign_os_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -26,6 +27,7 @@
     },
     "foreign_sqlite_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -45,6 +47,7 @@
     },
     "foreign_nemu_error": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -64,6 +67,7 @@
     },
     "foreign_adb_error": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -73,18 +77,20 @@
         "raw_code": "optional",
         "raw_text_truncated": "optional",
         "raw_text_sensitivity": "optional",
+        "raw_text_redacted": "optional",
         "exit_code": "optional",
-        "adb_serial": "optional"
+        "device_label": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "description": "adb failed or printed a failure; raw_text keeps its output, with every bound device serial replaced by its label token (raw_text_redacted).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
     "foreign_mumu_manager_error": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -105,6 +111,7 @@
     },
     "foreign_vision_error": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -124,6 +131,7 @@
     },
     "foreign_data_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -144,6 +152,7 @@
     },
     "foreign_http_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -166,6 +175,7 @@
     },
     "foreign_other_error": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -185,6 +195,7 @@
     },
     "panic_caught": {
       "category": "warning",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -205,6 +216,7 @@
     },
     "runtime_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -218,6 +230,7 @@
     },
     "runtime_owner_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -231,6 +244,7 @@
     },
     "invalid_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -244,6 +258,7 @@
     },
     "runtime_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -257,6 +272,7 @@
     },
     "runtime_fatal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -270,6 +286,7 @@
     },
     "owner_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -283,6 +300,7 @@
     },
     "protocol_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -296,6 +314,7 @@
     },
     "instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -309,6 +328,7 @@
     },
     "lease_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -325,6 +345,7 @@
     },
     "lease_cooldown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -338,6 +359,7 @@
     },
     "lease_expired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -347,12 +369,13 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
     "lease_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -362,12 +385,13 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
     "stale_owner_epoch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -381,6 +405,7 @@
     },
     "lease_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -394,6 +419,7 @@
     },
     "queue_full": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -407,6 +433,7 @@
     },
     "queue_expired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -420,6 +447,7 @@
     },
     "queue_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -433,6 +461,7 @@
     },
     "queue_connection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -446,6 +475,7 @@
     },
     "transfer_not_safe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -459,6 +489,7 @@
     },
     "instance_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -472,6 +503,7 @@
     },
     "holder_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -485,6 +517,7 @@
     },
     "connection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -498,6 +531,7 @@
     },
     "readonly_capability_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -511,6 +545,7 @@
     },
     "capture_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -524,6 +559,7 @@
     },
     "recognition_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -537,6 +573,7 @@
     },
     "backend_open_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -550,6 +587,7 @@
     },
     "backend_operation_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -563,6 +601,7 @@
     },
     "package_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -576,6 +615,7 @@
     },
     "evidence_export_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -589,6 +629,7 @@
     },
     "ledger_failure": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -602,6 +643,7 @@
     },
     "contained_task_deadline_exceeded": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -615,6 +657,7 @@
     },
     "contained_task_busy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -628,6 +671,7 @@
     },
     "contained_task_cancelled": {
       "category": "error",
+      "ladder_class": "planned_stop",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -641,6 +685,7 @@
     },
     "contained_task_paused": {
       "category": "error",
+      "ladder_class": "planned_stop",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -654,6 +699,7 @@
     },
     "governance_client_not_allowed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -667,6 +713,7 @@
     },
     "governance_instance_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -680,6 +727,7 @@
     },
     "governance_identity_already_declared": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -693,6 +741,7 @@
     },
     "input_backend_open_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -706,6 +755,7 @@
     },
     "capture_backend_open_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -719,6 +769,7 @@
     },
     "paired_backend_open_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -732,6 +783,7 @@
     },
     "input_check_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -745,6 +797,7 @@
     },
     "capture_check_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -758,6 +811,7 @@
     },
     "provider_startup_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -771,6 +825,7 @@
     },
     "runtime_diagnostic": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -784,6 +839,7 @@
     },
     "lease_fencing_denied": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -797,6 +853,7 @@
     },
     "lease_queue_cancelled": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -810,6 +867,7 @@
     },
     "lease_queue_disconnected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -823,6 +881,7 @@
     },
     "artifact_export_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -836,6 +895,7 @@
     },
     "artifact_pinned_frame_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -849,6 +909,7 @@
     },
     "input_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -862,6 +923,7 @@
     },
     "application_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -875,6 +937,7 @@
     },
     "command_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -888,6 +951,7 @@
     },
     "policy_rejected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -901,6 +965,7 @@
     },
     "catalog_transition_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -914,6 +979,7 @@
     },
     "release_transition_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -927,6 +993,7 @@
     },
     "agent_response_session_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -940,6 +1007,7 @@
     },
     "agent_session_not_active": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -953,6 +1021,7 @@
     },
     "application_backend_operation_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -966,6 +1035,7 @@
     },
     "approval_decision_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -979,6 +1049,7 @@
     },
     "approval_projection_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -992,6 +1063,7 @@
     },
     "approval_projection_origin_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1005,6 +1077,7 @@
     },
     "approval_projection_payload_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1018,6 +1091,7 @@
     },
     "approval_projection_record_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1031,6 +1105,7 @@
     },
     "approval_target_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1044,6 +1119,7 @@
     },
     "artifact_object_key_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1057,6 +1133,7 @@
     },
     "artifact_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1070,6 +1147,7 @@
     },
     "artifact_read_range_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1083,6 +1161,7 @@
     },
     "artifact_reference_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1096,6 +1175,7 @@
     },
     "capacity_admission_refused": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1109,6 +1189,7 @@
     },
     "capacity_owner_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1122,6 +1203,7 @@
     },
     "capture_summary_bound_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1135,6 +1217,7 @@
     },
     "capture_summary_count_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1148,6 +1231,7 @@
     },
     "capture_summary_frame_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1161,6 +1245,7 @@
     },
     "capture_summary_pin_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1174,6 +1259,7 @@
     },
     "client_action_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1187,6 +1273,7 @@
     },
     "consecutive_unchanged_threshold_reached": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1200,6 +1287,7 @@
     },
     "contained_task_guard_evaluation_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1213,6 +1301,7 @@
     },
     "contained_task_home_recovery_package_incompatible": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1226,6 +1315,7 @@
     },
     "contained_task_post_admission_ocr_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1239,6 +1329,7 @@
     },
     "contained_task_recognition_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1252,6 +1343,7 @@
     },
     "current_page_unknown": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1265,6 +1357,7 @@
     },
     "event_issuer_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1278,6 +1371,7 @@
     },
     "evidence_capture_summary_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1291,6 +1385,7 @@
     },
     "evidence_capture_summary_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1304,6 +1399,7 @@
     },
     "evidence_capture_summary_not_ready": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1317,6 +1413,7 @@
     },
     "fact_invalidation_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1330,6 +1427,7 @@
     },
     "fact_invalidation_source_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1343,6 +1441,7 @@
     },
     "fact_invalidation_target_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1356,6 +1455,7 @@
     },
     "fact_tombstone_projection_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1369,6 +1469,7 @@
     },
     "fact_tombstone_projection_source_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1382,6 +1483,7 @@
     },
     "input_backend_operation_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1395,6 +1497,7 @@
     },
     "install_selection_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1408,6 +1511,7 @@
     },
     "instance_discovery_unavailable": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1421,6 +1525,7 @@
     },
     "invalid_artifact_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1434,6 +1539,7 @@
     },
     "invalid_artifact_timestamp": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1447,6 +1553,7 @@
     },
     "invalid_capacity_sample": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1460,6 +1567,7 @@
     },
     "invalid_capacity_thresholds": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1473,6 +1581,7 @@
     },
     "invalid_capture_policy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1486,6 +1595,7 @@
     },
     "invalid_failed_run_retention_policy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1499,6 +1609,7 @@
     },
     "invalid_governance_identity_card": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1512,6 +1623,7 @@
     },
     "invalid_governance_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1525,6 +1637,7 @@
     },
     "invalid_instance_alias": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1538,6 +1651,7 @@
     },
     "invalid_lab_pin_release_target": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1551,6 +1665,7 @@
     },
     "invalid_material_read_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1564,6 +1679,7 @@
     },
     "invalid_runtime_event_query_snapshot": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1577,6 +1693,7 @@
     },
     "invalid_runtime_fact_snapshot": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1590,6 +1707,7 @@
     },
     "invalid_timestamp": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1603,6 +1721,7 @@
     },
     "lease_queue_connection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1616,6 +1735,7 @@
     },
     "lease_queue_expired": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1627,12 +1747,13 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), and a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted), and since 0.12.0 an emulator control (CLI, console, MCP ac_emulator; 5 s, once for a restart; nothing is driven). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
       "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
     "ledger_migration_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1646,6 +1767,7 @@
     },
     "material_read_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1659,6 +1781,7 @@
     },
     "material_read_deadline_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1672,6 +1795,7 @@
     },
     "material_read_reply_limit": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1685,6 +1809,7 @@
     },
     "navigation_arrival_failed": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1698,6 +1823,7 @@
     },
     "navigation_destructive_overlap": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1711,6 +1837,7 @@
     },
     "navigation_page_drift": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1724,6 +1851,7 @@
     },
     "navigation_target_not_visible": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1737,6 +1865,7 @@
     },
     "nemu_app_index_requires_paired_input": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1750,6 +1879,7 @@
     },
     "nemu_input_frame_required": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1761,8 +1891,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ocr_field_low_confidence": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ocr_fields_declaration_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1776,6 +1921,7 @@
     },
     "ocr_fields_declaration_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1789,6 +1935,7 @@
     },
     "ocr_fields_dictionary_limit_exceeded": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1802,6 +1949,7 @@
     },
     "ocr_fields_dictionary_reference_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1815,6 +1963,7 @@
     },
     "ocr_fields_outcome_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1828,6 +1977,7 @@
     },
     "outcome_projection_not_ready": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1841,6 +1991,7 @@
     },
     "owner_compaction_unrecoverable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1854,6 +2005,7 @@
     },
     "owner_seek_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1867,6 +2019,7 @@
     },
     "package_read_failed": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1880,6 +2033,7 @@
     },
     "package_reference_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1893,6 +2047,7 @@
     },
     "performance_sample_time_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1906,6 +2061,7 @@
     },
     "planning_result_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1919,6 +2075,7 @@
     },
     "policy_detection_budget_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1932,6 +2089,7 @@
     },
     "policy_planning_checkpoint_ahead": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1945,6 +2103,7 @@
     },
     "policy_planning_signal_identity_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1958,6 +2117,7 @@
     },
     "policy_reason_chain_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1971,6 +2131,7 @@
     },
     "policy_recovery_query_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1984,6 +2145,7 @@
     },
     "prerequisite_id_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -1997,6 +2159,7 @@
     },
     "prerequisite_self": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2010,6 +2173,7 @@
     },
     "project_decision_cursor_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2023,6 +2187,7 @@
     },
     "project_decision_page_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2036,6 +2201,7 @@
     },
     "project_interface_response_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2049,6 +2215,7 @@
     },
     "proposal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2062,6 +2229,7 @@
     },
     "record_application_indeterminate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2075,6 +2243,7 @@
     },
     "record_lock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2088,6 +2257,7 @@
     },
     "record_session_not_active": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2101,6 +2271,7 @@
     },
     "record_step_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2114,6 +2285,7 @@
     },
     "release_boundary_migration_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2127,6 +2299,7 @@
     },
     "resource_declaration_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2140,6 +2313,7 @@
     },
     "resource_targets_document_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2153,6 +2327,7 @@
     },
     "return_home_package_unbound": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2166,6 +2341,7 @@
     },
     "runtime_debug_event_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2179,6 +2355,7 @@
     },
     "runtime_event_query_response_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2192,6 +2369,7 @@
     },
     "runtime_fact_ledger_position_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2205,6 +2383,7 @@
     },
     "runtime_fact_replay_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2218,6 +2397,7 @@
     },
     "runtime_fact_snapshot_payload_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2231,6 +2411,7 @@
     },
     "runtime_identifier_issue_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2244,6 +2425,7 @@
     },
     "runtime_info_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2257,6 +2439,7 @@
     },
     "runtime_lab_artifact_event_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2270,6 +2453,7 @@
     },
     "runtime_lab_artifact_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2283,6 +2467,7 @@
     },
     "runtime_not_running": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2296,6 +2481,7 @@
     },
     "scheduled_recovery_draft_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2309,6 +2495,7 @@
     },
     "semantic_action_requires_destructive_opt_in": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2322,6 +2509,7 @@
     },
     "serialization_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2335,6 +2523,7 @@
     },
     "signature_replay_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2348,6 +2537,7 @@
     },
     "state_directory_sync_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2361,6 +2551,7 @@
     },
     "state_document_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2374,6 +2565,7 @@
     },
     "state_root_create_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2387,6 +2579,7 @@
     },
     "state_root_inspect_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2400,6 +2593,7 @@
     },
     "state_root_unsafe": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2413,6 +2607,7 @@
     },
     "strategic_report_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2426,6 +2621,7 @@
     },
     "system_clock_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2439,6 +2635,7 @@
     },
     "target_below_threshold": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2452,6 +2649,7 @@
     },
     "target_not_visible": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2465,6 +2663,7 @@
     },
     "validation_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2478,6 +2677,7 @@
     },
     "artifact_write_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2491,6 +2691,7 @@
     },
     "artifact_verify_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2504,6 +2705,7 @@
     },
     "planning_document_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2517,6 +2719,7 @@
     },
     "planning_document_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2530,6 +2733,7 @@
     },
     "unsupported_planning_document_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2543,6 +2747,7 @@
     },
     "planning_document_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2556,6 +2761,7 @@
     },
     "planning_document_kind_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2569,6 +2775,7 @@
     },
     "invalid_strategic_evidence": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2582,6 +2789,7 @@
     },
     "invalid_policy_input_identity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2595,6 +2803,7 @@
     },
     "invalid_maintenance_query": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2608,6 +2817,7 @@
     },
     "invalid_strategic_plan_result": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2621,6 +2831,7 @@
     },
     "planning_response_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2634,6 +2845,7 @@
     },
     "planning_document_not_object": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2647,6 +2859,7 @@
     },
     "planning_document_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2660,6 +2873,7 @@
     },
     "planning_request_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2673,6 +2887,7 @@
     },
     "input_frame_dimensions_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2686,6 +2901,7 @@
     },
     "invalid_segmented_swipe_contract": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2699,6 +2915,7 @@
     },
     "invalid_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2712,6 +2929,7 @@
     },
     "invalid_input_text": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2725,6 +2943,7 @@
     },
     "invalid_lease_expiry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2738,6 +2957,7 @@
     },
     "invalid_lease_queue_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2751,6 +2971,7 @@
     },
     "invalid_lease_queue_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2764,6 +2985,7 @@
     },
     "invalid_frame_dimensions": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2777,6 +2999,7 @@
     },
     "invalid_observation_dimensions": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2790,6 +3013,7 @@
     },
     "invalid_observation_artifact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2803,6 +3027,7 @@
     },
     "invalid_capture_sequence_spec": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2816,6 +3041,7 @@
     },
     "capture_sequence_wait_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2829,6 +3055,7 @@
     },
     "invalid_capture_sequence_observation_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2842,6 +3069,7 @@
     },
     "invalid_capture_sequence_artifact_identity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2855,6 +3083,7 @@
     },
     "duplicate_capture_sequence_artifact_identity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2868,6 +3097,7 @@
     },
     "invalid_stuck_recovery_cooldown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2881,6 +3111,7 @@
     },
     "invalid_runtime_status_game": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2894,6 +3125,7 @@
     },
     "runtime_capabilities_provenance_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2907,6 +3139,7 @@
     },
     "invalid_runtime_instance_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2920,6 +3153,7 @@
     },
     "invalid_runtime_state_source": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2933,6 +3167,7 @@
     },
     "invalid_runtime_status_registry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2946,6 +3181,7 @@
     },
     "invalid_scheduling_pause_expectation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2959,6 +3195,7 @@
     },
     "invalid_scheduling_resume_selfcheck": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2972,6 +3209,7 @@
     },
     "invalid_scheduling_pause_state": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2985,6 +3223,7 @@
     },
     "invalid_scheduling_pause_reason": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -2998,6 +3237,7 @@
     },
     "invalid_instance_discovery": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3011,6 +3251,7 @@
     },
     "invalid_runtime_debug_event": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3024,6 +3265,7 @@
     },
     "invalid_resource_authoring_event": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3037,6 +3279,7 @@
     },
     "invalid_observation_failure_context": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3050,6 +3293,7 @@
     },
     "invalid_debug_package_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3063,6 +3307,7 @@
     },
     "invalid_debug_package_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3076,6 +3321,7 @@
     },
     "invalid_contained_task_recovery_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3089,6 +3335,7 @@
     },
     "invalid_contained_task_recovery_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3102,6 +3349,7 @@
     },
     "invalid_contained_task_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3115,6 +3363,7 @@
     },
     "invalid_contained_task_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3128,6 +3377,7 @@
     },
     "invalid_contained_task_response_deadline": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3141,6 +3391,7 @@
     },
     "invalid_evidence_output_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3154,6 +3405,7 @@
     },
     "invalid_evidence_zip_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3167,6 +3419,7 @@
     },
     "invalid_evidence_screenshot_counts": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3180,6 +3433,7 @@
     },
     "invalid_evidence_archive_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3193,6 +3447,7 @@
     },
     "invalid_evidence_terminal_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3206,6 +3461,7 @@
     },
     "invalid_evidence_zip_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3219,6 +3475,7 @@
     },
     "invalid_evidence_manifest_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3232,6 +3489,7 @@
     },
     "invalid_debug_package_summary": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3245,6 +3503,7 @@
     },
     "invalid_event_query_bounds": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3258,6 +3517,7 @@
     },
     "invalid_runtime_subscription_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3271,6 +3531,7 @@
     },
     "invalid_runtime_event_query_cursor": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3284,6 +3545,7 @@
     },
     "invalid_runtime_event_query_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3297,6 +3559,7 @@
     },
     "invalid_runtime_artifact_eviction_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3310,6 +3573,7 @@
     },
     "invalid_runtime_event_read_scope": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3323,6 +3587,7 @@
     },
     "invalid_runtime_event_recovery": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3336,6 +3601,7 @@
     },
     "runtime_event_query_page_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3349,6 +3615,7 @@
     },
     "runtime_event_query_fingerprint_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3362,6 +3629,7 @@
     },
     "invalid_runtime_event_batch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3375,6 +3643,7 @@
     },
     "invalid_project_interface_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3388,6 +3657,7 @@
     },
     "invalid_policy_input_position": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3401,6 +3671,7 @@
     },
     "invalid_signature_definition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3414,6 +3685,7 @@
     },
     "invalid_signature_match_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3427,6 +3699,7 @@
     },
     "invalid_signature_registration": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3440,6 +3713,7 @@
     },
     "invalid_client_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3453,6 +3727,7 @@
     },
     "invalid_approval_decision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3466,6 +3741,7 @@
     },
     "invalid_agent_response": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3479,6 +3755,7 @@
     },
     "invalid_catalog_proposal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3492,6 +3769,7 @@
     },
     "invalid_runtime_monitor_policy": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3505,6 +3783,7 @@
     },
     "invalid_scheduling_pause_drain_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3518,6 +3797,7 @@
     },
     "unsupported_request_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3531,6 +3811,7 @@
     },
     "invalid_request_timestamp": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3544,6 +3825,7 @@
     },
     "invalid_client_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3557,6 +3839,7 @@
     },
     "invalid_shutdown_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3570,6 +3853,7 @@
     },
     "invalid_install_transition_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3583,6 +3867,7 @@
     },
     "invalid_resource_authoring_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3596,6 +3881,7 @@
     },
     "invalid_signature_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3609,6 +3895,7 @@
     },
     "invalid_runtime_debug_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3622,6 +3909,7 @@
     },
     "invalid_emulator_control_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3635,6 +3923,7 @@
     },
     "invalid_scheduling_pause_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3648,6 +3937,7 @@
     },
     "fact_origin_mixed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3661,6 +3951,7 @@
     },
     "invalid_agent_dispatcher_origin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3674,6 +3965,7 @@
     },
     "invalid_contained_task_cancellation_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3687,6 +3979,7 @@
     },
     "invalid_host_failure": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3700,6 +3993,7 @@
     },
     "material_read_result_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3713,6 +4007,7 @@
     },
     "material_read_failure_already_recorded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3726,6 +4021,7 @@
     },
     "material_read_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3739,6 +4035,7 @@
     },
     "unsupported_receipt_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3752,6 +4049,7 @@
     },
     "invalid_receipt_outcome": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3765,6 +4063,7 @@
     },
     "invalid_observation_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3778,6 +4077,7 @@
     },
     "invalid_terminal_event": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3791,6 +4091,7 @@
     },
     "invalid_resource_declaration_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3804,6 +4105,7 @@
     },
     "invalid_resource_targets_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3817,6 +4119,7 @@
     },
     "invalid_material_read_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3830,6 +4133,7 @@
     },
     "invalid_signature_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3843,6 +4147,7 @@
     },
     "invalid_shutdown_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3856,6 +4161,7 @@
     },
     "invalid_install_transition_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3869,6 +4175,7 @@
     },
     "invalid_scheduling_pause_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3882,6 +4189,7 @@
     },
     "invalid_instance_selfcheck_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3895,6 +4203,7 @@
     },
     "invalid_project_interface_response": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3908,6 +4217,7 @@
     },
     "invalid_runtime_monitor_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3921,6 +4231,7 @@
     },
     "invalid_artifact_ocr_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3934,6 +4245,7 @@
     },
     "invalid_page_observation_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3947,6 +4259,7 @@
     },
     "invalid_lab_operation_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3960,6 +4273,7 @@
     },
     "invalid_contained_task_result": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3973,6 +4287,7 @@
     },
     "invalid_lab_pin_release_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3986,6 +4301,7 @@
     },
     "invalid_agent_session_context": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -3999,6 +4315,7 @@
     },
     "invalid_agent_session_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4012,6 +4329,7 @@
     },
     "invalid_proposal_preview": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4025,6 +4343,7 @@
     },
     "invalid_proposal_promotion": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4038,6 +4357,7 @@
     },
     "invalid_resource_target_view_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4051,6 +4371,7 @@
     },
     "invalid_shutdown_target": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4064,6 +4385,7 @@
     },
     "unsupported_runtime_info_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4077,6 +4399,7 @@
     },
     "invalid_runtime_host": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4090,6 +4413,7 @@
     },
     "invalid_runtime_info": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4103,6 +4427,7 @@
     },
     "invalid_input_coordinate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4116,6 +4441,7 @@
     },
     "invalid_input_duration": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4129,6 +4455,7 @@
     },
     "invalid_sha256": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4142,6 +4469,7 @@
     },
     "invalid_governance_client_version": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4155,6 +4483,7 @@
     },
     "invalid_governance_instance": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4168,6 +4497,7 @@
     },
     "invalid_governance_client": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4181,6 +4511,7 @@
     },
     "invalid_material_read_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4194,6 +4525,7 @@
     },
     "invalid_material_read_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4207,6 +4539,7 @@
     },
     "material_read_source_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4220,6 +4553,7 @@
     },
     "invalid_material_read_retention": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4233,6 +4567,7 @@
     },
     "material_read_retention_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4246,6 +4581,7 @@
     },
     "invalid_material_read_failure": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4259,6 +4595,7 @@
     },
     "material_read_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4272,6 +4609,7 @@
     },
     "material_read_chunk_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4285,6 +4623,7 @@
     },
     "invalid_verified_material_chunk": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4298,6 +4637,7 @@
     },
     "material_read_limit_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4311,6 +4651,7 @@
     },
     "invalid_failed_material_read": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4324,6 +4665,7 @@
     },
     "invalid_saved_artifact_ocr_request": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4337,6 +4679,7 @@
     },
     "invalid_saved_artifact_ocr_result": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4350,6 +4693,7 @@
     },
     "runtime_lab_event_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4363,6 +4707,7 @@
     },
     "runtime_lab_event_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4376,6 +4721,7 @@
     },
     "runtime_lab_artifact_correlation_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4389,6 +4735,7 @@
     },
     "runtime_lab_artifact_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4402,6 +4749,7 @@
     },
     "runtime_lab_artifact_event_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4415,6 +4763,7 @@
     },
     "runtime_lab_artifact_lifecycle_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4428,6 +4777,7 @@
     },
     "runtime_lab_artifact_lifecycle_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4441,6 +4791,7 @@
     },
     "runtime_lab_projection_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4454,6 +4805,7 @@
     },
     "runtime_lab_private_facts_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4467,6 +4819,7 @@
     },
     "runtime_lab_projection_content_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4480,6 +4833,7 @@
     },
     "runtime_lab_recognition_lifecycle_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4493,6 +4847,7 @@
     },
     "runtime_lab_event_request_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4506,6 +4861,7 @@
     },
     "runtime_lab_prepared_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4519,6 +4875,7 @@
     },
     "runtime_lab_terminal_decode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4532,6 +4889,7 @@
     },
     "runtime_lab_record_content_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4545,6 +4903,7 @@
     },
     "runtime_lab_diagnostic_budget_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4558,6 +4917,7 @@
     },
     "runtime_lab_failure_event_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4571,6 +4931,7 @@
     },
     "runtime_lab_lease_grant_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4584,6 +4945,7 @@
     },
     "runtime_lab_unleased_frame": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4597,6 +4959,7 @@
     },
     "runtime_lab_frame_before_lease": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4610,6 +4973,7 @@
     },
     "runtime_lab_frame_budget_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4623,6 +4987,7 @@
     },
     "runtime_lab_action_projection_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4636,6 +5001,7 @@
     },
     "runtime_lab_action_unresolvable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4649,6 +5015,7 @@
     },
     "runtime_lab_action_source_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4662,6 +5029,7 @@
     },
     "runtime_lab_input_intent_payload_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4675,6 +5043,7 @@
     },
     "runtime_lab_input_intent_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4688,6 +5057,7 @@
     },
     "runtime_lab_unreported_input_intent": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4701,6 +5071,7 @@
     },
     "runtime_lab_input_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4714,6 +5085,7 @@
     },
     "runtime_lab_input_payload_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4727,6 +5099,7 @@
     },
     "runtime_lab_input_effect_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4740,6 +5113,7 @@
     },
     "runtime_lab_failed_input_reobserved": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4753,6 +5127,7 @@
     },
     "runtime_lab_post_frame_order_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4766,6 +5141,7 @@
     },
     "runtime_lab_unreported_input": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4779,6 +5155,7 @@
     },
     "runtime_lab_before_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4792,6 +5169,7 @@
     },
     "runtime_lab_after_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4805,6 +5183,7 @@
     },
     "runtime_lab_success_lease_discontinuous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4818,6 +5197,7 @@
     },
     "runtime_lab_terminal_payload_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4831,6 +5211,7 @@
     },
     "runtime_lab_terminal_outcome_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4844,6 +5225,7 @@
     },
     "invalid_lab_arrival_condition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4857,6 +5239,7 @@
     },
     "invalid_lab_operation_selection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4870,6 +5253,7 @@
     },
     "lab_element_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4883,6 +5267,7 @@
     },
     "lab_coordinates_out_of_frame": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4896,6 +5281,7 @@
     },
     "invalid_lab_projection_hint": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4909,6 +5295,7 @@
     },
     "invalid_lab_evidence_artifact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4922,6 +5309,7 @@
     },
     "invalid_lab_evidence_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4935,6 +5323,7 @@
     },
     "invalid_lab_operation_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4948,6 +5337,7 @@
     },
     "invalid_lab_operation_frame": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4961,6 +5351,7 @@
     },
     "invalid_lab_operation_projection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4974,6 +5365,7 @@
     },
     "lab_action_without_frame": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -4987,6 +5379,7 @@
     },
     "lab_action_without_geometry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5000,6 +5393,7 @@
     },
     "invalid_lab_action_geometry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5013,6 +5407,7 @@
     },
     "incomplete_lab_operation_success": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5026,6 +5421,7 @@
     },
     "invalid_lab_arrival_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5039,6 +5435,7 @@
     },
     "invalid_observation_package_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5052,6 +5449,7 @@
     },
     "invalid_observation_targets": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5065,6 +5463,7 @@
     },
     "observation_fact_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5078,6 +5477,7 @@
     },
     "invalid_observation_facts": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5091,6 +5491,7 @@
     },
     "invalid_page_observation_artifact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5104,6 +5505,7 @@
     },
     "invalid_contained_page_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5117,6 +5519,7 @@
     },
     "invalid_page_projection_content": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5130,6 +5533,7 @@
     },
     "invalid_resource_target_view": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5143,6 +5547,7 @@
     },
     "invalid_resource_targets_applied": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5156,6 +5561,7 @@
     },
     "invalid_resource_targets_rejection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5169,6 +5575,7 @@
     },
     "invalid_git_object_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5182,6 +5589,7 @@
     },
     "invalid_package_repository": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5195,6 +5603,7 @@
     },
     "invalid_source_tree_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5208,6 +5617,7 @@
     },
     "invalid_content_directory_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5221,6 +5631,7 @@
     },
     "invalid_package_sha256": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5234,6 +5645,7 @@
     },
     "invalid_bundle_source": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5247,6 +5659,7 @@
     },
     "invalid_bundle_pack": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5260,6 +5673,7 @@
     },
     "invalid_bundle_pack_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5273,6 +5687,7 @@
     },
     "invalid_bundle_index": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5286,6 +5701,7 @@
     },
     "duplicate_bundle_pack": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5299,6 +5715,7 @@
     },
     "invalid_bundle_maintenance": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5312,6 +5729,7 @@
     },
     "duplicate_bundle_maintenance_role": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5325,6 +5743,7 @@
     },
     "bundle_maintenance_pack_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5338,6 +5757,7 @@
     },
     "install_root_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5351,6 +5771,7 @@
     },
     "install_slot_lock_metadata_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5364,6 +5785,7 @@
     },
     "install_slot_lock_not_empty": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5377,6 +5799,7 @@
     },
     "install_slot_unlock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5390,6 +5813,7 @@
     },
     "install_environment_root_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5403,6 +5827,7 @@
     },
     "install_environment_root_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5416,6 +5841,7 @@
     },
     "install_environment_selection_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5429,6 +5855,7 @@
     },
     "install_environment_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5442,6 +5869,7 @@
     },
     "install_selection_json_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5455,6 +5883,7 @@
     },
     "install_config_path_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5468,6 +5897,7 @@
     },
     "install_config_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5481,6 +5911,7 @@
     },
     "install_config_selection_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5494,6 +5925,7 @@
     },
     "install_input_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5507,6 +5939,7 @@
     },
     "install_input_outside_root": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5520,6 +5953,7 @@
     },
     "install_input_hash_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5533,6 +5967,7 @@
     },
     "install_input_read_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5546,6 +5981,7 @@
     },
     "install_input_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5559,6 +5995,7 @@
     },
     "invalid_install_file_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5572,6 +6009,7 @@
     },
     "invalid_install_selection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5585,6 +6023,7 @@
     },
     "install_members_slot_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5598,6 +6037,7 @@
     },
     "install_config_generation_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5611,6 +6051,7 @@
     },
     "install_provider_generation_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5624,6 +6065,7 @@
     },
     "install_selection_size_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5637,6 +6079,7 @@
     },
     "install_previous_transition_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5650,6 +6093,7 @@
     },
     "invalid_install_transition_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5663,6 +6107,7 @@
     },
     "invalid_install_timeout": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5676,6 +6121,7 @@
     },
     "invalid_install_transition_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5689,6 +6135,7 @@
     },
     "selection_record_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5702,6 +6149,7 @@
     },
     "invalid_task_selection_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5715,6 +6163,7 @@
     },
     "policy_runtime_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5728,6 +6177,7 @@
     },
     "unsupported_release_set_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5741,6 +6191,7 @@
     },
     "release_set_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5754,6 +6205,7 @@
     },
     "invalid_release_resource_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5767,6 +6219,7 @@
     },
     "release_resources_not_canonical": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5780,6 +6233,7 @@
     },
     "invalid_release_transition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5793,6 +6247,7 @@
     },
     "release_set_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5806,6 +6261,7 @@
     },
     "invalid_state_identifier": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5819,6 +6275,7 @@
     },
     "invalid_state_version": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5832,6 +6289,7 @@
     },
     "invalid_state_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5845,6 +6303,7 @@
     },
     "invalid_runtime_state_fact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5858,6 +6317,7 @@
     },
     "invalid_runtime_fact_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5871,6 +6331,7 @@
     },
     "runtime_fact_family_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5884,6 +6345,7 @@
     },
     "runtime_fact_record_list_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5897,6 +6359,7 @@
     },
     "invalid_runtime_fact_ttl": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5910,6 +6373,7 @@
     },
     "config_manifest_subsystems_too_many": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5923,6 +6387,7 @@
     },
     "config_manifest_parameters_too_many": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5936,6 +6401,7 @@
     },
     "invalid_config_subsystem_name": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5949,6 +6415,7 @@
     },
     "invalid_config_subsystem_reason": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5962,6 +6429,7 @@
     },
     "invalid_config_parameter_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5975,6 +6443,7 @@
     },
     "runtime_fact_schema_version_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -5988,6 +6457,7 @@
     },
     "runtime_fact_snapshot_part_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6001,6 +6471,7 @@
     },
     "runtime_fact_snapshot_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6014,6 +6485,7 @@
     },
     "invalid_proposal_patch_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6027,6 +6499,7 @@
     },
     "invalid_proposal_patch_operation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6040,6 +6513,7 @@
     },
     "invalid_template_instantiation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6053,6 +6527,7 @@
     },
     "invalid_proposal_patch_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6066,6 +6541,7 @@
     },
     "proposal_patch_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6079,6 +6555,7 @@
     },
     "unsupported_proposal_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6092,6 +6569,7 @@
     },
     "proposal_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6105,6 +6583,7 @@
     },
     "invalid_proposal_boundary": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6118,6 +6597,7 @@
     },
     "invalid_proposal_report": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6131,6 +6611,7 @@
     },
     "proposal_authorization_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6144,6 +6625,7 @@
     },
     "invalid_proposal_authorization": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6157,6 +6639,7 @@
     },
     "invalid_proposal_approval_facts": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6170,6 +6653,7 @@
     },
     "invalid_proposal_report_facts": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6183,6 +6667,7 @@
     },
     "proposal_identity_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6196,6 +6681,7 @@
     },
     "invalid_proposal_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6209,6 +6695,7 @@
     },
     "invalid_proposal_identifier": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6222,6 +6709,7 @@
     },
     "invalid_proposal_patch_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6235,6 +6723,7 @@
     },
     "invalid_performance_context": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6248,6 +6737,7 @@
     },
     "invalid_performance_context_health": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6261,6 +6751,7 @@
     },
     "invalid_performance_pressure_time": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6274,6 +6765,7 @@
     },
     "invalid_performance_pressure_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6287,6 +6779,7 @@
     },
     "invalid_performance_process": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6300,6 +6793,7 @@
     },
     "invalid_performance_ledger_window": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6313,6 +6807,7 @@
     },
     "invalid_performance_process_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6326,6 +6821,7 @@
     },
     "invalid_performance_stutter": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6339,6 +6835,7 @@
     },
     "invalid_performance_control": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6352,6 +6849,7 @@
     },
     "invalid_performance_control_transition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6365,6 +6863,7 @@
     },
     "performance_control_evidence_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6378,6 +6877,7 @@
     },
     "invalid_performance_monitor_state": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6391,6 +6891,7 @@
     },
     "invalid_capacity_decision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6404,6 +6905,7 @@
     },
     "invalid_interaction_identifier": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6417,6 +6919,7 @@
     },
     "invalid_client_action_value": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6430,6 +6933,7 @@
     },
     "invalid_owner_unlock_actor": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6443,6 +6947,7 @@
     },
     "invalid_approval_target": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6456,6 +6961,7 @@
     },
     "invalid_approval_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6469,6 +6975,7 @@
     },
     "invalid_fact_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6482,6 +6989,7 @@
     },
     "invalid_fact_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6495,6 +7003,7 @@
     },
     "fact_observation_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6508,6 +7017,7 @@
     },
     "empty_fact_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6521,6 +7031,7 @@
     },
     "inconsistent_fact_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6534,6 +7045,7 @@
     },
     "fact_ttl_expiry_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6547,6 +7059,7 @@
     },
     "fact_ttl_out_of_bounds": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6560,6 +7073,7 @@
     },
     "fact_ttl_policy_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6573,6 +7087,7 @@
     },
     "fact_ttl_policy_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6586,6 +7101,7 @@
     },
     "invalid_fact_token": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6599,6 +7115,7 @@
     },
     "fact_record_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6612,6 +7129,7 @@
     },
     "fact_field_limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6625,6 +7143,7 @@
     },
     "invalid_fact_snapshot": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6638,6 +7157,7 @@
     },
     "invalid_fact_snapshot_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6651,6 +7171,7 @@
     },
     "invalid_fact_invalidation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6664,6 +7185,7 @@
     },
     "invalid_fact_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6677,6 +7199,7 @@
     },
     "invalid_fact_text": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6690,6 +7213,7 @@
     },
     "invalid_fact_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6703,6 +7227,7 @@
     },
     "invalid_event_query_instance_filter": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6716,6 +7241,7 @@
     },
     "invalid_event_query_event_type_filter": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6729,6 +7255,7 @@
     },
     "fingerprinter_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6742,6 +7269,7 @@
     },
     "invalid_task_timing_observations": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6755,6 +7283,7 @@
     },
     "invalid_artifact_retention": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6768,6 +7297,7 @@
     },
     "invalid_owner_close_evidence": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6781,6 +7311,7 @@
     },
     "invalid_owner_close_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6794,6 +7325,7 @@
     },
     "invalid_prior_epoch_close": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6807,6 +7339,7 @@
     },
     "invalid_fingerprint": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6820,6 +7353,7 @@
     },
     "invalid_sanitized_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6833,6 +7367,7 @@
     },
     "invalid_machine_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6846,6 +7381,7 @@
     },
     "invalid_input_execution_plan": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6859,6 +7395,7 @@
     },
     "invalid_input_provenance": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6872,6 +7409,7 @@
     },
     "invalid_diagnostic_detail_message": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6885,6 +7423,7 @@
     },
     "unsafe_diagnostic_detail_message": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6898,6 +7437,7 @@
     },
     "invalid_diagnostic_detail_sensitivity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6911,6 +7451,7 @@
     },
     "invalid_diagnostic_detail_token": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6924,6 +7465,7 @@
     },
     "invalid_resource_disposition_scopes": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6937,6 +7479,7 @@
     },
     "resource_count_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6950,6 +7493,7 @@
     },
     "invalid_lifecycle_native_detail": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6963,6 +7507,7 @@
     },
     "invalid_vendor_stdio_cause": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6976,6 +7521,7 @@
     },
     "incomplete_resource_close_context": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -6989,6 +7535,7 @@
     },
     "invalid_diagnostic_detail_stage": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7002,6 +7549,7 @@
     },
     "invalid_artifact_failure_causes": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7015,6 +7563,7 @@
     },
     "invalid_capture_summary_artifact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7028,6 +7577,7 @@
     },
     "invalid_capture_summary_pin": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7041,6 +7591,7 @@
     },
     "capture_summary_count_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7054,6 +7605,7 @@
     },
     "capture_summary_pin_artifact_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7067,6 +7619,7 @@
     },
     "capture_summary_completeness_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7080,6 +7633,7 @@
     },
     "invalid_task_geometry_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7093,6 +7647,7 @@
     },
     "invalid_task_geometry_conclusion": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7106,6 +7661,7 @@
     },
     "invalid_input_sampling_region": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7119,6 +7675,7 @@
     },
     "invalid_input_sampling_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7132,6 +7689,7 @@
     },
     "invalid_scheduling_outcome_declaration": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7145,6 +7703,7 @@
     },
     "invalid_authoritative_scheduling_outcome": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7158,6 +7717,7 @@
     },
     "invalid_task_semantic_label": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7171,6 +7731,7 @@
     },
     "invalid_scheduling_outcome_projection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7184,6 +7745,7 @@
     },
     "invalid_task_semantic_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7197,6 +7759,7 @@
     },
     "invalid_task_lease_deadline": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7210,6 +7773,7 @@
     },
     "invalid_input_sampling_fact": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7223,6 +7787,7 @@
     },
     "invalid_task_response_deadline": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7236,6 +7801,7 @@
     },
     "invalid_task_recognition_result": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7249,6 +7815,7 @@
     },
     "invalid_task_entry_recovery": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7262,6 +7829,7 @@
     },
     "invalid_task_entry_disposition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7275,6 +7843,7 @@
     },
     "invalid_task_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7288,6 +7857,7 @@
     },
     "invalid_task_effect": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7301,6 +7871,7 @@
     },
     "invalid_task_terminal": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7314,6 +7885,7 @@
     },
     "invalid_task_package_fingerprint": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7327,6 +7899,7 @@
     },
     "invalid_task_frame_dimensions": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7340,6 +7913,7 @@
     },
     "invalid_task_recognition_targets": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7353,6 +7927,7 @@
     },
     "invalid_task_candidate_pages": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7366,6 +7941,7 @@
     },
     "invalid_task_step_index": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7379,6 +7955,7 @@
     },
     "invalid_resource_authoring_fingerprint": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7392,6 +7969,7 @@
     },
     "invalid_resource_authoring_paths": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7405,6 +7983,7 @@
     },
     "invalid_resource_authoring_path": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7418,6 +7997,7 @@
     },
     "missing_resource_authoring_failure_code": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7431,6 +8011,7 @@
     },
     "unexpected_resource_authoring_failure_code": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7444,6 +8025,7 @@
     },
     "invalid_resource_authoring_token": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7457,6 +8039,7 @@
     },
     "invalid_policy_token": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7470,6 +8053,7 @@
     },
     "invalid_policy_digest": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7483,6 +8067,7 @@
     },
     "invalid_policy_dispatch_position": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7496,6 +8081,7 @@
     },
     "invalid_policy_reason_chain": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7509,6 +8095,7 @@
     },
     "invalid_policy_approval_facts": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7522,6 +8109,7 @@
     },
     "invalid_policy_activity_sample": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7535,6 +8123,7 @@
     },
     "invalid_policy_budget_receipt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7548,6 +8137,7 @@
     },
     "invalid_policy_execution_time": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7561,6 +8151,7 @@
     },
     "invalid_policy_failure_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7574,6 +8165,7 @@
     },
     "invalid_policy_planning_signal_time": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7587,6 +8179,7 @@
     },
     "invalid_policy_detection_budget_presence": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7600,6 +8193,7 @@
     },
     "invalid_policy_detection_budget": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7613,6 +8207,7 @@
     },
     "invalid_runtime_instance_binding_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7626,6 +8221,7 @@
     },
     "invalid_adb_port": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7639,6 +8235,7 @@
     },
     "invalid_adb_host": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7652,6 +8249,7 @@
     },
     "invalid_instance_binding_discovery": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7665,6 +8263,7 @@
     },
     "invalid_runtime_fact_recorded_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7678,6 +8277,7 @@
     },
     "invalid_runtime_fact_invalidated_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7691,6 +8291,7 @@
     },
     "invalid_runtime_fact_snapshot_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7704,6 +8305,7 @@
     },
     "invalid_performance_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7717,6 +8319,7 @@
     },
     "invalid_fact_scope_binding": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7730,6 +8333,7 @@
     },
     "invalid_fact_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7743,6 +8347,7 @@
     },
     "invalid_client_action_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7756,6 +8361,7 @@
     },
     "invalid_approval_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7769,6 +8375,7 @@
     },
     "invalid_policy_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7782,6 +8389,7 @@
     },
     "invalid_catalog_version": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7795,6 +8403,7 @@
     },
     "invalid_catalog_transition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7808,6 +8417,7 @@
     },
     "invalid_catalog_transition_lifecycle": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7821,6 +8431,7 @@
     },
     "invalid_release_stage_lifecycle": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7834,6 +8445,7 @@
     },
     "invalid_release_transition_lifecycle": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7847,6 +8459,7 @@
     },
     "invalid_agent_session_lifecycle": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7860,6 +8473,7 @@
     },
     "invalid_policy_text": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7873,6 +8487,7 @@
     },
     "invalid_catalog_hash": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7886,6 +8501,7 @@
     },
     "invalid_monitor_outcome": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7899,6 +8515,7 @@
     },
     "invalid_monitor_recovery_coordination": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7912,6 +8529,7 @@
     },
     "invalid_scheduler_queue": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7925,6 +8543,7 @@
     },
     "invalid_lease_transfer": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7938,6 +8557,7 @@
     },
     "invalid_capture_pressure": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7951,6 +8571,7 @@
     },
     "invalid_capture_dedup_window": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7964,6 +8585,7 @@
     },
     "invalid_artifact_export": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7977,6 +8599,7 @@
     },
     "invalid_monitor_state_event": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -7990,6 +8613,7 @@
     },
     "invalid_resource_declaration_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8003,6 +8627,7 @@
     },
     "invalid_artifact_failure_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8016,6 +8641,7 @@
     },
     "invalid_artifact_failure_stage": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8029,6 +8655,7 @@
     },
     "invalid_runtime_state_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8042,6 +8669,7 @@
     },
     "invalid_touch_response_scope": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8055,6 +8683,7 @@
     },
     "invalid_capture_acquire_scope": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8068,6 +8697,7 @@
     },
     "invalid_device_diagnostic_config_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8081,6 +8711,7 @@
     },
     "resource_disposition_summary_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8094,6 +8725,7 @@
     },
     "invalid_backend_open_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8107,6 +8739,7 @@
     },
     "invalid_prior_epoch_close_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8120,6 +8753,7 @@
     },
     "invalid_vendor_stdio_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8133,6 +8767,7 @@
     },
     "invalid_adb_recovery_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8146,6 +8781,7 @@
     },
     "invalid_fact_snapshot_set_skipped": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8159,6 +8795,7 @@
     },
     "invalid_device_diagnostic_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8172,6 +8809,7 @@
     },
     "device_diagnostic_owner_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8185,6 +8823,7 @@
     },
     "invalid_lifecycle_failure_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8198,6 +8837,7 @@
     },
     "invalid_cleanup_cause_owner": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8211,6 +8851,7 @@
     },
     "invalid_runtime_lifecycle_action": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8224,6 +8865,7 @@
     },
     "invalid_state_migration_lifecycle": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8237,6 +8879,7 @@
     },
     "invalid_ledger_migration": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8250,6 +8893,7 @@
     },
     "invalid_task_semantic_payload": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8263,6 +8907,7 @@
     },
     "invalid_capture_summary": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8276,6 +8921,7 @@
     },
     "invalid_device_diagnostic_budget": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8289,6 +8935,7 @@
     },
     "invalid_provider_startup_record": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8302,6 +8949,7 @@
     },
     "invalid_device_self_check": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8315,6 +8963,7 @@
     },
     "invalid_recovery_ladder_phase": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8328,6 +8977,7 @@
     },
     "invalid_owner_unlock_disposition": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8341,6 +8991,7 @@
     },
     "invalid_adb_target_recovery": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8354,6 +9005,7 @@
     },
     "invalid_adb_recovery_attempt": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8367,6 +9019,7 @@
     },
     "vendor_stdio_steps_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8380,6 +9033,7 @@
     },
     "vendor_stdio_residue_facts_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8393,6 +9047,7 @@
     },
     "invalid_diagnostic_signature": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8406,6 +9061,7 @@
     },
     "artifact_retention_draft_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8419,6 +9075,7 @@
     },
     "artifact_retention_link_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8432,6 +9089,7 @@
     },
     "scheduled_recovery_link_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8445,6 +9103,7 @@
     },
     "scheduled_recovery_link_conflict": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8458,6 +9117,7 @@
     },
     "task_geometry_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8471,6 +9131,7 @@
     },
     "task_effect_frame_identity_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8484,6 +9145,7 @@
     },
     "task_timing_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8497,6 +9159,7 @@
     },
     "invalid_artifact_byte_count": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8510,6 +9173,7 @@
     },
     "artifact_id_issuance_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8523,6 +9187,7 @@
     },
     "artifact_verification_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8536,6 +9201,7 @@
     },
     "invalid_projected_artifact_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8549,6 +9215,7 @@
     },
     "invalid_backend_input_check": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8562,6 +9229,7 @@
     },
     "invalid_backend_open_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8575,6 +9243,7 @@
     },
     "invalid_agent_wake_trigger": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8588,6 +9257,7 @@
     },
     "invalid_agent_session_budget": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8601,6 +9271,7 @@
     },
     "invalid_agent_capability_contract": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8614,6 +9285,7 @@
     },
     "invalid_agent_wake": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8627,6 +9299,7 @@
     },
     "invalid_agent_session_time": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8640,6 +9313,7 @@
     },
     "invalid_agent_session": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8653,6 +9327,7 @@
     },
     "invalid_agent_ledger_projection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8666,6 +9341,7 @@
     },
     "project_contract_version_unsupported": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8679,6 +9355,7 @@
     },
     "project_compatibility_matrix_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8692,6 +9369,7 @@
     },
     "unsupported_project_request_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8705,6 +9383,7 @@
     },
     "project_contract_versions_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8718,6 +9397,7 @@
     },
     "project_request_schema_contract_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8731,6 +9411,7 @@
     },
     "project_decision_page_requires_v2": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8744,6 +9425,7 @@
     },
     "project_current_source_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8757,6 +9439,7 @@
     },
     "project_snapshot_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8770,6 +9453,7 @@
     },
     "project_catalog_identity_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8783,6 +9467,7 @@
     },
     "project_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8796,6 +9481,7 @@
     },
     "project_catalog_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8809,6 +9495,7 @@
     },
     "project_ledger_snapshot_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8822,6 +9509,7 @@
     },
     "project_current_view_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8835,6 +9523,7 @@
     },
     "project_current_contract_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8848,6 +9537,7 @@
     },
     "project_legacy_contract_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8861,6 +9551,7 @@
     },
     "project_response_encode_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8874,6 +9565,7 @@
     },
     "unsupported_project_response_schema": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8887,6 +9579,7 @@
     },
     "project_response_contract_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8900,6 +9593,7 @@
     },
     "project_instance_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8913,6 +9607,7 @@
     },
     "project_fact_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8926,6 +9621,7 @@
     },
     "project_goal_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8939,6 +9635,7 @@
     },
     "project_decision_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8952,6 +9649,7 @@
     },
     "project_approval_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8965,6 +9663,7 @@
     },
     "project_diagnostic_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8978,6 +9677,7 @@
     },
     "project_scope_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -8991,6 +9691,7 @@
     },
     "project_goal_metric_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9004,6 +9705,7 @@
     },
     "candidate_projection_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9017,6 +9719,7 @@
     },
     "candidate_sets_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9030,6 +9733,7 @@
     },
     "invalid_candidate_projection": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9043,6 +9747,7 @@
     },
     "invalid_candidate_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9056,6 +9761,7 @@
     },
     "invalid_monitor_page": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9069,6 +9775,7 @@
     },
     "invalid_monitor_observation": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9082,6 +9789,7 @@
     },
     "invalid_monitor_decision": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9095,6 +9803,7 @@
     },
     "invalid_runtime_monitor_interval": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9108,6 +9817,7 @@
     },
     "invalid_runtime_monitor_state": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9121,6 +9831,7 @@
     },
     "runtime_monitor_time_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9134,6 +9845,7 @@
     },
     "runtime_monitor_count_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9147,6 +9859,7 @@
     },
     "invalid_runtime_monitor_instance_status": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9160,6 +9873,7 @@
     },
     "invalid_runtime_monitor_registry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9173,6 +9887,7 @@
     },
     "identifier_clock_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9186,6 +9901,7 @@
     },
     "identifier_issuer_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9199,6 +9915,7 @@
     },
     "identifier_sequence_exhausted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9212,6 +9929,7 @@
     },
     "identifier_contract_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9225,6 +9943,7 @@
     },
     "task_phases_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9238,6 +9957,7 @@
     },
     "task_phases_outcome_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9251,6 +9971,7 @@
     },
     "task_phases_designated_effect_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9264,6 +9985,7 @@
     },
     "task_phases_outcome_incomplete": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9277,6 +9999,7 @@
     },
     "task_phases_unreachable": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9290,6 +10013,7 @@
     },
     "task_phases_designated_effect_repeated": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9303,6 +10027,7 @@
     },
     "task_phases_postcondition_missing": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9316,6 +10041,7 @@
     },
     "ocr_fields_text_extraction_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9329,6 +10055,7 @@
     },
     "ocr_fields_text_extraction_evidence_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9342,6 +10069,7 @@
     },
     "resource_reading_id_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9355,6 +10083,7 @@
     },
     "resource_reading_fact_key_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9368,6 +10097,7 @@
     },
     "resource_reading_page_id_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9381,6 +10111,7 @@
     },
     "resource_reading_target_id_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9394,6 +10125,7 @@
     },
     "resource_reading_value_max_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9407,6 +10139,7 @@
     },
     "resource_reading_value_min_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9420,6 +10153,7 @@
     },
     "resource_reading_minimum_confidence_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9433,6 +10167,7 @@
     },
     "resource_reading_valid_for_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9446,6 +10181,7 @@
     },
     "resource_readings_count_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9459,6 +10195,7 @@
     },
     "resource_reading_id_duplicate": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9472,6 +10209,7 @@
     },
     "resource_reading_fact_key_duplicate": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9485,6 +10223,7 @@
     },
     "ocr_fields_zero_input_outcome_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9498,6 +10237,7 @@
     },
     "ocr_fields_zero_input_pages_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9511,6 +10251,7 @@
     },
     "ocr_fields_text_extraction_type_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9524,6 +10265,7 @@
     },
     "ocr_fields_binding_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9537,6 +10279,7 @@
     },
     "ocr_fields_range_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9550,6 +10293,7 @@
     },
     "ocr_fields_dictionary_schema_invalid": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9563,6 +10307,7 @@
     },
     "ocr_fields_dictionary_ambiguous": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9576,6 +10321,7 @@
     },
     "invalid_resource_declaration_identity": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9589,6 +10335,7 @@
     },
     "invalid_resource_declaration_diagnostic": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9602,6 +10349,7 @@
     },
     "install_executable_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9615,6 +10363,7 @@
     },
     "install_process_slot_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9628,6 +10377,7 @@
     },
     "instance_not_found": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9641,6 +10391,7 @@
     },
     "device_error": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9654,6 +10405,7 @@
     },
     "ppocr_diagnostic_report_identity_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9667,6 +10419,7 @@
     },
     "ppocr_diagnostic_node_size_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9680,6 +10433,7 @@
     },
     "ppocr_diagnostic_node_detail_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9693,6 +10447,7 @@
     },
     "ppocr_diagnostic_json_bound_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9706,6 +10461,7 @@
     },
     "ppocr_diagnostic_report_budget_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9719,6 +10475,7 @@
     },
     "ppocr_diagnostic_report_count_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9732,6 +10489,7 @@
     },
     "ppocr_diagnostic_model_repeated": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9745,6 +10503,7 @@
     },
     "install_slot_lock_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9758,6 +10517,7 @@
     },
     "install_slot_lock_open_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9771,6 +10531,7 @@
     },
     "install_slot_in_use": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9784,6 +10545,7 @@
     },
     "install_slot_lock_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9797,6 +10559,7 @@
     },
     "application_effect_requires_assigned_application": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9810,6 +10573,7 @@
     },
     "capture_backend_operation_failed": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9823,6 +10587,7 @@
     },
     "capture_frame_invalid": {
       "category": "error",
+      "ladder_class": "environment_fault",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9836,6 +10601,7 @@
     },
     "contained_task_home_entry_not_matched": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9849,6 +10615,7 @@
     },
     "contained_task_ocr_fields_unresolved": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9862,6 +10629,7 @@
     },
     "contained_task_page_unknown": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9875,6 +10643,7 @@
     },
     "contained_task_prerequisite_incompatible": {
       "category": "error",
+      "ladder_class": "declaration_error",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9888,6 +10657,7 @@
     },
     "contained_task_prerequisite_step_limit": {
       "category": "error",
+      "ladder_class": "pack_logic_mismatch",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9901,6 +10671,7 @@
     },
     "dangling_reference": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9914,6 +10685,7 @@
     },
     "document_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9927,6 +10699,7 @@
     },
     "duplicate_id": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9940,6 +10713,7 @@
     },
     "duplicate_key": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9953,6 +10727,7 @@
     },
     "effective_configuration_too_large": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9966,6 +10741,7 @@
     },
     "evidence_capture_summary_duplicate": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9979,6 +10755,7 @@
     },
     "evidence_capture_summary_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -9992,6 +10769,7 @@
     },
     "frame_memory_accounting_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10005,6 +10783,7 @@
     },
     "frame_memory_budget_source_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10018,6 +10797,7 @@
     },
     "frame_memory_owner_missing_or_mismatched": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10031,6 +10811,7 @@
     },
     "frame_workspace_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10044,6 +10825,7 @@
     },
     "invalid_arguments": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10057,6 +10839,7 @@
     },
     "invalid_json": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10070,6 +10853,7 @@
     },
     "lab_arrival_timeout": {
       "category": "error",
+      "ladder_class": "budget_or_permission",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10083,6 +10867,7 @@
     },
     "limit_exceeded": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10096,6 +10881,7 @@
     },
     "missing_required_field": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10109,6 +10895,7 @@
     },
     "offline_fixture_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10122,6 +10909,7 @@
     },
     "policy_detection_budget_unexpected": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10135,6 +10923,7 @@
     },
     "policy_settlement_interrupted": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10148,6 +10937,7 @@
     },
     "type_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10161,6 +10951,7 @@
     },
     "unsupported_schema_version": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10174,6 +10965,7 @@
     },
     "target_not_matched": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10187,6 +10979,7 @@
     },
     "matched_template_rect_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10200,6 +10993,7 @@
     },
     "dynamic_target_not_evaluated": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10213,6 +11007,7 @@
     },
     "target_not_recognizable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10226,6 +11021,7 @@
     },
     "target_not_evaluated": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10239,6 +11035,7 @@
     },
     "target_evaluation_ambiguous": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10252,6 +11049,7 @@
     },
     "invalid_frame_geometry": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10265,6 +11063,7 @@
     },
     "material_read_length_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10278,6 +11077,7 @@
     },
     "material_read_reference_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10291,6 +11091,7 @@
     },
     "material_read_verification_mismatch": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10304,6 +11105,7 @@
     },
     "max_steps_reached": {
       "category": "info",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10317,6 +11119,7 @@
     },
     "agent_dispatcher_config_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10330,6 +11133,7 @@
     },
     "execution_backend_registry_incomplete": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10343,6 +11147,7 @@
     },
     "performance_process_count_overflow": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10356,6 +11161,7 @@
     },
     "policy_catalog_approval_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10369,6 +11175,7 @@
     },
     "policy_catalog_compile_failed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10382,6 +11189,7 @@
     },
     "policy_catalog_unavailable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10395,6 +11203,7 @@
     },
     "procedure_package_digest_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10408,6 +11217,7 @@
     },
     "suspended_policy_unconfigured": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10421,6 +11231,7 @@
     },
     "contained_task_state_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10434,6 +11245,7 @@
     },
     "procedure_manifest_entry_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10447,6 +11259,7 @@
     },
     "not_implemented": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10460,6 +11273,7 @@
     },
     "priority_offset_invalid": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
@@ -10473,6 +11287,7 @@
     },
     "scheduled_contained_task_not_client_cancellable": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,

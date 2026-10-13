@@ -814,6 +814,18 @@ pub(crate) fn validate_locate_declarations(pack: &RecognitionPack) -> Result<(),
                 }
             }
         }
+        // Train 3: the same rule for a feature's own target (Workflow #308 SEL-L1).
+        for (feature_index, feature) in layout.features.iter().enumerate() {
+            if let Some(target_id) = &feature.target
+                && reads_located_text(pack, target_id)
+            {
+                refuse(
+                    format!("/candidate_layouts/{layout_index}/features/{feature_index}/target"),
+                    ResourceDeclarationReason::InvalidValue,
+                    "a locate target cannot be a candidate layout slot target or feature",
+                )?;
+            }
+        }
     }
     Ok(())
 }
