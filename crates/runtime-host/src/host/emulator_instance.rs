@@ -103,8 +103,11 @@ impl VocabularyToken for StopResultToken {
 
 /// The tokens of the vocabulary `emulator_stop_result`: `confirmed`, or the last part of the
 /// device stage a Stop failed at.
-const STOP_RESULT_TOKENS: [&str; 18] = [
+const STOP_RESULT_TOKENS: [&str; 19] = [
     "confirmed",
+    // The default stage `mumu_manager.control` of a failure without a device diagnostic
+    // (acceptance H-L7).
+    "control",
     "control_exit",
     "control_errcode",
     "launch_error",

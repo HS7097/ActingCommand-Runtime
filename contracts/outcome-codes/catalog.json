@@ -4131,6 +4131,9 @@
         "confirmed": {
           "description": "The Stop was confirmed."
         },
+        "control": {
+          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager.control)."
+        },
         "control_exit": {
           "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
         },
