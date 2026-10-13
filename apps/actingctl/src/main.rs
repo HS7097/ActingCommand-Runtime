@@ -40,10 +40,10 @@ mod diagnose;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
-    CONFIG_PARAMETERS_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY, CaptureSequenceSpec,
-    ContainedTaskRecoveryBinding, ContainedTaskRequest, EmulatorInstanceAction, EventActor,
-    EventSource, FactObservation, FactRecord, FactScope, RuntimeMonitorPolicy, RuntimeReceiptState,
-    SchedulingPauseScope,
+    CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_SELECTION_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY,
+    CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
+    EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord, FactScope,
+    MAX_CONFIG_SETTING_CHANGES, RuntimeMonitorPolicy, RuntimeReceiptState, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use codes::ActingctlCode;
@@ -261,6 +261,15 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         Command::AgentPublishFacts { .. } => Ok(serde_json::json!({
             "event_id": client.publish_facts(observation.ok_or(ActingctlError::FactRecord)?).map_err(ActingctlError::runtime)?,
         })),
+        // Workflow #387 D1b: `config set|clear` (MCP `ac_config_set`); a refused change prints
+        // the Runtime's receipt, whose error exits non-zero.
+        Command::ConfigureSettings { changes } => match client.configure_settings(changes) {
+            Ok(settings) => Ok(serde_json::json!({ "settings": settings })),
+            Err(error) => match error.received_receipt() {
+                Some(receipt) => Ok(serde_json::json!({ "receipt": receipt })),
+                None => return Err(ActingctlError::runtime(error)),
+            },
+        },
         // A refused policy prints the Runtime's receipt, whose error exits non-zero.
         Command::AgentApplyResourceTargets { .. } => match client
             .apply_resource_targets(resource_targets.ok_or(ActingctlError::ResourceTargetsFile)?)
@@ -378,22 +387,27 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .map_err(ActingctlError::runtime)?,
         ),
         Command::Status => serde_json::to_value(client.status().map_err(ActingctlError::runtime)?),
-        // The same program-fact read as `facts --program`, reduced to the two records the
-        // daemon's configuration manifest produced; no new operation.
+        // The same program-fact read as `facts --program`, reduced to the `config.*` records:
+        // `config.subsystems`, `config.selection` when recorded, and every
+        // `config.parameters.<section>` in key order (Workflow #387 D1b); no new operation.
         Command::StatusConfig => {
             let snapshot = client
                 .runtime_fact_snapshot()
                 .map_err(ActingctlError::runtime)?;
-            let records = [CONFIG_SUBSYSTEMS_FACT_KEY, CONFIG_PARAMETERS_FACT_KEY]
-                .into_iter()
-                .map(|key| {
-                    snapshot
-                        .records
-                        .iter()
-                        .find(|record| record.key == key)
-                        .ok_or(ActingctlError::ConfigFactsMissing)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let record = |key: &str| snapshot.records.iter().find(|record| record.key == key);
+            let mut sections = snapshot
+                .records
+                .iter()
+                .filter(|record| record.key.starts_with(CONFIG_PARAMETERS_FACT_PREFIX))
+                .collect::<Vec<_>>();
+            if sections.is_empty() {
+                return Err(ActingctlError::ConfigFactsMissing);
+            }
+            sections.sort_by(|left, right| left.key.cmp(&right.key));
+            let mut records =
+                vec![record(CONFIG_SUBSYSTEMS_FACT_KEY).ok_or(ActingctlError::ConfigFactsMissing)?];
+            records.extend(record(CONFIG_SELECTION_FACT_KEY));
+            records.extend(sections);
             serde_json::to_value(records)
         }
         Command::ProgramFacts => serde_json::to_value(
@@ -495,6 +509,39 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     Ok(output)
 }
 
+/// Workflow #387 D1b: the changes of `config set <key>=<json>…` and `config clear <key>…`, the
+/// same `ConfigureSettings` changes MCP `ac_config_set` sends: a set carries its value (JSON, not
+/// `null`), a clear none.
+fn config_changes(
+    action: &str,
+    items: &[String],
+) -> Result<Vec<ConfigSettingChange>, ActingctlError> {
+    if items.is_empty() || items.len() > MAX_CONFIG_SETTING_CHANGES {
+        return Err(ActingctlError::Usage);
+    }
+    items
+        .iter()
+        .map(|item| match action {
+            "set" => {
+                let (key, json) = item.split_once('=').ok_or(ActingctlError::Usage)?;
+                let value = serde_json::from_str::<Value>(json)
+                    .ok()
+                    .filter(|value| !value.is_null())
+                    .ok_or(ActingctlError::Usage)?;
+                Ok(ConfigSettingChange {
+                    key: key.to_owned(),
+                    value: Some(value),
+                })
+            }
+            "clear" => Ok(ConfigSettingChange {
+                key: item.clone(),
+                value: None,
+            }),
+            _ => Err(ActingctlError::Usage),
+        })
+        .collect()
+}
+
 fn pause_scope(instance: Option<String>) -> SchedulingPauseScope {
     match instance {
         Some(instance_alias) => SchedulingPauseScope::Instance { instance_alias },
@@ -562,6 +609,10 @@ enum Command {
     Status,
     /// `status --config`: the `config.*` records of the runtime fact snapshot.
     StatusConfig,
+    /// `config set <key>=<json>…` and `config clear <key>…` (Workflow #387 D1b).
+    ConfigureSettings {
+        changes: Vec<ConfigSettingChange>,
+    },
     ProgramFacts,
     MonitorStatus,
     MonitorSet {
@@ -599,6 +650,22 @@ impl Invocation {
     fn parse(arguments: Vec<OsString>) -> Result<Self, ActingctlError> {
         let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
             return Err(ActingctlError::Usage);
+        };
+        // Workflow #387 D1b: `config` takes its action as the second token and its keys (and
+        // values) as the tokens before the first flag.
+        let config_items = if command == "config" {
+            let action = arguments
+                .get(1)
+                .and_then(|value| value.to_str())
+                .ok_or(ActingctlError::Usage)?;
+            let items = arguments[2..]
+                .iter()
+                .map_while(|value| value.to_str().filter(|text| !text.starts_with("--")))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            Some((action, items))
+        } else {
+            None
         };
         // `emulator` takes its action as the second token; flags follow it.
         let emulator_action = if command == "emulator" {
@@ -658,7 +725,9 @@ impl Invocation {
         } else {
             None
         };
-        let mut index = if emulator_action.is_some() || selfcheck_alias.is_some() {
+        let mut index = if let Some((_, items)) = &config_items {
+            2 + items.len()
+        } else if emulator_action.is_some() || selfcheck_alias.is_some() {
             2
         } else if task_offset.is_some() {
             3
@@ -822,6 +891,12 @@ impl Invocation {
             "reset" => Command::Reset,
             "observe" => Command::Observe,
             "status" if config => Command::StatusConfig,
+            "config" => {
+                let (action, items) = config_items.ok_or(ActingctlError::Usage)?;
+                Command::ConfigureSettings {
+                    changes: config_changes(action, &items)?,
+                }
+            }
             "status" => Command::Status,
             "facts" => {
                 // The per-instance read is not built; only the program store is readable.
@@ -923,6 +998,7 @@ impl Command {
             self,
             Self::Status
                 | Self::StatusConfig
+                | Self::ConfigureSettings { .. }
                 | Self::ProgramFacts
                 | Self::MonitorStatus
                 | Self::EmulatorDiscover
@@ -975,7 +1051,8 @@ enum ActingctlError {
     PriorityOffsetInvalid,
     /// The system clock is before the Unix epoch or out of range.
     Clock,
-    /// `status --config`: the snapshot carries no `config.subsystems` / `config.parameters`.
+    /// `status --config`: the snapshot carries no `config.subsystems` or no
+    /// `config.parameters.<section>`.
     ConfigFactsMissing,
     Output,
     /// `request-shutdown --wait` failed after the shutdown was accepted; `detail` is JSON.
@@ -1015,7 +1092,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status [--config]|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>"),
+                .write_str("usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::FactRecord => formatter.write_str("invalid or unreadable bounded fact observation file"),
@@ -1024,7 +1101,7 @@ impl fmt::Display for ActingctlError {
             Self::TaskOffsetScopeAmbiguous => write!(formatter, "{}: the registered instances do not name exactly one configured game; pass --instance <alias>", self.code()),
             Self::PriorityOffsetInvalid => write!(formatter, "{}: the task identifier cannot form a priority offset fact", self.code()),
             Self::Clock => write!(formatter, "{}: the system clock is before the Unix epoch or out of range", self.code()),
-            Self::ConfigFactsMissing => write!(formatter, "{}: the runtime fact snapshot holds no config.subsystems / config.parameters record", self.code()),
+            Self::ConfigFactsMissing => write!(formatter, "{}: the runtime fact snapshot holds no config.subsystems or no config.parameters.<section> record", self.code()),
             Self::Output => formatter.write_str("failed to write JSON output"),
             Self::ShutdownWait { code, detail } => {
                 write!(formatter, "{code} during wait_shutdown: {detail}")

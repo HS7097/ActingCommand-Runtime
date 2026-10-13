@@ -552,6 +552,10 @@ impl HostShared {
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
+            // Workflow #387 D1b: a general instruction of the three counters.
+            RuntimeOperation::ConfigureSettings { changes } => {
+                self.configure_settings(request, validated, changes)
+            }
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
             // UpgradeStateStatus U-4). Until then each is refused and records nothing.
@@ -1293,6 +1297,25 @@ impl HostShared {
         action: EventAction,
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<EventLinksDraft, RequestFailure> {
+        self.append_scoped_client_command_intent(
+            original,
+            request,
+            Some(instance_id),
+            action,
+            run_links,
+        )
+    }
+
+    /// [`Self::append_client_command_intent`] of a request that may concern no instance
+    /// (Workflow #387 D1b: `ConfigureSettings` is Runtime-wide).
+    pub(super) fn append_scoped_client_command_intent(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: Option<InstanceId>,
+        action: EventAction,
+        run_links: Option<RuntimeRunLinks>,
+    ) -> Result<EventLinksDraft, RequestFailure> {
         self.validate_c4_client_source(original)?;
         let (source, module, payload) = match original.source() {
             EventSource::Cli => (
@@ -1326,9 +1349,7 @@ impl HostShared {
                 ));
             }
         };
-        let mut links = self
-            .events
-            .request_links(request, Some(instance_id), None, None);
+        let mut links = self.events.request_links(request, instance_id, None, None);
         if let Some(run_links) = run_links {
             links = run_links.apply(links);
         }

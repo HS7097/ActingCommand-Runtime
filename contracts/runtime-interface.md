@@ -476,6 +476,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `monitor-set`, `monitor-clear` | ConfigureMonitor, ClearMonitor | general instruction | stay; `ac_monitor_set`, `ac_monitor_clear` (new) |
 | `task-offset` | PublishFacts (offset) | general instruction | stays; `ac_task_offset` (new) |
 | `request-shutdown` | RequestShutdown | general instruction | stays; `ac_request_shutdown` (new) |
+| new: `config set`, `config clear` (#387 D1b) | ConfigureSettings | general instruction | actingctl; `ac_config_set` (observer until U-3); the console's settings page in the next UI release ([runtime-config.md](runtime-config.md)) |
 | `agent-publish-facts` | PublishFacts | general instruction (§14.2) | stays |
 | `agent-apply-resource-targets` | ApplyResourceTargets | general instruction (§14.2) | stays (whole `--policy-file` form) |
 | `install-transition` | InstallTransition | compat | stays until the install-control minimum is 2; not mapped |
@@ -555,9 +556,11 @@ two.
   after a Lab tool; G14's `mcp` and `via` replace them. MCP writes are `(Cli, Cli)`.
 - Instructions text: no tiers; "queries and the instructions operation needs are always
   there; authoring and debugging tools appear only when the installer ticked their
-  option, from the next session"; "approvals and configuration edits belong to the
-  person; starting the daemon belongs to the person and the watchdog; request shutdown
-  is a general request".
+  option, from the next session"; "approvals and configuration file edits belong to
+  the person, a setting the Runtime may change while running is set with
+  ac_config_set and every change is recorded (#387 D1b, M387 §8.4); starting the
+  daemon belongs to the person and the watchdog; request shutdown is a general
+  request".
 
 ### Console (counter `ui`)
 

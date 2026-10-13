@@ -161,6 +161,12 @@ pub(super) struct ActingdConfigFile {
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
+    /// Workflow #387 D1b (`config.selection`): the file's `sha256:<hex>` as `load_for` read it
+    /// and, for an installed Runtime, the configuration generation acsetup committed.
+    #[serde(skip)]
+    config_sha256: Option<String>,
+    #[serde(skip)]
+    config_generation: Option<u64>,
     /// The install root the daemon runs from, when it runs from one (set by `load_for`).
     #[serde(skip)]
     install_root: Option<PathBuf>,
@@ -823,6 +829,9 @@ pub(super) struct RuntimeAssembly {
     pub(super) policy: Option<PolicyBootstrap>,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
+    /// Workflow #387 D1b: the configuration layers read, handed to `host` as `config.selection`;
+    /// `check-config` prints it. `None` only for a file `load_for` did not read.
+    pub(super) config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
     pub(super) resource_packages: BTreeMap<String, PathBuf>,
     /// The `ACTINGCOMMAND_*` variables that are set but ignored because
@@ -1053,6 +1062,8 @@ pub(super) fn load_for(
     };
     let mut config = serde_json::from_slice::<ActingdConfigFile>(&bytes)
         .map_err(|_| SharedCode::ConfigDecodeFailed.code())?;
+    config.config_sha256 = Some(actingcommand_runtime_config::sha256_text(&bytes));
+    config.config_generation = installation.map(|selected| selected.selection().generation);
     config.source_root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1170,7 +1181,10 @@ impl ActingdConfigFile {
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
         let mut stuck_recovery = BTreeMap::new();
-        let mut instance_parameters = Vec::with_capacity(instances.len());
+        let mut instance_ids = Vec::with_capacity(instances.len());
+        // Workflow #387 D1b: the members of the per-instance section as the file names them, the
+        // file layer the configuration mechanism resolves (`instances[]` by `instance_id`).
+        let mut instance_members = Vec::with_capacity(instances.len());
         for instance in &mut instances {
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
@@ -1193,14 +1207,22 @@ impl ActingdConfigFile {
                 .validate()
                 .map_err(|_| ActingdCode::StuckRecoveryCooldownInvalid.code())?;
             stuck_recovery.insert(instance.alias.clone(), settings);
-            instance_parameters.push(manifest::InstanceParameters {
-                instance_id: instance.instance_id,
-                alias: instance.alias.clone(),
-                stuck_recovery_explicit: instance.stuck_recovery.is_some(),
-                stuck_recovery_cooldown_secs_explicit: instance
-                    .stuck_recovery_cooldown_secs
-                    .is_some(),
-            });
+            let instance_id = manifest::instance_id_text(instance.instance_id)?;
+            let mut members = serde_json::Map::new();
+            members.insert(
+                "instance_id".to_owned(),
+                serde_json::Value::String(instance_id.clone()),
+            );
+            members.insert(
+                actingcommand_runtime_config::STUCK_RECOVERY.to_owned(),
+                serde_json::json!(instance.stuck_recovery),
+            );
+            members.insert(
+                actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS.to_owned(),
+                serde_json::json!(instance.stuck_recovery_cooldown_secs),
+            );
+            instance_members.push(serde_json::Value::Object(members));
+            instance_ids.push(instance_id);
             if let Some(path) = instance.resource_package.take() {
                 // An empty path stays empty so admission reports it missing.
                 let path = if path.as_os_str().is_empty() || path.is_absolute() {
@@ -1290,6 +1312,25 @@ impl ActingdConfigFile {
                 }
             })
             .transpose()?;
+        // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
+        // itself (D1b: the per-instance section), from the members the file named.
+        let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
+            .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
+        let mechanism_parameters = actingcommand_runtime_config::render_parameters(
+            actingcommand_runtime_config::mechanism_rows(),
+            &instance_ids,
+            &defaults,
+            &serde_json::json!({ "instances": instance_members }),
+            &actingcommand_runtime_config::code_default,
+        )
+        .map_err(|failure| failure.failure_code().code())?;
+        let config_selection =
+            self.config_sha256
+                .map(|config_sha256| actingcommand_contract::ConfigSelection {
+                    config_generation: self.config_generation,
+                    config_sha256,
+                    defaults_sha256: actingcommand_runtime_config::shipped_defaults_sha256(),
+                });
         host = host
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
@@ -1325,9 +1366,21 @@ impl ActingdConfigFile {
             instances_count: provider.instance_count(),
             instances_deferred_count: provider.deferred.len(),
             instances_startup_package_count,
-            instances: &instance_parameters,
+            mechanism_parameters,
         })?;
+        // Workflow #387 D1b: the whole-section checks of the file layer, with the facts of other
+        // crates they read (§5.3); a start and check-config refuse the same way.
+        actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
+            .and_then(|effective| {
+                effective.check(&actingcommand_runtime_config::CheckContext::new(
+                    host.scheduler().maximum_client_heartbeat_interval_ms,
+                ))
+            })
+            .map_err(|failure| failure.failure_code().code())?;
         host = host.with_config_manifest(manifest.clone());
+        if let Some(selection) = &config_selection {
+            host = host.with_config_selection(selection.clone());
+        }
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
@@ -1355,6 +1408,7 @@ impl ActingdConfigFile {
             provider,
             policy,
             manifest,
+            config_selection,
             resource_packages,
             ignored_env_overrides,
             adb_requirement,

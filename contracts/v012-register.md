@@ -233,6 +233,30 @@ once the Runtime is shutting down, still write `unconfirmed`.
 | F4 | `RecoveryRungSkipReason::ResourceFence` (`resource_fence`) | new enum value of the rung plan's skip reason | #403 | #403 | the return-home rung of a fence's ladder, which never re-prepares the instance; its `recovery_rung_finished` outcome is `recovery_rung_skipped_resource_fence` (info) |
 | F5 | `RuntimeInstanceStatus.resource_fence` (`InstanceResourceFence`) | new optional member of the status projection (also in the runtime state observation of `command.validated`) | #403 | #403 | `{cause, since_unix_ms, awaiting_person}` (`deny_unknown_fields`), absent when the instance is not fenced; `cause` is the unconfirmed failure's code; `awaiting_person` once the fence's ladder ended without proof or none could start; `ac_overview` shows it as the row's `resource_fence` |
 
+### 1.12 Wave 3 slices (D1b, #387 M387 §5–§6)
+
+D1b brings its own shapes (rows R5, R6 of §1.5 and W3 of §3, written here as built) and writes
+them; [runtime-config.md](runtime-config.md) is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| G1 | `ConfigParameter.settable` (boolean); `ConfigParameterSource::Instruction`, spelled `instruction` | new member, new enum value (R5) | D1b | D1b | `settable` from the key table of `crates/runtime-config`; `instruction` only in the running Runtime's facts, never in `check-config` |
+| G2 | `config.parameters` → one runtime fact `config.parameters.<section>` per section (prefix `CONFIG_PARAMETERS_FACT_PREFIX`); rows `{key, value, source, settable}` | key change of a runtime fact (§5.1 split) | D1b | D1b | section = the key's first segment, `top_level` for a key without a dot; at most 256 rows each; a section an earlier start had and this one has not is recorded empty; readers: `actingctl status --config` (all sections, key order), not the suspension report (its start time now reads `config.subsystems`) |
+| G3 | `config.selection` | new runtime fact (R6), one row `{config_sha256, defaults_sha256, config_generation?}` | D1b | D1b | `sha256:<hex>` of the configuration file and of the embedded `actingd.defaults.json` (configuration files, not packages); `config_generation` decimal text, installed Runtime only; contract type `ConfigSelection` |
+| G4 | `host.config_overrides` | new runtime fact (R6), rows `{config_key, value_json, base_json, base_source, set_unix_ms, set_in_owner_epoch, request_id, channel?}` | D1b | D1b | `value_json` / `base_json` canonical JSON text; `base_source` `explicit` or `default`; `set_unix_ms` a `timestamp_ms` scalar; `channel` written from U-2 on; tagged (§4) |
+| G5 | `RuntimeOperation::ConfigureSettings { changes: [ConfigSettingChange {key, value?}] }` → `RuntimeResult::SettingsConfigured { settings: [ConfiguredSetting {key, value, source}] }` | new request and result kind (W3, runtime-client 2) | D1b | D1b | 1..=64 changes, keys unique, value ≤ 8 KiB serialized (`invalid_configure_settings`); general instruction, G14-copied; command records `command.received` / `validated` / `rejected` with action `runtime.action` (§1.6 U2) |
+| G6 | `CommandPayloadDraft::rejected_with_outcome` | writer API, no new member | D1b | D1b | the `command.rejected` record's `outcome` is the refusal (`config_*`) rather than `command_rejected` |
+| G7 | restore notes at start: `runtime.failed` with outcome `config_override_superseded` (info) / `config_override_base_changed` / `config_override_dropped` (warning) and `config_key` | existing record type, new outcome codes | D1b | D1b | severity = the code's category; system links |
+| G8 | `check-config` v1 report: member `config_selection`; `not_checked` token `instruction_values`; `config_manifest.parameters[].settable` | interface members | D1b | D1b | schema version stays `v1` (additive) |
+| G9 | `actingctl config set <key>=<json>…` / `config clear <key>…`; MCP `ac_config_set {changes: [{key, value?}]}` (observer tier until U-3) | CLI and MCP surface | D1b | D1b | the same request through both (D1-M8); MCP `INSTRUCTIONS` names `ac_config_set` (UIF:1013 → M387 §8.4) |
+| G10 | Runtime artifact payload `actingd.defaults.json` | distribution file | D1b | D1b | layout name stays `distribution-v1`; `Get-ExactBuildArtifact.ps1` accepts a Runtime artifact with or without it; the build compares its SHA-256 with `check-config`'s `config_selection.defaults_sha256` |
+
+Configuration keys (§5): D1b adds none. The per-instance `stuck_recovery` and
+`stuck_recovery_cooldown_secs` join the key table (settable, `default = code` until D1c gives
+them `section:recovery_ladder.*`); every key the manifest reported before D1b has a row
+(not settable). The defaults file ships empty (`{}`) until a section with `default = file`
+keys arrives (D1c on).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

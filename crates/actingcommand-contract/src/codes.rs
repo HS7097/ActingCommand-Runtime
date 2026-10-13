@@ -661,6 +661,8 @@ crate::outcome_codes! {
         InstallSlotLockOpenFailed => "install_slot_lock_open_failed": error / none,
         InstallSlotInUse => "install_slot_in_use": error / none,
         InstallSlotLockFailed => "install_slot_lock_failed": error / none,
+        // Workflow #387 D1b: a `ConfigureSettings` request or receipt of the wrong shape.
+        InvalidConfigureSettings => "invalid_configure_settings": error / none,
     }
 }
 

@@ -17866,26 +17866,6 @@
       "common_causes": "The blackout table changed after the run was admitted, or a ladder rung or startup package outlasted its estimate.",
       "handling": "Nothing to repair for one occurrence."
     },
-    "blackout_config_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "config",
-      "uncertain": false,
-      "values": {
-        "field": "required",
-        "blackout_id": "optional",
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A host blackout entry (scheduling.blackout.host) breaks a rule; field points at the member, blackout_id names the entry when it has one. check-config and startup refuse the configuration.",
-      "common_causes": "A duplicate id, a weekday outside 1 to 7, a minute of day outside 0 to 1439, or an offset outside the allowed range.",
-      "handling": "Fix the entry and commit the configuration again."
-    },
     "session_feature_fact_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -18084,6 +18064,62 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A shared interrupt page whose then is end_run was handled (Workflow #373 NAV-6): the run ends after its handler, as the standard pack's data asks; the ladder configuration decides what follows a routine run.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "host_config_overrides_fact_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At start the recorded host.config_overrides fact is not of the shape this build writes; the start fails, and every later start until the ledger is repaired.",
+      "common_causes": "A ledger written by another build.",
+      "handling": "Restore a ledger this build wrote, or move the state root aside."
+    },
+    "host_config_overrides_persist_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A ConfigureSettings change could not record host.config_overrides; nothing changed and the request is refused (caused_by: the ledger's refusal).",
+      "common_causes": "The ledger refused the record, for example at its capacity bound.",
+      "handling": "Read the ledger state, then send the change again."
+    },
+    "host_config_overrides_fact_clock_overflow": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configuration fact cannot be recorded after the previous one: its observation time would overflow.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "host_config_value_type_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A value the configuration in effect holds, or an identity a configuration record needs, is not of the type the reader expects (an internal invariant).",
       "common_causes": "TBD",
       "handling": "TBD"
     }
@@ -24376,6 +24412,46 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Handling a shared interrupt page: admitting and running its handler and then.run packages (Workflow #373 NAV-6)."
+    },
+    "configure_settings": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: apply a ConfigureSettings request (Workflow #387 D1b)."
+    },
+    "restore_config_overrides": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: restore the instruction values of host.config_overrides at start (Workflow #387 D1b)."
+    },
+    "persist_config_overrides": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: record the configuration facts a ConfigureSettings request changes (Workflow #387 D1b)."
+    },
+    "read_runtime_config": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: read the configuration in effect (Workflow #387 D1b)."
+    },
+    "record_runtime_config": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: record the configuration facts at start (Workflow #387 D1b)."
     }
   }
 }

@@ -600,10 +600,13 @@ jobs:
           }
           New-Item -ItemType Directory -Path $runtimeDir, $toolsDir | Out-Null
 
+          # Workflow #387 D1b (model v1.2 §5.2): the defaults file ships beside the example
+          # configuration.
           $runtimeFiles = @(
             'actingcommand-actingd.exe',
             'actingctl.exe',
             'actingd.config.example.json',
+            'actingd.defaults.json',
             'INSTALL.md',
             'RELEASE-NOTES.md'
           )
@@ -720,9 +723,33 @@ jobs:
           Copy-BuildFiles -Names @('actingcommand-actingd.exe', 'actingctl.exe') -Destination $runtimeDir
           Copy-BuildFiles -Names @(
             'actingd.config.example.json',
+            'actingd.defaults.json',
             'INSTALL.md',
             'RELEASE-NOTES.md'
           ) -SourceDirectory (Join-Path $PWD 'distribution/windows') -Destination $runtimeDir
+          # Workflow #387 D1b (model v1.2 §5.2): the shipped defaults file is the one the program
+          # embeds: its SHA-256 equals check-config's config_selection.defaults_sha256.
+          $defaultsRoot = Join-Path $env:RUNNER_TEMP 'defaults-digest-check'
+          if (Test-Path -LiteralPath $defaultsRoot) {
+            Remove-Item -LiteralPath $defaultsRoot -Recurse -Force -ErrorAction Stop
+          }
+          New-Item -ItemType Directory -Path $defaultsRoot | Out-Null
+          $defaultsConfig = Get-Content -LiteralPath (Join-Path $runtimeDir 'actingd.config.example.json') -Raw | ConvertFrom-Json
+          $defaultsConfig.state_root = Join-Path $defaultsRoot 'state'
+          $defaultsConfig.secret_fingerprint_salt = 'defaults-digest-salt-0123456789'
+          $defaultsConfigPath = Join-Path $defaultsRoot 'actingd.config.json'
+          [IO.File]::WriteAllText($defaultsConfigPath, ($defaultsConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+          $PSNativeCommandUseErrorActionPreference = $false
+          $checkReport = (& (Join-Path $runtimeDir 'actingcommand-actingd.exe') check-config --config $defaultsConfigPath | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "defaults digest check: check-config exited ${LASTEXITCODE}: $checkReport"
+          }
+          $reportedDefaults = ($checkReport | ConvertFrom-Json).config_selection.defaults_sha256
+          $shippedDefaults = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $runtimeDir 'actingd.defaults.json')).Hash.ToLowerInvariant()
+          if ($reportedDefaults -cne $shippedDefaults) {
+            throw "defaults digest check: the program embeds $reportedDefaults, the artifact ships $shippedDefaults"
+          }
+          Write-Host "defaults digest check: $shippedDefaults"
           Copy-BuildFiles -Names $toolFiles -Destination $toolsDir
           New-Item -ItemType Directory -Path (Join-Path $toolsDir 'platform-tools') | Out-Null
           Copy-BuildFiles -Names $platformToolsFiles -SourceDirectory $env:PLATFORM_TOOLS_DIR -Destination $toolsDir

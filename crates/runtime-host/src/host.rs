@@ -196,6 +196,7 @@ mod resource_close;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod resource_fence;
 mod resource_targets;
+mod runtime_config;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
@@ -488,6 +489,9 @@ pub struct RuntimeHostConfig {
     /// runs whose outcome is reported later.
     scheduled_procedures: BTreeSet<String>,
     config_manifest: Option<RuntimeConfigManifest>,
+    /// Workflow #387 D1b: the configuration layers this start read, recorded as
+    /// `config.selection` with the manifest.
+    config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
     /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
     /// `actingctl task-run --package / --expected-sha256`.
@@ -543,6 +547,7 @@ impl RuntimeHostConfig {
             procedure_manifest: None,
             scheduled_procedures: BTreeSet::new(),
             config_manifest: None,
+            config_selection: None,
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
@@ -709,6 +714,16 @@ impl RuntimeHostConfig {
     /// `config.*` runtime facts once per startup. A host without one records nothing.
     pub fn with_config_manifest(mut self, config_manifest: RuntimeConfigManifest) -> Self {
         self.config_manifest = Some(config_manifest);
+        self
+    }
+
+    /// Installs the configuration layers this start read (Workflow #387 D1b): the host records
+    /// them as `config.selection` together with the manifest.
+    pub fn with_config_selection(
+        mut self,
+        config_selection: actingcommand_contract::ConfigSelection,
+    ) -> Self {
+        self.config_selection = Some(config_selection);
         self
     }
 
@@ -983,6 +998,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.procedure_manifest.as_ref().map(|_| "<runtime-owned>"),
             )
             .field("config_manifest", &self.config_manifest)
+            .field("config_selection", &self.config_selection)
             .field(
                 "startup_packages",
                 &self.startup_packages.keys().collect::<Vec<_>>(),
@@ -1534,6 +1550,8 @@ impl RuntimeHost {
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
+            config_override_gate: Mutex::new(()),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
@@ -1792,8 +1810,10 @@ impl RuntimeHost {
                 HostLocation::PrepareAgentDispatcher,
             )? = agent_dispatcher;
             shared.seed_policy_instance_facts()?;
+            // Workflow #387 D1b: the configuration facts, and the instruction values restored
+            // before any instance is prepared.
             if let Some(config_manifest) = &config.config_manifest {
-                shared.record_config_manifest(config_manifest)?;
+                shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
             }
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
@@ -2058,6 +2078,16 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
         self.work_ref(HostLocation::ReadSupersededCatalogApprovals)?
             .superseded_catalog_approvals(generation)
+    }
+
+    /// Workflow #387 D1b: the stuck-recovery settings the ladder reads for one instance now.
+    #[cfg(test)]
+    pub(crate) fn stuck_recovery_for_test(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<actingcommand_contract::InstanceStuckRecovery> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest)?
+            .instance_stuck_recovery(instance_id)
     }
 
     /// Workflow #361 B1: the held scheduling pauses, global and per instance alias.
@@ -3980,6 +4010,11 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // Workflow #387 D1b: the configuration in effect (the file layer of the manifest and the
+    // instruction values), and the gate that orders each change and the start's restore with
+    // the records it leads to.
+    runtime_config: Mutex<actingcommand_runtime_config::EffectiveConfig>,
+    config_override_gate: Mutex<()>,
     // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.

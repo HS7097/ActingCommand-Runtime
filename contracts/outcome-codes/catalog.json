@@ -384,11 +384,11 @@
     },
     "range_min": {
       "type": "integer",
-      "description": "The lowest revision of an interface range."
+      "description": "The lowest value of a range: the lowest revision of an interface range, or the lowest value a configuration key allows."
     },
     "range_max": {
       "type": "integer",
-      "description": "The highest revision of an interface range."
+      "description": "The highest value of a range: the highest revision of an interface range, or the highest value a configuration key allows."
     },
     "component": {
       "type": "vocab:component",
@@ -1532,6 +1532,14 @@
     "ladder_class": {
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
+    "config_key": {
+      "type": "token",
+      "description": "A configuration key as config.parameters names it, for example a per-instance key instance.<instance id>.<member> (Workflow #387)."
+    },
+    "config_value_problem": {
+      "type": "vocab:config_value_problem",
+      "description": "Why a configuration value is refused (Workflow #387)."
     },
     "device_state_probe": {
       "type": "vocab:device_state_probe",
@@ -4507,6 +4515,28 @@
           "description": "The feature package's pages are not exactly the pages of pages.json."
         }
       }
+    },
+    "config_value_problem": {
+      "description": "Why a configuration value is refused, the reason config_value_invalid carries (Workflow #387).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-config/src/codes.rs",
+        "enum": "ConfigValueProblem"
+      },
+      "tokens": {
+        "wrong_type": {
+          "description": "The value is not of the key's type."
+        },
+        "out_of_range": {
+          "description": "The value is outside the key's allowed range or words."
+        },
+        "section_check": {
+          "description": "The value leaves its section failing the section's whole-section check."
+        },
+        "repeated_key": {
+          "description": "The request names the key more than once."
+        }
+      }
     }
   },
   "domains": {
@@ -5029,7 +5059,8 @@
     "config_": [
       "actingctl",
       "actingd",
-      "contract"
+      "contract",
+      "runtime-config"
     ],
     "configure_": [
       "ledger",
@@ -6467,6 +6498,7 @@
       "actinglab",
       "execution-kernel",
       "ledger",
+      "runtime-config",
       "runtime-host"
     ],
     "rect_": [
@@ -7303,6 +7335,7 @@
       "runtime-host"
     ],
     "blackout_": [
+      "runtime-config",
       "runtime-host"
     ],
     "session_feature_": [
@@ -7353,6 +7386,7 @@
     "recognition-pack": "crates/recognition-pack",
     "resource-tooling": "crates/resource-tooling",
     "runtime-client": "crates/runtime-client",
+    "runtime-config": "crates/runtime-config",
     "runtime-database": "crates/runtime-database",
     "runtime-host": "crates/runtime-host",
     "runtime-state": "crates/runtime-state",

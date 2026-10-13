@@ -331,11 +331,7 @@ impl HostShared {
         let Some(preparation_failure) = &preparation_failure else {
             return Ok((event, None));
         };
-        let settings = self
-            .stuck_recovery()?
-            .get(&instance_id)
-            .copied()
-            .unwrap_or_default();
+        let settings = self.instance_stuck_recovery(instance_id)?;
         let resolved = lock(
             &self.registered_instances,
             HostLocation::ReadPreparationInstance,
@@ -573,11 +569,7 @@ impl HostShared {
         trigger: LadderTrigger,
     ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
         let instance_id = resolved.instance_id();
-        let settings = self
-            .stuck_recovery()?
-            .get(&instance_id)
-            .copied()
-            .unwrap_or_default();
+        let settings = self.instance_stuck_recovery(instance_id)?;
         if !is_stuck_recovery_trigger(&trigger.terminal.failure_code)
             || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
             || !settings.enabled

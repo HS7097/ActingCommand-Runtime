@@ -2,9 +2,12 @@
 
 //! Builds the in-memory runtime configuration manifest from what `assemble` actually
 //! applies: which subsystems the host runs and why, and every effective parameter value
-//! with its source. Every value is read back from the assembled `RuntimeHostConfig`; the
-//! configuration file only decides whether a value is `explicit` or `default`. Data only;
-//! the host records it as the two `config.*` runtime facts.
+//! with its source. Every value of the keys the assembly parses itself is read back from the
+//! assembled `RuntimeHostConfig`; the configuration file only decides whether a value is
+//! `explicit` or `default`. The keys the configuration mechanism resolves itself (Workflow #387
+//! D1b: the per-instance section) come rendered from `actingcommand-runtime-config`, and every
+//! row says whether an instruction may change it (`settable`, from the key table). Data only;
+//! the host records it as the `config.subsystems` and `config.parameters.<section>` facts.
 
 use crate::codes::ActingdCode;
 use crate::monitor_retry::PolicyMonitorSettings;
@@ -57,8 +60,9 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) instances_count: usize,
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
-    /// Every configured instance in declaration order (Workflow #318 cfg3).
-    pub(super) instances: &'a [InstanceParameters],
+    /// Workflow #387 D1b: the rows the configuration mechanism resolved (the per-instance
+    /// section, every configured instance in declaration order).
+    pub(super) mechanism_parameters: Vec<ConfigParameter>,
 }
 
 /// The effective `policy.monitor` settings (Workflow #397) and which of them the file named.
@@ -70,15 +74,6 @@ pub(super) struct PolicyMonitorParameters {
     pub(super) retry_limit_explicit: bool,
     pub(super) retry_backoff_explicit: bool,
     pub(super) retry_backoff_max_explicit: bool,
-}
-
-/// What the file named for one instance's manifest keys; the values are read back from
-/// the host's stuck-recovery settings under `alias`.
-pub(super) struct InstanceParameters {
-    pub(super) instance_id: InstanceId,
-    pub(super) alias: String,
-    pub(super) stuck_recovery_explicit: bool,
-    pub(super) stuck_recovery_cooldown_secs_explicit: bool,
 }
 
 pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest, Code> {
@@ -176,6 +171,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "bind_port".to_owned(),
             value: FactScalar::Integer(i64::from(bind_address.port())),
             source: explicit_or_default(inputs.bind_port_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "device_diagnostic_mode".to_owned(),
@@ -183,31 +179,37 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
                 device_diagnostic_mode_name(device_diagnostic_mode).to_owned(),
             ),
             source: explicit_or_default(inputs.device_diagnostic_mode_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "frame_retention_enabled".to_owned(),
             value: FactScalar::Boolean(frame_retention_enabled),
             source: explicit_or_default(inputs.frame_retention_enabled.is_some()),
+            settable: false,
         },
         ConfigParameter {
             key: "frame_retention_failed_run_successes".to_owned(),
             value: FactScalar::Integer(i64::from(failed_run_retention.successor_successes)),
             source: explicit_or_default(inputs.failed_run_successes_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "frame_retention_failed_run_days".to_owned(),
             value: FactScalar::Integer(i64::from(failed_run_retention.retention_days)),
             source: explicit_or_default(inputs.failed_run_days_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "frame_retention_dedup_error".to_owned(),
             value: FactScalar::Boolean(host.frame_retention_dedup_error()),
             source: explicit_or_default(inputs.dedup_error_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "frame_retention_dedup_lab".to_owned(),
             value: FactScalar::Boolean(host.frame_retention_dedup_lab()),
             source: explicit_or_default(inputs.dedup_lab_explicit),
+            settable: false,
         },
         explicit(
             "secret_fingerprint_salt_bytes",
@@ -217,6 +219,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "allow_env_overrides".to_owned(),
             value: FactScalar::Boolean(inputs.allow_env_overrides.unwrap_or(false)),
             source: explicit_or_default(inputs.allow_env_overrides.is_some()),
+            settable: false,
         },
         ConfigParameter {
             key: "governance.allowed_clients".to_owned(),
@@ -225,6 +228,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
                     .map_or_else(|| "any".to_owned(), |allowed| allowed.join(",")),
             ),
             source: explicit_or_default(inputs.governance_allowed_clients_explicit),
+            settable: false,
         },
     ];
     if let Some(transition) = inputs.catalog_transition {
@@ -246,21 +250,25 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
                 key: "policy.monitor.io_timeout_ms".to_owned(),
                 value: duration_ms(settings.io_timeout)?,
                 source: explicit_or_default(monitor.io_timeout_explicit),
+                settable: false,
             },
             ConfigParameter {
                 key: "policy.monitor.retry_limit".to_owned(),
                 value: FactScalar::Integer(i64::from(settings.retry_limit)),
                 source: explicit_or_default(monitor.retry_limit_explicit),
+                settable: false,
             },
             ConfigParameter {
                 key: "policy.monitor.retry_backoff_ms".to_owned(),
                 value: duration_ms(settings.retry_backoff)?,
                 source: explicit_or_default(monitor.retry_backoff_explicit),
+                settable: false,
             },
             ConfigParameter {
                 key: "policy.monitor.retry_backoff_max_ms".to_owned(),
                 value: duration_ms(settings.retry_backoff_max)?,
                 source: explicit_or_default(monitor.retry_backoff_max_explicit),
+                settable: false,
             },
         ]);
     }
@@ -291,26 +299,9 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         ),
     ]);
     // Workflow #318 (cfg3): each instance's stuck-recovery settings, keyed by its bounded
-    // registry id (an alias may exceed the 128-byte key bound).
-    for instance in inputs.instances {
-        let settings = host
-            .stuck_recovery()
-            .get(&instance.alias)
-            .ok_or(ActingdCode::ConfigManifestIncomplete.code())?;
-        let prefix = format!("instance.{}", instance_id_text(instance.instance_id)?);
-        parameters.extend([
-            ConfigParameter {
-                key: format!("{prefix}.stuck_recovery"),
-                value: FactScalar::Boolean(settings.enabled),
-                source: explicit_or_default(instance.stuck_recovery_explicit),
-            },
-            ConfigParameter {
-                key: format!("{prefix}.stuck_recovery_cooldown_secs"),
-                value: FactScalar::Integer(i64::from(settings.cooldown_secs)),
-                source: explicit_or_default(instance.stuck_recovery_cooldown_secs_explicit),
-            },
-        ]);
-    }
+    // registry id (an alias may exceed the 128-byte key bound); since Workflow #387 D1b the
+    // per-instance section the configuration mechanism resolved.
+    parameters.extend(inputs.mechanism_parameters.iter().cloned());
     parameters.extend([
         default(
             "scheduler.maximum_client_heartbeat_interval_ms",
@@ -384,21 +375,25 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             key: "performance_monitor.pressure_start_samples".to_owned(),
             value: FactScalar::Integer(i64::from(performance_monitor.pressure_start_samples())),
             source: explicit_or_default(inputs.pressure_start_samples_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "performance_monitor.pressure_end_samples".to_owned(),
             value: FactScalar::Integer(i64::from(performance_monitor.pressure_end_samples())),
             source: explicit_or_default(inputs.pressure_end_samples_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "capacity_thresholds.hard_bytes".to_owned(),
             value: integer(capacity_thresholds.hard_bytes)?,
             source: explicit_or_default(inputs.capacity_thresholds_explicit),
+            settable: false,
         },
         ConfigParameter {
             key: "capacity_thresholds.soft_bytes".to_owned(),
             value: integer(capacity_thresholds.soft_bytes)?,
             source: explicit_or_default(inputs.capacity_thresholds_explicit),
+            settable: false,
         },
     ]);
     if let Some((max_attempts, max_session_ms, max_projection_events)) = inputs.agent_dispatcher {
@@ -431,6 +426,9 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             duration_ms(MUMU_MANAGER_STATE_WAIT_STOP)?,
         ),
     ]);
+    // Workflow #387 D1b: every key is in the key table, and says whether it is settable.
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .map_err(|failure| failure.failure_code().code())?;
     let manifest = RuntimeConfigManifest {
         subsystems,
         parameters,
@@ -482,7 +480,7 @@ pub(crate) fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) 
 }
 
 /// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.
-fn instance_id_text(instance_id: InstanceId) -> Result<String, Code> {
+pub(super) fn instance_id_text(instance_id: InstanceId) -> Result<String, Code> {
     match serde_json::to_value(instance_id) {
         Ok(serde_json::Value::String(text)) => Ok(text),
         _ => Err(ActingdCode::ConfigManifestInvalid.code()),
@@ -494,6 +492,7 @@ fn explicit(key: &str, value: FactScalar) -> ConfigParameter {
         key: key.to_owned(),
         value,
         source: ConfigParameterSource::Explicit,
+        settable: false,
     }
 }
 
@@ -502,6 +501,7 @@ fn default(key: &str, value: FactScalar) -> ConfigParameter {
         key: key.to_owned(),
         value,
         source: ConfigParameterSource::Default,
+        settable: false,
     }
 }
 

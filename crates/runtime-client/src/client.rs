@@ -1163,6 +1163,23 @@ impl RuntimeClient {
         }
     }
 
+    /// Changes settings the Runtime may change while it runs, all of them or none (Workflow #387
+    /// D1b, model v1.2 §5.6). Returns each changed key as it is in effect afterwards; a refusal
+    /// (`config_key_unknown`, `config_key_not_settable`, `config_value_invalid`) is the error with
+    /// the receipt.
+    pub fn configure_settings(
+        &self,
+        changes: Vec<actingcommand_contract::ConfigSettingChange>,
+    ) -> RuntimeClientResult<Vec<actingcommand_contract::ConfiguredSetting>> {
+        match self.execute(
+            ClientLocation::RuntimeConfigureSettings.location(),
+            RuntimeOperation::ConfigureSettings { changes },
+        )? {
+            RuntimeResult::SettingsConfigured { settings } => Ok(settings),
+            _ => Err(self.unexpected_result(ClientLocation::RuntimeConfigureSettings.location())),
+        }
+    }
+
     /// Starts, stops or restarts the emulator instance through the Runtime (no lease is
     /// acquired; the host fences the instance itself). Returns the
     /// `RuntimeResult::EmulatorInstanceControlled` result verbatim. The receipt wait is

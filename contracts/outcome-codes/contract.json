@@ -15439,6 +15439,20 @@
       "description": "Event or record sanitization refused a value: invalid task interrupt record (interrupt_handled count outside 1 to 8, or interrupt_ambiguous with fewer than two or more than 32 pages).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "invalid_configure_settings": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a ConfigureSettings request without changes, with more than 64, with an empty, overlong or repeated key or an oversized value, or a receipt of the wrong shape.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

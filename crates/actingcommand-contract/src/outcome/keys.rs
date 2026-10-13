@@ -376,6 +376,9 @@ outcome_keys! {
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
     ladder_class: vocab(ladder_class),
+    // Workflow #387 D1b: the configuration key a configuration code concerns.
+    config_key: token,
+    config_value_problem: vocab(config_value_problem),
     // Workflow #398 RD-5a: the device-state read of a handset that failed.
     device_state_probe: vocab(device_state_probe),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
