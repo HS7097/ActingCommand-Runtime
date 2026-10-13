@@ -191,7 +191,8 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
                 RuntimeErrorCode::BackendOperationFailed
             }
         );
-        assert_eq!(error.is_fatal(), close_failure);
+        // Workflow #403: an unconfirmed close fences the instance; the input fails non-fatally.
+        assert!(!error.is_fatal());
         assert!(!format!("{error:?} {error}").contains(primary_text));
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 0);
@@ -261,17 +262,33 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
                 .unwrap()
                 .contains(primary_text)
         );
+        // Workflow #403: the failed input's lease ends also after an unconfirmed close (a fenced
+        // instance's ladder takes a key of its own).
         let released = events
             .iter()
-            .filter(|event| event.event_type() == EventType::LeaseReleased)
+            .filter(|event| {
+                event.event_type() == EventType::LeaseReleased
+                    && event.links().lease_id() == failed.links().lease_id()
+            })
             .collect::<Vec<_>>();
-        assert_eq!(released.len(), usize::from(!close_failure));
+        assert_eq!(released.len(), 1);
         let quiescence = events.iter().find(|event| matches!(event.payload(),
             EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload))
             if matches!(payload.phase(), RuntimeLifecyclePhase::ResourceQuiescence { quiescence: ResourceQuiescence::Confirmed, .. })));
         if close_failure {
             assert!(quiescence.is_none());
-            assert!(host.fatal_error().unwrap().is_some());
+            assert!(host.fatal_error().unwrap().is_none());
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event.payload(),
+                        EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+                            if record.outcome().code().as_str()
+                                == crate::codes::HostCode::InstanceResourcesFenced.as_str()))
+                    .count(),
+                1,
+                "the instance is fenced once"
+            );
         } else {
             let closed = quiescence.expect("real close completion");
             assert_eq!(closed.links().lease_id(), failed.links().lease_id());
@@ -282,12 +299,12 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         let terminals = events.iter().filter(|event| matches!(event.payload(),
             EventPayload::Task(TaskPayload::Semantic(payload))
             if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
-        assert_eq!(terminals.len(), usize::from(contained && !close_failure));
+        assert_eq!(terminals.len(), usize::from(contained));
         if let Some(terminal) = terminals.first() {
             assert_eq!(terminal.links().run_id(), failed.links().run_id());
         }
         drop(client);
-        assert_eq!(host.close().is_err(), close_failure);
+        host.close().expect("close host");
         assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
     }
 }

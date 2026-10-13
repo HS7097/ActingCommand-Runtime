@@ -448,6 +448,10 @@ impl HostShared {
             HostLocation::ReadRuntimeStatusSchedulingPause,
         )?
         .clone();
+        // Workflow #403: the resource fences, read and released before the registry lock.
+        let resource_fences = self
+            .resource_fence_statuses()
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
@@ -487,6 +491,7 @@ impl HostShared {
                 .cloned();
             let game_id = configured_games.get(&instance.instance_alias).cloned();
             let pause = scheduling_pause.instance_state(&instance.instance_alias);
+            let resource_fence = resource_fences.get(&instance_id).cloned();
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -513,6 +518,7 @@ impl HostShared {
                 .with_resource_package(resource_package)
                 .with_game_id(game_id)
                 .and_then(|status| status.with_pause(pause))
+                .map(|status| status.with_resource_fence(resource_fence))
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RuntimeStatusProjectionInvalid,

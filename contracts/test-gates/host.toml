@@ -13,7 +13,7 @@ tests = [
 ]
 incident = []
 
-# Teardown keeps the session until host close; an unconfirmed teardown retains the owner
+# Teardown keeps the session until host close; an unconfirmed teardown fences only its instance (Workflow #403; before, it retained the owner)
 [[gate]]
 key = "6"
 coverage = "Y"
@@ -405,3 +405,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure",
 ]
 incident = ["#71", "#390 D-01"]
+
+# An unconfirmed close fences only its instance: the others run, a ladder re-preparation that passes lifts the fence, an unproven ladder or a manual fence waits for a person, and a shared fatal still ends the Runtime
+[[gate]]
+key = "50"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_403::gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_403::gate_a_direct_run_fence_starts_no_ladder_and_a_passing_resume_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_403::gate_a_ladder_whose_re_preparation_passes_lifts_the_fence",
+    "actingcommand-runtime-host::lib::tests::gate_403::gate_a_ladder_that_cannot_prove_the_close_leaves_the_instance_waiting_for_a_person",
+    "actingcommand-runtime-host::lib::tests::gate_403::gate_a_ledger_writer_failure_still_ends_the_whole_runtime",
+]
+incident = ["#403"]

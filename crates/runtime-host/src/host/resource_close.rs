@@ -3,6 +3,7 @@
 use super::lease::HostClaim;
 use super::policy_dispatch::scheduling_resume_selfcheck;
 use super::recovery_ladder::PendingRecoveryLadder;
+use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::RuntimeErrorCode;
@@ -128,11 +129,10 @@ impl HostShared {
         connection_id: ConnectionId,
         failure: RequestFailure,
     ) -> RequestFailure {
-        match self.retain_unconfirmed_resources(&failure.error, EventLinksDraft::default()) {
-            Ok(true) => return failure,
-            Ok(false) => {}
-            Err(retain_failure) => return failure.replace_with_poison(retain_failure),
-        }
+        let failure = match self.settle_failure_resources(&token, failure) {
+            Ok(failure) => failure,
+            Err(failure) => return failure,
+        };
         match self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure) {
             Ok(()) => failure,
             Err(error) => failure.replace_with_poison(error),
@@ -147,11 +147,10 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
         failure: RequestFailure,
     ) -> RequestFailure {
-        match self.retain_unconfirmed_resources(&failure.error, EventLinksDraft::default()) {
-            Ok(true) => return failure,
-            Ok(false) => {}
-            Err(retain_failure) => return failure.replace_with_poison(retain_failure),
-        }
+        let failure = match self.settle_failure_resources(&token, failure) {
+            Ok(failure) => failure,
+            Err(failure) => return failure,
+        };
         let cleanup = match run_links {
             // Workflow #369 H-1 (review M-1): only a policy run's control carries a ladder
             // trigger; every other run-linked end passes `None`.
@@ -186,7 +185,9 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             );
             error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
-            self.retain_unconfirmed_resources(&error, EventLinksDraft::default())
+            // A fenced write still in flight is not one instance's state the host can fence:
+            // the whole Runtime retains its owner, as before (Workflow #403 keeps it).
+            self.settle_unconfirmed_resources(&error, None, EventLinksDraft::default())
                 .map_err(RequestFailure::poison_without_terminal)?;
             return Err(RequestFailure::poison_without_terminal(error));
         };
@@ -215,7 +216,9 @@ impl HostShared {
         let has_sessions = self.execution()?.has_sessions().map_err(|error| {
             RuntimeHostError::execution(HostLocation::InspectRemainingExecutionSessions, &error)
         })?;
-        let disposition = if has_sessions {
+        // Workflow #403: a fenced instance's resources are not confirmed closed until a
+        // preparation proves it; the owner's stay in use meanwhile.
+        let disposition = if has_sessions || self.any_resource_fence()? {
             OwnerResourceDisposition::InUse
         } else {
             OwnerResourceDisposition::ConfirmedClosed
@@ -224,28 +227,25 @@ impl HostShared {
         Ok(disposition)
     }
 
-    pub(super) fn retain_unconfirmed_resources(
+    /// Workflow #403: a failed lease end's failure whose resources may still be live. An
+    /// unconfirmed close of the token's instance fences that instance and the lease ends with
+    /// the fence's non-fatal failure (`Ok`); unconfirmed resources no single instance owns
+    /// keep the lease, as before, with the fatal failure (`Err`).
+    fn settle_failure_resources(
         &self,
-        error: &RuntimeHostError,
-        links: EventLinksDraft,
-    ) -> RuntimeHostResult<bool> {
-        if error.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
-            return Ok(false);
+        token: &LeaseToken,
+        failure: RequestFailure,
+    ) -> Result<RequestFailure, RequestFailure> {
+        match self.settle_unconfirmed_resources(
+            &failure.error,
+            Some(token.instance_id()),
+            EventLinksDraft::default(),
+        ) {
+            Ok(UnconfirmedResources::Confirmed) => Ok(failure),
+            Ok(UnconfirmedResources::Fenced(fence)) => Ok(failure.fenced(fence)),
+            Ok(UnconfirmedResources::Retained) => Err(failure),
+            Err(retain_failure) => Err(failure.replace_with_poison(retain_failure)),
         }
-        let error = error.clone().into_fatal();
-        let lifecycle_result = self.append_lifecycle_failure(
-            RuntimeLifecycleFailureStage::SessionClose,
-            RuntimeLifecycleFailure::Host(&error),
-            links,
-            None,
-        );
-        let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
-            .and_then(|mut owner| owner.retain_unconfirmed());
-        let fatal_result = self.fatal.mark(error.clone());
-        lifecycle_result?;
-        retain_result?;
-        fatal_result?;
-        Ok(true)
     }
 
     pub(super) fn close_instance_resources(
@@ -254,13 +254,20 @@ impl HostShared {
         connection_id: ConnectionId,
         links: EventLinksDraft,
     ) -> Result<(), RequestFailure> {
-        self.close_instance_resources_result(token, connection_id, links)?
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    HostLocation::CloseExecutionSession,
-                    &error,
-                ))
-            })
+        match self.close_instance_resources_result(token, connection_id, links)? {
+            Ok(()) => Ok(()),
+            // Workflow #403: the unconfirmed close fenced the instance; the lease ends and the
+            // fence keeps the instance out of use.
+            Err(error)
+                if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed)
+                    && self.resource_fenced(token.instance_id())? =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::execution(HostLocation::CloseExecutionSession, &error),
+            )),
+        }
     }
 
     pub(super) fn close_instance_resources_result(
@@ -377,16 +384,28 @@ impl HostShared {
                 let lifecycle_result = self.append_lifecycle_failure(
                     RuntimeLifecycleFailureStage::SessionClose,
                     RuntimeLifecycleFailure::Host(&error),
-                    links,
+                    links.clone(),
                     None,
                 );
                 if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed) {
-                    let retain_result = lock(&self.owner, HostLocation::RetainUnconfirmedOwner)
-                        .and_then(|mut owner| owner.retain_unconfirmed());
-                    let fatal_result = self.fatal.mark(error.clone());
+                    // Workflow #403: during shutdown the whole Runtime retains its owner, as
+                    // before (`settle_unconfirmed_resources`); the failure is recorded above.
+                    if self.fatal.is_shutdown_requested() {
+                        let retained = self.retain_owner_unconfirmed(&error);
+                        lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
+                        retained.map_err(RequestFailure::poison_without_terminal)?;
+                        return Ok(Err(execution_error));
+                    }
                     lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
-                    retain_result.map_err(RequestFailure::poison_without_terminal)?;
-                    fatal_result.map_err(RequestFailure::poison_without_terminal)?;
+                    // Workflow #403: the instance's own resources fence only that instance; its
+                    // close step ends as after any failed close once its write authority is
+                    // back (a write still in flight keeps the whole-Runtime retention).
+                    let settled = self
+                        .settle_unconfirmed_resources(&error, Some(token.instance_id()), links)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    if let UnconfirmedResources::Fenced(_) = settled {
+                        self.finish_destructive_input(Some(witness), connection_id)?;
+                    }
                     return Ok(Err(execution_error));
                 }
                 lifecycle_result.map_err(RequestFailure::poison_without_terminal)?;
@@ -535,6 +554,13 @@ impl HostShared {
         links: EventLinksDraft,
     ) -> RuntimeHostResult<ExecutionKernelError> {
         if primary.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+            // Workflow #403: the caller fences the instance; the input's own step ends once its
+            // write authority is back (a write still in flight keeps the whole-Runtime
+            // retention, `fenced_step_not_reclaimed`).
+            if step.is_some() {
+                self.finish_destructive_input(step, connection_id)
+                    .map_err(|failure| *failure.error)?;
+            }
             return Ok(primary);
         }
         let close_result: RuntimeHostResult<Result<(), ExecutionKernelError>> = (|| {
@@ -1081,8 +1107,12 @@ impl HostShared {
             .as_ref()
             .err()
             .is_none_or(|error| error.resource_quiescence() == Some(ResourceQuiescence::Confirmed));
+        // Workflow #403: an unconfirmed close fenced the instance (the close path did): the
+        // preparation ends as a failed self-check and its lease ends as after a confirmed close,
+        // the fence keeping the instance out of use.
+        let fenced = !confirmed && self.resource_fenced(instance_id)?;
         // A held key (the ladder's) stays with its holder.
-        if confirmed && !held {
+        if (confirmed || fenced) && !held {
             self.cleanup_token_inner(
                 &token,
                 connection_id,
@@ -1093,9 +1123,10 @@ impl HostShared {
         }
         let cleanup_succeeded = closed.is_ok();
         if let Err(close_error) = closed {
-            // The close path recorded the failure; an unconfirmed close retained the owner and
-            // marked the Runtime fatal, as on every close path.
-            if close_error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+            // The close path recorded the failure; an unconfirmed close that fenced no instance
+            // retained the owner and marked the Runtime fatal, as on every close path.
+            if close_error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) && !fenced
+            {
                 return Err(RuntimeHostError::execution(
                     HostLocation::ClosePreparedInstanceSession,
                     &close_error,
@@ -1113,12 +1144,16 @@ impl HostShared {
         let recoverable = recoverable && confirmed && cleanup_succeeded;
         let (event, ladder) = self.record_preparation_finished(
             instance_id,
-            links,
+            links.clone(),
             stage,
             &observations,
             &selfcheck,
             recoverable,
         )?;
+        // Workflow #403: a passing self-check of a fenced instance proves its close.
+        if selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none() {
+            self.lift_resource_fence(instance_id, event, links)?;
+        }
         // Workflow #369 H-1: a dedicated lease was released above, so a daemon-start
         // preparation's ladder waits as a claim and the pump grants it on the free instance. On
         // a held key the ladder goes back to the key's holder, whose release hands it the key.

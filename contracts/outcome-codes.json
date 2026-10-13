@@ -22752,6 +22752,38 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_resources_fence_lifted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A preparation of a fenced instance (instance_id) passed its self-check after the unconfirmed close, which proves the close: the resource fence is lifted, the instance's policy availability follows its self-check again and it schedules again (Workflow #403). Recorded once as the outcome of the resource_fence_lifted lifecycle record, which names the passing preparation's instance_preparation_finished record. The proving preparation is the recovery ladder's (after an application or emulator restart) or a person's resume, emulator start or restart, or self-check.",
+      "common_causes": "The recovery ladder restarted the application or the emulator and the instance's preparation passed, or a person resumed, restarted or self-checked the instance.",
+      "handling": "Nothing to do."
+    },
+    "instance_resources_fenced": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An unconfirmed close of one instance's own resources (instance_id) fenced that instance instead of ending the whole Runtime (Workflow #403). The fenced instance gets no new dispatch and its policy availability is withheld; its key goes only to the recovery ladder, and a person is needed once the ladder ended without proving the close (status resource_fence.awaiting_person). Recorded once when the instance is fenced, as a runtime.failed lifecycle record whose caused_by link is the unconfirmed failure (for example application_backend_operation_failed); the work that met the failure ends with this code, non-fatal, and a policy dispatch to the fenced instance is refused with it. Only a preparation whose self-check passes lifts the fence (instance_resources_fence_lifted). An unconfirmed failure that names no single instance still ends the whole Runtime.",
+      "common_causes": "An application, input or capture backend of the instance did not confirm that its processes or handles ended: an adb command that hung while the emulator showed a black screen, a device that stopped answering in the middle of a close.",
+      "handling": "Usually nothing: the recovery ladder restarts the application or the emulator and re-prepares the instance. When status shows the fence awaiting a person, bring the device back and run actingctl resume, an emulator restart or actingctl selfcheck for the instance; a passing self-check lifts the fence. If those are refused or keep failing, restart the Runtime: its start prepares and self-checks the instance again, and the other instances are not affected."
+    },
     "instance_unavailable": {
       "category": "info",
       "ladder_class": "none",
@@ -32475,6 +32507,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "observe_identity_limit_exceeded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "actual_bytes": "required",
+        "limit_bytes": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
+      "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
+      "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
+    },
     "ocr_field_low_confidence": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -41247,6 +41296,20 @@
       "description": "A stuck-recovery ladder skipped its application_restart rung: the instance has no startup package (the rung's recovery_rung_finished outcome; formerly the reason no_startup_package).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recovery_rung_skipped_resource_fence": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource fence's stuck-recovery ladder skipped a rung that cannot prove the instance's close (the rung's recovery_rung_finished outcome; Workflow #403). The return-home rung only runs a package and never re-prepares the instance, so only the application restart and the emulator restart rungs can lift a fence.",
+      "common_causes": "An unconfirmed close fenced the instance and handed it to the ladder.",
+      "handling": "Nothing to do."
     },
     "recovery_rung_target_not_reached": {
       "category": "error",
@@ -57792,6 +57855,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: fail monitor probe."
     },
+    "fence_instance_resources": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: fence one instance whose own resources were not confirmed closed (Workflow #403)."
+    },
     "fence_own_emulator_control": {
       "owner": "runtime-host",
       "layer": "host",
@@ -58031,6 +58102,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: hand off to ladder."
+    },
+    "hand_resource_fences_to_ladders": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand fenced instances to the recovery ladder, or to a person (Workflow #403)."
     },
     "hash_evidence_entry": {
       "owner": "artifact-store",
@@ -58607,6 +58686,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: lift failed instance pause."
+    },
+    "lift_instance_resource_fence": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: lift an instance's resource fence after a passing preparation (Workflow #403)."
     },
     "list_connection_leases": {
       "owner": "runtime-host",
@@ -61095,6 +61182,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read instance registry."
+    },
+    "read_instance_resource_fence": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read the instances' resource fences (Workflow #403)."
     },
     "read_instance_state": {
       "owner": "contract",

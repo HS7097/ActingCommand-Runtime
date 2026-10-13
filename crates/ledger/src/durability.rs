@@ -210,7 +210,8 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::RecoveryInstanceStopped { .. }
         | RuntimeLifecyclePhase::RecoveryLadderFinished { .. }
         | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
-        | RuntimeLifecyclePhase::FactSnapshotSetSkipped { .. } => CommitSync::Full,
+        | RuntimeLifecyclePhase::FactSnapshotSetSkipped { .. }
+        | RuntimeLifecyclePhase::ResourceFenceLifted { .. } => CommitSync::Full,
     }
 }
 

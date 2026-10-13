@@ -1374,6 +1374,25 @@ pub struct RuntimeInstanceStatus {
     /// start at revision 1 in the new owner epoch, at stage `released`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pause: Option<InstancePauseState>,
+    /// Workflow #403: the instance's resource fence; absent when it is not fenced. An
+    /// unconfirmed close of the instance's own resources fences it until a preparation's
+    /// self-check proves the close.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_fence: Option<InstanceResourceFence>,
+}
+
+/// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
+/// The fenced instance gets no new dispatch; the recovery ladder, or a person's resume,
+/// emulator restart or self-check, lifts the fence only through a preparation whose self-check
+/// passes. `awaiting_person` is set once the ladder ended without that proof, or when none
+/// could start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceResourceFence {
+    /// The code of the unconfirmed failure that fenced the instance.
+    pub cause: crate::outcome::CodeStr,
+    pub since_unix_ms: u64,
+    pub awaiting_person: bool,
 }
 
 impl RuntimeInstanceStatus {
@@ -1400,6 +1419,7 @@ impl RuntimeInstanceStatus {
             resource_package: None,
             game_id: None,
             pause: None,
+            resource_fence: None,
         };
         status.validate()?;
         Ok(status)
@@ -1520,6 +1540,16 @@ impl RuntimeInstanceStatus {
 
     pub const fn pause(&self) -> Option<&InstancePauseState> {
         self.pause.as_ref()
+    }
+
+    /// Workflow #403: this status with the instance's resource fence.
+    pub fn with_resource_fence(mut self, resource_fence: Option<InstanceResourceFence>) -> Self {
+        self.resource_fence = resource_fence;
+        self
+    }
+
+    pub const fn resource_fence(&self) -> Option<&InstanceResourceFence> {
+        self.resource_fence.as_ref()
     }
 }
 

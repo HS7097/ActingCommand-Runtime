@@ -426,6 +426,25 @@ impl HostShared {
         result
     }
 
+    /// Workflow #403: decides a gated instance's policy availability again from its stored
+    /// self-check once its resource fence was lifted. Every refusal is returned.
+    pub(super) fn regate_policy_instance_availability(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        let _availability = lock(
+            &self.backend_selfcheck_availability_gate,
+            HostLocation::LiftInstanceResourceFence,
+        )?;
+        let result = self.gate_policy_availability_on_selfcheck(instance_id, None);
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
     /// Workflow #317 sc3 (the strict reading of #316 goal 5, replacing sc2's bounded one):
     /// keeps the policy availability `session.instance.available` of a configured policy
     /// instance on a physical device equal to its configured seed **and** its self-check. The
@@ -455,7 +474,12 @@ impl HostShared {
             return Ok(());
         };
         let (active, active_value) = self.active_policy_instance_availability(&instance_alias)?;
-        if seed_available && self.backend_selfcheck_passed(instance_id)? {
+        // Workflow #403: a fenced instance stays unavailable whatever its self-check says,
+        // until a passing preparation lifts the fence.
+        if seed_available
+            && self.backend_selfcheck_passed(instance_id)?
+            && !self.resource_fenced(instance_id)?
+        {
             let withdrawn_by_selfcheck = active.as_ref().is_some_and(|record| {
                 record
                     .source_snapshot_id

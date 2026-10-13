@@ -625,6 +625,21 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         &[Check::G3],
         "A6a: suspended v1 JSON key; A6a's outcome replaces code and operation",
     ),
+    // Workflow #389 MCP-7: ac_diagnose's actingd suspended report status, moved with its code
+    // from mcp/runs.rs (finish_suspension_report, start_suspension_report) to the module
+    // `actingctl diagnose` shares with it.
+    bridge(
+        "apps/actingctl/src/diagnose.rs",
+        "SuspensionReport::finish",
+        &[Check::G3],
+        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
+    ),
+    bridge(
+        "apps/actingctl/src/diagnose.rs",
+        "suspension_source",
+        &[Check::G3],
+        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
+    ),
     bridge(
         "apps/actingctl/src/mcp/events.rs",
         "result_schema",
@@ -706,18 +721,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     bridge(
         "apps/actingctl/src/mcp/observer.rs",
         "overview",
-        &[Check::G3],
-        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
-    ),
-    bridge(
-        "apps/actingctl/src/mcp/runs.rs",
-        "finish_suspension_report",
-        &[Check::G3],
-        "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
-    ),
-    bridge(
-        "apps/actingctl/src/mcp/runs.rs",
-        "start_suspension_report",
         &[Check::G3],
         "A5: MCP JSON key; A5's {class, outcome} and typed results replace it",
     ),

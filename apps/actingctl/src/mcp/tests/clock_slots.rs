@@ -5,8 +5,9 @@
 //! the refused and deferred rows first, with `clock_slots_total`; under the output budget it
 //! cuts them before the errors page. Every expected value comes from the frozen model.
 
-use super::super::runs::{Diagnosis, clock_slot_rows};
+use super::super::runs::Diagnosis;
 use super::super::tools::ToolError;
+use crate::diagnose::clock_slot_rows;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
@@ -124,6 +125,8 @@ fn diagnosis(errors: Vec<Value>, clock_slots: Vec<Value>, clock_slots_total: usi
         report_status: json!({"status": "ok", "through_sequence": 121_000}),
         clock_slots,
         clock_slots_total,
+        runs_grouped: Vec::new(),
+        failures_grouped: Vec::new(),
     }
 }
 

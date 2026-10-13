@@ -465,6 +465,32 @@ performed by the ladder has `stage: recovery_preparation` and cannot trigger ano
 The current owner remembers only the latest preparation event. A subsequent preparation,
 backend open or binding invalidation supersedes a queued preparation trigger.
 
+Workflow #403: an unconfirmed close of one instance's own resources (an application, input or
+capture backend, or a session close, that could not confirm its processes or handles gone)
+fences that instance instead of ending the whole Runtime. The work that met it fails with
+`instance_resources_fenced` (non-fatal), recorded once as a `runtime.failed` caused by the
+unconfirmed failure; the instance's policy availability is withheld, a policy dispatch to it is
+refused with that code, and its routine claims wait. The lease sweep hands the fence to a ladder
+admitted as every ladder is (trigger `stage: resource_fence` with the unconfirmed failure's code
+and no run, task or preparation), whose claim waits for the instance's key; a ladder already
+holding or waiting for the instance decides instead. A fence that manual work met (the
+instance's key held by a direct task run, a client lease, an application or input command or a
+Lab operation) starts no ladder and waits for a person at once (M387 B1: the ladder exists for
+the routine). Its return-home rung is skipped
+(`resource_fence`): it never prepares the instance again. The application restart rung, after
+its stop, prepares the instance again on the key; the emulator restart rung prepares it in its
+readiness wait. Only a preparation whose self-check passes proves the close and lifts the fence
+(`resource_fence_lifted`, naming that preparation); a person's resume (allowed while the
+instance is fenced without a pause), emulator start or restart, or self-check lifts it the same
+way. A ladder that ends with the instance still fenced, or a fence no ladder may take, leaves the
+instance waiting for a person (`Status`: `resource_fence.awaiting_person`). The fence is memory
+only: a restart prepares and self-checks the instance again, as every start does. Unconfirmed
+resources that no single registered instance owns, and ledger failures, still retain the owner
+and end the Runtime. So does any unconfirmed close once the Runtime is shutting down (a
+requested shutdown, or after a fatal): a fence would end with the process before a ladder or a
+person could take it, so the shutdown records the close failure and the owner journal says
+`unconfirmed`, as before.
+
 Instance aliases, indices, tool paths and addresses come from formal configuration and the
 registered provider binding. Provider control polls discover the current process state and
 port; the new Start must match the registered instance index. Native process identity is

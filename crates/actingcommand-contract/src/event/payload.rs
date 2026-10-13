@@ -1861,6 +1861,14 @@ pub enum RuntimeLifecyclePhase {
         parts_found: u16,
         parts: u16,
     },
+    /// Workflow #403: the resource fence of `instance_id` was lifted because the preparation
+    /// `preparation` (its `instance_preparation_finished`) passed its self-check after the
+    /// instance's unconfirmed close. `outcome` is the lift's code with the instance.
+    ResourceFenceLifted {
+        instance_id: InstanceId,
+        preparation: crate::TerminalEvent,
+        outcome: Outcome,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1892,6 +1900,7 @@ impl RuntimeLifecyclePayload {
             | RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. } => {
                 outcome.as_ref()
             }
+            RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
             _ => None,
         }
     }
