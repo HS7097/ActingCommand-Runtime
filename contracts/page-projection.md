@@ -129,7 +129,11 @@ identity that cannot fit fails explicitly. The `Min` transport can request a
 smaller byte budget from the same owner. It never edits DTO fields independently.
 The default Min envelope targets 1 KiB and keeps at most one resolvable element
 when that target requires its existing 2 KiB hard limit. Unresolvable entries may
-all be omitted, with original counts and a freshly hashed truncation state.
+all be omitted, with original counts and a freshly hashed truncation state. When
+that one element does not fit the hard limit either, Min omits it too and answers
+the identity alone in the same truncation state; only an identity that alone
+exceeds the hard limit fails, with actinglab's `observe_identity_limit_exceeded`
+(#391 MCP-391b).
 Empty missing/control/field arrays and an absent window are omitted in JSON;
 the root `omitted_count` is the serialized omission count. The offline frame
 digest supplies the default Min provenance; `frame_source` remains available by
