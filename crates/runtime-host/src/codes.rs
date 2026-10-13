@@ -2151,16 +2151,16 @@ actingcommand_contract::outcome_codes! {
     pub(crate) enum ConfigHostCode {
         /// Error. At start the recorded `host.config_overrides` is not of the shape this build
         /// writes; the start fails, and every later start until the ledger is repaired.
-        HostConfigOverridesFactInvalid => "host_config_overrides_fact_invalid": error / none,
+        OverridesFactInvalid => "host_config_overrides_fact_invalid": error / none,
         /// Error. A `ConfigureSettings` change could not record `host.config_overrides`; nothing
         /// changed and the request is refused (`caused_by`: the ledger's refusal).
-        HostConfigOverridesPersistFailed => "host_config_overrides_persist_failed": error / none,
+        OverridesPersistFailed => "host_config_overrides_persist_failed": error / none,
         /// Error. A configuration fact cannot be recorded after the previous one: its observation
         /// time would overflow.
-        HostConfigOverridesFactClockOverflow => "host_config_overrides_fact_clock_overflow": error / none,
+        OverridesFactClockOverflow => "host_config_overrides_fact_clock_overflow": error / none,
         /// Error. A value the configuration in effect holds, or an identity a configuration
         /// record needs, is not of the type the reader expects (an internal invariant).
-        HostConfigValueTypeInvalid => "host_config_value_type_invalid": error / none,
+        ValueTypeInvalid => "host_config_value_type_invalid": error / none,
     }
 }
 

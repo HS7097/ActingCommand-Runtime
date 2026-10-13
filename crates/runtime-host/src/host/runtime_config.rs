@@ -194,7 +194,7 @@ impl HostShared {
                 return Err(RequestFailure::poison_without_terminal(error));
             }
             let failure = RuntimeHostError::request(
-                ConfigHostCode::HostConfigOverridesPersistFailed,
+                ConfigHostCode::OverridesPersistFailed,
                 ConfigHostLocation::PersistConfigOverrides,
                 RuntimeErrorCode::LedgerFailure,
             )
@@ -301,7 +301,7 @@ impl HostShared {
         record.observed_at_unix_ms = match previous {
             Some(previous) => now.max(previous.checked_add(1).ok_or_else(|| {
                 RuntimeHostError::fatal(
-                    ConfigHostCode::HostConfigOverridesFactClockOverflow,
+                    ConfigHostCode::OverridesFactClockOverflow,
                     ConfigHostLocation::RecordRuntimeConfig,
                     RuntimeErrorCode::RuntimeFatal,
                 )
@@ -354,7 +354,7 @@ fn overrides_record(rows: Vec<BTreeMap<String, FactScalar>>) -> RuntimeFactRecor
 
 fn overrides_invalid() -> RuntimeHostError {
     RuntimeHostError::fatal(
-        ConfigHostCode::HostConfigOverridesFactInvalid,
+        ConfigHostCode::OverridesFactInvalid,
         ConfigHostLocation::RestoreConfigOverrides,
         RuntimeErrorCode::RuntimeFatal,
     )
@@ -362,7 +362,7 @@ fn overrides_invalid() -> RuntimeHostError {
 
 fn value_type_invalid(operation: ConfigHostLocation) -> RuntimeHostError {
     RuntimeHostError::fatal(
-        ConfigHostCode::HostConfigValueTypeInvalid,
+        ConfigHostCode::ValueTypeInvalid,
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
