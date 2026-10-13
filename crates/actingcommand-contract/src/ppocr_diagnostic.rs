@@ -76,8 +76,17 @@ pub struct PpocrCpuAssignedNodeDiagnostic {
     pub node_name: String,
     pub operator_type: String,
     pub domain: String,
-    pub placement_reason: String,
+    pub placement_reason: PpocrNodePlacementReason,
     pub assigned_execution_provider: String,
+}
+
+/// Why ONNX Runtime placed a node on the CPU (Workflow #378 A2-P: a closed token). Its
+/// placement log names no reason, so the one token is `unavailable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PpocrNodePlacementReason {
+    /// The placement log names no reason.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +125,6 @@ impl PpocrNodePlacementDiagnostic {
                 || node.operator_type.is_empty()
                 || source_bytes > PPOCR_MAX_NODE_LOG_BYTES
                 || node.domain != "unavailable"
-                || node.placement_reason != "unavailable"
                 || node.assigned_execution_provider != "CPUExecutionProvider"
             {
                 return Err(PpocrDiagnosticError::new(

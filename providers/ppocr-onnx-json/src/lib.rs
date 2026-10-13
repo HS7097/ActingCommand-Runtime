@@ -28,7 +28,7 @@ use actingcommand_vision_ffi::{
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
     PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
-    validate_ppocr_call_diagnostics,
+    PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
 };
 use ort::logging::LogLevel;
 use ort::session::{RunOptions, Session};
@@ -45,7 +45,7 @@ const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_
 const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
 const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
 const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
-const ENGINE_MODULE: &str = "ppocr-ctc-engine";
+const ENGINE_MODULE: &str = "ppocr_ctc_engine";
 /// Recorded as the execution attestation's provider implementation.
 const ENGINE_IMPLEMENTATION: &str = "actingcommand-ocr-engine/ppocr-ctc";
 /// The default recognizer width cap; a dynamic width above it is sized with floor, as the
@@ -289,7 +289,7 @@ fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, Stri
         node_name: node_name.to_string(),
         operator_type: operator_type.to_string(),
         domain: "unavailable".to_string(),
-        placement_reason: "unavailable".to_string(),
+        placement_reason: PpocrNodePlacementReason::Unavailable,
         assigned_execution_provider: CPU_EXECUTION_PROVIDER.to_string(),
     })
 }
@@ -2100,7 +2100,7 @@ mod tests {
         assert_eq!(diagnostic.nodes[1].operator_type, "Shape");
         assert!(diagnostic.nodes.iter().all(|node| {
             node.domain == "unavailable"
-                && node.placement_reason == "unavailable"
+                && node.placement_reason == PpocrNodePlacementReason::Unavailable
                 && node.assigned_execution_provider == CPU_EXECUTION_PROVIDER
         }));
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     OcrAnchorMatch, OcrRegionEvidence, OcrRegionOffset, OcrRegionRect, OcrRegionUnresolvedReason,
 };
@@ -75,16 +75,46 @@ pub enum RecognitionPackErrorSeverity {
     Unresolved,
 }
 
+/// Each variant names one registered code (Workflow #378 A2-P); its serde spelling is that
+/// code's spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RecognitionPackErrorCode {
+    #[serde(rename = "recognition_pack_invalid")]
     InvalidPackage,
+    #[serde(rename = "recognition_pack_target_unsupported")]
     UnsupportedTarget,
+    #[serde(rename = "recognition_pack_provider_missing")]
     VisionProviderMissing,
+    #[serde(rename = "recognition_pack_provider_failed")]
     VisionProviderFailure,
+    #[serde(rename = "recognition_pack_provider_response_invalid")]
     VisionProviderInvalidResponse,
+    #[serde(rename = "ocr_region_unresolved")]
     RegionUnresolved,
     /// Workflow #396 REC-1: a text read refused to conclude (its outcome says why).
+    #[serde(rename = "recognition_pack_text_read_refused")]
     TextReadRefused,
+}
+
+impl RecognitionPackErrorCode {
+    /// The registered code this variant names.
+    pub const fn code(self) -> Code {
+        match self {
+            Self::InvalidPackage => RecognitionPackCode::RecognitionPackInvalid.code(),
+            Self::UnsupportedTarget => RecognitionPackCode::RecognitionPackTargetUnsupported.code(),
+            Self::VisionProviderMissing => {
+                RecognitionPackCode::RecognitionPackProviderMissing.code()
+            }
+            Self::VisionProviderFailure => {
+                RecognitionPackCode::RecognitionPackProviderFailed.code()
+            }
+            Self::VisionProviderInvalidResponse => {
+                RecognitionPackCode::RecognitionPackProviderResponseInvalid.code()
+            }
+            Self::RegionUnresolved => RecognitionPackCode::OcrRegionUnresolved.code(),
+            Self::TextReadRefused => RecognitionPackCode::RecognitionPackTextReadRefused.code(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -307,13 +337,24 @@ impl Default for RecognitionDefaults {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecognitionMethod {
     #[default]
     Ncc,
     RgbCount,
     HsvCount,
+}
+
+impl RecognitionMethod {
+    /// The pack spelling (the serde spelling).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ncc => "ncc",
+            Self::RgbCount => "rgb_count",
+            Self::HsvCount => "hsv_count",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -884,10 +925,41 @@ pub struct TemplateRegionEvaluationRow {
     pub color: Option<ColorEvaluation>,
 }
 
+/// A template target that declares recognition semantics this build cannot evaluate
+/// (Workflow #378 A2-P: typed members replace the English list).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedRecognitionTarget {
     pub id: String,
-    pub reason: String,
+    /// The declared matching method, when it is not `ncc`.
+    pub method: Option<RecognitionMethod>,
+    /// Whether the target declares a mask.
+    pub mask: bool,
+}
+
+impl UnsupportedRecognitionTarget {
+    /// The unsupported semantics a template target declares; `None` when it declares none.
+    fn of_template(target: &TemplateTarget) -> Option<Self> {
+        let method = (target.method != RecognitionMethod::Ncc).then_some(target.method);
+        let mask = target.mask.is_some();
+        (method.is_some() || mask).then(|| Self {
+            id: target.id.clone(),
+            method,
+            mask,
+        })
+    }
+}
+
+/// Developer text: the unsupported semantics in the pack's own spellings (`method=rgb_count`,
+/// `mask`).
+impl fmt::Display for UnsupportedRecognitionTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.method, self.mask) {
+            (Some(method), true) => write!(formatter, "method={}, mask", method.as_str()),
+            (Some(method), false) => write!(formatter, "method={}", method.as_str()),
+            (None, true) => formatter.write_str("mask"),
+            (None, false) => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -1308,9 +1380,9 @@ impl RecognitionEvaluator {
 
         match target {
             RecognitionTarget::Template(target) => {
-                if let Some(reason) = unsupported_template_reason(target) {
+                if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
                     return Err(RecognitionPackError::fatal(format!(
-                        "template target '{}' uses unsupported recognition semantics: {reason}",
+                        "template target '{}' uses unsupported recognition semantics: {unsupported}",
                         target.id
                     )));
                 }
@@ -1340,9 +1412,9 @@ impl RecognitionEvaluator {
                 "recognition target '{target_id}' is not a template target"
             )));
         };
-        if let Some(reason) = unsupported_template_reason(target) {
+        if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
             return Err(RecognitionPackError::fatal(format!(
-                "template target '{}' uses unsupported recognition semantics: {reason}",
+                "template target '{}' uses unsupported recognition semantics: {unsupported}",
                 target.id
             )));
         }
@@ -2308,10 +2380,7 @@ pub fn unsupported_recognition_targets(
         .iter()
         .filter_map(|target| match target {
             RecognitionTarget::Template(target) => {
-                unsupported_template_reason(target).map(|reason| UnsupportedRecognitionTarget {
-                    id: target.id.clone(),
-                    reason,
-                })
+                UnsupportedRecognitionTarget::of_template(target)
             }
             RecognitionTarget::Color(_)
             | RecognitionTarget::ClickOnly(_)
@@ -3663,21 +3732,6 @@ fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> Recog
     error
 }
 
-fn unsupported_template_reason(target: &TemplateTarget) -> Option<String> {
-    let mut reasons = Vec::new();
-    if target.method != RecognitionMethod::Ncc {
-        reasons.push(format!("method={:?}", target.method));
-    }
-    if target.mask.is_some() {
-        reasons.push("mask".to_string());
-    }
-    if reasons.is_empty() {
-        None
-    } else {
-        Some(reasons.join(", "))
-    }
-}
-
 fn template_message(template_ok: bool, color_ok: bool) -> String {
     match (template_ok, color_ok) {
         (true, true) => "template passed".to_string(),
@@ -3849,12 +3903,11 @@ mod tests {
 
         assert_eq!(evaluator.unsupported_target_count(), 1);
         assert_eq!(evaluator.unsupported_targets()[0].id, "template");
-        assert!(
-            evaluator.unsupported_targets()[0]
-                .reason
-                .contains("method=RgbCount")
+        assert_eq!(
+            evaluator.unsupported_targets()[0].method,
+            Some(RecognitionMethod::RgbCount)
         );
-        assert!(evaluator.unsupported_targets()[0].reason.contains("mask"));
+        assert!(evaluator.unsupported_targets()[0].mask);
         let err = evaluator
             .evaluate_target(&fixture.blank_scene(), "template")
             .expect_err("unsupported target fails loud");

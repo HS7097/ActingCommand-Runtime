@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use actingcommand_contract::outcome::{Category, catalog_json};
+use actingcommand_contract::outcome::{Category, Outcome, catalog_json};
 use serde_json::{Value, json};
 
 use super::selection_catalog as fixture;
@@ -208,7 +208,7 @@ fn gate_p1_g10_every_decision_that_is_not_selected_carries_a_registered_reason()
             .iter()
             .filter(|decision| decision.state != SchedulingDecisionState::Selected)
             .filter_map(|decision| decision.reasons.last())
-            .map(|reason| reason.code.as_str())
+            .map(|reason| reason.outcome.code().as_str())
             .collect::<BTreeSet<_>>();
         for code in settled_by {
             assert!(
@@ -243,7 +243,7 @@ fn gate_p1_g10_a_decision_left_without_a_reason_is_deferred_with_decision_reason
     assert_eq!(
         left.reasons
             .iter()
-            .map(|reason| reason.code.as_str())
+            .map(|reason| reason.outcome.code().as_str())
             .collect::<Vec<_>>(),
         [missing.as_str()]
     );
@@ -254,7 +254,7 @@ fn gate_p1_g10_a_decision_left_without_a_reason_is_deferred_with_decision_reason
     let listed = reason_chains[0]
         .reasons
         .iter()
-        .find(|reason| reason.code.strip_prefix("candidate_not_selected:") == Some(DUE_TASK))
+        .find(|reason| listed_task(reason) == Some(DUE_TASK))
         .expect("the dispatch decision record lists the decision");
     assert_eq!(
         tokens(&listed.detail).get("why").copied(),
@@ -399,7 +399,7 @@ fn scenarios() -> Vec<(&'static str, PolicyEvaluation, Vec<&'static str>)> {
                 |_| {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            code: INSTANCE_HELD.to_owned(),
+                            outcome: Outcome::relayed(INSTANCE_HELD),
                             detail: "count=1".to_owned(),
                         },
                         next_wake_unix_ms: None,
@@ -467,7 +467,7 @@ fn assert_every_decision_explained(case: &str, evaluation: &PolicyEvaluation) {
             .map(|intent| intent.instance_id.as_str())
             .unwrap_or_else(|| panic!("{case}: reason chain {} has no dispatch intent", chain.id));
         for listed in &chain.reasons {
-            let Some(task_id) = listed.code.strip_prefix("candidate_not_selected:") else {
+            let Some(task_id) = listed_task(listed) else {
                 continue;
             };
             let decision = decision_for(evaluation, task_id, instance_id);
@@ -487,7 +487,7 @@ fn settling_reason<'a>(case: &str, decision: &'a TaskDecision) -> &'a str {
     let why = decision
         .reasons
         .last()
-        .map(|reason| reason.code.as_str())
+        .map(|reason| reason.outcome.code().as_str())
         .unwrap_or_else(|| {
             panic!(
                 "{case}: {} on {:?} is not selected and carries no reason",
@@ -510,6 +510,17 @@ fn is_registered(code: &str) -> bool {
     let catalog = catalog_json()
         .unwrap_or_else(|error| panic!("the embedded outcome catalog parses: {error}"));
     catalog["codes"][code]["status"] == "active"
+}
+
+/// The task a dispatch decision record lists: the `task_id` of its
+/// `decision_candidate_not_selected` reason; `None` for any other reason.
+fn listed_task(reason: &DecisionReason) -> Option<&str> {
+    if reason.outcome.code().as_str() != "decision_candidate_not_selected" {
+        return None;
+    }
+    let task_id = reason.outcome.value("task_id").and_then(Value::as_str);
+    assert!(task_id.is_some(), "a listed candidate names its task_id");
+    task_id
 }
 
 /// The `key=value` tokens of a reason detail.

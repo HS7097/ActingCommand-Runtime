@@ -357,7 +357,7 @@ pub fn restore_authoring_draft(
             .as_ref()
             .is_some_and(|failure| failure.stage == LabOperationStage::Input)
         {
-            record_gaps.push("input_failed");
+            record_gaps.push("lab_input_failed");
         }
         if let Some(action_id) = record.input_action_id
             && !action_ids.insert(action_id)

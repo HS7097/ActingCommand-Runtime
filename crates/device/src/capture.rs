@@ -1899,11 +1899,11 @@ enum NemuCaptureResolutionDetail {
 }
 
 impl NemuCaptureResolutionDetail {
-    const fn stage(self) -> &'static str {
+    const fn stage(self) -> actingcommand_contract::outcome::Location {
         match self {
-            Self::Installation => "nemu.installation.resolve",
-            Self::Identity => "nemu.capture.identity",
-            Self::Target => "nemu.target.resolve",
+            Self::Installation => crate::codes::DeviceStage::NemuInstallationResolve.location(),
+            Self::Identity => crate::codes::DeviceStage::NemuCaptureIdentity.location(),
+            Self::Target => crate::codes::DeviceStage::NemuTargetResolve.location(),
         }
     }
 
@@ -1934,7 +1934,7 @@ fn with_nemu_capture_resolution_detail(
         .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, detail.stage())
         .with_diagnostic_context_if_absent(
             "nemu_ipc",
-            detail.operation().as_str(),
+            detail.operation(),
             DeviceErrorSensitivity::Internal,
         );
     if producer_complete || producer_message {
@@ -3207,7 +3207,7 @@ fn verify_adb_device(
         .map_err(|error| {
             error.with_diagnostic_context_if_absent(
                 backend.as_str(),
-                DeviceLocation::EnsureDevice.as_str(),
+                DeviceLocation::EnsureDevice,
                 DeviceErrorSensitivity::Sensitive,
             )
         })
@@ -3268,11 +3268,18 @@ fn validate_pixel_buffer(
     len: usize,
 ) -> DeviceResult<()> {
     if width == 0 || height == 0 {
-        return Err(DeviceError::fatal("frame dimensions must be nonzero")
-            .with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout"));
+        return Err(
+            DeviceError::fatal("frame dimensions must be nonzero").with_diagnostic(
+                DeviceErrorCategory::FrameLayout,
+                crate::codes::DeviceStage::CaptureFrameLayout.location(),
+            ),
+        );
     }
     let expected = checked_pixel_len(width, height, pixel_format).map_err(|error| {
-        error.with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout")
+        error.with_diagnostic(
+            DeviceErrorCategory::FrameLayout,
+            crate::codes::DeviceStage::CaptureFrameLayout.location(),
+        )
     })?;
     if len != expected {
         return Err(DeviceError::fatal(format!(
@@ -3283,7 +3290,10 @@ fn validate_pixel_buffer(
             len,
             expected
         ))
-        .with_diagnostic(DeviceErrorCategory::FrameLayout, "capture.frame_layout"));
+        .with_diagnostic(
+            DeviceErrorCategory::FrameLayout,
+            crate::codes::DeviceStage::CaptureFrameLayout.location(),
+        ));
     }
     Ok(())
 }
@@ -4922,12 +4932,12 @@ mod tests {
         );
         let diagnostic = error.diagnostic().expect("installation diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::Protocol);
-        assert_eq!(diagnostic.stage(), "nemu.installation.resolve");
+        assert_eq!(diagnostic.stage().as_str(), "nemu_installation_resolve");
         let context = error
             .diagnostic_context()
             .expect("installation diagnostic context");
         assert_eq!(context.backend(), "nemu_ipc");
-        assert_eq!(context.operation(), "installation_resolve");
+        assert_eq!(context.operation().as_str(), "installation_resolve");
         assert_eq!(
             context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -4964,12 +4974,12 @@ mod tests {
         );
         let diagnostic = error.diagnostic().expect("capture identity diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::Protocol);
-        assert_eq!(diagnostic.stage(), "nemu.capture.identity");
+        assert_eq!(diagnostic.stage().as_str(), "nemu_capture_identity");
         let context = error
             .diagnostic_context()
             .expect("capture identity diagnostic context");
         assert_eq!(context.backend(), "nemu_ipc");
-        assert_eq!(context.operation(), "capture_identity");
+        assert_eq!(context.operation().as_str(), "capture_identity");
         assert_eq!(
             context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -5009,12 +5019,12 @@ mod tests {
         );
         let diagnostic = error.diagnostic().expect("running target diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::Protocol);
-        assert_eq!(diagnostic.stage(), "nemu.target.resolve");
+        assert_eq!(diagnostic.stage().as_str(), "nemu_target_resolve");
         let context = error
             .diagnostic_context()
             .expect("running target diagnostic context");
         assert_eq!(context.backend(), "nemu_ipc");
-        assert_eq!(context.operation(), "target_resolve");
+        assert_eq!(context.operation().as_str(), "target_resolve");
         assert_eq!(
             context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal

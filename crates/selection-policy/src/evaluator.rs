@@ -21,9 +21,12 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Outcome, VocabularyToken};
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::canonical_sha256;
+use crate::codes::SelectionPolicyCode;
 use crate::facts::{Candidate, RecordRow, ScalarValue, SelectionFactSnapshot, UnknownReason};
 use crate::schema::{
     FactDeclaration, GateUnknownHandling, LookupKey, MAX_CANDIDATES, RowFilter,
@@ -37,19 +40,63 @@ use crate::schema::{
 pub(crate) type ListIndex<'a> =
     BTreeMap<(&'a str, Option<&'a RowFilter>), BTreeMap<&'a str, &'a RecordRow>>;
 
-/// One entry in the decision's reason chain.
+/// One entry in the decision's reason chain: a registered code with its values (Workflow #378
+/// A2-P), which a selection record persists, and developer text that is never persisted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionReason {
-    pub code: String,
+    pub outcome: Outcome,
     pub detail: String,
 }
 
 impl DecisionReason {
-    fn new(code: &str, detail: impl Into<String>) -> Self {
+    /// A reason whose code carries no values.
+    fn new(code: SelectionPolicyCode, detail: impl Into<String>) -> Self {
+        Self::with(Outcome::new(code), detail)
+    }
+
+    /// A reason with its outcome built, values included.
+    fn with(outcome: Outcome, detail: impl Into<String>) -> Self {
         Self {
-            code: code.to_owned(),
+            outcome,
             detail: detail.into(),
+        }
+    }
+
+    /// A gate's or a scoring term's reason, naming the rule as `rule_id`.
+    fn rule(code: SelectionPolicyCode, rule_id: &str, detail: impl Into<String>) -> Self {
+        Self::with(Outcome::new(code).rule_id(rule_id), detail)
+    }
+
+    /// `selection_unknown`, with the unknown input's reason.
+    fn unknown(reason: UnknownReason, detail: impl Into<String>) -> Self {
+        Self::with(
+            Outcome::new(SelectionPolicyCode::SelectionUnknown)
+                .unknown_reason(UnknownReasonToken(reason)),
+            detail,
+        )
+    }
+}
+
+/// An unknown input's reason as a token of the catalog vocabulary `unknown_reason`, so a
+/// reason's outcome can carry it (Workflow #378 A2-P).
+#[derive(Clone, Copy)]
+struct UnknownReasonToken(UnknownReason);
+
+impl VocabularyToken for UnknownReasonToken {
+    const VOCABULARY: &'static str = "unknown_reason";
+
+    fn token(self) -> &'static str {
+        match self.0 {
+            UnknownReason::FactMissing => "fact_missing",
+            UnknownReason::FactExpired => "fact_expired",
+            UnknownReason::FactStale => "fact_stale",
+            UnknownReason::FactLowConfidence => "fact_low_confidence",
+            UnknownReason::FactNotScalar => "fact_not_scalar",
+            UnknownReason::FieldMissing => "field_missing",
+            // The vocabulary token shares the registered code's spelling.
+            UnknownReason::TypeMismatch => SharedCode::TypeMismatch.as_str(),
+            UnknownReason::LookupMiss => "lookup_miss",
         }
     }
 }
@@ -203,10 +250,10 @@ pub fn evaluate(
         now_unix_ms,
     })?;
     let mut reasons = vec![
-        DecisionReason::new("policy.identity", &policy_sha256),
-        DecisionReason::new("input.identity", &input_sha256),
+        DecisionReason::new(SelectionPolicyCode::SelectionPolicyIdentity, &policy_sha256),
+        DecisionReason::new(SelectionPolicyCode::SelectionInputsIdentity, &input_sha256),
         DecisionReason::new(
-            "selection.requirement",
+            SelectionPolicyCode::SelectionRequirementDeclared,
             format!(
                 "{:?} required_count={}",
                 policy.selection.mode, policy.selection.required_count
@@ -219,7 +266,7 @@ pub fn evaluate(
     let lists = match read_lists(policy, facts, now_unix_ms) {
         Ok(lists) => lists,
         Err(ListUnreadable { reason, detail }) => {
-            reasons.push(DecisionReason::new("selection.unknown", &detail));
+            reasons.push(DecisionReason::unknown(reason, &detail));
             return Ok(finish(
                 policy,
                 policy_sha256,
@@ -241,7 +288,7 @@ pub fn evaluate(
         match assess(policy, candidate, &resolver)? {
             Assessment::Aborted { verdict, reason } => {
                 verdicts.push(verdict);
-                reasons.push(DecisionReason::new("selection.unknown", &reason.1));
+                reasons.push(DecisionReason::unknown(reason.0, &reason.1));
                 let outcome = SelectionOutcome::Unknown {
                     reason: reason.0,
                     detail: reason.1,
@@ -276,7 +323,7 @@ pub fn evaluate(
         if let Some(verdict) = verdict {
             verdict.rank = Some(rank);
             verdict.reasons.push(DecisionReason::new(
-                "candidate.ranked",
+                SelectionPolicyCode::CandidateRanked,
                 format!("rank={rank}"),
             ));
         }
@@ -319,31 +366,32 @@ pub fn evaluate(
     };
     match &outcome {
         SelectionOutcome::Selected { count } => reasons.push(DecisionReason::new(
-            "selection.selected",
+            SelectionPolicyCode::SelectionSelected,
             format!("{count} of {} surviving", survivors.len()),
         )),
         SelectionOutcome::Empty => reasons.push(DecisionReason::new(
-            "selection.empty",
+            SelectionPolicyCode::SelectionEmpty,
             format!("{} surviving, none required", survivors.len()),
         )),
         SelectionOutcome::Insufficient {
             surviving,
             required,
         } => reasons.push(DecisionReason::new(
-            "selection.insufficient",
+            SelectionPolicyCode::SelectionInsufficient,
             format!("{surviving} surviving below required {required}"),
         )),
         SelectionOutcome::Ambiguous { candidate_ids } => reasons.push(DecisionReason::new(
-            "selection.ambiguous",
+            SelectionPolicyCode::SelectionAmbiguous,
             format!("tie-break leaves {} at the cut", candidate_ids.join(", ")),
         )),
         SelectionOutcome::Unknown { .. } => {}
     }
     for verdict in &mut verdicts {
         if selected.contains(&verdict.candidate_id) {
-            verdict
-                .reasons
-                .push(DecisionReason::new("candidate.selected", "chosen"));
+            verdict.reasons.push(DecisionReason::new(
+                SelectionPolicyCode::CandidateSelected,
+                "chosen",
+            ));
         }
     }
 
@@ -575,7 +623,10 @@ fn finish(
     mut reasons: Vec<DecisionReason>,
 ) -> SelectionDecision {
     let outcome_key = outcome.key(&policy.applies_to.outcome_keys).to_owned();
-    reasons.push(DecisionReason::new("selection.outcome_key", &outcome_key));
+    reasons.push(DecisionReason::new(
+        SelectionPolicyCode::SelectionOutcomeKeyChosen,
+        &outcome_key,
+    ));
     SelectionDecision {
         schema_version: SELECTION_POLICY_SCHEMA_VERSION.to_owned(),
         policy_id: policy.policy_id.clone(),
@@ -875,9 +926,11 @@ fn assess(
                         "candidate `{}` gate `{}`: {reason:?}",
                         candidate.candidate_id, gate.gate_id
                     );
-                    verdict
-                        .reasons
-                        .push(DecisionReason::new("gate.unknown_abort", &detail));
+                    verdict.reasons.push(DecisionReason::rule(
+                        SelectionPolicyCode::GateUnknownAborted,
+                        &gate.gate_id,
+                        &detail,
+                    ));
                     return Ok(Assessment::Aborted {
                         verdict,
                         reason: (reason, detail),
@@ -892,21 +945,24 @@ fn assess(
             outcome,
         });
         if substituted {
-            verdict.reasons.push(DecisionReason::new(
-                "gate.unknown_substituted",
+            verdict.reasons.push(DecisionReason::rule(
+                SelectionPolicyCode::GateUnknownSubstituted,
+                &gate.gate_id,
                 format!("gate `{}` used the declared verdict", gate.gate_id),
             ));
         }
         if !keep {
             verdict.status = if dropped {
-                verdict.reasons.push(DecisionReason::new(
-                    "gate.unknown_dropped",
+                verdict.reasons.push(DecisionReason::rule(
+                    SelectionPolicyCode::GateUnknownDropped,
+                    &gate.gate_id,
                     format!("gate `{}` met an unknown input", gate.gate_id),
                 ));
                 CandidateStatus::UnknownDropped
             } else {
-                verdict.reasons.push(DecisionReason::new(
-                    "gate.rejected",
+                verdict.reasons.push(DecisionReason::rule(
+                    SelectionPolicyCode::GateRejected,
+                    &gate.gate_id,
                     format!("gate `{}` does not hold", gate.gate_id),
                 ));
                 CandidateStatus::GateRejected
@@ -948,9 +1004,11 @@ fn assess(
                         "candidate `{}` term `{}`: {reason:?}",
                         candidate.candidate_id, term.term_id
                     );
-                    verdict
-                        .reasons
-                        .push(DecisionReason::new("term.unknown_abort", &detail));
+                    verdict.reasons.push(DecisionReason::rule(
+                        SelectionPolicyCode::TermUnknownAborted,
+                        &term.term_id,
+                        &detail,
+                    ));
                     return Ok(Assessment::Aborted {
                         verdict,
                         reason: (reason, detail),
@@ -977,8 +1035,9 @@ fn assess(
             0
         };
         if matches!(outcome, TermOutcome::UnknownSubstituted { .. }) {
-            verdict.reasons.push(DecisionReason::new(
-                "term.unknown_substituted",
+            verdict.reasons.push(DecisionReason::rule(
+                SelectionPolicyCode::TermUnknownSubstituted,
+                &term.term_id,
                 format!("term `{}` used the declared value", term.term_id),
             ));
         }
@@ -990,8 +1049,9 @@ fn assess(
         });
         if !keep {
             verdict.status = CandidateStatus::UnknownDropped;
-            verdict.reasons.push(DecisionReason::new(
-                "term.unknown_dropped",
+            verdict.reasons.push(DecisionReason::rule(
+                SelectionPolicyCode::TermUnknownDropped,
+                &term.term_id,
                 format!("term `{}` met an unknown input", term.term_id),
             ));
             return Ok(Assessment::Settled {
@@ -1013,7 +1073,7 @@ fn assess(
     })?;
     verdict.score_milli = Some(score_milli);
     verdict.reasons.push(DecisionReason::new(
-        "candidate.scored",
+        SelectionPolicyCode::CandidateScored,
         format!("score_milli={score_milli}"),
     ));
     let mut keys = Vec::with_capacity(policy.tie_break.len());
@@ -1029,7 +1089,7 @@ fn assess(
         };
         if let Err(reason) = &resolved.0 {
             verdict.reasons.push(DecisionReason::new(
-                "tie_break.unknown",
+                SelectionPolicyCode::TieBreakUnknown,
                 format!("tie-break key {index} is unknown ({reason:?}) and orders last"),
             ));
         }
@@ -1303,7 +1363,7 @@ mod tests {
             rejected
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "gate.rejected")
+                .any(|reason| reason.outcome.code().as_str() == "gate_rejected")
         );
 
         // The fourth candidate ties the second on score and on the first tie-break key; the
@@ -1709,7 +1769,7 @@ mod tests {
             first
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "term.unknown_substituted")
+                .any(|reason| reason.outcome.code().as_str() == "term_unknown_substituted")
         );
     }
 
@@ -1763,7 +1823,7 @@ mod tests {
             first
                 .reasons
                 .iter()
-                .any(|reason| reason.code == "gate.unknown_substituted")
+                .any(|reason| reason.outcome.code().as_str() == "gate_unknown_substituted")
         );
 
         policy.gates[1].on_unknown = GateUnknownHandling::DropCandidate;
@@ -1894,7 +1954,7 @@ mod tests {
                 skipped
                     .reasons
                     .iter()
-                    .any(|reason| reason.code == "tie_break.unknown")
+                    .any(|reason| reason.outcome.code().as_str() == "tie_break_unknown")
             );
         }
 

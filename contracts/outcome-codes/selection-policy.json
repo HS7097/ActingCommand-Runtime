@@ -72,6 +72,374 @@
       "description": "The offline selection-eval shell cannot read one of its input files (policy, candidates or facts).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "selection_policy_identity": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the canonical identity of its selection-policy document.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_inputs_identity": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the canonical identity of its candidates, facts and instant.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_requirement_declared": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the selection mode and count its document requires.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection evaluation ended unknown: a record list could not be read, or an unknown input reached a rule whose document ends the evaluation (unknown_reason).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_ranked": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate passed every gate and received its rank.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose the required number of surviving candidates.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_empty": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose nothing, which its document allows.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_insufficient": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Fewer selection candidates survived than the document requires; nothing is chosen.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_ambiguous": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The declared tie-break order does not separate the selection candidates at the cut; nothing is chosen.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate is among the chosen ones.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_outcome_key_chosen": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose the outcome key its document maps the decision to.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_aborted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and its document ends the evaluation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_substituted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and used its declared verdict.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and its document drops the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_rejected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) does not hold for the candidate, which is rejected.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "term_unknown_aborted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and its document ends the evaluation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "term_unknown_substituted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and used its declared value.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "term_unknown_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and its document drops the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_scored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate received its score from the document's scoring terms.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "tie_break_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate's tie-break key is unknown, so the candidate orders after every candidate whose key is known.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

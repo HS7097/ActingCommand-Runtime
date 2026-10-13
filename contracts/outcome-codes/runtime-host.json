@@ -403,7 +403,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the host's stop-result table gives the stage no token.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
       "handling": "TBD"
     },
@@ -430,7 +430,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the host's stop-result table gives the stage no token.",
       "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
       "handling": "TBD"
     },
@@ -477,7 +477,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose fact_code is this code followed by key=value tokens and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
+      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose outcome is this code with these values and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
       "common_causes": "A daily or window budget already used that day, often by an owed run that served the previous day's slot; the activity window closed before the slot could run; the task is paused after repeated failures; the task is disabled for the instance, or the instance lacks the operation or a matching activity profile.",
       "handling": "Compare next_eligible_unix_ms with next_occurrence_unix_ms: below it, the slot runs later in the same or the next window; at or above it, the slot is lost to the next occurrence. Change the catalog (budget, slot times, activity window) or the instance configuration if the slot must run."
     },
@@ -8019,7 +8019,7 @@
       "handling": "TBD"
     },
     "maintenance_recheck_suggested": {
-      "category": "error",
+      "category": "info",
       "ladder_class": "none",
       "owner": "runtime-host",
       "layer": "host",
@@ -8032,7 +8032,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports maintenance recheck suggested.",
+      "description": "A predictive maintenance assessment of a task on an instance suggests a recheck: the outcome of a drift_predicted planning signal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -9485,17 +9485,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
+      "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports performance event type encode failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #378 A2-P). The rejected event type of a performance observation event could not be spelled into the monitor failure code <code>.<event type>. Since 0.12.0 the failure is performance_event_rejected with the event type as the value event_type, which needs no encoding.",
+      "common_causes": "None known: an event type always had a spelling.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "performance_frame_gap_missing": {
       "category": "error",
@@ -18170,6 +18167,155 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "performance_event_rejected": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_type": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A performance observation event that contract sanitization refused was dropped, and the performance monitor degraded instead of ending the Runtime; the refusal is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_receipt_build_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host could not build the runtime receipt of a request; the host latches the failure (was the runtime client's runtime_receipt_invalid, which names a receipt the client cannot read).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "planning_fact_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy candidate's predicate read a fact (fact_key) that is unknown (unknown_reason), and the policy reserves a detection for it: the outcome of a detection_reserved or detection_quota_exhausted planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "strategic_feasibility_red": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal infeasible on an instance at best effort: the outcome of a feasibility_red planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "strategic_timeline_reached": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal's deadline reached on an instance with a shortfall left: the outcome of a timeline_reached planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_instance_fact_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation found no usable instance fact (fact_key) for an instance and projected the instance unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "priority_offset_unknown_task": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A priority offset names a task (task_id) the active catalog does not declare; the offset is ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_detection_reason_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation's detection suggestion carries a reason that the unknown_reason vocabulary does not list, so its planning signal cannot be recorded.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "recovery_rung_skipped_before_start_rung": {
       "category": "info",
       "ladder_class": "none",
@@ -24535,6 +24681,206 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: record the configuration facts at start (Workflow #387 D1b)."
+    },
+    "adb_endpoint_pending": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a session-opening refusal: the discovered instance's ADB endpoint is pending (the stopped instance reported no port)."
+    },
+    "adb_endpoint_unresolved": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an endpoint rebind refusal: the started instance reported ADB port 0."
+    },
+    "device_registry_input_operation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an input operation failure in the device registry's input backend when the device error names no stage of its own."
+    },
+    "emulator_control_binding": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance has no emulator binding (registered without discovery, or a fixture)."
+    },
+    "emulator_control_registration": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance is not registered with the provider."
+    },
+    "runtime_ipc_request_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: reading the request."
+    },
+    "runtime_ipc_request_decode": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: decoding the request."
+    },
+    "runtime_ipc_request_cache": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: looking up or keeping the request's cached receipt."
+    },
+    "runtime_ipc_dispatch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: dispatching the request."
+    },
+    "runtime_ipc_receipt_build": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: building the receipt."
+    },
+    "runtime_ipc_receipt_write": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: writing the receipt."
+    },
+    "runtime_ipc_connection_panic": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: the connection's handler panicked."
+    },
+    "frame_retention_move": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: moving a frame to the kept folder failed."
+    },
+    "frame_retention_counter": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: writing the move counter failed."
+    },
+    "frame_retention_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: removing a frame failed."
+    },
+    "runtime_monitor_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a monitor registry failure: restoring the persisted registry at start."
+    },
+    "observation_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a contained observation failure's diagnostic detail."
+    },
+    "instance_discovery_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an instance discovery failure whose device error names no stage of its own."
+    },
+    "mumu_manager_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control failure whose device error names no stage of its own."
+    },
+    "mumu_manager_process_list": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a confirmed Stop whose process listing failed (emulator_stop_process_unverified)."
+    },
+    "material_read_attempt": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime material read failure: the read attempt."
+    },
+    "unlock_owner_ledger": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an offline owner unlock: recording the unlock fact in the ledger (unlock-owner v1 prints it as ledger)."
+    },
+    "material_read_deadline_compute": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: computing its deadline from the read budget."
+    },
+    "material_read_length_convert": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: converting a chunk's length to the reply's integer type."
+    },
+    "effective_configuration_size_check": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a contained task's effective configuration record: checking the encoded record against its byte limit."
     },
     "recovery_stability_count": {
       "owner": "runtime-host",

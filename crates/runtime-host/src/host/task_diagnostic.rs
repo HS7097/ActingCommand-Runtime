@@ -17,6 +17,7 @@ use actingcommand_contract::{
     TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage, TaskDiagnosticUniquenessData,
     TaskRecordSubphases, TaskTimingResult,
 };
+use actingcommand_execution_kernel::ContainedTaskGuardEvaluation;
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
 use actingcommand_recognition_pack::{
     OcrObservationEvaluation, RecognitionPackResult, TargetEvaluation,
@@ -78,32 +79,21 @@ fn page_role(value: actingcommand_page_detector::PageTargetRole) -> &'static str
     }
 }
 
+/// A recognition error's row (Workflow #378 A2-P, M378 section 8.1): its outcome replaces the
+/// copied severity and the recognition pack's code spelling. It is the registered outcome of
+/// an evaluation that refused to conclude (Workflow #396 REC-1, REC-2) when the error has one,
+/// else the error's own registered code.
 fn recognition_error(
     error: &actingcommand_recognition_pack::RecognitionPackError,
 ) -> TaskDiagnosticRecognitionError {
-    use actingcommand_recognition_pack::{RecognitionPackErrorCode, RecognitionPackErrorSeverity};
     TaskDiagnosticRecognitionError {
-        severity: match error.severity() {
-            RecognitionPackErrorSeverity::Fatal => "Fatal",
-            RecognitionPackErrorSeverity::Unresolved => "Unresolved",
-        }
-        .to_owned(),
-        code: match error.code() {
-            RecognitionPackErrorCode::InvalidPackage => "InvalidPackage",
-            RecognitionPackErrorCode::UnsupportedTarget => "UnsupportedTarget",
-            RecognitionPackErrorCode::VisionProviderMissing => "VisionProviderMissing",
-            RecognitionPackErrorCode::VisionProviderFailure => "VisionProviderFailure",
-            RecognitionPackErrorCode::VisionProviderInvalidResponse => {
-                "VisionProviderInvalidResponse"
-            }
-            RecognitionPackErrorCode::RegionUnresolved => "RegionUnresolved",
-            RecognitionPackErrorCode::TextReadRefused => "TextReadRefused",
-        }
-        .to_owned(),
         region: error.region().cloned().map(Box::new),
         timing: error.timing().copied(),
         sample: error.sample().cloned().map(Box::new),
-        outcome: error.outcome().cloned(),
+        outcome: error
+            .outcome()
+            .cloned()
+            .unwrap_or_else(|| Outcome::new(error.code().code())),
     }
 }
 
@@ -564,7 +554,7 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         target: Option<&str>,
         result: Option<&RecognitionPackResult<TargetEvaluation>>,
-        reason: &'static str,
+        evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), RequestFailure> {
         let sampled = match result {
             Some(Ok(value)) => matches!(
@@ -579,12 +569,12 @@ impl RuntimeContainedTask<'_> {
             // OCR children and provider artifacts must not claim the latest capture ID.
             let frame = self.last_frame_id.take();
             let recognition = self.current_recognition_id.take();
-            let recorded = self.diagnostic_guard_inner(target, result, reason);
+            let recorded = self.diagnostic_guard_inner(target, result, evaluation);
             self.last_frame_id = frame;
             self.current_recognition_id = recognition;
             recorded
         } else {
-            self.diagnostic_guard_inner(target, result, reason)
+            self.diagnostic_guard_inner(target, result, evaluation)
         }
     }
 
@@ -592,13 +582,9 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         target: Option<&str>,
         result: Option<&RecognitionPackResult<TargetEvaluation>>,
-        reason: &'static str,
+        evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), RequestFailure> {
-        let phase = if reason == "candidate_sample" {
-            "candidate_sample"
-        } else {
-            "guard"
-        };
+        let phase = evaluation.phase();
         let reports = match result {
             Some(Ok(value)) => value.ppocr_diagnostics().to_vec(),
             Some(Err(error)) => error.ppocr_diagnostics().clone(),
@@ -635,18 +621,24 @@ impl RuntimeContainedTask<'_> {
                     })),
                 )
                 .map(|_| ()),
-            None => self
-                .diagnostic(
-                    None,
-                    // The guard's reason is not registered yet (A2-P renames it): its spelling
-                    // travels as the relayed outcome's `raw_code`.
-                    Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
-                        phase: phase.to_owned(),
-                        target_id: target.map(str::to_owned),
-                        outcome: Outcome::relayed(reason),
-                    }),
-                )
-                .map(|_| ()),
+            // A guard target that was not evaluated: the kernel's code says why
+            // (`contained_task_guard_skipped`, `contained_task_guard_page_mismatch`). An
+            // evaluation that names no such code always comes with its result.
+            None => match evaluation.unexecuted_code() {
+                Some(code) => self
+                    .diagnostic(
+                        None,
+                        Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
+                            phase: phase.to_owned(),
+                            target_id: target.map(str::to_owned),
+                            outcome: Outcome::new(code),
+                        }),
+                    )
+                    .map(|_| ()),
+                None => Err(failure(format!(
+                    "guard evaluation {evaluation:?} recorded without its result"
+                ))),
+            },
         };
         ppocr_diagnostic::finish_task_ppocr_record(recorded, &reports, primary)
     }
@@ -1042,9 +1034,11 @@ mod tests {
                 3,
                 None,
                 Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
-                    phase: "candidate_sample".to_owned(),
+                    phase: "guard".to_owned(),
                     target_id: Some("text/entry".to_owned()),
-                    outcome: Outcome::relayed("candidate_sample"),
+                    outcome: Outcome::new(
+                        actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskGuardPageMismatch,
+                    ),
                 }),
             ),
         ];

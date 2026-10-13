@@ -8,6 +8,7 @@
 //! 06:00–23:30 UTC, UTC clocks and a manual Runtime clock.
 
 use super::*;
+use crate::codes::HostCode;
 use actingcommand_contract::SchedulingPauseScope;
 
 const MINUTE_MS: u64 = 60_000;
@@ -129,11 +130,11 @@ pub(super) fn slot_sources(
 struct SlotRow {
     /// `refused`, `deferred` or `owed`: the `signal_id` segment after the prefix.
     kind: String,
-    /// The code at the head of the `fact_code` token.
+    /// The record outcome's code.
     code: String,
     task_id: String,
     observed_at_unix_ms: u64,
-    /// The token's `key=value` pairs.
+    /// The outcome's values other than its task and alias, as text.
     values: BTreeMap<String, String>,
 }
 
@@ -164,14 +165,18 @@ fn slot_rows(host: &RuntimeHost) -> Vec<SlotRow> {
             if payload.kind() == PolicyPlanningSignalKind::GoalMissed =>
         {
             let identity = payload.signal_id().strip_prefix(CLOCK_SLOT_PREFIX)?;
-            let mut tokens = payload.fact_code().split(':');
-            let code = tokens.next().unwrap_or_default().to_owned();
-            let values = tokens
-                .map(|token| {
-                    let (key, value) = token
-                        .split_once('=')
-                        .unwrap_or_else(|| panic!("a key=value token: {token}"));
-                    (key.to_owned(), value.to_owned())
+            let code = payload.outcome().code().as_str().to_owned();
+            let values = payload
+                .outcome()
+                .values()
+                .iter()
+                .filter(|(key, _)| key.as_str() != "task_id" && key.as_str() != "alias")
+                .map(|(key, value)| {
+                    let text = match value {
+                        serde_json::Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    };
+                    (key.clone(), text)
                 })
                 .collect();
             Some(SlotRow {
@@ -825,41 +830,43 @@ fn gate_clock_slot_a_pair_waiting_in_the_round_leaves_no_record() {
     slots.close();
 }
 
-/// Test 7, the token bound: every gate code of the gate table, with every `budget_dimension`
-/// token and 13-digit times, gives a refused and a deferred `fact_code` that the contract's
-/// planning-signal validation accepts; so does the longest owed token.
+/// Test 7, the value bound: every gate code of the gate table, with every `budget_dimension`
+/// token and 13-digit times, gives a refused and a deferred outcome whose values the contract's
+/// planning-signal validation accepts; so does the owed outcome with every value.
 #[test]
 fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
     use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal};
+    use actingcommand_contract::outcome::{Code, Outcome};
     use actingcommand_contract::{
         AuditInput, EventDraft, EventLinksDraft, EventOrigin, PolicyBudgetDimension,
         PolicyPayloadDraft,
     };
     use actingcommand_ledger::Sha256SecretFingerprinter;
+    use actingcommand_policy::PolicyCode;
 
     /// Every gate code of the K2 gate table that leaves a record.
-    const GATE_CODES: [&str; 13] = [
-        "policy_budget_exhausted",
-        "policy_activity_window_closed",
-        "policy_task_paused",
-        "instance_override_disabled",
-        "capability_missing",
-        "activity_profile_missing",
-        "dispatch_paused_global",
-        "dispatch_paused_instance",
-        "dispatch_instance_held",
-        "policy_retry_backoff_active",
-        "policy_activity_interval_active",
-        "dispatch_instance_cooldown",
-        "instance_unavailable",
+    const GATE_CODES: [Code; 13] = [
+        HostCode::PolicyBudgetExhausted.code(),
+        HostCode::PolicyActivityWindowClosed.code(),
+        HostCode::PolicyTaskPaused.code(),
+        PolicyCode::InstanceOverrideDisabled.code(),
+        PolicyCode::CapabilityMissing.code(),
+        PolicyCode::ActivityProfileMissing.code(),
+        HostCode::DispatchPausedGlobal.code(),
+        HostCode::DispatchPausedInstance.code(),
+        HostCode::DispatchInstanceHeld.code(),
+        HostCode::PolicyRetryBackoffActive.code(),
+        HostCode::PolicyActivityIntervalActive.code(),
+        HostCode::DispatchInstanceCooldown.code(),
+        PolicyCode::InstanceUnavailable.code(),
     ];
     const TIME: u64 = 1_700_042_400_000;
     let issuer = IdentifierIssuer::new().expect("identifier issuer");
     let fingerprinter =
         Sha256SecretFingerprinter::new(b"clock-slot-token-bound").expect("fingerprinter");
     // The contract's own path: the event draft of a planning signal, sanitized.
-    let validate = |signal: PolicyPlanningSignalEventData| -> String {
-        let fact_code = signal.fact_code.clone();
+    let validate = |signal: PolicyPlanningSignalEventData| -> Outcome {
+        let outcome = signal.outcome.clone();
         let links = EventLinksDraft::default()
             .with_request_id(issuer.mint_request_id().expect("request id"))
             .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
@@ -877,8 +884,8 @@ fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
             PolicyPayloadDraft::planning_signal_observed(signal, AuditInput::new()).into(),
         )
         .sanitize(&fingerprinter)
-        .unwrap_or_else(|error| panic!("{fact_code} passes the validation: {error:?}"));
-        fact_code
+        .unwrap_or_else(|error| panic!("{outcome} passes the validation: {error:?}"));
+        outcome
     };
     let dimensions = [
         None,
@@ -893,7 +900,7 @@ fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
         for dimension in dimensions {
             for kind in [SlotRecord::Refused, SlotRecord::Deferred] {
                 let values = SlotValues {
-                    gate_code: Some(gate_code.to_owned()),
+                    gate_code: Some(gate_code),
                     budget_dimension: dimension,
                     occurrence_unix_ms: TIME,
                     window_end_unix_ms: Some(TIME),
@@ -901,7 +908,7 @@ fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
                     next_occurrence_unix_ms: Some(TIME),
                     ..SlotValues::default()
                 };
-                let fact_code = validate(clock_slot_signal(
+                let outcome = validate(clock_slot_signal(
                     kind,
                     SLOT_TASK,
                     POLICY_INSTANCE_ALIAS,
@@ -911,9 +918,12 @@ fn gate_clock_slot_every_token_passes_the_planning_signal_validation() {
                 if let Some(dimension) = dimension {
                     let token = serde_json::to_value(dimension).expect("dimension token");
                     let token = token.as_str().expect("a vocabulary token");
-                    assert!(
-                        fact_code.contains(&format!(":budget_dimension={token}:")),
-                        "{fact_code}"
+                    assert_eq!(
+                        outcome
+                            .value("budget_dimension")
+                            .and_then(serde_json::Value::as_str),
+                        Some(token),
+                        "{outcome}"
                     );
                 }
             }
@@ -972,14 +982,14 @@ fn gate_clock_slot_records_round_trip_through_ledger_and_projection() {
         ..SlotValues::default()
     };
     let deferred = SlotValues {
-        gate_code: Some("dispatch_paused_instance".to_owned()),
+        gate_code: Some(HostCode::DispatchPausedInstance.code()),
         occurrence_unix_ms: at(1, 7, 0),
         window_end_unix_ms: Some(at(1, 23, 30)),
         next_occurrence_unix_ms: Some(at(1, 19, 0)),
         ..SlotValues::default()
     };
     let refused = SlotValues {
-        gate_code: Some("policy_budget_exhausted".to_owned()),
+        gate_code: Some(HostCode::PolicyBudgetExhausted.code()),
         budget_dimension: Some(PolicyBudgetDimension::TaskDaily),
         occurrence_unix_ms: at(1, 19, 0),
         window_end_unix_ms: Some(at(1, 23, 30)),
@@ -1028,7 +1038,7 @@ fn gate_clock_slot_records_round_trip_through_ledger_and_projection() {
     assert_eq!(payloads.len(), signals.len());
     for (payload, signal) in payloads.iter().zip(&signals) {
         assert_eq!(payload.signal_id(), signal.signal_id);
-        assert_eq!(payload.fact_code(), signal.fact_code);
+        assert_eq!(payload.outcome(), &signal.outcome);
         let bytes = serde_json::to_vec(payload).expect("encode the record");
         let record: serde_json::Value = serde_json::from_slice(&bytes).expect("record JSON");
         let keys = record
@@ -1045,7 +1055,7 @@ fn gate_clock_slot_records_round_trip_through_ledger_and_projection() {
                 "instance_id",
                 "task_id",
                 "kind",
-                "fact_code",
+                "outcome",
                 "observed_at_unix_ms",
                 "audit",
             ])

@@ -10,15 +10,15 @@ use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityEvidence, EmulatorCapabilityImplementation, EmulatorCapabilityProfile,
-    EmulatorInstanceAction, EmulatorVersionEvidence, FencedWrite, InstanceId,
-    MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
+    EmulatorInstanceAction, EmulatorVersionEvidence, EmulatorVersionUnavailableReason, FencedWrite,
+    InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
-    DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceResult,
-    DeviceTarget, InputBackend, MumuDiscoveryReport, NemuAppIndex, NemuApplicationTarget,
-    NemuInputConfig, NemuIpcSession, NemuResolutionReason, NemuSessionBackends,
-    PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
+    DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceLocation,
+    DeviceResult, DeviceTarget, InputBackend, MumuDiscoveryReport, NemuAppIndex,
+    NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuResolutionReason,
+    NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
     create_touch_backend_for_fenced_input, discover_mumu_instances, mumu_state_wait,
 };
 pub use actingcommand_execution_kernel::{
@@ -353,10 +353,13 @@ impl EntryEndpoint {
             return Err(DeviceError::fatal(
                 "adb endpoint pending: the discovered instance was stopped and has reported no ADB port; start it through emulator control first",
             )
-            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.endpoint_pending")
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                HostLocation::AdbEndpointPending,
+            )
             .with_diagnostic_context(
                 "execution_backend_registry",
-                operation.as_str(),
+                operation,
                 DeviceErrorSensitivity::Sensitive,
             ));
         }
@@ -806,7 +809,7 @@ fn capability_profile(
     EmulatorCapabilityProfile::new(
         "runtime.execution_backend_registry",
         EmulatorVersionEvidence::Unavailable {
-            reason: "Backend versions have not been probed.".to_owned(),
+            reason: EmulatorVersionUnavailableReason::NotProbed,
         },
         evidence,
     )
@@ -970,20 +973,20 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
     }
 
     /// Drives `MuMuManager control` for a discovery-bound entry only. Explicit (non-discovered)
-    /// entries carry no `MuMuManager` path and are refused with `emulator_control.unavailable`.
+    /// entries carry no `MuMuManager` path and are refused with `emulator_control_binding`.
     /// No device session is opened or touched here.
     fn control_instance(
         &self,
         instance_alias: &str,
         action: EmulatorInstanceAction,
     ) -> EmulatorControlResult<EmulatorControlOutcome> {
-        let refused = |message: &str, stage: &'static str| {
+        let refused = |message: &str, stage: Location| {
             EmulatorControlFailure::without_output(
                 DeviceError::fatal(message)
                     .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                     .with_diagnostic_context(
                         "execution_backend_registry",
-                        ContractLocation::ControlInstance.as_str(),
+                        ContractLocation::ControlInstance,
                         DeviceErrorSensitivity::Sensitive,
                     ),
                 0,
@@ -995,20 +998,20 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             Some(RegistryEntry::Fixture(_)) => {
                 return Err(refused(
                     "emulator control unavailable: a fixture simulation instance has no emulator",
-                    "emulator_control.unavailable",
+                    HostLocation::EmulatorControlBinding.location(),
                 ));
             }
             None => {
                 return Err(refused(
                     "execution backend instance is not registered",
-                    "emulator_control.unregistered",
+                    HostLocation::EmulatorControlRegistration.location(),
                 ));
             }
         };
         let Some(discovered) = entry.endpoint().state.discovered_binding().cloned() else {
             return Err(refused(
                 "emulator control unavailable: the instance was registered explicitly, without MuMuManager discovery, so no MuMuManager executable is bound to it",
-                "emulator_control.unavailable",
+                HostLocation::EmulatorControlBinding.location(),
             ));
         };
         actingcommand_device::control_instance(
@@ -1023,12 +1026,12 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
     /// `MUMU_MANAGER_COMMAND_TIMEOUT`) of a discovery-bound entry, with the same refusals as
     /// `control_instance`. No device session is opened or touched here.
     fn read_instance_state(&self, instance_alias: &str) -> DeviceResult<InstanceState> {
-        let refused = |message: &str, stage: &'static str| {
+        let refused = |message: &str, stage: Location| {
             DeviceError::fatal(message)
                 .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                 .with_diagnostic_context(
                     "execution_backend_registry",
-                    ContractLocation::ReadInstanceState.as_str(),
+                    ContractLocation::ReadInstanceState,
                     DeviceErrorSensitivity::Sensitive,
                 )
         };
@@ -1038,20 +1041,20 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             Some(RegistryEntry::Fixture(_)) => {
                 return Err(refused(
                     "emulator state unavailable: a fixture simulation instance has no emulator",
-                    "emulator_control.unavailable",
+                    HostLocation::EmulatorControlBinding.location(),
                 ));
             }
             None => {
                 return Err(refused(
                     "execution backend instance is not registered",
-                    "emulator_control.unregistered",
+                    HostLocation::EmulatorControlRegistration.location(),
                 ));
             }
         };
         let Some(discovered) = entry.endpoint().state.discovered_binding().cloned() else {
             return Err(refused(
                 "emulator state unavailable: the instance was registered explicitly, without MuMuManager discovery",
-                "emulator_control.unavailable",
+                HostLocation::EmulatorControlBinding.location(),
             ));
         };
         actingcommand_device::read_instance_state(
@@ -1067,12 +1070,12 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         instance_alias: &str,
         adb_port: Option<u16>,
     ) -> DeviceResult<()> {
-        let refused = |message: &str, stage: &'static str| {
+        let refused = |message: &str, stage: Location| {
             DeviceError::fatal(message)
                 .with_diagnostic(DeviceErrorCategory::Protocol, stage)
                 .with_diagnostic_context(
                     "execution_backend_registry",
-                    ContractLocation::RebindDiscoveredEndpoint.as_str(),
+                    ContractLocation::RebindDiscoveredEndpoint,
                     DeviceErrorSensitivity::Sensitive,
                 )
         };
@@ -1082,13 +1085,13 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             Some(RegistryEntry::Fixture(_)) => {
                 return Err(refused(
                     "endpoint rebinding unavailable: a fixture simulation instance has no emulator",
-                    "emulator_control.unavailable",
+                    HostLocation::EmulatorControlBinding.location(),
                 ));
             }
             None => {
                 return Err(refused(
                     "execution backend instance is not registered",
-                    "emulator_control.unregistered",
+                    HostLocation::EmulatorControlRegistration.location(),
                 ));
             }
         };
@@ -1096,7 +1099,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         let Some(discovered) = endpoint.state.discovered_binding().cloned() else {
             return Err(refused(
                 "endpoint rebinding unavailable: the instance was registered explicitly, without MuMuManager discovery",
-                "emulator_control.unavailable",
+                HostLocation::EmulatorControlBinding.location(),
             ));
         };
         let host = endpoint.application_target.host.clone();
@@ -1104,7 +1107,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             Some(PENDING_ADB_PORT) => {
                 return Err(refused(
                     "endpoint rebinding refused: the started instance reported ADB port 0",
-                    "adb.endpoint_unresolved",
+                    HostLocation::AdbEndpointUnresolved.location(),
                 ));
             }
             Some(port) => {
@@ -1133,11 +1136,11 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 error: DeviceError::fatal("instance discovery unsupported by this provider")
                     .with_diagnostic(
                         DeviceErrorCategory::Protocol,
-                        "instance_discovery.unsupported",
+                        ContractLocation::InstanceDiscoveryUnsupported,
                     )
                     .with_diagnostic_context(
                         "execution_backend_registry",
-                        ContractLocation::DiscoverInstances.as_str(),
+                        ContractLocation::DiscoverInstances,
                         DeviceErrorSensitivity::Sensitive,
                     ),
             }));
@@ -1183,7 +1186,7 @@ impl DeviceRegistryInputDiagnosticBackend {
 
     fn run<T>(
         &mut self,
-        operation: &'static str,
+        operation: DeviceLocation,
         execute: impl FnOnce(&mut dyn InputBackend) -> DeviceResult<T>,
     ) -> DeviceResult<T> {
         match execute(self.backend.as_mut()) {
@@ -1194,7 +1197,7 @@ impl DeviceRegistryInputDiagnosticBackend {
                 let error = error
                     .with_diagnostic_if_absent(
                         DeviceErrorCategory::Native,
-                        "device_registry.input.operation",
+                        HostLocation::DeviceRegistryInputOperation,
                     )
                     .with_diagnostic_context_if_absent(
                         self.requested_backend.as_str(),
@@ -1226,7 +1229,9 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
     }
 
     fn tap(&mut self, witness: &FencedWrite, x: i32, y: i32) -> DeviceResult<()> {
-        self.run("tap", |backend| backend.tap(witness, x, y))
+        self.run(DeviceLocation::InputTap, |backend| {
+            backend.tap(witness, x, y)
+        })
     }
 
     fn tap_in_frame(
@@ -1236,7 +1241,7 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         y: i32,
         context: &actingcommand_device::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.run("tap", |backend| {
+        self.run(DeviceLocation::InputTap, |backend| {
             backend.tap_in_frame(witness, x, y, context)
         })
     }
@@ -1248,7 +1253,7 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         y: i32,
         duration_ms: u64,
     ) -> DeviceResult<()> {
-        self.run("long_tap", |backend| {
+        self.run(DeviceLocation::InputLongTap, |backend| {
             backend.long_tap(witness, x, y, duration_ms)
         })
     }
@@ -1262,7 +1267,7 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         y2: i32,
         duration_ms: u64,
     ) -> DeviceResult<()> {
-        self.run("swipe", |backend| {
+        self.run(DeviceLocation::InputSwipe, |backend| {
             backend.swipe(witness, x1, y1, x2, y2, duration_ms)
         })
     }
@@ -1276,10 +1281,9 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         witness: &FencedWrite,
         plan: &PreparedSegmentedSwipePlan,
     ) -> DeviceResult<()> {
-        self.run(
-            actingcommand_device::DeviceLocation::SegmentedSwipe.as_str(),
-            |backend| backend.segmented_swipe_prepared(witness, plan),
-        )
+        self.run(DeviceLocation::SegmentedSwipe, |backend| {
+            backend.segmented_swipe_prepared(witness, plan)
+        })
     }
 
     fn segmented_swipe_prepared_in_frame(
@@ -1288,29 +1292,34 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         plan: &PreparedSegmentedSwipePlan,
         context: &actingcommand_device::InputExecutionContext,
     ) -> DeviceResult<()> {
-        self.run(
-            actingcommand_device::DeviceLocation::SegmentedSwipe.as_str(),
-            |backend| backend.segmented_swipe_prepared_in_frame(witness, plan, context),
-        )
+        self.run(DeviceLocation::SegmentedSwipe, |backend| {
+            backend.segmented_swipe_prepared_in_frame(witness, plan, context)
+        })
     }
 
     fn key(&mut self, witness: &FencedWrite, key: &str) -> DeviceResult<()> {
-        self.run("key", |backend| backend.key(witness, key))
+        self.run(DeviceLocation::InputKey, |backend| {
+            backend.key(witness, key)
+        })
     }
 
     fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()> {
-        self.run("text", |backend| backend.text(witness, text))
+        self.run(DeviceLocation::InputText, |backend| {
+            backend.text(witness, text)
+        })
     }
 
     fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()> {
-        self.run("reset", |backend| backend.reset(witness))
+        self.run(DeviceLocation::InputReset, |backend| backend.reset(witness))
     }
 
     fn close_once(
         &mut self,
         authority: actingcommand_device::DeviceCloseAuthority,
     ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
-        self.run("close", |backend| backend.close_once(authority))
+        self.run(DeviceLocation::InputClose, |backend| {
+            backend.close_once(authority)
+        })
     }
 }
 
@@ -1395,6 +1404,19 @@ mod tests {
                 Self::Text => "text",
                 Self::Reset => "reset",
                 Self::Close => "close",
+            }
+        }
+
+        /// The operation the diagnostic wrapper names for this input (Workflow #378 A2-P).
+        const fn location(self) -> DeviceLocation {
+            match self {
+                Self::Tap => DeviceLocation::InputTap,
+                Self::LongTap => DeviceLocation::InputLongTap,
+                Self::Swipe => DeviceLocation::InputSwipe,
+                Self::Key => DeviceLocation::InputKey,
+                Self::Text => DeviceLocation::InputText,
+                Self::Reset => DeviceLocation::InputReset,
+                Self::Close => DeviceLocation::InputClose,
             }
         }
 
@@ -1567,12 +1589,15 @@ mod tests {
             );
             let diagnostic = returned.diagnostic().expect("adapter diagnostic");
             assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
-            assert_eq!(diagnostic.stage(), "device_registry.input.operation");
+            assert_eq!(
+                diagnostic.stage().as_str(),
+                "device_registry_input_operation"
+            );
             let context = returned
                 .diagnostic_context()
                 .expect("adapter diagnostic context");
             assert_eq!(context.backend(), "adb_shell_input");
-            assert_eq!(context.operation(), operation.name());
+            assert_eq!(context.operation(), operation.location().location());
             assert_eq!(
                 context.declared_sensitivity(),
                 DeviceErrorSensitivity::Sensitive
@@ -1581,8 +1606,15 @@ mod tests {
         }
 
         let original = DeviceError::transient("producer-owned private input failure")
-            .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write")
-            .with_diagnostic_context("maatouch", "child_write", DeviceErrorSensitivity::Internal);
+            .with_diagnostic(
+                DeviceErrorCategory::CommandWrite,
+                actingcommand_device::codes::DeviceStage::MaatouchStdinWrite.location(),
+            )
+            .with_diagnostic_context(
+                "maatouch",
+                actingcommand_device::codes::DeviceLocation::InputSwipe,
+                DeviceErrorSensitivity::Internal,
+            );
         let DiagnosticInputBackendFixture {
             mut backend, calls, ..
         } = diagnostic_input_backend(Err(original.clone()));
@@ -1594,12 +1626,12 @@ mod tests {
         assert_eq!(returned.diagnostic_message(), None);
         let diagnostic = returned.diagnostic().expect("producer diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::CommandWrite);
-        assert_eq!(diagnostic.stage(), "maatouch.stdin.write");
+        assert_eq!(diagnostic.stage().as_str(), "maatouch_stdin_write");
         let context = returned
             .diagnostic_context()
             .expect("producer diagnostic context");
         assert_eq!(context.backend(), "maatouch");
-        assert_eq!(context.operation(), "child_write");
+        assert_eq!(context.operation().as_str(), "input_swipe");
         assert_eq!(
             context.declared_sensitivity(),
             DeviceErrorSensitivity::Internal
@@ -1610,8 +1642,10 @@ mod tests {
     // Test class: specification criterion.
     #[test]
     fn maatouch_write_failure_preserves_typed_diagnostic() {
-        let original = DeviceError::transient("Broken pipe (os error 232)")
-            .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write");
+        let original = DeviceError::transient("Broken pipe (os error 232)").with_diagnostic(
+            DeviceErrorCategory::CommandWrite,
+            actingcommand_device::codes::DeviceStage::MaatouchStdinWrite.location(),
+        );
         let DiagnosticInputBackendFixture {
             mut backend, calls, ..
         } = diagnostic_input_backend_with(
@@ -1629,12 +1663,12 @@ mod tests {
             DeviceErrorCategory::CommandWrite
         );
         assert_eq!(
-            returned.diagnostic().expect("diagnostic").stage(),
-            "maatouch.stdin.write"
+            returned.diagnostic().expect("diagnostic").stage().as_str(),
+            "maatouch_stdin_write"
         );
         let context = returned.diagnostic_context().expect("context");
         assert_eq!(context.backend(), "maatouch");
-        assert_eq!(context.operation(), "swipe");
+        assert_eq!(context.operation().as_str(), "input_swipe");
         assert_eq!(
             context.declared_sensitivity(),
             DeviceErrorSensitivity::Sensitive
@@ -1681,7 +1715,10 @@ mod tests {
         let original = DeviceError::transient(
             "failed to write segmented swipe to fixture.device:16384: Broken pipe",
         )
-        .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write");
+        .with_diagnostic(
+            DeviceErrorCategory::CommandWrite,
+            actingcommand_device::codes::DeviceStage::MaatouchStdinWrite.location(),
+        );
         let DiagnosticInputBackendFixture {
             mut backend,
             calls,
@@ -1701,11 +1738,15 @@ mod tests {
             DeviceErrorCategory::CommandWrite
         );
         assert_eq!(
-            returned.diagnostic().expect("diagnostic").stage(),
-            "maatouch.stdin.write"
+            returned.diagnostic().expect("diagnostic").stage().as_str(),
+            "maatouch_stdin_write"
         );
         assert_eq!(
-            returned.diagnostic_context().expect("context").operation(),
+            returned
+                .diagnostic_context()
+                .expect("context")
+                .operation()
+                .as_str(),
             "segmented_swipe"
         );
         assert_eq!(*calls.lock().expect("input calls"), ["segmented_swipe"]);

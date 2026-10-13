@@ -327,7 +327,7 @@ their original evaluators.
 | `ocr_block` | original text/confidence/rect with `source_index` and `derived_rank` |
 | `nn` | actual requested ROI, selected label/score, selection mode and label count |
 | `nn_label` | original label/score with `source_index`; separate derived candidate flag/rank |
-| `error`, `unexecuted` | existing cause or unexecuted reason at the original evaluation boundary |
+| `error`, `unexecuted` | existing cause or unexecuted reason at the original evaluation boundary, as an `outcome`: a recognition error's is the registered outcome of an evaluation that refused to conclude, else the recognition pack's code (`recognition_pack_invalid`, `ocr_region_unresolved`, ...), beside its region, timing and sample; an unexecuted page's is `batch_validation_failed` or `batch_terminated`, an unexecuted guard's `contained_task_guard_skipped` or `contained_task_guard_page_mismatch` |
 | `step_started` | actual step index and RuntimeClock monotonic timestamp |
 | `step_elapsed` | actual start/end timestamps, checked monotonic difference and completion flag |
 | `artifact` | original ArtifactVerified sequence and projected native artifact reference |

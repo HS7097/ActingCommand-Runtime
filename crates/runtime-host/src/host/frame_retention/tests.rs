@@ -302,7 +302,7 @@ fn a_failed_move_warns_once_and_leaves_the_frame() {
         Some(format!("kept/{DATE}/{ERROR_LEAF}").as_str())
     );
     assert!(warning.io_kind.is_some());
-    assert_eq!(warning.stage(), "frame_retention.move");
+    assert_eq!(warning.stage().as_str(), "frame_retention_move");
     // Ledger revision 3: the warning's record carries its outcome, with typed values.
     let outcome = warning.outcome();
     assert_eq!(outcome.code().as_str(), "frame_retention_move_failed");
@@ -404,7 +404,7 @@ fn a_counter_that_cannot_be_written_has_its_own_warning() {
     assert_eq!(warning.code, HostCode::FrameRetentionCounterFailed);
     assert_eq!(warning.artifact_id, None);
     assert_eq!(warning.entry.as_deref(), Some("kept/.moves"));
-    assert_eq!(warning.stage(), "frame_retention.counter");
+    assert_eq!(warning.stage().as_str(), "frame_retention_counter");
     let outcome = warning.outcome();
     assert_eq!(outcome.code().as_str(), "frame_retention_counter_failed");
     assert_eq!(

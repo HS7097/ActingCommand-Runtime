@@ -21,7 +21,7 @@ use actingcommand_contract::{
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
     PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
     Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact, record_severity,
-    scheduled_failure_class, scheduled_failure_code,
+    scheduled_failure_class, scheduled_failure_code_str,
 };
 #[cfg(test)]
 use actingcommand_contract::{
@@ -825,8 +825,9 @@ impl<B: DurableStorage> EventStore<B> {
                 ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
-        // Ledger revision 3 (Workflow #378 A3): the record's severity is its category (an
-        // execution record carries no outcome: its event type's), never the policy's class.
+        // Ledger revision 3 (Workflow #378 A3): the record's severity is its category (a failed
+        // execution's failure outcome's, Workflow #378 A2-P; a success's event type's), never
+        // the policy's class.
         if draft.severity() != record_severity(EventSeverity::Info, draft.payload()) {
             return Err(GlobalLedgerError::settlement_refusal(
                 LedgerCode::ScheduledExecutionRecoverySeverityInvalid.code(),
@@ -1102,7 +1103,8 @@ impl<B: DurableStorage> EventStore<B> {
                         && matches!(
                             execution.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
-                                if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
+                                if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+                                    && failure.failure_identity.is_none()
                                     && failure.original_class == PolicyFailureClass::Severe
                                     && failure.effective_class == PolicyFailureClass::Severe
                                     && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -1229,8 +1231,10 @@ impl<B: DurableStorage> EventStore<B> {
                 };
                 // The code and the class come from the terminal through the contract's shared
                 // functions, as the Runtime's live settlement and startup recovery read them
-                // (model section 8.1).
-                let failure_code = scheduled_failure_code(failure_outcome);
+                // (model section 8.1). The recovered failure is the terminal's: the same code
+                // (Workflow #378 A2-P), and no failure identity, which only a live settlement
+                // computes.
+                let failure_code = scheduled_failure_code_str(failure_outcome);
                 let class = scheduled_failure_class(failure_outcome.code(), *failure_severe);
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
@@ -1257,7 +1261,8 @@ impl<B: DurableStorage> EventStore<B> {
                     || !(matches!(
                         execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
-                            if failure.error_code == failure_code
+                            if scheduled_failure_code_str(&failure.outcome) == failure_code
+                                && failure.failure_identity.is_none()
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms
@@ -1289,7 +1294,8 @@ impl<B: DurableStorage> EventStore<B> {
                     || !matches!(
                         execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
-                            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
+                            if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+                                && failure.failure_identity.is_none()
                                 && failure.original_class == PolicyFailureClass::Severe
                                 && failure.effective_class == PolicyFailureClass::Severe
                                 && failure.disposition == PolicyFailureDisposition::PausedTask
@@ -1647,7 +1653,8 @@ impl SegmentStorage {
 fn scheduled_policy_execution_recovery_draft(
     execution: &PolicyExecutionEventData,
 ) -> GlobalLedgerResult<SanitizedEventDraft> {
-    // The stored severity is the record's category (ledger revision 3, Workflow #378 A3).
+    // The stored severity is the record's category (ledger revision 3, Workflow #378 A3): a
+    // failure's outcome's, a success's event type's (Workflow #378 A2-P).
     scheduled_policy_recovery_draft(
         execution.observed_at_unix_ms,
         EventSeverity::Info,
@@ -1861,12 +1868,14 @@ fn unique_lease_end<'a>(
 }
 
 /// The interrupted settlement of a scheduled run the daemon's own end cut short
-/// (`policy_settlement_interrupted`), as the startup reconciliation records it.
+/// (`policy_settlement_interrupted`, no failure identity), as the startup reconciliation
+/// records it.
 fn is_interrupted_settlement(outcome: &PolicyExecutionOutcome) -> bool {
     matches!(
         outcome,
         PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
+            if failure.outcome.is(SharedCode::PolicySettlementInterrupted)
+                && failure.failure_identity.is_none()
                 && failure.original_class == PolicyFailureClass::Severe
                 && failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition == PolicyFailureDisposition::PausedTask

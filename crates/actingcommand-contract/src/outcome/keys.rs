@@ -392,4 +392,8 @@ outcome_keys! {
     added_package_ids: list(name),
     removed_package_ids: list(name),
     // ---- Workflow #373 NAV-6: end ----
+    // Workflow #378 A2-P: a ledger event type (the rejected performance event's).
+    event_type: vocab(event_type),
+    // Workflow #378 A2-P: a resource target of an instance's resource-targets document.
+    resource_target_id: token,
 }

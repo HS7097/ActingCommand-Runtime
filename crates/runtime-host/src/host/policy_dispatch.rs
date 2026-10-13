@@ -7,7 +7,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::policy_host::InstanceOccupancy;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
     SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
@@ -489,12 +489,6 @@ impl SchedulingPauseTable {
             .is_some_and(|connections| connections.contains(&connection))
     }
 
-    /// The pause that defers a dispatch on `instance_alias`, as the spelling the policy
-    /// evaluator's scheduling-pause callback takes (the policy crate types it in A2d).
-    pub(super) fn deferral(&self, instance_alias: &str) -> Option<&'static str> {
-        self.deferral_code(instance_alias).map(HostCode::as_str)
-    }
-
     /// The pause that defers a dispatch on `instance_alias`.
     pub(super) fn deferral_code(&self, instance_alias: &str) -> Option<HostCode> {
         if self.global.is_some() {
@@ -805,7 +799,9 @@ impl HostShared {
                     seed,
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
-                    scheduling_pause: &|instance_alias| scheduling_pause.deferral(instance_alias),
+                    scheduling_pause: &|instance_alias| {
+                        scheduling_pause.deferral_code(instance_alias)
+                    },
                     instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
                 },
@@ -2691,8 +2687,9 @@ fn policy_instance_string_list(record: &FactRecord, field: &str) -> Option<Vec<S
         .collect()
 }
 
-/// Records `policy_instance_fact_missing:<key>` on every decision made for an instance the
-/// projection found incomplete, next to the evaluator's own reasons for that decision.
+/// Records `policy_instance_fact_missing` (with the missing `fact_key`) on every decision made
+/// for an instance the projection found incomplete, next to the evaluator's own reasons for that
+/// decision.
 fn attach_missing_instance_fact_reasons(
     cycle: &mut PolicyCycle,
     missing_instance_facts: &MissingPolicyInstanceFacts,
@@ -2713,7 +2710,7 @@ fn attach_missing_instance_fact_reasons(
         };
         for key in missing {
             decision.reasons.push(DecisionReason {
-                code: format!("policy_instance_fact_missing:{key}"),
+                outcome: Outcome::new(HostCode::PolicyInstanceFactMissing).fact_key(*key),
                 detail: format!(
                     "instance '{instance_id}' has no usable `{key}` fact at ledger position \
                      {ledger_position}; it is projected unavailable"
@@ -2746,7 +2743,7 @@ fn attach_eligible_since_unknown_reasons(
             continue;
         }
         decision.reasons.push(DecisionReason {
-            code: HostCode::EligibleSinceUnknown.as_str().to_owned(),
+            outcome: Outcome::new(HostCode::EligibleSinceUnknown),
             detail: "eligibility age is kept in memory only and is not rebuilt after a start; \
                      this candidate's age counts from this cycle"
                 .to_owned(),
@@ -2760,8 +2757,8 @@ pub(super) type UnknownPriorityOffsetTasks = BTreeSet<String>;
 
 /// Reports each unknown offset task once per evaluated cycle: one explanatory decision of
 /// that task, without an instance, blocked, with the single reason
-/// `priority_offset_unknown_task:<task>`. The evaluator never saw such a task, so this
-/// decision selects nothing and carries no rank; the offset stays in the inputs and is
+/// `priority_offset_unknown_task` (with its `task_id`). The evaluator never saw such a task,
+/// so this decision selects nothing and carries no rank; the offset stays in the inputs and is
 /// ignored there.
 fn attach_unknown_priority_offset_task_reasons(
     cycle: &mut PolicyCycle,
@@ -2782,7 +2779,8 @@ fn attach_unknown_priority_offset_task_reasons(
                 rank: None,
                 detection_suggestions: Vec::new(),
                 reasons: vec![DecisionReason {
-                    code: format!("priority_offset_unknown_task:{task_id}"),
+                    outcome: Outcome::new(HostCode::PriorityOffsetUnknownTask)
+                        .task_id(task_id.as_str()),
                     detail: format!(
                         "a priority offset at ledger position {ledger_position} names task \
                      '{task_id}', which the active catalog does not declare; the offset is \
@@ -2820,9 +2818,7 @@ fn policy_event_data(
         reasons: reason_chain
             .reasons
             .iter()
-            .map(|reason| PolicyReasonRecord {
-                code: reason.code.clone(),
-            })
+            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
             .collect(),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,

@@ -2,11 +2,9 @@
 
 //! The scheduling policy's outcome codes (Workflow #378). Every entry is listed in the fragment
 //! `contracts/outcome-codes/policy.json`; the outcome guard (G1) checks both directions.
-//! A decision reason still carries its code as a spelling (`PolicyCode::as_str`), with only
-//! `key=value` tokens in its detail: its channel also carries spellings that cannot be
-//! registered as they are (`eligible`, `ranked`, `scored`, `score_unknown:<term>`,
-//! `candidate_not_selected:<task>`, `resource_target_unmapped:<id>`, ...), which A2-P renames or
-//! splits. Spellings several owners use with one meaning are the contract's (`SharedCode`).
+//! A decision reason carries its code as an outcome, with its values; its detail is
+//! developer text only (Workflow #378 A2-P). Spellings several owners use with one meaning
+//! are the contract's (`SharedCode`).
 
 actingcommand_contract::outcome_codes! {
     /// The scheduling policy's codes: D2 S1 registered the first three ahead of the A2 sweep
@@ -94,6 +92,28 @@ actingcommand_contract::outcome_codes! {
         ExecutionContinues => "execution_continues": info / none,
         NoConditionalTemplateMatched => "no_conditional_template_matched": info / none,
         PinnedObservationMissing => "pinned_observation_missing": info / none,
+        /// Info. Workflow #378 A2-P.
+        TaskEligible => "task_eligible": info / none,
+        /// Info. Workflow #378 A2-P.
+        RankAssigned => "rank_assigned": info / none,
+        /// Info. Workflow #378 A2-P.
+        ScoreComputed => "score_computed": info / none,
+        /// Info. Workflow #378 A2-P (keys `rule_id`).
+        ScoreUnknown => "score_unknown": info / none,
+        /// Info. Workflow #378 A2-P.
+        ScoreCostUnknown => "score_cost_unknown": info / none,
+        /// Info. Workflow #378 A2-P (keys `task_id`).
+        DecisionCandidateNotSelected => "decision_candidate_not_selected": info / none,
+        /// Info. Workflow #378 A2-P (keys `resource_target_id`).
+        ResourceTargetUnmapped => "resource_target_unmapped": info / none,
+        /// Info. Workflow #378 A2-P (keys `resource_target_id`).
+        ResourceTargetOverride => "resource_target_override": info / none,
+        /// Info. Workflow #378 A2-P (keys `resource_target_id`).
+        ResourceTargetPending => "resource_target_pending": info / none,
+        /// Info. Workflow #378 A2-P (keys `resource_target_id`).
+        ResourceTargetSatisfied => "resource_target_satisfied": info / none,
+        /// Info. Workflow #378 A2-P (keys `resource_target_id`).
+        ResourceTargetApplied => "resource_target_applied": info / none,
     }
 }
 

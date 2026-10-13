@@ -608,7 +608,7 @@ fn a_server_that_does_not_start_fails_only_this_instance_run() {
             "an adb step of the start fails",
             start_failure_from(
                 DeviceError::fatal("adb push exited with status 1"),
-                "capture.scrcpy.server.push",
+                crate::codes::DeviceStage::CaptureScrcpyServerPush.location(),
             ),
         ),
     ];
@@ -644,11 +644,11 @@ fn scrcpy_error_texts_name_a_serial_device_only_by_its_label() {
     let adb_steps = [
         start_failure_from(
             DeviceError::fatal(adb_text.clone()),
-            "capture.scrcpy.forward",
+            crate::codes::DeviceStage::CaptureScrcpyForward.location(),
         ),
         start_failure_from(
             DeviceError::transient(adb_text),
-            "capture.scrcpy.server.push",
+            crate::codes::DeviceStage::CaptureScrcpyServerPush.location(),
         ),
     ];
     for error in &adb_steps {

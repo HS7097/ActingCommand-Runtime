@@ -594,7 +594,7 @@ actingcommand_contract::outcome_codes! {
         MaintenanceLedgerQueryFailed => "maintenance_ledger_query_failed": error / none,
         MaintenanceLedgerQueryInvalid => "maintenance_ledger_query_invalid": error / none,
         MaintenancePathMissing => "maintenance_path_missing": error / none,
-        MaintenanceRecheckSuggested => "maintenance_recheck_suggested": error / none,
+        MaintenanceRecheckSuggested => "maintenance_recheck_suggested": info / none,
         MigrationBackupSourceMismatch => "migration_backup_source_mismatch": error / none,
         MigrationCurrentStateConflict => "migration_current_state_conflict": error / none,
         MonitorCommittedStateMissing => "monitor_committed_state_missing": error / none,
@@ -676,7 +676,6 @@ actingcommand_contract::outcome_codes! {
         PerformanceControlWorkloadInvalid => "performance_control_workload_invalid": error / none,
         PerformanceDispatchGateInvalid => "performance_dispatch_gate_invalid": error / none,
         PerformanceDurationOverflow => "performance_duration_overflow": error / none,
-        PerformanceEventTypeEncodeFailed => "performance_event_type_encode_failed": error / none,
         PerformanceFrameGapMissing => "performance_frame_gap_missing": error / none,
         PerformanceHeavyCountOverflow => "performance_heavy_count_overflow": error / none,
         PerformanceInstanceTrackingExhausted => "performance_instance_tracking_exhausted": error / none,
@@ -1182,6 +1181,25 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        /// Error. A performance observation event the contract refused was dropped and the
+        /// performance monitor degraded instead of ending the Runtime (keys `event_type`; its
+        /// `caused_by` link is the contract's sanitization outcome; Workflow #378 A2-P).
+        PerformanceEventRejected => "performance_event_rejected": error / none,
+        /// Error. The host could not build a runtime receipt (A2-P: was the client's
+        /// `runtime_receipt_invalid`).
+        RuntimeReceiptBuildFailed => "runtime_receipt_build_failed": error / none,
+        /// Info. Workflow #378 A2-P (keys `fact_key`, `unknown_reason`).
+        PlanningFactUnknown => "planning_fact_unknown": info / none,
+        /// Info. Workflow #378 A2-P.
+        StrategicFeasibilityRed => "strategic_feasibility_red": info / none,
+        /// Info. Workflow #378 A2-P.
+        StrategicTimelineReached => "strategic_timeline_reached": info / none,
+        /// Warning. Workflow #378 A2-P (keys `fact_key`).
+        PolicyInstanceFactMissing => "policy_instance_fact_missing": warning / none,
+        /// Warning. Workflow #378 A2-P (keys `task_id`).
+        PriorityOffsetUnknownTask => "priority_offset_unknown_task": warning / none,
+        /// Error. Workflow #378 A2-P.
+        PolicyDetectionReasonUnknown => "policy_detection_reason_unknown": error / none,
     }
 }
 
@@ -1955,7 +1973,7 @@ actingcommand_contract::outcome_locations! {
         WriteCatalogState => "write_catalog_state",
         WriteOwnerFile => "write_owner_file",
         // Workflow #378 A3: the stages of runtime lifecycle failures (`runtime.failed`), which
-        // were the dotted tokens `runtime.lifecycle.*`; those stay the detail's stage.
+        // were the dotted tokens `runtime.lifecycle.*`; since A2-P also the detail's stage.
         RuntimeLifecycleInstallDrain => "runtime_lifecycle_install_drain",
         RuntimeLifecycleInstallHeld => "runtime_lifecycle_install_held",
         RuntimeLifecycleInstallRelease => "runtime_lifecycle_install_release",
@@ -1982,6 +2000,31 @@ actingcommand_contract::outcome_locations! {
         StandardPackRegister => "standard_pack_register",
         InterruptCheck => "interrupt_check",
         InterruptHandle => "interrupt_handle",
+        AdbEndpointPending => "adb_endpoint_pending",
+        AdbEndpointUnresolved => "adb_endpoint_unresolved",
+        DeviceRegistryInputOperation => "device_registry_input_operation",
+        EmulatorControlBinding => "emulator_control_binding",
+        EmulatorControlRegistration => "emulator_control_registration",
+        RuntimeIpcRequestRead => "runtime_ipc_request_read",
+        RuntimeIpcRequestDecode => "runtime_ipc_request_decode",
+        RuntimeIpcRequestCache => "runtime_ipc_request_cache",
+        RuntimeIpcDispatch => "runtime_ipc_dispatch",
+        RuntimeIpcReceiptBuild => "runtime_ipc_receipt_build",
+        RuntimeIpcReceiptWrite => "runtime_ipc_receipt_write",
+        RuntimeIpcConnectionPanic => "runtime_ipc_connection_panic",
+        FrameRetentionMove => "frame_retention_move",
+        FrameRetentionCounter => "frame_retention_counter",
+        FrameRetentionRemove => "frame_retention_remove",
+        RuntimeMonitorRestore => "runtime_monitor_restore",
+        ObservationFailed => "observation_failed",
+        InstanceDiscoveryFailed => "instance_discovery_failed",
+        MumuManagerControl => "mumu_manager_control",
+        MumuManagerProcessList => "mumu_manager_process_list",
+        MaterialReadAttempt => "material_read_attempt",
+        UnlockOwnerLedger => "unlock_owner_ledger",
+        MaterialReadDeadlineCompute => "material_read_deadline_compute",
+        MaterialReadLengthConvert => "material_read_length_convert",
+        EffectiveConfigurationSizeCheck => "effective_configuration_size_check",
         // Workflow #387 D1c: direction ①'s count on the append path and its admission by the
         // lease sweep; the record of a code the catalog does not list.
         RecoveryStabilityCount => "recovery_stability_count",

@@ -551,8 +551,9 @@ CREATE TABLE ledger_index (
   `policy.control_state_recorded` through G5 with the pair's complete state: daily counts with
   their day key, window counts and the window's runtime (today's `task_runtime`) with the active
   window they count in (the `window_id` of the task's activity profile), failure streak
-  (`error_code` = the failure identity, format v2, Workflow #336 / M-PKG §3.4, and `paused_on`
-  rebuilt from it — no package digest is stored), retry round, dispatch clock, and
+  (split as the execution record's failure is since Workflow #378 A2-P: `failure_code` and
+  `failure_identity` = the failure identity, format v2, Workflow #336 / M-PKG §3.4, and
+  `paused_on` rebuilt from it — no package digest is stored), retry round, dispatch clock, and
   `condition_reruns` `{failure_code, count, expires_at_unix_ms}`.
 - Every change of an (instance, activity profile)'s activity state emits one
   `policy.activity_state_recorded` through G5 with its complete state: the daily count with its

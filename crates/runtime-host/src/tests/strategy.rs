@@ -261,7 +261,10 @@ fn strategic_report_uses_authoritative_policy_projection() {
     assert_eq!(signal.kind(), PolicyPlanningSignalKind::FeasibilityRed);
     assert_eq!(signal.instance_id(), POLICY_INSTANCE_ALIAS);
     assert_eq!(signal.task_id(), None);
-    assert_eq!(signal.fact_code(), "strategic.feasibility_red");
+    assert_eq!(
+        signal.outcome().code().as_str(),
+        "strategic_feasibility_red"
+    );
     assert_eq!(signal.observed_at_unix_ms(), POLICY_NOW_UNIX_MS);
     assert_eq!(signal.detection_budget(), None);
     assert!(signal.signal_id().starts_with("signal:strategic:"));
@@ -398,8 +401,14 @@ fn strategic_report_records_timeline_reached_once() {
             PolicyPlanningSignalKind::TimelineReached,
         ]
     );
-    assert_eq!(signals[0].fact_code(), "strategic.feasibility_red");
-    assert_eq!(signals[1].fact_code(), "strategic.timeline_reached");
+    assert_eq!(
+        signals[0].outcome().code().as_str(),
+        "strategic_feasibility_red"
+    );
+    assert_eq!(
+        signals[1].outcome().code().as_str(),
+        "strategic_timeline_reached"
+    );
     assert_ne!(signals[0].signal_id(), signals[1].signal_id());
     assert!(signals.iter().all(|signal| {
         signal.signal_id().starts_with("signal:strategic:")

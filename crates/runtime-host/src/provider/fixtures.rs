@@ -84,11 +84,11 @@ impl FixtureEntry {
             DeviceError::fatal("foreground application observation unsupported by this provider")
                 .with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "application.foreground_unsupported",
+                    ContractLocation::ApplicationForegroundUnsupported,
                 )
                 .with_diagnostic_context(
                     "execution_backend_provider",
-                    ContractLocation::ObserveForegroundApplication.as_str(),
+                    ContractLocation::ObserveForegroundApplication,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         )

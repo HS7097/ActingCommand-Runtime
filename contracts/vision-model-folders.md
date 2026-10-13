@@ -111,8 +111,10 @@ A folder breaks the rule when its name is not a valid `model_ref` (empty, over
 255 bytes, a path separator, a colon or a control character, or not UTF-8), it
 or a model file is a symbolic link or junction, it mixes layouts, a layout is
 incomplete, it holds an angle classifier, or its `model.json` is unreadable,
-invalid or names another family. Startup records such a folder with its reason
-and keeps running; every request naming it fails with that reason.
+invalid or names another family. Startup records such a folder as
+`vision_model_folder_invalid` with its `path` and, when the folder name fits the
+name rule, its `model_name` (not its reason) and keeps running; every request
+naming it fails.
 `actingd check-config` fails with `vision_model_folder_invalid`. A missing
 `models\` folder, a missing `ort\onnxruntime.dll` and an empty `models\` fail
 startup.

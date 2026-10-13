@@ -50,7 +50,7 @@ fn validate_lab_package_zip_with_expected(
                 .iter()
                 .map(|target| LabUnsupportedTargetResponse {
                     id: target.id.clone(),
-                    reason: target.reason.clone(),
+                    reason: target.to_string(),
                 })
                 .collect(),
             pages: resources.pages_path.display().to_string(),
@@ -121,7 +121,7 @@ pub fn validate_lab_package_bytes(
                 .iter()
                 .map(|target| LabUnsupportedTargetResponse {
                     id: target.id.clone(),
-                    reason: target.reason.clone(),
+                    reason: target.to_string(),
                 })
                 .collect(),
             pages: bundle
@@ -145,7 +145,7 @@ pub fn validate_lab_package_bytes(
                 .iter()
                 .map(|target| LabUnsupportedTargetResponse {
                     id: target.id.clone(),
-                    reason: target.reason.clone(),
+                    reason: target.to_string(),
                 })
                 .collect(),
             pages: resources.pages_path.display().to_string(),

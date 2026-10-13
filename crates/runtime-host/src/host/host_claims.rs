@@ -227,7 +227,7 @@ impl HostShared {
                 .raw_text(detail_text(&raw_text)),
                 DiagnosticDetailDraft::new(
                     category,
-                    RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
+                    RuntimeLifecycleFailureStage::OperationCleanup.location(),
                     "runtime_host",
                     HostLocation::RunInstanceWorker.as_str(),
                 ),

@@ -188,12 +188,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
-        "crates/runtime-state/src/store/planning.rs",
-        "StoredPlanningSignal.fact_code",
-        &[Check::G2],
-        "A2-P: carries the runtime host's planning-signal fact code, a dynamic family A2-P splits into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-database/src/maintenance.rs",
         "MaintenanceWarning.code",
         &[Check::G2],
@@ -249,12 +243,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/artifact-store/src/frame_store.rs",
-        "RecognitionState::Failed.reason",
-        &[Check::G2],
-        "A2-P: carries the page detector's English error text (the Display of PageDetectorError or BatchLevelError, cut to 256 characters) as a frame's recognition failure reason; giving it a registered code changes the timeline's reason text",
-    ),
-    bridge(
-        "crates/artifact-store/src/frame_store.rs",
         "RecognitionState::as_json",
         &[Check::G3],
         "B3: a frame store timeline JSON key (reason, pinned_reason); B3 builds the timeline from typed records",
@@ -296,12 +284,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays ledger and artifact store errors' codes; it takes Code with those errors once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
-        "crates/ledger-forensics/src/lib.rs",
-        "task_evidence_report",
-        &[Check::G5],
-        "A2-P: the report gap token artifact_verification_failed shares its spelling with a contract code; A2-P renames one side (model section 2.2)",
-    ),
-    bridge(
         "apps/ledger-forensics/src/lib.rs",
         "CliError.code",
         &[Check::G2],
@@ -328,70 +310,22 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     // A2a part 1 bridges: channels of the contract crate and runtime-client that stay strings
     // until the slice the reason names removes the entry (brief-a2a.md A2a-9).
     bridge(
-        "crates/actingcommand-contract/src/emulator.rs",
-        "EmulatorVersionEvidence::Unavailable.reason",
-        &[Check::G2],
-        "A2-P: the unavailable version's reason is English text (the device layer's offline fake, the host's backend registry) sent in Status capabilities; a typed reason changes that emitted value, so A2-P replaces it (A2e keeps every emitted string)",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/artifact.rs",
-        "TaskDiagnosticRecognitionError.code",
-        &[Check::G2],
-        "A2-P: a recognition pack error's PascalCase spelling (`InvalidPackage`, ...) in the task-diagnostic artifact; A2-P registers and renames these spellings, then the row carries an outcome",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft.operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "DiagnosticDetailDraft.stage",
-        &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a diagnostic detail draft's operation relays other crates' operation spellings (RuntimeHostError::operation, which relays ledger, store and kernel operations, and actingd_process) until the host and ledger channels take Location together; its stage is a registered location since A2-P, and B5 types the device categories and backends",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's operation; the record keeps it as a string until a received-location type exists, and the draft's operation channel relays other crates' strings until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord.stage",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyFailureRecord.error_code",
-        &[Check::G2],
-        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalEventData.fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalPayload.fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyReasonRecord.code",
-        &[Check::G2],
-        "A2-P: a policy reason code is the evaluator's text, including the dynamic family `score_unknown:<rule>` that A2-P splits; ledger revision 3 already persists no reason text",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload.policy_signal_fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's stage; stages are registered locations since A2-P and the validator requires the location form, but the record keeps the stage as a string until a received-location type exists",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -401,57 +335,33 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "Wire.error_code",
-        &[Check::G2],
-        "A2-P: the policy failure record's error_code carries the #336 failure identity (`<base>~v1~k..~f..`), a dynamic family A2-P splits into a fixed code and values; the execution record then carries an outcome",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalPayload::fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::new",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): the draft's stage is a registered location since A2-P, but its operation parameter relays other crates' operation spellings (RuntimeHostError::operation) until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailDraft::operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a diagnostic detail draft's operation relays other crates' operation spellings (RuntimeHostError::operation, which relays ledger, store and kernel operations, and actingd_process) until the host and ledger channels take Location together; its stage is a registered location since A2-P, and B5 types the device categories and backends",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::operation",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload::policy_signal_fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "DiagnosticDetailDraft::stage",
-        &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's operation; the record keeps it as a string until a received-location type exists, and the draft's operation channel relays other crates' strings until the host and ledger channels take Location together",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "DiagnosticDetailRecord::stage",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's stage; stages are registered locations since A2-P and the validator requires the location form, but the record keeps the stage as a string until a received-location type exists",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "validate_diagnostic_detail",
         &[Check::G2],
-        "A2-P/B5: a diagnostic detail's stage and operation are the producer's tokens (the dotted stage tokens A2-P renames, the device stages and operations B5 types); ledger revision 3 keeps them as typed context beside the record's outcome until they are registered locations",
+        "B5 (with the A2b/A2c merge follow-up): validates a stored detail's stage and operation strings; stages are registered locations since A2-P (the location form is required), the record keeps both as strings until a received-location type exists, and the operation channel relays other crates' strings",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload/signature.rs",
@@ -544,12 +454,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the Lab page projection's json keys blocked_reason and reason hold registered PageProjectionCode spellings; B4 converts the Lab sites",
     ),
     bridge(
-        "crates/actingcommand-contract/src/ppocr_diagnostic.rs",
-        "PpocrCpuAssignedNodeDiagnostic.placement_reason",
-        &[Check::G2],
-        "A2-P: carries the vision provider's placement token unavailable, which breaks the form; A2-P renames it (or makes it a vocabulary), then the field is retyped",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/primitive.rs",
         "CaptureRequest.reason",
         &[Check::G2],
@@ -618,24 +522,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     // A2e bridges: channels of the device crate that stay strings until the slice the reason
     // names removes the entry (brief-a2e.md; A2e is mechanical and keeps every emitted string).
     bridge(
-        "crates/device/src/adb.rs",
-        "CommandProgram.timeout_stage",
-        &[Check::G2],
-        "A2-P: a child program's bound-expiry stage (mumu_manager.timeout) is dotted and breaks the form; A2-P renames it",
-    ),
-    bridge(
-        "crates/device/src/adb_bounds_diagnostic.rs",
-        "AdbBoundsAction::operation",
-        &[Check::G2],
-        "A2-P: the adb input bounds operations tap and swipe are one word and break the form; A2-P renames them",
-    ),
-    bridge(
-        "crates/device/src/capture.rs",
-        "NemuCaptureResolutionDetail::stage",
-        &[Check::G2],
-        "A2-P: the Nemu capture resolution stages (nemu.installation.resolve, nemu.capture.identity, nemu.target.resolve) are dotted and break the form; A2-P renames them",
-    ),
-    bridge(
         "crates/device/src/discovery.rs",
         "mumu_instance_id",
         &[Check::G2],
@@ -646,60 +532,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "parse_dash_v_instance",
         &[Check::G2],
         "B5: a MuMu process command line without a usable instance id is refused with English text; B5 gives the refusal a device code and keeps the command-line text as raw_text",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic.stage",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic::new",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorDiagnostic::stage",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_if_absent",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic stage; the device stages are dotted (adb.*, maatouch.*, minitouch.*, mumu_manager.*, nemu.*, capture.*, input.*) and host and kernel stages share the channel; A2-P renames them, then the channel takes a typed stage",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorContext.operation",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceErrorContext::operation",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_context",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
-    ),
-    bridge(
-        "crates/device/src/error.rs",
-        "DeviceError::with_diagnostic_context_if_absent",
-        &[Check::G2],
-        "A2-P: a device error's diagnostic operation; the channel carries one-word input operations (tap, swipe, key, text, reset) from the device layer and the host, which break the form; A2-P renames them, then the channel takes a Location",
     ),
     bridge(
         "crates/device/src/mumu_manager.rs",
@@ -718,12 +550,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "TouchBackendDiagnostics::push_failure",
         &[Check::G2],
         "B5: a touch backend attempt keeps the failed open's device error text (developer prose), which the backend-open observation records as native detail; B5 carries the device error's outcome instead",
-    ),
-    bridge(
-        "crates/device/src/touch.rs",
-        "adb_shell_input_connect_error",
-        &[Check::G2],
-        "A2-P: the stage parameter carries a dotted device stage (adb.*) and the operation parameter feeds the device error's operation channel, which carries one-word operations; A2-P renames them",
     ),
     // A2a part 2 bridges: channels of actingd, actingctl and vision-provider-check that stay
     // strings until the slice the reason names removes the entry (brief-a2a.md A2a-9).
@@ -1064,14 +890,14 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "apps/vision-provider-check/src/main.rs",
         "InvalidModelReport.reason",
         &[Check::G2],
-        "A2-P: carries vision-ffi's model folder refusal, English text that the tool prints as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     // A2b bridges: channels of runtime-host, the scheduler and host-metrics that stay strings
     // until the slice the reason names removes the entry (brief-a2bcd.md; the A2a pattern).
     // A2b/A2c merge follow-up: the runtime host error still relays the ledger, state,
     // artifact-store and kernel codes, which carry the host's codes back, so both sides take
-    // Code together after the A2 train; A2-P: an emitted spelling that only a rename or a family
-    // split can type without changing output.
+    // Code together after the A2 train. A2-P (Workflow #378) removed the bridges whose spelling
+    // only a rename or a family split could type.
     bridge(
         "crates/runtime-host/src/error.rs",
         "HostErrorCode::Relayed.relayed_code",
@@ -1115,46 +941,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host error relays the codes and operations of the ledger, runtime-state and artifact-store errors and of the kernel's ContainedTaskCode as spellings (RuntimeHostError::relayed_*), and those carry the host's own codes back (A2c's TransactionWorkError and ArtifactStoreError::fatal, A2d's ContainedTaskCode::Host); both sides take Code and Location together in one follow-up after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "FailureIdentity::parse",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "encode_failure_base",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "failure_accumulates",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/failure_identity.rs",
-        "failure_key",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-host/src/host.rs",
         "RuntimeLifecycleFailure::Process.code",
         &[Check::G2],
         "A2b/A2c merge follow-up: actingd's own failure code may be a runtime host code that actingd holds as a spelling (ErrorCode::Host, filled from RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
-        "EntryRecoveryRuntime::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/contained_task.rs",
-        "RuntimeContainedTask::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
     ),
     bridge(
         "crates/runtime-host/src/host/contained_task.rs",
@@ -1193,18 +983,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/host/failure_settlement.rs",
-        "recorded_failure_input",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/frame_retention.rs",
-        "FrameRetentionWarning::stage",
-        &[Check::G2],
-        "A2-P: dotted stage tokens (runtime.lifecycle.*, frame_retention.*) break the form; A2-P renames them to registered locations",
-    ),
-    bridge(
         "crates/runtime-host/src/host/frame_retention.rs",
         "pin_failure",
         &[Check::G2],
@@ -1221,12 +999,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "scheduling_resume_selfcheck",
         &[Check::G2],
         "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/policy_outcome.rs",
-        "HostShared::validate_scheduled_policy_terminal",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
     ),
     bridge(
         "crates/runtime-host/src/host/prerequisite.rs",
@@ -1271,18 +1043,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: a recovery rung's failure reason can be a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
-        "crates/runtime-host/src/host/requests.rs",
-        "protocol_error_at_code_spelling",
-        &[Check::G2],
-        "A2-P: an operation spelled like a shared code (material_read_deadline_overflow, material_read_length_overflow: one spelling for a code and a location); A2-P renames one side",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/requests.rs",
-        "receipt_error",
-        &[Check::G5],
-        "A2-P: the host's receipt-build failure keeps the spelling runtime_receipt_invalid, which the runtime client registered with another meaning (M378:90); A2-P renames the host side",
-    ),
-    bridge(
         "crates/runtime-host/src/host/saved_artifact_ocr.rs",
         "relayed_source_error",
         &[Check::G2],
@@ -1295,18 +1055,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/host/task_diagnostic.rs",
-        "RuntimeContainedTask::diagnostic_guard",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
-        "crates/runtime-host/src/host/task_diagnostic.rs",
-        "RuntimeContainedTask::diagnostic_guard_inner",
-        &[Check::G2],
-        "A2-P: the kernel's guard-evaluation reason, a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is (the kernel's ContainedTaskRuntime::record_guard_evaluation bridge); A2-P renames it, then types the parameter",
-    ),
-    bridge(
         "crates/runtime-host/src/ledger_maintenance.rs",
         "LedgerMaintenanceFailure.code",
         &[Check::G2],
@@ -1317,108 +1065,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "LedgerMaintenanceFailure.operation",
         &[Check::G2],
         "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
-        "crates/runtime-host/src/owner_unlock.rs",
-        "OwnerUnlockFailure.stage",
-        &[Check::G2],
-        "A2-P: the one-word unlock stages journal and ledger break the form; A2-P renames them (unlock-owner v2 is A6a's)",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "PerformanceMonitor::ingest_monitor_failure",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "PerformanceMonitor::record_monitor_failure",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "rejected_event_code",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance.rs",
-        "valid_error_code",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/performance/capacity.rs",
-        "PerformanceMonitor::degrade_for_rejected_summary",
-        &[Check::G2],
-        "A2-P: the performance monitor's failure code can be the dynamic family <code>.<event_type> (rejected_event_code); A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "FailureStreak.error_code",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "PolicyExecutionInput::Failed.error_code",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_control.rs",
-        "interruption_lifted_by_restart",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "Deferral.code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "Gate.code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "SlotValues.gate_code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "closure_gate",
-        &[Check::G2, Check::G5],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "placement_gate",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/procedure_manifest.rs",
-        "field_refusal",
-        &[Check::G2],
-        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
-    ),
-    bridge(
-        "crates/runtime-host/src/procedure_manifest.rs",
-        "validate_token",
-        &[Check::G2],
-        "A2-P: the operation names the refused manifest field (procedure_ref, package_digest, operation_id, yield_point), data carried as a location; A2-P moves the field into a value under a registered operation",
-    ),
-    bridge(
-        "crates/runtime-host/src/provider.rs",
-        "DeviceRegistryInputDiagnosticBackend::run",
-        &[Check::G2],
-        "A2-P: passes the device layer's one-word input operation names (tap, swipe, key, ...) to the device error's diagnostic context, whose operation channel stays a string (A2e bridge DeviceErrorContext.operation); A2-P renames them",
     ),
     bridge(
         "crates/runtime-host/src/provider_startup.rs",
@@ -1434,21 +1080,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/runtime-host/src/suspension_report.rs",
-        "Snapshot::run_failure",
-        &[Check::G2],
-        "A2-P: the #336 failure identity, a dynamic code family (<code>~f...) persisted in policy.execution_recorded and recomputed at replay; A2-P splits it into a fixed code and values",
-    ),
-    bridge(
-        "crates/runtime-host/src/suspension_report.rs",
         "suspension_report",
         &[Check::G3],
         "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
-    ),
-    bridge(
-        "crates/runtime-host/src/host.rs",
-        "artifact_store_error_at_code_spelling",
-        &[Check::G2],
-        "A2-P: an operation spelled like a shared code (effective_configuration_too_large: one spelling for a code and a location); A2-P renames one side",
     ),
     // End of the A2b bridges.
     AllowEntry {
@@ -1464,7 +1098,7 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         reason: "standing: the configuration manifest's subsystem names are vocabulary tokens, not codes or locations (model section 2.1); the subsystem runtime_fact_snapshot equals the runtime client's location of that spelling",
     },
     // A2d bridges: channels of the execution and recognition group that stay strings until the
-    // slice the reason names removes the entry (brief-a2bcd.md; A2-P changes emitted strings).
+    // slice the reason names removes the entry (brief-a2bcd.md).
     bridge(
         "crates/execution-kernel/src/contained_task.rs",
         "ContainedTaskCode::Host.host_code",
@@ -1476,12 +1110,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "ContainedTaskRunError::task",
         &[Check::G2],
         "A2b/A2c merge follow-up: the runtime host passes its own code, still a spelling (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train), into a contained task failure; then the constructor takes Code",
-    ),
-    bridge(
-        "crates/execution-kernel/src/contained_task.rs",
-        "ContainedTaskRuntime::record_guard_evaluation",
-        &[Check::G2],
-        "A2-P: the guard evaluation reason is a closed token set (candidate_sample, trusted_coordinate, page_mismatch and the single word evaluated) that cannot be registered as it is; A2-P renames it, then types the parameter",
     ),
     bridge(
         "crates/execution-kernel/src/contained_task/linear.rs",
@@ -1500,12 +1128,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "read_policy",
         &[Check::G2],
         "B4: the error is the English text of a selection policy document refusal, which the caller reports under contained_task_select_policy_invalid; B4 types it",
-    ),
-    bridge(
-        "crates/execution-kernel/src/environment.rs",
-        "EnvironmentStateErrorKind::reason",
-        &[Check::G2],
-        "A2-P: the reason set includes the single word expired and the spelling low_confidence that other owners use as a vocabulary token, which the kernel cannot register as they are; A2-P renames them, then types the getter",
     ),
     bridge(
         "crates/execution-kernel/src/environment.rs",
@@ -1539,21 +1161,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/execution-kernel/src/recovery.rs",
-        "NodeOutcome::reason",
-        &[Check::G2],
-        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
-    ),
-    bridge(
-        "crates/execution-kernel/src/recovery.rs",
         "RecoveryExecutionReport.terminal_reason",
         &[Check::G2],
         "B4: not an outcome code: English text saying why a recovery graph run ended",
-    ),
-    bridge(
-        "crates/execution-kernel/src/recovery.rs",
-        "RecoveryRuntime::save_on_error",
-        &[Check::G2],
-        "A2-P: the node outcome reason set includes the single word succeeded, which cannot be registered as it is; A2-P splits success from the registered failure codes, then types the channel",
     ),
     bridge(
         "crates/execution-kernel/src/run.rs",
@@ -1635,27 +1245,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/policy/src/evaluator.rs",
-        "DecisionReason.code",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
         "DetectionSuggestion.reason",
         &[Check::G2],
         "B4: carries detection-suggestion reasons, unknown_reason vocabulary tokens next to registered codes; B4 types the channel as a vocabulary or a code",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
-        "last_reason_code",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
-        "reason",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
     ),
     bridge(
         "crates/policy/src/forward.rs",
@@ -1772,28 +1364,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: not an outcome code: English text saying why a target cannot be measured, written into the failure's detail",
     ),
     bridge(
-        "crates/recognition-pack/src/lib.rs",
-        "UnsupportedRecognitionTarget.reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
-    ),
-    bridge(
-        "crates/recognition-pack/src/lib.rs",
-        "unsupported_template_reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
-    ),
-    bridge(
         "crates/recognition-pack/src/target_consensus.rs",
         "TargetConsensus::validate",
         &[Check::G2],
         "B4: the error is the English message of a pack validation refusal, which the caller reports under its typed RecognitionPackErrorCode; B4 types it",
-    ),
-    bridge(
-        "crates/resource-tooling/src/api.rs",
-        "UnsupportedRecognitionTargetResponse.reason",
-        &[Check::G2],
-        "A2-P: the English list of a target's unsupported features (method=..., mask) that resource tooling prints as the target's reason; giving it a registered code changes that text",
     ),
     bridge(
         "crates/resource-tooling/src/authoring.rs",
@@ -1886,28 +1460,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the restore provenance record's json keys stage and code hold a Lab operation failure's stage and code; B4 converts the Lab sites and builds the record from typed members",
     ),
     bridge(
-        "crates/resource-tooling/src/resource_restore.rs",
-        "restore_authoring_draft",
-        &[Check::G5],
-        "A2-P: the restore report's record_gaps token input_failed has the spelling of the contract's input_failed code with another meaning; resource tooling's side is the more specific one and A2-P renames it (CD-8), which changes the report",
-    ),
-    bridge(
         "crates/selection-policy/src/evaluator.rs",
         "Assessment::Aborted.reason",
         &[Check::G2],
         "B4: not an outcome code: the String is the detail text beside the typed UnknownReason",
-    ),
-    bridge(
-        "crates/selection-policy/src/evaluator.rs",
-        "DecisionReason.code",
-        &[Check::G2],
-        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
-    ),
-    bridge(
-        "crates/selection-policy/src/evaluator.rs",
-        "DecisionReason::new",
-        &[Check::G2],
-        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
     ),
     bridge(
         "crates/selection-policy/src/evaluator.rs",
@@ -1931,43 +1487,43 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "crates/vision-ffi/src/models.rs",
         "InvalidModelFolder.reason",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "VisionModelDescription::validate",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "VisionModelDescription::validate_params",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "classify_folder",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "directory",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "read_description",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "crates/vision-ffi/src/models.rs",
         "regular_file",
         &[Check::G2],
-        "A2-P: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; giving it a registered code changes that text",
+        "B4: the model folder refusal is English text that vision-provider-check and check-config print as the folder's reason; the v0.12 register (section 1.9, A3 acceptance CA-M2) assigns coding vision-ffi's individual folder reasons to B4",
     ),
     bridge(
         "providers/ppocr-onnx-json/src/lib.rs",
@@ -2208,22 +1764,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the text an input action types (data; a task record persists it only as [redacted]), not Runtime prose; B4 settles the input records",
     ),
     bridge(
-        "crates/actingcommand-contract/src/emulator.rs",
-        "EmulatorVersionEvidence::Unavailable.reason",
-        &[Check::G6],
-        "A2-P: the unavailable version's reason is English text (the same channel as its G2 bridge); A2-P replaces it with a typed reason",
-    ),
-    bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "severe_policy_failure_codes",
         &[Check::G5],
         "B4: the policy's Severe code list (model section 8.1) spells other owners' codes; B4 reviews the list with the policy",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "scheduled_failure_code",
-        &[Check::G2],
-        "A2-P: the policy failure code of a failed run's terminal outcome (an unregistered relayed spelling keeps its raw_code), the base of the #336 failure identity `error_code`, a dynamic family A2-P splits into a fixed code and values",
     ),
     // End of the A3 entries.
 ];

@@ -874,7 +874,7 @@ fn device_state_error(
     let error = DeviceError::fatal(format!(
         "target device {serial} is not available in device state ({state_text}{connect_attempt_text})"
     ))
-        .with_diagnostic(DeviceErrorCategory::Native, "adb.ensure_device.get_state")
+        .with_diagnostic(DeviceErrorCategory::Native, crate::codes::DeviceStage::AdbEnsureDeviceGetState.location())
         .with_diagnostic_message(diagnostic_message);
     if state_was_checked {
         error.input_parameter_failure()
@@ -900,7 +900,7 @@ pub(crate) struct CommandProgram {
     pub(crate) windows_creation_flags: u32,
     /// Diagnostic stage attached to the bound-expiry error so a caller can tell an expired
     /// bound from a spawn or poll failure; `None` leaves that error untyped (the `adb` default).
-    pub(crate) timeout_stage: Option<&'static str>,
+    pub(crate) timeout_stage: Option<actingcommand_contract::outcome::Location>,
 }
 
 pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
@@ -1566,7 +1566,7 @@ mod tests {
         assert_eq!(
             debug,
             format!(
-                "DeviceError {{ severity: Fatal, message: {:?}, diagnostic: Some(DeviceErrorDiagnostic {{ category: Native, stage: \"adb.ensure_device.get_state\" }}), context: None }}",
+                "DeviceError {{ severity: Fatal, message: {:?}, diagnostic: Some(DeviceErrorDiagnostic {{ category: Native, stage: adb_ensure_device_get_state }}), context: None }}",
                 error.message()
             )
         );
@@ -1588,7 +1588,7 @@ mod tests {
         assert!(!diagnostic_message.contains("raw connect failure"));
         let diagnostic = error.diagnostic().expect("device state diagnostic");
         assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
-        assert_eq!(diagnostic.stage(), "adb.ensure_device.get_state");
+        assert_eq!(diagnostic.stage().as_str(), "adb_ensure_device_get_state");
 
         // Workflow #284 ADB-TARGET-RECOVERY-v1, B13 preserved native first red.
         // Reuse the owner's command seam; no external process or device is used.

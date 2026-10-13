@@ -147,7 +147,8 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
     let PolicyExecutionOutcome::Failed { failure } = outcome else {
         panic!("expected one final failed policy outcome")
     };
-    assert_eq!(failure.error_code, error.code());
+    assert_eq!(failure.outcome.code().as_str(), error.code());
+    assert_eq!(failure.failure_identity, None);
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);

@@ -1623,8 +1623,15 @@ fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
     let host = emulator_instance_host(&root, &state, instance_id(), false);
     *state.input_open_error.lock().expect("input open error") = Some(
         DeviceError::transient("fixture input handshake failed")
-            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
-            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_diagnostic(
+                DeviceErrorCategory::Handshake,
+                crate::codes::HostLocation::DeviceRegistryInputOperation,
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                crate::codes::HostLocation::OpenInput,
+                DeviceErrorSensitivity::Internal,
+            )
             .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
     );
     let (start, receipt) = control_emulator(&host, Start, 90);
@@ -1796,8 +1803,15 @@ fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_
     let startup_claim = startup_claim_request(&all_events(&host));
     *state.input_open_error.lock().expect("input open error") = Some(
         DeviceError::transient("fixture input handshake failed")
-            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
-            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_diagnostic(
+                DeviceErrorCategory::Handshake,
+                crate::codes::HostLocation::DeviceRegistryInputOperation,
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                crate::codes::HostLocation::OpenInput,
+                DeviceErrorSensitivity::Internal,
+            )
             .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
     );
 
@@ -2622,7 +2636,8 @@ fn crash_inside_the_hand_off(root: &Path, eval_ms: Option<u64>) -> (RunId, Lease
     (run_id, lease_id)
 }
 
-/// The failure code of the run's one `policy.execution_recorded`; `None` when it succeeded.
+/// The failure the run's one `policy.execution_recorded` records (its failure identity, else
+/// its outcome's code); `None` when it succeeded.
 fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<String> {
     let executions = events
         .iter()
@@ -2637,7 +2652,12 @@ fn recorded_failure_code(events: &[PersistedEvent], run_id: &RunId) -> Option<St
     match execution.payload() {
         EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
             match payload.policy_result() {
-                PolicyExecutionOutcome::Failed { failure } => Some(failure.error_code.clone()),
+                PolicyExecutionOutcome::Failed { failure } => Some(
+                    failure
+                        .failure_identity
+                        .clone()
+                        .unwrap_or_else(|| failure.outcome.code().as_str().to_owned()),
+                ),
                 PolicyExecutionOutcome::Succeeded { .. } => None,
             }
         }
@@ -3287,10 +3307,13 @@ fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
         .expect("the next evaluation");
     let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
     assert!(
-        evaluation.decisions.iter().any(|decision| decision
-            .reasons
+        evaluation
+            .decisions
             .iter()
-            .any(|reason| reason.code == "policy_task_paused")),
+            .any(|decision| decision
+                .reasons
+                .iter()
+                .any(|reason| reason.outcome.code().as_str() == "policy_task_paused")),
         "{evaluation:#?}"
     );
     assert!(host.fatal_error().expect("runtime health").is_none());

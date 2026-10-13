@@ -4,9 +4,9 @@
 //! in the fragment `contracts/outcome-codes/execution-kernel.json`; the outcome guard (G1) checks
 //! both directions. Spellings several owners use with one meaning are the contract's
 //! (`actingcommand_contract::codes::SharedCode`, `ContractLocation`, ...), and the kernel's error
-//! types carry those as well. A channel that still carries spellings which cannot be registered
-//! as they are (a recovery node's `succeeded`, an environment reason's `expired`, a guard
-//! evaluation reason's `evaluated`) keeps the spelling (`ExecutionKernelCode::as_str`) until A2-P.
+//! types carry those as well. A recovery node's failure, an environment refusal and a guard
+//! target left unevaluated carry registered codes (Workflow #378 A2-P); a node that
+//! succeeded and a guard target that was evaluated carry none.
 
 actingcommand_contract::outcome_codes! {
     /// The kernel's codes: execution sessions, contained tasks, offline simulation, online
@@ -191,7 +191,7 @@ actingcommand_contract::outcome_codes! {
         PngInvalid => "png_invalid": error / none,
         SizeChanged => "size_changed": info / none,
         DigestCellsChanged => "digest_cells_changed": info / none,
-        // Environment state refusals (`EnvironmentStateErrorKind::reason`).
+        // Environment state refusals (`EnvironmentStateErrorKind::code`).
         SchemaMismatch => "schema_mismatch": error / none,
         ScopeMismatch => "scope_mismatch": error / none,
         DetectorMismatch => "detector_mismatch": error / none,
@@ -220,11 +220,25 @@ actingcommand_contract::outcome_codes! {
         /// `field`; SR-10).
         CostCommitDeclarationInvalid => "cost_commit_declaration_invalid": error / declaration_error,
         // Workflow #386 SR-0. End.
+        /// Info. The operation declares `unguarded_trusted_coordinate`, so its guard target is
+        /// not evaluated: the task-diagnostic stream's unexecuted guard row (Workflow #378 A2-P).
+        ContainedTaskGuardSkipped => "contained_task_guard_skipped": info / none,
+        /// Warning. The observed page is not the guard's page, so the guard target is not
+        /// evaluated: the task-diagnostic stream's unexecuted guard row; the run itself fails
+        /// `contained_task_guard_refused` (Workflow #378 A2-P).
+        ContainedTaskGuardPageMismatch => "contained_task_guard_page_mismatch": warning / none,
+        /// Error. An environment detection value's confidence is below the declared minimum
+        /// (`EnvironmentStateErrorKind::LowConfidence`; Workflow #378 A2-P).
+        EnvironmentValueLowConfidence => "environment_value_low_confidence": error / none,
+        /// Error. An environment detection value is older than its declared lifetime
+        /// (`EnvironmentStateErrorKind::Expired`; Workflow #378 A2-P).
+        EnvironmentValueExpired => "environment_value_expired": error / none,
     }
 }
 
 actingcommand_contract::outcome_locations! {
-    /// The kernel's locations: the stages of an online page observation.
+    /// The kernel's locations: the stages of an online page observation, and the stage of the
+    /// provider default's emulator control refusal (Workflow #378 A2-P).
     pub enum ExecutionKernelLocation {
         // Online page observation stages (`OnlineObservationError::stage`, evidence rows).
         LoadObservationResources => "load_observation_resources",
@@ -235,5 +249,6 @@ actingcommand_contract::outcome_locations! {
         EvaluatePage => "evaluate_page",
         EvaluatePageTarget => "evaluate_page_target",
         EvaluateRequestedTarget => "evaluate_requested_target",
+        EmulatorControlSupport => "emulator_control_support",
     }
 }

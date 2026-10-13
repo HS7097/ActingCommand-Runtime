@@ -242,7 +242,7 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
     controller.script_control(
         EmulatorInstanceAction::Start,
         ScriptedControl::Failed {
-            stage: "mumu_manager.wait_timeout",
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
             exit_code: Some(0),
             last_state: Some(stopped_state()),
             device_process_present: None,

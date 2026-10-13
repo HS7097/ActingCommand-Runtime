@@ -2,7 +2,7 @@
 
 mod retention;
 use crate::codes::{ContractCode, RuntimeContractCode, SanitizationCode, SharedCode};
-use crate::outcome::{CauseRelation, Code, IoKind, Outcome, RawSource};
+use crate::outcome::{CauseRelation, Code, IoKind, Location, Outcome, RawSource};
 pub use retention::*;
 mod ledger_migration;
 mod signature;
@@ -88,6 +88,8 @@ pub const MAX_CAPTURE_SUMMARY_COUNT: u64 = 1_000_000;
 pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
 pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
 const MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES: usize = 256;
+/// A detail's stage is a location: at most 64 bytes (M378 §3.2).
+const MAX_DIAGNOSTIC_DETAIL_STAGE_BYTES: usize = 64;
 const MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES: usize = 1_024;
 const MAX_MACHINE_PATH_BASENAME_BYTES: usize = 255;
 const LEGACY_REDACTED_MACHINE_PATH: &str = "[redacted]";
@@ -596,13 +598,14 @@ impl InputIntentPayload {
 /// Where a failure arose, as its producer names it: the category, the stage, the backend and
 /// the operation. Ledger revision 3 (Workflow #378 A3) persists no failure text: the failure
 /// itself is the record's `outcome`, foreign text rides on its `foreign_*` links, and text the
-/// Runtime made goes only to the developer log. These names stay typed context beside the
-/// outcome until they are registered (the dotted stage tokens in A2-P, the device stages and
-/// backends in B5).
+/// Runtime made goes only to the developer log. The stage is a registered location (Workflow
+/// #378 A2-P); the category, backend and operation stay typed context beside the outcome until
+/// they are registered (the device categories and backends in B5; the operation relays other
+/// crates' spellings until the A2b/A2c merge follow-up).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticDetailDraft {
     category: String,
-    stage: String,
+    stage: Location,
     backend: String,
     operation: String,
 }
@@ -610,7 +613,7 @@ pub struct DiagnosticDetailDraft {
 impl DiagnosticDetailDraft {
     pub fn new(
         category: impl Into<String>,
-        stage: impl Into<String>,
+        stage: impl Into<Location>,
         backend: impl Into<String>,
         operation: impl Into<String>,
     ) -> Self {
@@ -626,8 +629,8 @@ impl DiagnosticDetailDraft {
         &self.category
     }
 
-    pub fn stage(&self) -> &str {
-        &self.stage
+    pub const fn stage(&self) -> Location {
+        self.stage
     }
 
     pub fn backend(&self) -> &str {
@@ -639,10 +642,11 @@ impl DiagnosticDetailDraft {
     }
 
     fn sanitize(self) -> Result<DiagnosticDetailRecord, SanitizationError> {
-        validate_diagnostic_detail(&self.category, &self.stage, &self.backend, &self.operation)?;
+        let stage = self.stage.as_str();
+        validate_diagnostic_detail(&self.category, stage, &self.backend, &self.operation)?;
         Ok(DiagnosticDetailRecord {
             category: self.category,
-            stage: self.stage,
+            stage: stage.to_owned(),
             backend: self.backend,
             operation: self.operation,
         })
@@ -1571,20 +1575,22 @@ impl RuntimeLifecycleFailureRecord {
     }
 }
 
-/// A stage token: one to four dotted segments of lowercase letters, digits, `_` and `-` (the
-/// dotted producer stages, and registered locations).
+/// A stage: the form of a registered location, `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` and at most
+/// 64 bytes (Workflow #378 A2-P; the dotted producer stages are registered locations now).
 fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
-    let segments = value.split('.').collect::<Vec<_>>();
-    if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
-        || !(1..=4).contains(&segments.len())
-        || segments.iter().any(|segment| {
-            segment.is_empty()
-                || !segment.bytes().all(|byte| {
-                    byte.is_ascii_lowercase()
-                        || byte.is_ascii_digit()
-                        || matches!(byte, b'_' | b'-')
-                })
-        })
+    let segment_valid = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    if value.len() > MAX_DIAGNOSTIC_DETAIL_STAGE_BYTES
+        || !value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        || !value.contains('_')
+        || !value.split('_').all(segment_valid)
     {
         Err(SanitizationError::new(
             SanitizationCode::InvalidDiagnosticDetailStage,
@@ -2617,14 +2623,12 @@ pub struct ResourceAuthoringPayload {
     audit: SanitizedAudit,
 }
 
-/// One reason of a dispatch's ranking chain. Ledger revision 3 persists no reason text (the
-/// policy's English detail goes only to the developer log); the code stays text until A2-P
-/// splits the policy's dynamic reason codes (`score_unknown:<rule>`) into fixed codes.
+/// One reason of a dispatch's ranking chain or of a task selection's explanation: the reason's
+/// outcome, a registered code with its values (ledger revision 3, Workflow #378 A2-P; model
+/// section 8.1). The evaluators' English detail goes only to the developer log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyReasonRecord {
-    pub code: String,
-}
+#[serde(transparent)]
+pub struct PolicyReasonRecord(pub Outcome);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyDispatchEventData {
@@ -2706,9 +2710,17 @@ pub struct PolicyAdmissionRecord {
     pub budget: PolicyBudgetReceipt,
 }
 
+/// A failed run as the policy records it (Workflow #378 A2-P). `outcome` is the run's failure:
+/// its terminal outcome's top node ([`Outcome::without_causes`]), the top node of the request
+/// error of a run with no terminal, or the policy's own [`POLICY_RUNTIME_BUDGET_EXCEEDED`] or
+/// `policy_settlement_interrupted`; its category is the record's severity. `failure_identity`
+/// is the #336 failure identity a live `linear_steps` settlement computes
+/// (`contracts/policy-suspension.md`), and is absent for any other failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PolicyFailureRecord {
-    pub error_code: String,
+    pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_identity: Option<String>,
     pub reported_success: bool,
     pub original_class: PolicyFailureClass,
     pub effective_class: PolicyFailureClass,
@@ -2745,18 +2757,12 @@ pub fn scheduled_failure_class(
     }
 }
 
-/// The policy failure code of a failed run's terminal outcome (Workflow #378 A3; coordinator
-/// ruling 7, 2026-10-13): the outcome's code, except for a relayed spelling the embedded catalog
-/// does not register (`outcome_relay_unregistered`), whose spelling the outcome keeps as
-/// `raw_code`, so distinct failures keep distinct failure identities and streaks. The live
-/// settlement, the startup recovery and the ledger's re-derivation all take it from here.
-pub fn scheduled_failure_code(outcome: &Outcome) -> String {
-    scheduled_failure_code_str(outcome).as_str().to_owned()
-}
-
-/// [`scheduled_failure_code`] as a received code, for the readers that keep a code: the
-/// recovery ladder's task trigger (acceptance H-L6). The relayed spelling is read back from the
-/// outcome's `raw_code`.
+/// The policy failure code of a failed run's outcome (Workflow #378 A3; coordinator ruling 7,
+/// 2026-10-13): the outcome's code, except for a relayed spelling the embedded catalog does not
+/// register (`outcome_relay_unregistered`), whose spelling the outcome keeps as `raw_code`, so
+/// distinct failures keep distinct failure identities and streaks. The live settlement, the
+/// startup recovery, the ledger's re-derivation and the recovery ladder's task trigger
+/// (acceptance H-L6) all take it from here, and compare a recorded failure by it.
 pub fn scheduled_failure_code_str(outcome: &Outcome) -> crate::outcome::CodeStr {
     if outcome.is(ContractCode::OutcomeRelayUnregistered)
         && let Some(spelling) = outcome
@@ -2956,9 +2962,11 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
 
 impl PolicyFailureRecord {
     /// Whether this failure is the policy's runtime-budget rewrite of a run that succeeded
-    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`], class Severe.
+    /// (`reported_success`) or failed: [`POLICY_RUNTIME_BUDGET_EXCEEDED`] with no failure
+    /// identity, class Severe.
     pub fn is_runtime_budget_rewrite(&self, reported_success: bool) -> bool {
-        self.error_code == POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
+        self.outcome.is(POLICY_RUNTIME_BUDGET_EXCEEDED)
+            && self.failure_identity.is_none()
             && self.original_class == PolicyFailureClass::Severe
             && self.reported_success == reported_success
     }
@@ -2988,7 +2996,9 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Wire {
-            error_code: String,
+            outcome: Outcome,
+            #[serde(default)]
+            failure_identity: Option<String>,
             reported_success: bool,
             original_class: PolicyFailureClass,
             effective_class: PolicyFailureClass,
@@ -3008,7 +3018,8 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
 
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
-            error_code: wire.error_code,
+            outcome: wire.outcome,
+            failure_identity: wire.failure_identity,
             reported_success: wire.reported_success,
             original_class: wire.original_class,
             effective_class: wire.effective_class,
@@ -3033,6 +3044,24 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
 pub enum PolicyExecutionOutcome {
     Succeeded { runtime_ms: u64 },
     Failed { failure: PolicyFailureRecord },
+}
+
+impl PolicyExecutionOutcome {
+    /// This result as the public projection carries it (Workflow #378 A2-P, register E9): a
+    /// failure's outcome is codes only, as the record's own projected `outcome` is.
+    fn codes_only(&self) -> Self {
+        match self {
+            Self::Succeeded { runtime_ms } => Self::Succeeded {
+                runtime_ms: *runtime_ms,
+            },
+            Self::Failed { failure } => Self::Failed {
+                failure: PolicyFailureRecord {
+                    outcome: failure.outcome.codes_only(),
+                    ..failure.clone()
+                },
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3085,7 +3114,8 @@ pub struct PolicyPlanningSignalEventData {
     pub instance_id: String,
     pub task_id: Option<String>,
     pub kind: PolicyPlanningSignalKind,
-    pub fact_code: String,
+    /// The signal's outcome: one registered code with its values (Workflow #378 A2-P).
+    pub outcome: Outcome,
     pub observed_at_unix_ms: u64,
     pub detection_budget: Option<PolicyDetectionBudgetRecord>,
 }
@@ -3112,7 +3142,7 @@ pub struct PolicyPlanningSignalPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     task_id: Option<String>,
     kind: PolicyPlanningSignalKind,
-    fact_code: String,
+    outcome: Outcome,
     observed_at_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detection_budget: Option<PolicyDetectionBudgetRecord>,
@@ -3136,8 +3166,9 @@ impl PolicyPlanningSignalPayload {
         self.kind
     }
 
-    pub fn fact_code(&self) -> &str {
-        &self.fact_code
+    /// The signal's outcome (Workflow #378 A2-P); the record's severity is its category.
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 
     pub const fn observed_at_unix_ms(&self) -> u64 {
@@ -4491,6 +4522,16 @@ impl TaskSemanticFact {
                 ..
             } => *outcome = outcome.codes_only(),
             Self::SelectionEvaluated { selection, .. } => {
+                // Workflow #378 A2-P: every reason is an outcome; the projection keeps its codes.
+                let selection = &mut **selection;
+                for reason in selection.reasons.iter_mut().chain(
+                    selection
+                        .verdicts
+                        .iter_mut()
+                        .flat_map(|verdict| verdict.reasons.iter_mut()),
+                ) {
+                    reason.0 = reason.0.codes_only();
+                }
                 if let TaskSelectionConfirmation::GuardFailed { outcome }
                 | TaskSelectionConfirmation::CaptureFailed { outcome } =
                     &mut selection.confirmation
@@ -5806,9 +5847,22 @@ impl PayloadDetail for PolicyExecutionPayload {
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
+
+    /// A failed execution carries its failure (Workflow #378 A2-P), so the record's severity
+    /// is the failure's category; a success carries none (its event type's category).
+    fn outcome(&self) -> Option<&Outcome> {
+        match &self.policy_result {
+            PolicyExecutionOutcome::Failed { failure } => Some(&failure.outcome),
+            PolicyExecutionOutcome::Succeeded { .. } => None,
+        }
+    }
 }
 
 impl PayloadDetail for PolicyPlanningSignalPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        Some(&self.outcome)
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -6614,7 +6668,7 @@ impl PolicyPlanningSignalDraft {
             instance_id: self.data.instance_id,
             task_id: self.data.task_id,
             kind: self.data.kind,
-            fact_code: self.data.fact_code,
+            outcome: self.data.outcome,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
             detection_budget: self.data.detection_budget,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -6840,7 +6894,7 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
         ));
     }
     for reason in &data.reasons {
-        validate_policy_token(&reason.code, "reason_code")?;
+        validate_policy_token(reason.0.code().as_str(), "reason_code")?;
     }
     if data.approval_fact_ids.len() > 64 {
         return Err(SanitizationError::new(
@@ -6903,7 +6957,9 @@ fn validate_policy_execution_data(
         ));
     }
     if let PolicyExecutionOutcome::Failed { failure } = &data.outcome {
-        validate_policy_token(&failure.error_code, "error_code")?;
+        if let Some(identity) = &failure.failure_identity {
+            validate_policy_token(identity, "failure_identity")?;
+        }
         failure.perf_context.validate()?;
         let retry_scheduled = failure.disposition == PolicyFailureDisposition::RetryScheduled;
         if failure.consecutive_same_error == 0
@@ -6928,7 +6984,7 @@ fn validate_policy_execution_data(
             || failure.effective_class == PolicyFailureClass::Severe
                 && failure.disposition != PolicyFailureDisposition::PausedTask
             || failure.reported_success
-                && (failure.error_code != POLICY_RUNTIME_BUDGET_EXCEEDED.as_str()
+                && (!failure.outcome.is(POLICY_RUNTIME_BUDGET_EXCEEDED)
                     || failure.original_class != PolicyFailureClass::Severe
                     || failure.effective_class != PolicyFailureClass::Severe)
             || failure.sensitive
@@ -6953,7 +7009,7 @@ fn validate_policy_planning_signal_data(
     if let Some(task_id) = &data.task_id {
         validate_policy_token(task_id, "task_id")?;
     }
-    validate_policy_token(&data.fact_code, "fact_code")?;
+    validate_policy_token(data.outcome.code().as_str(), "outcome")?;
     if data.observed_at_unix_ms == 0 {
         return Err(SanitizationError::new(
             SanitizationCode::InvalidPolicyPlanningSignalTime,
@@ -7312,7 +7368,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 instance_id: value.instance_id.clone(),
                 task_id: value.task_id.clone(),
                 kind: value.kind,
-                fact_code: value.fact_code.clone(),
+                outcome: value.outcome.clone(),
                 observed_at_unix_ms: value.observed_at_unix_ms,
                 detection_budget: value.detection_budget.clone(),
             })?;
@@ -8291,7 +8347,7 @@ impl RuntimePayloadDraft {
                 .operation(crate::codes::ContractLocation::RunContainedTask),
             DiagnosticDetailDraft::new(
                 "resource_declaration",
-                "resource.declaration.prepare",
+                crate::codes::ContractLocation::ResourceDeclarationPrepare,
                 "pack_containment",
                 crate::codes::ContractLocation::RunContainedTask.as_str(),
             ),
@@ -11730,11 +11786,9 @@ impl EventPayload {
             }),
             policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
             policy_execution_outcome: policy_execution
-                .map(|value| Box::new(value.policy_result.clone())),
+                .map(|value| Box::new(value.policy_result.codes_only())),
             policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
             policy_signal_kind: policy_signal.map(|value| value.kind),
-            policy_signal_fact_code: policy_signal
-                .map(|value| value.fact_code.clone().into_boxed_str()),
             performance_pressure: performance_pressure
                 .map(|value| Box::new(value.pressure.clone())),
             performance_context: performance_summary.map(|value| Box::new(value.context.clone())),
@@ -12178,8 +12232,6 @@ pub struct PublicPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_signal_kind: Option<PolicyPlanningSignalKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    policy_signal_fact_code: Option<Box<str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     performance_pressure: Option<Box<PerformancePressureRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_context: Option<Box<PerformanceContext>>,
@@ -12435,10 +12487,6 @@ impl PublicPayload {
 
     pub const fn policy_signal_kind(&self) -> Option<PolicyPlanningSignalKind> {
         self.policy_signal_kind
-    }
-
-    pub fn policy_signal_fact_code(&self) -> Option<&str> {
-        self.policy_signal_fact_code.as_deref()
     }
 
     pub fn performance_pressure(&self) -> Option<&PerformancePressureRecord> {

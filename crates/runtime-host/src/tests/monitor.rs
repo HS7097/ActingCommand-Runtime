@@ -879,7 +879,10 @@ fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
         .record_policy_dispatch_outcome(
             &intent.decision_id,
             &PolicyExecutionInput::Failed {
-                error_code: "transient.capture".to_owned(),
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    RuntimeErrorCode::CaptureFailed,
+                ),
+                failure_identity: None,
                 class: PolicyFailureClass::Recoverable,
             },
         )

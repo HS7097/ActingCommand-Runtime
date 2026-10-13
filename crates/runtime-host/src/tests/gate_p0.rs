@@ -275,7 +275,7 @@ fn gate_p0_t03_qos_reduced_keeps_host_budget_for_light() {
             .decisions
             .iter()
             .flat_map(|decision| &decision.reasons)
-            .any(|reason| reason.code == "host_budget_deferred"),
+            .any(|reason| reason.outcome.code().as_str() == "host_budget_deferred"),
         "no candidate is deferred for the host budget: {evaluation:#?}"
     );
     assert!(

@@ -18,7 +18,8 @@ use actingcommand_contract::{
     TaskGeometryRecheckTrigger, TaskRunIdentity,
 };
 use actingcommand_execution_kernel::{
-    CaptureGeometrySessionRef, ExecutionKernelCode, ResourceReadingValue,
+    CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, ExecutionKernelCode,
+    ResourceReadingValue,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1044,8 +1045,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.inner.task_timing.record_evaluation(timing, None, None);
-        self.inner
-            .diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
+        self.inner.diagnostic_guard(
+            Some(target_id),
+            Some(result),
+            ContainedTaskGuardEvaluation::CandidateSample,
+        )?;
         self.inner.ensure_active()
     }
 
@@ -1057,9 +1061,9 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
                 actingcommand_recognition_pack::TargetEvaluation,
             >,
         >,
-        reason: &'static str,
+        evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), Self::Error> {
-        self.inner.diagnostic_guard(target, result, reason)
+        self.inner.diagnostic_guard(target, result, evaluation)
     }
     fn record_ocr_evaluation(
         &mut self,
@@ -1227,6 +1231,16 @@ struct RuntimeContainedTaskOcrFailureDiagnostic<'a> {
     detail: &'a str,
     detail_utf8_bytes: usize,
     detail_sha256: String,
+}
+
+/// The registered code of a frame whose page recognition failed (Workflow #378 A2-P): the
+/// recognition pack's code of the failed target's cause, else
+/// `contained_task_recognition_failed`.
+fn recognition_failure_code(error: &actingcommand_page_detector::PageDetectorError) -> Code {
+    match &error.failed_target {
+        Some(target) => target.cause.code().code(),
+        None => SharedCode::ContainedTaskRecognitionFailed.code(),
+    }
 }
 
 fn task_geometry_error(code: impl Into<Code>) -> RuntimeHostError {
@@ -1770,9 +1784,7 @@ impl RuntimeContainedTask<'_> {
         })?;
         if bytes.len() as u64 > MAX_EFFECTIVE_CONFIGURATION_BYTES {
             return Err(RequestFailure::poison_without_terminal(
-                artifact_store_error_at_code_spelling(
-                    SharedCode::EffectiveConfigurationTooLarge.as_str(),
-                ),
+                artifact_store_error(HostLocation::EffectiveConfigurationSizeCheck),
             ));
         }
         let mut event_links = self
@@ -1952,7 +1964,7 @@ impl RuntimeContainedTask<'_> {
                         .find_map(|outcome| outcome.result.as_ref().err())
                     {
                         RecognitionState::Failed {
-                            reason: error.to_string().chars().take(256).collect(),
+                            code: recognition_failure_code(error),
                         }
                     } else {
                         let mut matches = outcomes
@@ -1970,7 +1982,7 @@ impl RuntimeContainedTask<'_> {
                     }
                 }
                 Err(error) => RecognitionState::Failed {
-                    reason: error.to_string().chars().take(256).collect(),
+                    code: recognition_failure_code(&error.cause),
                 },
             };
             let mut sink = RuntimeArtifactEventSink {
@@ -2091,7 +2103,7 @@ impl RuntimeContainedTask<'_> {
 
     /// Workflow #308: the interpreter returns the run-ending capture error, not the failure of
     /// a `run_ending` select record, so that failure is recorded here as it happens: one
-    /// `runtime.failed` lifecycle record (stage `runtime.lifecycle.selection_record`, the
+    /// `runtime.failed` lifecycle record (stage `runtime_lifecycle_selection_record`, the
     /// failure's own code and detail) linked to the run, before the run's terminal events and
     /// without touching the run's failure. When the ledger refuses that record as well, the
     /// failure is kept for the run to join to its own failure, which then poisons the runtime.
@@ -2859,7 +2871,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
         self.task_timing.record_evaluation(timing, None, None);
-        self.diagnostic_guard(Some(target_id), Some(result), "candidate_sample")?;
+        self.diagnostic_guard(
+            Some(target_id),
+            Some(result),
+            ContainedTaskGuardEvaluation::CandidateSample,
+        )?;
         self.ensure_active()
     }
 
@@ -2918,9 +2934,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 actingcommand_recognition_pack::TargetEvaluation,
             >,
         >,
-        reason: &'static str,
+        evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), Self::Error> {
-        self.diagnostic_guard(target, result, reason)
+        self.diagnostic_guard(target, result, evaluation)
     }
     fn record_ocr_evaluation(
         &mut self,

@@ -9,6 +9,7 @@
 //! instead of for time.
 
 use actingcommand_contract::EmulatorInstanceAction;
+use actingcommand_contract::outcome::Location;
 use actingcommand_device::{
     DeviceError, DeviceErrorCategory, DeviceProcessPresence, DeviceResult, EmulatorControlFailure,
     EmulatorControlOutcome, EmulatorControlResult, InstanceState,
@@ -44,7 +45,7 @@ pub enum ScriptedControl {
     /// A failure at the device stage `stage`, with the vendor exit code (`None`: the vendor
     /// command did not run), the last observation and a Stop's process check.
     Failed {
-        stage: &'static str,
+        stage: Location,
         exit_code: Option<i32>,
         last_state: Option<InstanceState>,
         device_process_present: Option<DeviceProcessPresence>,
@@ -95,14 +96,24 @@ pub fn running_state(adb_port: u16) -> InstanceState {
     }
 }
 
-/// The device stage's error category, as the device crate types it.
-fn stage_category(stage: &str) -> DeviceErrorCategory {
-    match stage {
-        "mumu_manager.control_exit" | "mumu_manager.exit" => DeviceErrorCategory::ChildExit,
-        "mumu_manager.run" | "mumu_manager.timeout" | "mumu_manager.path" => {
-            DeviceErrorCategory::BackendLaunch
-        }
-        _ => DeviceErrorCategory::Response,
+/// The device stage's error category, as the device crate types it (typed stages, never
+/// spellings).
+fn stage_category(stage: Location) -> DeviceErrorCategory {
+    use actingcommand_device::codes::DeviceStage;
+    let any = |stages: &[DeviceStage]| stages.iter().any(|known| known.location() == stage);
+    if any(&[
+        DeviceStage::MumuManagerControlExit,
+        DeviceStage::MumuManagerExit,
+    ]) {
+        DeviceErrorCategory::ChildExit
+    } else if any(&[
+        DeviceStage::MumuManagerRun,
+        DeviceStage::MumuManagerTimeout,
+        DeviceStage::MumuManagerPath,
+    ]) {
+        DeviceErrorCategory::BackendLaunch
+    } else {
+        DeviceErrorCategory::Response
     }
 }
 
@@ -248,8 +259,10 @@ impl FakeEmulatorController {
     pub fn read_state(&self) -> DeviceResult<InstanceState> {
         self.note(EmulatorCall::ReadState);
         self.lock().reads.pop_front().ok_or_else(|| {
-            DeviceError::fatal("scripted emulator state read: no answer")
-                .with_diagnostic(DeviceErrorCategory::BackendLaunch, "mumu_manager.timeout")
+            DeviceError::fatal("scripted emulator state read: no answer").with_diagnostic(
+                DeviceErrorCategory::BackendLaunch,
+                actingcommand_device::codes::DeviceStage::MumuManagerTimeout.location(),
+            )
         })
     }
 

@@ -256,7 +256,7 @@ use requests::{
     TaskFailureEvidence, client_fact_conflict, connection_boundary, critical_execution_error,
     critical_plan_error, diagnostic_for_projection, policy_admission_fatal,
     policy_admission_request, policy_contract_error, policy_id_error, protocol_error,
-    protocol_error_at_code_spelling, receipt_error, terminal,
+    receipt_error, terminal,
 };
 use state_control::reconcile_runtime_state;
 
@@ -2383,7 +2383,10 @@ impl RuntimeHost {
         shared.record_policy_dispatch_outcome_with_cache_update(
             context.decision_id(),
             &PolicyExecutionInput::Failed {
-                error_code: "injected.pre-terminal".to_owned(),
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    RuntimeErrorCode::RuntimeUnavailable,
+                ),
+                failure_identity: None,
                 class: PolicyFailureClass::Recoverable,
             },
             Some(context),
@@ -4566,17 +4569,6 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
         }
     }
     Ok(())
-}
-
-/// An artifact-store failure whose operation is spelled like a shared code
-/// (`effective_configuration_too_large`: one spelling for a code and a location, M378:90). A2-P
-/// renames one side; then `artifact_store_error` takes it.
-fn artifact_store_error_at_code_spelling(code_spelled_operation: &'static str) -> RuntimeHostError {
-    RuntimeHostError::relayed_fatal(
-        HostCode::ArtifactStoreFailure.as_str(),
-        code_spelled_operation,
-        RuntimeErrorCode::RuntimeFatal,
-    )
 }
 
 fn artifact_store_error(operation: impl Into<Location>) -> RuntimeHostError {

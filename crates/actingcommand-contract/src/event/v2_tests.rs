@@ -143,9 +143,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         package_digest: format!("sha256:{}", "c".repeat(64)).into(),
         procedure_binding_digest: format!("sha256:{}", "d".repeat(64)),
         reason_chain_id: "reason:fixture-a".to_owned(),
-        reasons: vec![PolicyReasonRecord {
-            code: "eligible".to_owned(),
-        }],
+        reasons: vec![PolicyReasonRecord(Outcome::relayed("task_eligible"))],
         catalog_hash: format!("sha256:{}", "b".repeat(64)),
         catalog_version: 1,
         input_ledger_position: 1,
@@ -190,7 +188,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         instance_id: "instance:fixture-a".to_owned(),
         task_id: Some("task:fixture-a".to_owned()),
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: "goal.primary.missed".to_owned(),
+        outcome: Outcome::relayed("clock_slot_deferred"),
         observed_at_unix_ms: 1_752_147_201_000,
         detection_budget: None,
     };
@@ -1021,9 +1019,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     };
     let detail = DiagnosticDetailDraft::new(
         "native",
-        "device_registry.input.operation",
+        crate::codes::ContractLocation::ApplicationForegroundUnsupported,
         "adb_shell_input",
-        "tap",
+        "input_tap",
     );
     let sanitized = sanitize(failed(detail), 92);
 
@@ -1033,9 +1031,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     };
     let detail = outcome.detail().expect("diagnostic detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.input.operation");
+    assert_eq!(detail.stage(), "application_foreground_unsupported");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation(), "tap");
+    assert_eq!(detail.operation(), "input_tap");
     assert_eq!(
         outcome.outcome().code(),
         &DiagnosticCode::InputFailed.code()
@@ -1057,9 +1055,9 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         stored["payload"]["data"]["detail"],
         serde_json::json!({
             "category": "native",
-            "stage": "device_registry.input.operation",
+            "stage": "application_foreground_unsupported",
             "backend": "adb_shell_input",
-            "operation": "tap",
+            "operation": "input_tap",
         })
     );
     assert!(stored["payload"]["data"]["detail"].get("message").is_none());
@@ -1087,11 +1085,10 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
     assert!(old_outcome.detail().is_none());
 
     let exact_token = "a".repeat(256);
-    let exact_stage = format!("{}.b", "a".repeat(254));
     sanitize(
         failed(DiagnosticDetailDraft::new(
             exact_token.clone(),
-            exact_stage,
+            crate::codes::ContractLocation::OpenCapturePipeline,
             exact_token.clone(),
             exact_token,
         )),
@@ -1105,16 +1102,53 @@ fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
         );
     };
     for detail in [
-        DiagnosticDetailDraft::new("", "device.input", "adb", "tap"),
-        DiagnosticDetailDraft::new("Native", "device.input", "adb", "tap"),
-        DiagnosticDetailDraft::new("native", "device.input", "a".repeat(257), "tap"),
+        DiagnosticDetailDraft::new(
+            "",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "adb",
+            "tap",
+        ),
+        DiagnosticDetailDraft::new(
+            "Native",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "adb",
+            "tap",
+        ),
+        DiagnosticDetailDraft::new(
+            "native",
+            crate::codes::ContractLocation::OpenCapturePipeline.location(),
+            "a".repeat(257),
+            "tap",
+        ),
     ] {
         assert_rejected(detail, "invalid_diagnostic_detail_token");
     }
-    for stage in ["device..input", "Device.input", "a.b.c.d.e"] {
-        assert_rejected(
-            DiagnosticDetailDraft::new("native", stage, "adb", "tap"),
+    // Workflow #378 A2-P: a draft's stage is a registered location, so only a stored record
+    // can carry another spelling; its stage must have a location's form, at most 64 bytes.
+    let stored_stage = |stage: &str| {
+        let mut record = stored.clone();
+        record["payload"]["data"]["detail"]["stage"] = serde_json::json!(stage);
+        serde_json::from_value::<EventPayload>(record)
+            .expect("typed stored detail")
+            .validate()
+    };
+    let exact_stage = format!("{}_b", "a".repeat(62));
+    stored_stage(&exact_stage).expect("a 64-byte location-form stage");
+    let long_stage = format!("{}_b", "a".repeat(63));
+    for stage in [
+        "device..input",
+        "Device.input",
+        "a.b.c.d.e",
+        "device.stage",
+        long_stage.as_str(),
+    ] {
+        assert_eq!(
+            stored_stage(stage)
+                .expect_err("stored stage validation")
+                .code()
+                .as_str(),
             "invalid_diagnostic_detail_stage",
+            "{stage}"
         );
     }
 
@@ -1880,7 +1914,7 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
                     instance_id: alias.clone(),
                     task_id: None,
                     kind: PolicyPlanningSignalKind::GoalMissed,
-                    fact_code: "goal.fixture.missed".to_owned(),
+                    outcome: Outcome::relayed("clock_slot_deferred"),
                     observed_at_unix_ms: 1_752_147_201_000,
                     detection_budget: None,
                 },
@@ -1900,7 +1934,8 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
         }
     }
     let base = PolicyFailureRecord {
-        error_code: "transient.capture".to_owned(),
+        outcome: Outcome::new(crate::codes::RuntimeErrorCode::CaptureFailed),
+        failure_identity: None,
         reported_success: false,
         original_class: PolicyFailureClass::Recoverable,
         effective_class: PolicyFailureClass::Recoverable,
@@ -2045,7 +2080,8 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
 #[test]
 fn legacy_policy_failure_defaults_preserve_streak_and_explicitly_mark_context_unavailable() {
     let failure = PolicyFailureRecord {
-        error_code: "transient.capture".to_owned(),
+        outcome: Outcome::new(crate::codes::RuntimeErrorCode::CaptureFailed),
+        failure_identity: None,
         reported_success: false,
         original_class: PolicyFailureClass::Recoverable,
         effective_class: PolicyFailureClass::Recoverable,
@@ -3121,9 +3157,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                     terms: Vec::new(),
                     reasons: Vec::new(),
                 }],
-                reasons: vec![PolicyReasonRecord {
-                    code: "best_score".to_owned(),
-                }],
+                reasons: vec![PolicyReasonRecord(Outcome::relayed("selection_selected"))],
                 confirmation,
             }),
         },
@@ -3138,7 +3172,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
     let detail = || {
         DiagnosticDetailDraft::new(
             "runtime_connection",
-            "runtime.ipc.receipt_write",
+            crate::codes::ContractLocation::ControlInstance,
             "local_ipc",
             "runtime_local_ipc",
         )

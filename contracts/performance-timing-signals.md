@@ -117,9 +117,10 @@ A performance observation event (`perf.pressure_started`, `perf.pressure_ended`,
 sanitization no longer ends the runtime. The host drops that one event and
 records the failure through the existing monitor machinery
 (`record_monitor_failure`): a `perf.monitor_degraded` event is written whose
-`failure_code` is the contract's own sanitization code followed by the rejected
-event type (`<code>.<event type>`, for example
-`invalid_performance_process.perf.summary`), `consecutive_failures` counts up,
+`outcome` is `performance_event_rejected` (error) with the rejected event type as
+its value `event_type` (for example `perf.summary`) and the contract's own
+sanitization outcome (for example `invalid_performance_process`) as its `caused_by`
+link, `consecutive_failures` counts up,
 and after `max_consecutive_failures` the degraded event is `terminal`. A
 degraded event is written for the first failure and once more on the
 transition into terminal; later failures only count (saturating) and write
