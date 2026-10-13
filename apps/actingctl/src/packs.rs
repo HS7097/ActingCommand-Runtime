@@ -723,11 +723,12 @@ fn run(arguments: &[OsString]) -> Result<(), PacksError> {
 /// The selected configuration generation, found as mcp-serve finds it (`mcp/runtime.rs`): this
 /// process's install selection; else the install selection of `--root`; else
 /// `<root>\actingd.config.json` of a root without one, `--root` or the install root this
-/// executable runs from. An installed process reads its root's selection again here (the
-/// launcher's snapshot when one was inherited, otherwise `install\active.json` as it is now),
-/// not the one pinned when the process started: `ac_packs` calls this at every call with the
-/// server's `--root`, so a long-running mcp-serve answers the generation selected now, as a
-/// fresh `actingctl packs` does (train 4 review ruling).
+/// executable runs from. An installed process reads its root's selection again here, from
+/// `install\active.json` as it is now (`current_selection`), not the one it holds from its start:
+/// `ac_packs` calls this at every call with the server's `--root`, so a long-running mcp-serve
+/// answers the generation selected now, as a fresh `actingctl packs` does (train 4 review
+/// ruling), also when the fixed entry started it with an inherited selection (Workflow #389
+/// MCP-7 scope extension).
 pub(crate) fn selected_config(
     root: Option<&Path>,
 ) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
@@ -756,25 +757,7 @@ pub(crate) fn selected_config(
                 ));
             }
         }
-        let current = InstalledProcess::read(selected.root())
-            .map_err(|error| {
-                PacksError::new(
-                    error.code(),
-                    format!(
-                        "the install selection of {} cannot be read",
-                        selected.root().display()
-                    ),
-                )
-            })?
-            .ok_or_else(|| {
-                PacksError::new(
-                    SharedCode::InstallSelectionUnavailable,
-                    format!(
-                        "the install root {} no longer has a selection",
-                        selected.root().display()
-                    ),
-                )
-            })?;
+        let current = current_selection(selected.root())?;
         let config = current.config_path();
         return Ok((Some(current), config));
     }
@@ -799,6 +782,32 @@ pub(crate) fn selected_config(
             PacksError::new(
                 ActingctlCode::InstallRootUnresolved,
                 "actingctl does not run from an install root; pass --root <install root>",
+            )
+        })
+}
+
+/// The selection `install\active.json` of the install root `root` holds now (Workflow #389 MCP-7
+/// scope extension). An installed process holds the selection of its start for its whole life:
+/// the one the fixed entry `<root>\runtime\actingctl.exe` handed it (`InstalledProcess::read`
+/// prefers that inherited snapshot), or the one its slot read when it started. A long-running
+/// process (mcp-serve) reads this instead at every call, as a process started now through the
+/// fixed entry would be handed it. A selection that cannot be read answers the contract's install
+/// code, one the root no longer has `install_selection_unavailable`.
+pub(crate) fn current_selection(root: &Path) -> Result<InstalledProcess, PacksError> {
+    InstalledProcess::read_active(root)
+        .map_err(|error| {
+            PacksError::new(
+                error.code(),
+                format!("the install selection of {} cannot be read", root.display()),
+            )
+        })?
+        .ok_or_else(|| {
+            PacksError::new(
+                SharedCode::InstallSelectionUnavailable,
+                format!(
+                    "the install root {} no longer has a selection",
+                    root.display()
+                ),
             )
         })
 }

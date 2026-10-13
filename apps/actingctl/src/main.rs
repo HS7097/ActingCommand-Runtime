@@ -31,6 +31,12 @@ mod observe_export;
 mod run_list;
 // End of MCP-3.
 
+// ---- Workflow #389 MCP-7 (begin): `diagnose` (MCP `ac_diagnose`), with the child-process
+// runner it shares with MCP for `actingd suspended`. ----
+mod child;
+mod diagnose;
+// ---- Workflow #389 MCP-7 (end) ----
+
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -107,6 +113,12 @@ fn main() -> ExitCode {
     if let Some(exit) = run_list::dispatch(&arguments) {
         return exit;
     }
+    // ---- Workflow #389 MCP-7 (begin): `diagnose` takes the instance selector of MCP, optional,
+    // and leaves before `Invocation::parse`. ----
+    if let Some(exit) = diagnose::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-7 (end) ----
     match run(arguments) {
         Ok(output) => match write_output(&output) {
             Ok(()) => {

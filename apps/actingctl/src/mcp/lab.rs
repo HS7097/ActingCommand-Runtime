@@ -595,9 +595,10 @@ pub(super) struct Answer {
 }
 
 impl Program {
+    /// The install's actinglab and the generation selected at this call (Workflow #389 MCP-7
+    /// scope extension: `locate_now`, not the selection this server holds from its start).
     fn locate(context: &ToolContext<'_>) -> Result<Self, ToolError> {
-        let location = context.runtime.locate();
-        location.check()?;
+        let location = context.runtime.locate_now()?;
         let (Some(root), Some(install_root)) = (location.root, location.install_root) else {
             return Err(ToolError::usage(
                 ActingctlCode::LabToolUnavailable,

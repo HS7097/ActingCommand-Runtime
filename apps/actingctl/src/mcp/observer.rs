@@ -11,13 +11,12 @@ use super::tools::{
     self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
 use crate::codes::ActingctlCode;
-use crate::events::CursorBinding;
 use actingcommand_contract::{
     ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectionProfile,
-    RuntimeEventQueryCursor, RuntimeEventQueryPageRequest, RuntimeInstanceStatus,
-    RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
-    RuntimeMaterialReadState, RuntimeMonitorInstanceStatus,
+    RuntimeEventQueryPageRequest, RuntimeInstanceStatus, RuntimeMaterialReadFailure,
+    RuntimeMaterialReadLimit, RuntimeMaterialReadRequest, RuntimeMaterialReadState,
+    RuntimeMonitorInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeMaterialCompleteResult, RuntimeMaterialSelection};
 use serde_json::{Map, Value, json};
@@ -26,13 +25,8 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-// An ac_events row, as `actingctl events` prints it (Workflow #389 MCP-1).
-pub(super) use crate::events::brief_row as event_row;
-
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-/// ac_events reads full payloads, as the ledger's diagnostic code lives in them.
-pub(super) const EVENTS_PROFILE: ProjectionProfile = crate::events::PROFILE;
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
@@ -231,27 +225,6 @@ fn text_of(value: Value) -> String {
         Value::String(text) => text,
         other => other.to_string(),
     }
-}
-
-/// `v1.<server>.<connection>.<snapshot>.<after>.<query fingerprint>`: the Runtime cursor
-/// bound to this server process and this connection, as ac_events reads it back.
-pub(super) fn encode_cursor(
-    context: &ToolContext<'_>,
-    connected: &Connected,
-    cursor: &RuntimeEventQueryCursor,
-) -> Result<String, ToolError> {
-    CursorBinding {
-        session: context.session,
-        generation: connected.generation,
-    }
-    .encode(cursor)
-    .map_err(|error| {
-        ToolError::new(
-            "runtime",
-            ActingctlCode::CursorEncodeFailed,
-            error.message(),
-        )
-    })
 }
 
 /// One committed material, found again from its ref at the ledger's current snapshot (or, for

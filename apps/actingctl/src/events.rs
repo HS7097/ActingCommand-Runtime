@@ -754,8 +754,9 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
     Ok((state_root, parameters))
 }
 
-/// Distinct per process: a cursor this CLI printed answers `cursor_invalid` in any other.
-fn process_session() -> u64 {
+/// Distinct per process: a cursor this CLI printed answers `cursor_invalid` in any other
+/// (`actingctl diagnose` binds its errors page cursor the same way, Workflow #389 MCP-7).
+pub(crate) fn process_session() -> u64 {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
