@@ -11,7 +11,11 @@ mod events;
 mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
+mod packs;
 mod process_probe;
+// Workflow #389 MCP-10: `start` and `restart`.
+#[cfg(windows)]
+mod runtime_start;
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
@@ -85,6 +89,19 @@ fn main() -> ExitCode {
     if let Some(exit) = observe_export::dispatch(&arguments) {
         return exit;
     }
+    // Workflow #389 MCP-10: `start` and `restart` take `--root`, not `--state-root`; CLI only.
+    #[cfg(windows)]
+    {
+        if let Some(exit) = runtime_start::dispatch(&arguments) {
+            return exit;
+        }
+    }
+    // ---- Workflow #389 MCP-11 (begin): `packs` reads the selected configuration offline and
+    // takes no `--state-root` (command table D5). ----
+    if let Some(exit) = packs::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-11 (end) ----
     // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
     // `Invocation::parse`.
     if let Some(exit) = run_list::dispatch(&arguments) {

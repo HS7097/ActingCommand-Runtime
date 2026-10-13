@@ -6,10 +6,10 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
-    ExternalExpectedSha256, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
-    PreparedContainedTask, simulate_contained_task_at, validate_lab_package_bytes,
+    OfflineDecision, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
+    simulate_contained_task_at, validate_lab_package_bytes,
 };
-use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
+use actingcommand_pack_containment::{DEFAULT_MAX_COMPRESSED_BYTES, Sha256Hash};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -59,7 +59,10 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             )
         })?;
     let args = PackageDryRunArgs::parse(global, flags)?;
-    let expected = ExternalExpectedSha256::parse_hex(&args.expected_sha256)
+    // Workflow #336 PKG-S1: the given hash is recorded, in canonical form, and compared with
+    // nothing.
+    let recorded = Sha256Hash::parse_hex(&args.expected_sha256)
+        .map(|hash| actingcommand_contract::PackageRef::LegacyZipSha256(hash.to_string()))
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     reject_output_collision(&args.out, &args.zip, &args.fixtures)?;
 
@@ -69,8 +72,8 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "offline_package",
         "package",
     )?;
-    let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
-    let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, expected)
+    let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, &recorded)?;
+    let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, &recorded)
         .map_err(|error| {
             offline_error(
                 error.code().as_str(),

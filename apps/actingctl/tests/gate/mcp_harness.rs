@@ -45,6 +45,17 @@ impl McpServer {
         if let Some(tier) = tier {
             command.args(["--tier", tier]);
         }
+        Self::start(command)
+    }
+
+    /// On an install root (`--root <root>`) with the default tier set (Workflow #389 MCP-11).
+    pub fn spawn_at_root(root: &Path) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_actingctl"));
+        command.arg("mcp-serve").arg("--root").arg(root);
+        Self::start(command)
+    }
+
+    fn start(mut command: Command) -> Self {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

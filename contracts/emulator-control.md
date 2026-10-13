@@ -405,13 +405,11 @@ that belongs to emulator control:
   probe failure is `startup_package_adb_not_ready` (`backend_operation_failed`), recorded
   before the run, and the claim's key is released. Admission refusals fail typed before the
   run:
-  `startup_package_missing` when a ZIP locator does not open,
-  `startup_package_admission_failed` for every other admission refusal (the underlying
-  `contained_task_package_*` code attached as related failure, a resource declaration
-  rejection carried along). For a digest-named content-directory locator (Workflow #288) a
-  missing or unreadable directory is also `startup_package_admission_failed`, with the
-  loader's code attached as related failure (for example `content_directory_missing` or
-  `content_directory_digest_mismatch`). Every failure of the run is recorded as
+  `startup_package_missing` when the locator does not exist (the loader's
+  `content_directory_missing`), `startup_package_admission_failed` for every other admission
+  refusal (the loader's code attached as related failure, a resource declaration rejection
+  carried along). Workflow #336 PKG-S1: every locator is read by its path and no digest is
+  compared. Every failure of the run is recorded as
   `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
   instance and the causation id; a fatal one poisons the host as any other.
 
@@ -490,10 +488,10 @@ its own run links, hands the key back to that continuation. Rung 2's entry and s
   `contained_task_prerequisite_incompatible` (Workflow #336 L2d; `contracts/linear-steps.md`,
   "Return-home fallback"). Skipped with `no_recovery_package` when the run had none bound and
   none is configured. A preparation trigger resolves the game/server through the configured
-  startup package's hash/containment admission, then uses its bound recovery package or the
+  startup package's containment admission, then uses its bound recovery package or the
   configured return-home mapping. Each actual run admits its own material. An ADB baseline
   probe failure, when the admitted actions need ADB, is `recovery_ladder_adb_not_ready`;
-  admission refusals keep their `contained_task_package_*` code; failures are recorded as
+  admission refusals keep the loader's code; failures are recorded as
   `runtime.failed` with category `recovery_ladder`.
 - `application_restart`: the assigned application is restarted (Workflow #369-2, Alice's
   09-25 ruling "restore home, then restart the application, then restart the emulator"). The

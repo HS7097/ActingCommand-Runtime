@@ -38,6 +38,8 @@ pub enum CaptureBackendName {
     AdbScreencapRawGzip,
     DroidcastRaw,
     NemuIpc,
+    /// #402 RD-3: the scrcpy continuous stream, selectable on real devices only.
+    Scrcpy,
 }
 
 impl CaptureBackendName {
@@ -49,6 +51,7 @@ impl CaptureBackendName {
             Self::AdbScreencapRawGzip => "adb_screencap_raw_gzip",
             Self::DroidcastRaw => "droidcast_raw",
             Self::NemuIpc => "nemu_ipc",
+            Self::Scrcpy => "scrcpy",
         }
     }
 }
@@ -155,4 +158,46 @@ pub enum CaptureFrameTransform {
     RotateClockwise90,
     RotateCounterclockwise90,
     FlipVertical,
+    /// #402 RD-3 (model #398 R1 §5.3): the frame is exactly this region of the logical display,
+    /// pixel for pixel. A stream whose encoder needs aligned sizes crops instead of
+    /// downsampling, and records the region here.
+    Crop(CaptureFrameCrop),
+}
+
+/// #402 RD-3: one region of the logical display, in logical display pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureFrameCrop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CaptureGeometry {
+    /// #402 RD-3i (model #398 R1 §5.3): whether a delivered frame of `extent` shows this
+    /// geometry's logical display. A recorded crop must name exactly the frame's size and lie
+    /// inside the display; every other transform keeps the proportional comparison, so a frame
+    /// that differs from the display without a recorded crop is judged as before.
+    pub fn frame_matches_display(&self, extent: CaptureExtent) -> bool {
+        let display = self.logical_display_extent;
+        match self.frame_transform {
+            Some(CaptureFrameTransform::Crop(crop)) => {
+                crop.width == extent.width()
+                    && crop.height == extent.height()
+                    && crop
+                        .x
+                        .checked_add(crop.width)
+                        .is_some_and(|right| right <= display.width())
+                    && crop
+                        .y
+                        .checked_add(crop.height)
+                        .is_some_and(|bottom| bottom <= display.height())
+            }
+            _ => {
+                u64::from(extent.width()) * u64::from(display.height())
+                    == u64::from(extent.height()) * u64::from(display.width())
+            }
+        }
+    }
 }

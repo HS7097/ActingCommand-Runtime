@@ -48,77 +48,28 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
-            let observer = if input.expected_sha256.is_directory_source() {
-                let deadline = Instant::now()
-                    .checked_add(Duration::from_millis(
-                        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-                    ))
-                    .ok_or_else(|| {
-                        observation_admission_error(
-                            HostCode::LabPackageDeadlineOverflow,
-                            HostLocation::AdmitLabOperation,
-                            "admission deadline overflow",
-                        )
-                    })?;
-                PreparedPageObservation::load_path(
-                    instance_alias,
-                    path,
-                    &input.expected_sha256,
-                    &[],
-                    self.execution()?.vision_provider(),
-                    deadline,
-                )
-                .map_err(observation_kernel_error)?
-            } else {
-                let file = fs::File::open(path).map_err(|error| {
+            // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is
+            // recorded and compared with nothing.
+            let deadline = Instant::now()
+                .checked_add(Duration::from_millis(
+                    ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+                ))
+                .ok_or_else(|| {
                     observation_admission_error(
-                        HostCode::ObservationPackageOpenFailed,
-                        HostLocation::OpenLabOperationPackage,
-                        error,
-                    )
-                })?;
-                let mut bytes = Vec::new();
-                file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|error| {
-                        observation_admission_error(
-                            HostCode::ObservationPackageReadFailed,
-                            HostLocation::ReadLabOperationPackage,
-                            error,
-                        )
-                    })?;
-                if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-                    return Err(observation_admission_error(
-                        HostCode::ObservationPackageLimitExceeded,
-                        HostLocation::ReadLabOperationPackage,
-                        "compressed package limit exceeded",
-                    ));
-                }
-                let expected = ExternalExpectedSha256::parse_hex(
-                    input.expected_sha256.legacy_sha256().ok_or_else(|| {
-                        observation_admission_error(
-                            HostCode::ObservationHashInvalid,
-                            HostLocation::AdmitLabOperation,
-                            "legacy package reference required",
-                        )
-                    })?,
-                )
-                .map_err(|error| {
-                    observation_admission_error(
-                        HostCode::ObservationHashInvalid,
+                        HostCode::LabPackageDeadlineOverflow,
                         HostLocation::AdmitLabOperation,
-                        error,
+                        "admission deadline overflow",
                     )
                 })?;
-                PreparedPageObservation::load(
-                    instance_alias,
-                    &bytes,
-                    expected,
-                    &[],
-                    self.execution()?.vision_provider(),
-                )
-                .map_err(observation_kernel_error)?
-            };
+            let observer = PreparedPageObservation::load_path(
+                instance_alias,
+                path,
+                &input.expected_sha256,
+                &[],
+                self.execution()?.vision_provider(),
+                deadline,
+            )
+            .map_err(observation_kernel_error)?;
             if input
                 .after
                 .as_ref()

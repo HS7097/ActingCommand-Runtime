@@ -28,7 +28,7 @@ use actingcommand_contract::{
     TaskSelectionVerdict, validate_candidate_layout_id,
 };
 use actingcommand_device::Frame;
-use actingcommand_pack_containment::{LoadedBundle, Sha256Hash};
+use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
@@ -44,8 +44,6 @@ use std::time::{Duration, Instant};
 
 const SELECT_INVALID: Code = ExecutionKernelCode::ContainedTaskSelectInvalid.code();
 const SELECT_POLICY_MISSING: Code = ExecutionKernelCode::ContainedTaskSelectPolicyMissing.code();
-const SELECT_POLICY_HASH_MISMATCH: Code =
-    ExecutionKernelCode::ContainedTaskSelectPolicyHashMismatch.code();
 const SELECT_POLICY_INVALID: Code = ExecutionKernelCode::ContainedTaskSelectPolicyInvalid.code();
 const SELECT_POLICY_MISMATCH: Code = ExecutionKernelCode::ContainedTaskSelectPolicyMismatch.code();
 const SELECTION_STATE_UNAVAILABLE: Code = ExecutionKernelCode::SelectionStateUnavailable.code();
@@ -103,7 +101,9 @@ pub(super) struct TaskSelect {
     policy: TaskSelectPolicy,
 }
 
-/// The task-local policy document a select step names, sealed by the SHA-256 of its bytes.
+/// The task-local policy document a select step names, with the SHA-256 its author declared.
+/// Workflow #336 PKG-S1: `sha256` stays required and format-checked, and is compared with
+/// nothing (PKG-S2 makes it optional).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TaskSelectPolicy {
@@ -142,7 +142,8 @@ pub(super) struct PreparedSelect {
     layout_id: String,
     /// The document's package path, `operations/<task>/<declared path>`, below the resource root.
     path: String,
-    /// The SHA-256 of the document's bytes, as declared and compared at admission.
+    /// The SHA-256 the select step declares for the document, recorded and never compared
+    /// (Workflow #336 PKG-S1).
     package_sha256: String,
     policy: SelectionPolicy,
 }
@@ -176,10 +177,9 @@ impl SelectedCandidate {
 
 /// Contained task admission of every select step, after the program and the page set are
 /// validated: the layout is a candidate layout of the recognition pack on the step's `from`
-/// page; the policy document is present in the package, its bytes hash to the declared
-/// SHA-256 (directly, whatever the package's manifest form), it reads as a selection-policy
+/// page; the policy document is present in the package, it reads as a selection-policy
 /// document, and it applies to the layout (`contracts/selection-graph.md`, section Select
-/// step).
+/// step). Its declared SHA-256 is compared with nothing (Workflow #336 PKG-S1).
 pub(super) fn prepare_select_steps(
     program: &mut TaskProgram,
     control: &TaskControl,
@@ -220,12 +220,6 @@ pub(super) fn prepare_select_steps(
         let bytes = bundle
             .resource_entry(&path)
             .map_err(|_| failure(SELECT_POLICY_MISSING, format!("policy={path}")))?;
-        if Sha256Hash::digest(bytes).to_string() != select.policy.sha256 {
-            return Err(failure(
-                SELECT_POLICY_HASH_MISMATCH,
-                format!("policy={path}"),
-            ));
-        }
         let policy = read_policy(bytes)
             .map_err(|reason| failure(SELECT_POLICY_INVALID, format!("policy={path} {reason}")))?;
         check_policy(&policy, layout)

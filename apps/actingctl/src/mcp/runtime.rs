@@ -23,6 +23,10 @@ use std::sync::Mutex;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 pub(super) struct RuntimeAccess {
+    /// Train 4 review ruling on MCP-11: the `--root` this server was started with, as given;
+    /// `ac_packs` finds the selected configuration from it at every call, as `actingctl packs`
+    /// does from its own `--root`.
+    requested_root: Option<PathBuf>,
     root: Option<PathBuf>,
     install_root: Option<PathBuf>,
     config: Option<PathBuf>,
@@ -94,6 +98,7 @@ pub(super) struct Connected {
 
 impl RuntimeAccess {
     pub(super) fn new(root: Option<PathBuf>, state_root: Option<PathBuf>) -> Self {
+        let requested_root = root.clone();
         let located = (|| {
             let process = actingcommand_contract::process_installation()
                 .map_err(|error| error.code().as_str().to_owned())?;
@@ -158,6 +163,7 @@ impl RuntimeAccess {
             Err(error) => (None, None, None, None, Some(error)),
         };
         Self {
+            requested_root,
             root,
             install_root,
             config,
@@ -166,6 +172,11 @@ impl RuntimeAccess {
             state_root,
             slot: Mutex::new(Slot::default()),
         }
+    }
+
+    /// The `--root` this server was started with, as given (train 4 review ruling on MCP-11).
+    pub(super) fn requested_root(&self) -> Option<&Path> {
+        self.requested_root.as_deref()
     }
 
     /// `--root`, or two levels above the running executable when

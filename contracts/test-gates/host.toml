@@ -395,3 +395,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_epoch_close::gate_after_a_crash_mid_run_the_new_start_winds_the_old_epoch_down",
 ]
 incident = ["#394"]
+
+# An install start with one unreachable device: only that instance is unavailable and the start goes on; a start that reached no device still ends
+[[gate]]
+key = "49"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure",
+]
+incident = ["#71", "#390 D-01"]

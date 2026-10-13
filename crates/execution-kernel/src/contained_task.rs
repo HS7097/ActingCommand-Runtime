@@ -4,10 +4,10 @@
 
 use crate::codes::ExecutionKernelCode;
 use crate::{
-    ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, InputFrameContext,
-    ObservedFrame, RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
-    RunOperationFailureDecision, RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal,
-    decide_run_operation_failure, select_run_operation,
+    ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame, RunDirective,
+    RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
+    RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
+    select_run_operation,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -53,7 +53,10 @@ mod selection;
 // Workflow #396 REC-1.
 #[cfg(test)]
 mod text_locate_tests;
+// Workflow #396 REC-2.
 mod timing;
+#[cfg(test)]
+mod unique_tests;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -2007,35 +2010,39 @@ enum PostAdmissionOcrExecution {
 }
 
 impl PreparedContainedTask {
-    /// Fully prepares verified material with the existing metadata-only vision capability,
-    /// then returns only its read-only description. No executable task or provider escapes.
+    /// Fully prepares the package `locator` names with the existing metadata-only vision
+    /// capability, then returns only its read-only description. No executable task or provider
+    /// escapes. Workflow #336 PKG-S1: `recorded` is the caller's reference, recorded on the
+    /// description and compared with nothing.
     pub fn describe_path(
         instance_label: &str,
         locator: &std::path::Path,
-        expected: &actingcommand_contract::PackageRef,
+        recorded: &actingcommand_contract::PackageRef,
         deadline: std::time::Instant,
     ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_metadata_path(
             instance_label,
             locator,
-            expected,
+            recorded,
             deadline,
         )
         .map_err(contained_task_admission_error)?;
         Ok(Self::from_bundle(bundle)?.package_descriptor())
     }
 
+    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path;
+    /// `recorded` is the caller's reference, kept as a record and compared with nothing.
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
-        expected: &actingcommand_contract::PackageRef,
+        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_path(
             instance_label,
             locator,
-            expected,
+            recorded,
             false,
             vision_provider,
             deadline,
@@ -2044,19 +2051,19 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
-    /// Workflow #336: `load_path` for a content table already in memory, admitted against the
-    /// content-directory reference `expected`.
+    /// Workflow #336: `load_path` for a content table already in memory; `recorded` is kept as
+    /// `load_path` keeps it.
     pub fn load_content_entries(
         instance_label: &str,
         entries: std::collections::BTreeMap<String, Vec<u8>>,
-        expected: &actingcommand_contract::ContentDirectory,
+        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_content_entries(
             instance_label,
             entries,
-            expected,
+            recorded,
             false,
             vision_provider,
             deadline,
@@ -2065,24 +2072,26 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
+    /// Admits the bytes of an assembled package ZIP structurally; `recorded` is kept as
+    /// `load_path` keeps it (Workflow #336 PKG-S1).
     pub fn load(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &actingcommand_contract::PackageRef,
     ) -> Result<Self, ContainedTaskError> {
-        Self::load_with_optional_vision_provider(instance_label, zip_bytes, expected, None)
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, recorded, None)
     }
 
     pub fn load_with_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Arc<dyn VisionProvider>,
     ) -> Result<Self, ContainedTaskError> {
         Self::load_with_optional_vision_provider(
             instance_label,
             zip_bytes,
-            expected,
+            recorded,
             Some(vision_provider),
         )
     }
@@ -2090,17 +2099,17 @@ impl PreparedContainedTask {
     fn load_with_optional_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        expected: ExternalExpectedSha256,
+        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = match vision_provider {
             Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
                 instance_label,
                 zip_bytes,
-                expected,
+                recorded,
                 provider,
             ),
-            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected),
+            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded),
         }
         .map_err(contained_task_admission_error)?;
         Self::from_bundle(bundle)
@@ -5649,12 +5658,12 @@ impl TaskProgram {
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeInvalid.code(),
             ));
         }
-        let expected_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
+        let declared_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
             ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
             )
         })?;
-        if expected_hash.to_string() != declaration.truth_set.sha256 {
+        if declared_hash.to_string() != declaration.truth_set.sha256 {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
             ));
@@ -5666,9 +5675,9 @@ impl TaskProgram {
                 relative_path.clone(),
             )
         })?;
-        if manifest_entry_sha256(bundle, &relative_path)? != expected_hash
-            || u64::try_from(bytes.len())
-                .map_or(true, |size| size > declaration.limits.max_total_bytes)
+        // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
+        // nothing; only the size bound applies to the bytes.
+        if u64::try_from(bytes.len()).map_or(true, |size| size > declaration.limits.max_total_bytes)
         {
             return Err(ContainedTaskError::with_detail(
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthMismatch.code(),
@@ -5820,7 +5829,9 @@ impl TaskProgram {
         for field in &declaration.fields {
             if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
                 let path = format!("operations/{}/{}", self.task_id, dictionary.path);
-                let expected = Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
+                // Workflow #336 PKG-S1: the declared `sha256` is format-checked and compared with
+                // nothing; only the total size bound applies to the bytes.
+                Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
                     ContainedTaskError::new(SharedCode::OcrFieldsDictionaryReferenceInvalid.code())
                 })?;
                 let bytes = bundle.resource_entry(&path).map_err(|_| {
@@ -5831,11 +5842,9 @@ impl TaskProgram {
                     .ok_or_else(|| {
                         ContainedTaskError::new(SharedCode::OcrFieldsDictionaryLimitExceeded.code())
                     })?;
-                if manifest_entry_sha256(bundle, &path)? != expected
-                    || dictionary_bytes > declaration.limits.max_total_bytes
-                {
+                if dictionary_bytes > declaration.limits.max_total_bytes {
                     return Err(ContainedTaskError::new(
-                        ExecutionKernelCode::OcrFieldsDictionaryHashOrLimitMismatch.code(),
+                        SharedCode::OcrFieldsDictionaryLimitExceeded.code(),
                     ));
                 }
                 let parsed: OcrFieldDictionary = serde_json::from_slice(bytes).map_err(|_| {
@@ -6385,70 +6394,6 @@ fn safe_task_local_path(path: &str) -> bool {
         && path
             .split('/')
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
-}
-
-fn manifest_entry_sha256(
-    bundle: &LoadedBundle,
-    relative_path: &str,
-) -> Result<Sha256Hash, ContainedTaskError> {
-    // Content-directory admission generates the manifest's hashes map in memory from the
-    // verified snapshot. LoadedBundle has checked those hashes against these same bytes.
-    // A manifest with files retains the exact single-entry requirement below.
-    if bundle.manifest().get("files").is_none() {
-        return bundle
-            .manifest()
-            .get("hashes")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|hashes| hashes.get(relative_path))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-                )
-            })
-            .and_then(|value| {
-                Sha256Hash::parse_hex(value).map_err(|_| {
-                    ContainedTaskError::new(
-                        ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-                    )
-                })
-            });
-    }
-    let files = bundle
-        .manifest()
-        .get("files")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            )
-        })?;
-    let matching = files
-        .iter()
-        .filter(|entry| {
-            entry.get("path").and_then(serde_json::Value::as_str) == Some(relative_path)
-        })
-        .collect::<Vec<_>>();
-    let [entry] = matching.as_slice() else {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-        ));
-    };
-    entry
-        .get("sha256")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            )
-        })
-        .and_then(|value| {
-            Sha256Hash::parse_hex(value).map_err(|_| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-                )
-            })
-        })
 }
 
 fn validate_stability_contract(
@@ -7698,9 +7643,6 @@ fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskE
     }
     let code = match &error {
         ExecutionBundleError::Containment(ContainmentError::SourceTree { code }) => *code,
-        ExecutionBundleError::Containment(ContainmentError::ContentDirectoryDigestMismatch {
-            ..
-        }) => ExecutionKernelCode::ContentDirectoryDigestMismatch.code(),
         ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
             code: RecognitionPackErrorCode::VisionProviderMissing,
             ..
@@ -10958,6 +10900,101 @@ mod retry_wiring_tests {
         }
     }
 
+    // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T4: a select step whose `policy.sha256`
+    // is well formed but is not the SHA-256 of the document is admitted, its document read and
+    // prepared for evaluation; the pin is compared with nothing (it stays required until S2).
+    #[test]
+    fn s1_t4_select_policy_pin_is_not_compared_at_admission() {
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let mut task = omitted_policy_task(false, false);
+        let mut pack = task.evaluator.pack().clone();
+        pack.schema_version = "0.7".into();
+        pack.candidate_layouts = vec![
+            serde_json::from_value(json!({
+                "id": "choices",
+                "page_id": "neutral/home",
+                "kind": "fixed_slots",
+                "features": [{"name": "ready", "value": "passed"}],
+                "slots": [{
+                    "rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "targets": {"ready": "guard/ready"}
+                }]
+            }))
+            .expect("candidate layout"),
+        ];
+        task.evaluator =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect("recognition evaluator");
+        task.program.operations[0].select = Some(
+            serde_json::from_value(json!({
+                "layout_id": "choices",
+                "policy": {"path": "policies/choices.json", "sha256": "b".repeat(64)}
+            }))
+            .expect("select declaration"),
+        );
+        task.program.operations[0].click = None;
+        let policy = serde_json::to_vec(&json!({
+            "schema_version": actingcommand_selection_policy::SELECTION_POLICY_SCHEMA_VERSION,
+            "policy_id": "policy.choices",
+            "applies_to": {
+                "candidate_layout_id": "choices",
+                "outcome_keys": {
+                    "selected": "outcome.selected",
+                    "empty": "outcome.empty",
+                    "insufficient": "outcome.insufficient",
+                    "ambiguous": "outcome.ambiguous",
+                    "unknown": "outcome.unknown"
+                }
+            },
+            "fields": [{"name": "ready", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": []
+        }))
+        .expect("policy document");
+        assert_ne!(format!("{:x}", Sha256::digest(&policy)), "b".repeat(64));
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes) in [
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/operations/task/task.json",
+                br#"{"task_id":"task"}"#.to_vec(),
+            ),
+            ("resources/operations/task/policies/choices.json", policy),
+        ] {
+            zip.start_file(path, zip::write::FileOptions::default())
+                .expect("zip entry");
+            zip.write_all(&bytes).expect("zip bytes");
+        }
+        let bytes = zip.finish().expect("zip").into_inner();
+        let reference = actingcommand_contract::PackageRef::LegacyZipSha256(format!(
+            "{:x}",
+            Sha256::digest(&bytes)
+        ));
+        let mut containment = actingcommand_pack_containment::Containment::new();
+        let bundle = containment
+            .load(
+                &actingcommand_pack_containment::InstanceId::new("neutral-select")
+                    .expect("instance"),
+                &bytes,
+                &reference,
+            )
+            .expect("the package is admitted");
+        selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
+            .expect("the select step is admitted with its declared pin unchecked");
+        assert!(task.program.operations[0].prepared_select.is_some());
+    }
+
     #[test]
     fn pre_execution_guard_passes_when_page_and_target_match() {
         let mut task = omitted_policy_task(false, false);
@@ -12301,6 +12338,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            uniqueness: None,
         };
         for click in [
             serde_json::from_value::<TaskClick>(json!({
@@ -12446,6 +12484,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            uniqueness: None,
         };
         let target_center: TaskClick = serde_json::from_value(json!({
             "kind": "target_center",

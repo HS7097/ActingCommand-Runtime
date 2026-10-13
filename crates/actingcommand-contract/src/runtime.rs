@@ -1066,6 +1066,8 @@ pub enum RuntimeCaptureBackend {
     AdbScreencapRawGzip,
     DroidcastRaw,
     NemuIpc,
+    /// #402 RD-3: the scrcpy continuous stream (real devices only).
+    Scrcpy,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

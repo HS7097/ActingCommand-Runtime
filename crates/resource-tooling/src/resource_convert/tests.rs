@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[test]
-fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithms() {
+fn schema_0_7_post_admission_ocr_validates_truth_and_closed_algorithms() {
     let root = tempfile::tempdir().expect("temp dir");
     let task_dir = root.path().join("operations/fixture_task");
     fs::create_dir_all(&task_dir).expect("task dir");
@@ -161,12 +161,10 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
             .message
             .contains("unsupported normalization")
     );
-    assert!(
-        validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &"0".repeat(64)))
-            .expect_err("truth hash mismatch")
-            .message
-            .contains("SHA-256")
-    );
+    // Workflow #336 PKG-S1 (model M-PKG v1.1 S1-T4): a well-formed truth-set SHA-256 that names
+    // other bytes is accepted; the pin is compared with nothing.
+    validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &"0".repeat(64)))
+        .expect("an unrelated well-formed truth set pin is not compared");
 
     let truth_v2_without_aliases = serde_json::to_vec(&json!({
         "schema_version": "actingcommand.ocr-truth-set.v2",

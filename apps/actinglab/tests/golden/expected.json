@@ -149,7 +149,7 @@
           "blocked_error": {
             "blocked_by": [],
             "code": "package_invalid",
-            "message": "fatal containment error: hash mismatch for instance semantic_readonly: expected <SHA256>, actual <SHA256>"
+            "message": "fatal containment error: invalid sha256 hash 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg'; hash mismatch cannot be evaluated"
           },
           "command": "detect-page",
           "details": null,
@@ -169,7 +169,7 @@
           "state": "failed",
           "trace_record_count": 1
         },
-        "message": "fatal containment error: hash mismatch for instance semantic_readonly: expected <SHA256>, actual <SHA256>"
+        "message": "fatal containment error: invalid sha256 hash 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg'; hash mismatch cannot be evaluated"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -583,7 +583,7 @@
       "error": {
         "blocked_by": [],
         "code": "package_invalid",
-        "message": "fatal containment error: invalid sha256 hash '0000'; hash mismatch cannot be evaluated"
+        "message": "resource declaration module/manifest.json field /hashes/operations~1resources.json is not consumable: InvalidType"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",

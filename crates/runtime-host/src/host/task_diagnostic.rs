@@ -14,8 +14,8 @@ use actingcommand_contract::{
     TaskDiagnosticRecognitionError, TaskDiagnosticRecord, TaskDiagnosticStepElapsedData,
     TaskDiagnosticStepStartedData, TaskDiagnosticTargetData, TaskDiagnosticTargetFailure,
     TaskDiagnosticTargetSource, TaskDiagnosticTemplateData, TaskDiagnosticTerminalData,
-    TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage, TaskRecordSubphases,
-    TaskTimingResult,
+    TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage, TaskDiagnosticUniquenessData,
+    TaskRecordSubphases, TaskTimingResult,
 };
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
 use actingcommand_recognition_pack::{
@@ -145,6 +145,12 @@ fn target_payload(
         source,
         sampling: target.sampling.clone(),
         failure: target.failure.clone(),
+        uniqueness: target.uniqueness.map(|value| TaskDiagnosticUniquenessData {
+            score_milli: value.score_milli,
+            second_score_milli: value.second_score_milli,
+            margin_milli: value.margin_milli,
+            second_rect: value.second_rect.map(region_rect),
+        }),
     }
 }
 
@@ -927,7 +933,8 @@ mod tests {
     use actingcommand_contract::outcome::Outcome;
     use actingcommand_recognition_pack::{
         OcrEvaluation, OcrLocatedEvidence, OcrMatchMode, OcrTextEvidence, PackRect,
-        RecognitionPackCode, RecognitionPackLocation, TargetKind,
+        RecognitionPackCode, RecognitionPackLocation, TargetKind, TargetMatchKind,
+        TargetUniquenessEvidence, TemplateEvaluation,
     };
 
     fn rect(x: i32, y: i32, width: i32, height: i32) -> PackRect {
@@ -996,6 +1003,7 @@ mod tests {
             color_digest: None,
             composite: None,
             failure,
+            uniqueness: None,
             message: "ocr text located".to_owned(),
             sampling: None,
             sample_evaluations: Vec::new(),
@@ -1152,5 +1160,79 @@ mod tests {
             ocr.as_ref(),
             TaskDiagnosticOcrData::Evaluated { located: None, .. }
         ));
+    }
+
+    // Workflow #396 REC-2: the guard row of a unique target with a second place.
+    #[test]
+    fn a_guard_row_carries_the_uniqueness_check_and_round_trips() {
+        let failure = Outcome::new(RecognitionPackCode::TargetMatchNotUnique)
+            .target_id("icon/unique")
+            .target_kind(TargetMatchKind::Template)
+            .score_milli(1000_u32)
+            .second_score_milli(1000_u32)
+            .margin_milli(50_u32)
+            .stage(RecognitionPackLocation::TargetMatchUnique);
+        let target = TargetEvaluation {
+            id: "icon/unique".to_owned(),
+            kind: TargetKind::Template,
+            passed: false,
+            template: Some(TemplateEvaluation {
+                x: 40,
+                y: 30,
+                width: 24,
+                height: 18,
+                raw_score: 1.0,
+                score: 1.0,
+                threshold: 0.9,
+            }),
+            color: None,
+            ocr: None,
+            nn: None,
+            color_digest: None,
+            composite: None,
+            failure: Some(failure),
+            uniqueness: Some(TargetUniquenessEvidence {
+                score_milli: 1000,
+                second_score_milli: Some(1000),
+                margin_milli: 50,
+                second_rect: Some(rect(200, 150, 24, 18)),
+            }),
+            message: "target match not unique".to_owned(),
+            sampling: None,
+            sample_evaluations: Vec::new(),
+        };
+        let row = record(
+            1,
+            None,
+            Payload::Target(Box::new(target_payload(
+                &target,
+                TaskDiagnosticTargetSource::Guard {
+                    phase: "guard".to_owned(),
+                },
+            ))),
+        );
+
+        let read = round_trip(&row);
+
+        assert_eq!(read, row);
+        let Payload::Target(data) = &read.payload else {
+            panic!("a target row");
+        };
+        assert_eq!(
+            data.uniqueness,
+            Some(TaskDiagnosticUniquenessData {
+                score_milli: 1000,
+                second_score_milli: Some(1000),
+                margin_milli: 50,
+                second_rect: Some(region_rect_of(rect(200, 150, 24, 18))),
+            })
+        );
+        let failure = data.failure.as_ref().expect("the typed failure");
+        assert!(failure.is(RecognitionPackCode::TargetMatchNotUnique));
+        assert_eq!(
+            failure.value("target_kind"),
+            Some(&serde_json::json!("template"))
+        );
+        assert_eq!(failure.value("margin_milli"), Some(&serde_json::json!(50)));
     }
 }

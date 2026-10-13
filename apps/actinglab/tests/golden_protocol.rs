@@ -1367,10 +1367,12 @@ impl Fixture {
                 | "do_failure"
         ) {
             args.extend([os("--zip"), self.semantic_package.clone().into_os_string()]);
+            // Workflow #336 PKG-S1: a well-formed reference is recorded and compared with
+            // nothing, so the failure case passes a malformed one, refused by the format check.
             args.extend([
                 os("--expected-sha256"),
                 os(if name == "detect_page_failure" {
-                    "0000000000000000000000000000000000000000000000000000000000000000"
+                    "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
                 } else {
                     &self.semantic_package_sha256
                 }),
@@ -1688,12 +1690,14 @@ fn write_safe_packages(safe: &Path, bad_hash: &Path) {
             ("module/operations/resources.json", br#"{}"#),
         ],
     );
+    // Workflow #336 PKG-S1: a manifest hash's text is no longer read, so the failure case
+    // gives a `hashes` value that is not text, refused by the manifest declaration grammar.
     write_zip(
         bad_hash,
         &[
             (
                 "module/manifest.json",
-                br#"{"hashes":{"operations/resources.json":"sha256:0000"}}"#,
+                br#"{"hashes":{"operations/resources.json":0}}"#,
             ),
             ("module/operations/task/task.json", br#"{}"#),
             ("module/operations/resources.json", br#"{}"#),

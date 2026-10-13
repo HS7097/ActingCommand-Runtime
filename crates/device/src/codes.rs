@@ -42,6 +42,54 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+// Workflow #398 RD-5a: the device-state checks of a handset (begin).
+actingcommand_contract::outcome_codes! {
+    /// Workflow #398 RD-5a (model-398 v1.1 §7, §10.1): the read-only device-state checks of a
+    /// handset and its screen check (`crate::device_state`). Every entry is pending.
+    pub enum DeviceStateCode {
+        /// A device-state read failed or answered a shape the parser does not know (value
+        /// `device_state_probe`; link `foreign_adb_error` when adb answered).
+        DeviceStateUnreadable => "device_state_unreadable": error / environment_fault,
+        /// The screen was still not awake after one wake key and the settle time (value
+        /// `device_label`).
+        DeviceWakeFailed => "device_wake_failed": error / environment_fault,
+        /// A keyguard without a credential still showed after one dismissal and the settle time
+        /// (value `device_label`).
+        DeviceKeyguardDismissFailed => "device_keyguard_dismiss_failed": error / environment_fault,
+        /// A keyguard waits for a person: it asks for a credential, or the policy is `wait` (value
+        /// `device_label`).
+        DeviceLocked => "device_locked": warning / budget_or_permission,
+    }
+}
+// Workflow #398 RD-5a (end).
+
+actingcommand_contract::outcome_codes! {
+    /// #402 RD-3: the scrcpy stream capture backend's results, and the stream freshness result
+    /// of the capture interface (#398 RD-3i). Until B5 types the device layer, a device error
+    /// carries the spelling as its message, as the frame memory codes do.
+    pub enum StreamCaptureCode {
+        /// The scrcpy server the executable carries does not match its pinned SHA-256 (or the
+        /// build embedded none). Only that instance's scrcpy capture backend is unavailable;
+        /// the Runtime goes on (coordinator ruling 10-13, board #403 direction).
+        ScrcpyServerDigestMismatch => "scrcpy_server_digest_mismatch": error / none,
+        /// Pushing, forwarding or starting the scrcpy server, or its first frame, failed. Only
+        /// that instance's run fails and the ladder handles it; the Runtime goes on
+        /// (coordinator ruling 10-13, the instance-level rule of board #403).
+        ScrcpyServerStartFailed => "scrcpy_server_start_failed": error / environment_fault,
+        /// The stream stopped: the server exited, the socket closed, a packet was malformed or
+        /// decoding failed. Only that instance's run fails and the ladder handles it; the
+        /// Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).
+        ScrcpyStreamEnded => "scrcpy_stream_ended": error / environment_fault,
+        /// The encoder produced another video size than the unscaled crop requested, so a frame
+        /// would be scaled; it is refused instead. Only that instance's run fails and the ladder
+        /// handles it; the Runtime goes on (coordinator ruling 10-13 09:2x: every scrcpy code is
+        /// instance-level).
+        ScrcpyVideoSizeMismatch => "scrcpy_video_size_mismatch": error / environment_fault,
+        /// No frame encoded after the capture floor arrived within the configured wait.
+        CaptureFrameStale => "capture_frame_stale": error / environment_fault,
+    }
+}
+
 actingcommand_contract::outcome_locations! {
     /// The device layer's own operations and steps that a device error's diagnostic context or
     /// developer text names: the adb shell input backend's connect steps, the Nemu capture

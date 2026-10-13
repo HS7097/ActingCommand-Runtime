@@ -189,6 +189,10 @@ crate::outcome_codes! {
         CaptureSummaryFrameConflict => "capture_summary_frame_conflict": error / none,
         CaptureSummaryPinConflict => "capture_summary_pin_conflict": error / none,
         ClientActionInvalid => "client_action_invalid": error / none,
+        // Workflow #389 MCP-11, ruling Q6: actingd's two configuration refusals, which actingctl
+        // `packs` / `ac_packs` emit with the same meaning.
+        ConfigDecodeFailed => "config_decode_failed": error / none,
+        ConfigReadFailed => "config_read_failed": error / none,
         ConsecutiveUnchangedThresholdReached => "consecutive_unchanged_threshold_reached": info / none,
         ContainedTaskGuardEvaluationFailed => "contained_task_guard_evaluation_failed": error / pack_logic_mismatch,
         ContainedTaskHomeEntryNotMatched => "contained_task_home_entry_not_matched": error / pack_logic_mismatch,

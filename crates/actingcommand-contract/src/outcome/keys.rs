@@ -148,6 +148,11 @@ outcome_keys! {
     // Workflow #396 REC-1.
     target_id: id,
     text_read_budget: vocab(text_read_budget),
+    // Workflow #396 REC-2.
+    target_kind: vocab(target_kind),
+    score_milli: integer,
+    second_score_milli: integer,
+    margin_milli: integer,
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
@@ -371,6 +376,8 @@ outcome_keys! {
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
     ladder_class: vocab(ladder_class),
+    // Workflow #398 RD-5a: the device-state read of a handset that failed.
+    device_state_probe: vocab(device_state_probe),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
 }

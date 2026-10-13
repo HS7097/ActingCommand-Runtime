@@ -861,21 +861,65 @@ impl HostShared {
             .map(|transition| transition.deadline))
     }
 
-    pub(super) fn require_install_selfcheck(
+    /// INST-1 (Workflow #390, FCM D-01): an install start's verdict on the self-checks of its
+    /// daemon-start preparation, given every instance it prepared (`checks`). Outside a held
+    /// start nothing changes: a failed preparation has already left its instance unavailable.
+    /// In a held start:
+    /// - no prepared instance passed and at least one failed: the new build reached no device,
+    ///   and the start ends `install_preparation_selfcheck_failed` as before;
+    /// - otherwise each failed instance stays unavailable and is recorded once as
+    ///   `install_preparation_instance_unavailable` (warning) at stage `install_release`, with
+    ///   its self-check failure as the outcome's `caused_by` link (ledger revision 3), and the
+    ///   start goes on with the instances that passed.
+    pub(super) fn settle_install_selfchecks(
         &self,
-        instance_id: InstanceId,
-        check: &SchedulingResumeSelfCheck,
+        checks: &[(InstanceId, SchedulingResumeSelfCheck)],
     ) -> RuntimeHostResult<()> {
         let admission = lock(
             &self.lifecycle_admission,
             HostLocation::CheckInstallSelfcheck,
         )?;
-        if admission.held.is_some()
-            && (check.failure_code.is_some() || !check.capture.ok || !check.touch.ok)
-        {
+        if admission.held.is_none() {
+            return Ok(());
+        }
+        let failed = checks
+            .iter()
+            .filter(|(_, check)| {
+                check.failure_code.is_some() || !check.capture.ok || !check.touch.ok
+            })
+            .collect::<Vec<_>>();
+        if failed.is_empty() {
+            return Ok(());
+        }
+        if failed.len() == checks.len() {
             let mut error = install_error(HostCode::InstallPreparationSelfcheckFailed);
-            error.lifecycle.instance_id = Some(instance_id);
+            if let [(instance_id, _)] = failed.as_slice() {
+                error.lifecycle.instance_id = Some(*instance_id);
+            }
             return Err(error);
+        }
+        let entered_event_id = admission
+            .transition
+            .as_ref()
+            .and_then(|transition| transition.entered_event_id);
+        for (instance_id, check) in failed {
+            let mut unavailable = install_error(HostCode::InstallPreparationInstanceUnavailable);
+            unavailable.lifecycle.instance_id = Some(*instance_id);
+            // Ledger revision 3 (#378 A3): the self-check failure is the `caused_by` link (it
+            // was the `cause=<code>` token).
+            if let Some(cause) = &check.failure_code {
+                unavailable.lifecycle.caused_by =
+                    Some(actingcommand_contract::outcome::Outcome::relayed(cause));
+            }
+            self.append_lifecycle_failure_with_severity(
+                RuntimeLifecycleFailureStage::InstallRelease,
+                RuntimeLifecycleFailure::Host(&unavailable),
+                self.events
+                    .system_links()?
+                    .with_instance_id(self.events.issuer().issue_registered_instance(*instance_id)),
+                entered_event_id,
+                Some(EventSeverity::Warning),
+            )?;
         }
         Ok(())
     }

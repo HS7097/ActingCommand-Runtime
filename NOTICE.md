@@ -43,6 +43,25 @@ No upstream automation source code has been copied into this repository as part 
 - Redistribution: redistributed by the owner's decision (Workflow #337, 2026-10-03). Android SDK License section 3.4 forbids copying or redistributing the SDK except where a third-party license requires otherwise; section 3.5 places components released under an open-source license only under that license. This records the owner's decision; it is not a legal opinion.
 - Purpose: the adb `actingd` uses by default from an install root (see `external-tools/NOTICE.md`, "ADB version boundary").
 
+## Embedded in the Runtime executable, not committed
+
+### scrcpy server 5.0.1
+
+- Upstream: the scrcpy server by Genymobile and Romain Vimont, release v5.0.1 (`Copyright (C) 2018 Genymobile`, `Copyright (C) 2018-2026 Romain Vimont`).
+- Source URL: https://github.com/Genymobile/scrcpy/releases/download/v5.0.1/scrcpy-server-v5.0.1 (the official versioned release asset; no other source).
+- Verification: the Windows exact-SHA build downloads the asset and fails unless it has the pinned size (733930 bytes) and the official SHA-256 (`764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`, published as `PREBUILT_SERVER_SHA256` in the release's `install_release.sh` and reported by GitHub for the asset). `crates/device/build.rs` checks the same pin again and embeds the file; the device crate checks the embedded bytes against the pin before every push to a device. The pin is `components."scrcpy-server-5.0.1"` in `scripts/windows-tools/windows-tool-sources.v1.json`. Nothing of it is committed to this repository.
+- License: Apache-2.0 (https://github.com/Genymobile/scrcpy/blob/v5.0.1/LICENSE). The Runtime artifact's `RELEASE-NOTES.md` carries the notice.
+- Redistribution: bundled with the Runtime by the owner's decision (#402 ruling, 2026-10-13). This records the owner's decision; it is not a legal opinion.
+- Purpose: the `scrcpy` capture backend for real devices (#402 RD-3). The Runtime pushes it to the device's `/data/local/tmp` and starts it with its control and audio channels off and no option that changes a device setting; it never runs on this machine.
+
+### OpenH264 (compiled from source)
+
+- Upstream: Cisco's OpenH264 (`Copyright (c) 2013, Cisco Systems`), at commit `4a2615fac570c6ca1ed4f157b9fdab9466edfd80` of https://github.com/cisco/openh264 as bundled by the `openh264-sys2` 0.9.8 crate, with the Rust wrapper `openh264` 0.9.8 (https://github.com/ralfbiedert/openh264-rs, Ralf Biedert and contributors).
+- Crate checksums (crates.io SHA-256, also in `Cargo.lock`): `openh264` 0.9.8 `fcc9071a0b5f9c501ddd01066c2600d922cc799dc450a52975222bcda7755a08`; `openh264-sys2` 0.9.8 `6ada29a4cadc13d4d326737af87c13e224210d7d99fe47594e9f3f9b0102fd70`.
+- License: BSD-2-Clause (OpenH264, `openh264` and `openh264-sys2`). The Runtime artifact's `RELEASE-NOTES.md` reproduces the notice and conditions.
+- Build: the crates' default `source` feature compiles the bundled C++ source with the MSVC toolchain into `actingcommand-actingd.exe`; no prebuilt OpenH264 binary is downloaded or loaded. Built from source, it does not carry the patent licence Cisco attaches to its own binaries.
+- Purpose: decoding the scrcpy server's H.264 stream (only H.264 is used).
+
 ## Reviewed but not bundled OCR/NN dependencies
 
 ### FastDeploy / PPOCR
@@ -72,6 +91,22 @@ No upstream automation source code has been copied into this repository as part 
 - License check: ONNX Runtime repository `LICENSE` was verified through GitHub API on 2026-07-02 as MIT.
 - Artifact contract status: the contract exists, and the source-only provider crate exists. A local-only R3 NN smoke was run on 2026-07-02 using ignored local artifacts: ONNXRuntime release `v1.24.4` CPU x64 asset `onnxruntime-win-x64-1.24.4.zip`, ONNX Models SqueezeNet `Opset16` model `Computer_Vision/squeezenet1_0_Opset16_torch_hub/squeezenet1_0_Opset16.onnx`, and local smoke labels. The smoke produced real ONNXRuntime JSON output through `ac_onnxruntime_classify_json`; these binaries/models/labels are not copied or redistributed in this repository.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, third-party notices, binary provenance, model terms, copied artifact paths, and redistribution obligations.
+
+## Rust crate dependencies
+
+### FFT for the exact template score map
+
+- Role (Workflow #396 REC-2, model D18): `crates/recognition` computes the template products `sum(T * I)` of the exact score map by an FFT cross-correlation (`contracts/resource-declarations.md`, section Task schema `0.9` unique matches). No other crate uses these crates.
+- Source: crates.io, compiled from source into the binaries that link `crates/recognition`; `Cargo.lock` pins each version with its crates.io SHA-256 checksum. No source file is copied into this repository.
+- Rust dependency license check: `realfft` 3.5.0 reports `MIT`; `rustfft` 6.4.1 and its dependencies `primal-check` 0.3.4, `strength_reduce` 0.2.4 and `transpose` 0.2.3 report `MIT OR Apache-2.0`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
+- Notes: all five are pure Rust. `num-complex`, `num-integer` and `num-traits`, which they also use, were already dependencies.
+
+### SIMD conversion and build helpers of the OpenH264 crates
+
+- Role (#402 RD-3): `openh264` 0.9.8 converts decoded YUV frames with `wide` 1.7.1, which builds on `safe_arch` 1.2.0; both are compiled into `actingcommand-actingd.exe` through `crates/device`. The build script of `openh264-sys2` 0.9.8 uses `nasm-rs` 0.3.2, with `walkdir` 2.5.0 and `same-file` 1.0.6, at build time only; these three are linked into no binary. The OpenH264 section above covers `openh264` and `openh264-sys2` themselves.
+- Source: crates.io, compiled from source; `Cargo.lock` pins each version with its crates.io SHA-256 checksum. No source file is copied into this repository.
+- Rust dependency license check: `wide` 1.7.1 and `safe_arch` 1.2.0 report `Zlib OR Apache-2.0 OR MIT`; `nasm-rs` 0.3.2 reports `MIT OR Apache-2.0`; `walkdir` 2.5.0 and `same-file` 1.0.6 report `Unlicense/MIT`. These are the licences stated in each crate's crates.io metadata, checked on 2026-10-13.
+- Notes: `wide` 0.7.33 and `safe_arch` 0.7.4 were already dependencies of other crates; `Cargo.lock` names both versions of each. `cc`, `log`, `winapi-util`, `bytemuck` and `sha2`, which these crates also use, were already dependencies.
 
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 

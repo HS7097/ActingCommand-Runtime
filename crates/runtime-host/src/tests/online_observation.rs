@@ -8,7 +8,7 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         ContainedObservationEvidence, ContainedObservationRequest, PageObservationStatus,
     };
     use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
-    for mode in 0..7 {
+    for mode in 0..6 {
         let root = TempDir::new().unwrap();
         let state = Arc::new(FakeState::default());
         state.unknown_capture.store(mode == 1, Ordering::Release);
@@ -51,11 +51,7 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         let bytes = zip.finish().unwrap().into_inner();
         let path = root.path().join("observation.zip");
         fs::write(&path, &bytes).unwrap();
-        let expected = if mode == 6 {
-            "0".repeat(64)
-        } else {
-            format!("{:x}", Sha256::digest(&bytes))
-        };
+        let expected = format!("{:x}", Sha256::digest(&bytes));
         if mode == 5 {
             fs::write(root.path().join("artifacts"), b"blocks artifact directory").unwrap();
         }
@@ -76,10 +72,7 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         if mode >= 4 {
             let error = result.unwrap_err();
             assert_eq!(error.is_fatal(), mode == 5);
-            assert_eq!(
-                state.capture_count.load(Ordering::Acquire),
-                usize::from(mode != 6)
-            );
+            assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
         } else {
             let verified = match result {
                 Ok(value) => value,

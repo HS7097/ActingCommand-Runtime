@@ -252,9 +252,27 @@ pub struct TaskDiagnosticTargetData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<TaskDiagnosticSamplingData>,
     /// Workflow #396 REC-1: why a target did not pass, when a registered reason exists
-    /// (`text_locate_not_found`, `text_locate_outside_cells`); absent otherwise.
+    /// (`text_locate_not_found`, `text_locate_outside_cells`, and from REC-2
+    /// `target_match_not_unique`); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<crate::outcome::Outcome>,
+    /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique`; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniqueness: Option<TaskDiagnosticUniquenessData>,
+}
+
+/// Workflow #396 REC-2: the best match's score and the declared margin, in milli, and the
+/// second place within that margin when one exists (the target then did not pass).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticUniquenessData {
+    pub score_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_score_milli: Option<u32>,
+    pub margin_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_rect: Option<crate::OcrRegionRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

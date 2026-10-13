@@ -182,24 +182,15 @@ pub(super) fn compile(
             PackContainmentCode::SourceContainsDerivedOutput,
         ));
     }
-    // This in-memory index preserves the existing projection dependency guards;
-    // the admitted package identity remains the verified source reference.
-    let hashes: BTreeMap<_, _> = entries
-        .iter()
-        .filter_map(|(path, bytes)| {
-            path.strip_prefix("resources/")
-                .map(|path| (path.to_owned(), Sha256Hash::digest(bytes).to_string()))
-        })
-        .collect();
+    // Assembly reads the derived manifest for its entry task; it carries no file hashes
+    // (Workflow #336 PKG-S1: no pin inside a package is computed or compared).
     entries.insert(
         "resources/manifest.json".to_owned(),
-        serde_json::to_vec(
-            &serde_json::json!({"entry_task_id":control.entry_task_id,"hashes":hashes}),
-        )
-        .map_err(|_| source_error(PackContainmentCode::SourceConversionEncodeFailed))?,
+        serde_json::to_vec(&serde_json::json!({"entry_task_id":control.entry_task_id}))
+            .map_err(|_| source_error(PackContainmentCode::SourceConversionEncodeFailed))?,
     );
-    // Projection declarations remain the exact verified source bytes; build_all
-    // has already checked them against the generated catalog.
+    // Projection declarations remain the exact source bytes read; build_all has already
+    // checked them against the generated catalog.
     let mut resident_bytes = operation_bytes;
     for bytes in entries.values() {
         if bytes.len() as u64 > limits.max_entry_bytes {

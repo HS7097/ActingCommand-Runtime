@@ -566,6 +566,22 @@
       "type": "vocab:text_read_budget",
       "description": "Which per-consumer text read budget ran out."
     },
+    "target_kind": {
+      "type": "vocab:target_kind",
+      "description": "Which kind of target a uniqueness check compared."
+    },
+    "score_milli": {
+      "type": "integer",
+      "description": "A best match's score in milli, rounded down: a template's normalized match score or a text block's confidence."
+    },
+    "second_score_milli": {
+      "type": "integer",
+      "description": "The score in milli, rounded down, of the second place found within the margin of the best match."
+    },
+    "margin_milli": {
+      "type": "integer",
+      "description": "A declared margin in milli below the best match's score."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -1516,6 +1532,10 @@
     "ladder_class": {
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
+    "device_state_probe": {
+      "type": "vocab:device_state_probe",
+      "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     },
     "mumu_manager_version": {
       "type": "version",
@@ -3246,6 +3266,21 @@
         }
       }
     },
+    "target_kind": {
+      "description": "Which kind of target a uniqueness check compared (Workflow #396 REC-2).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TargetMatchKind"
+      },
+      "tokens": {
+        "template": {
+          "description": "A template target: positions of its match score."
+        },
+        "ocr": {
+          "description": "A locate OCR target: text blocks and their confidence."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -4313,6 +4348,36 @@
         },
         "none": {
           "description": "7. Not applicable: a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error."
+        }
+      }
+    },
+    "device_state_probe": {
+      "description": "A device-state read of a handset (model-398 section 7.1).",
+      "source": {
+        "file": "crates/device/src/device_state.rs",
+        "enum": "DeviceStateProbe"
+      },
+      "tokens": {
+        "power": {
+          "description": "dumpsys power: the wakefulness."
+        },
+        "keyguard": {
+          "description": "dumpsys window policy: the keyguard section."
+        },
+        "battery": {
+          "description": "dumpsys battery."
+        },
+        "thermal": {
+          "description": "dumpsys thermalservice: the thermal status."
+        },
+        "foreground": {
+          "description": "The foreground query (dumpsys activity activities)."
+        },
+        "home": {
+          "description": "cmd package resolve-activity for the home intent."
+        },
+        "settings": {
+          "description": "settings get of a screen-timeout setting."
         }
       }
     }
@@ -6806,6 +6871,9 @@
       "lab",
       "pack-containment"
     ],
+    "target_match_": [
+      "recognition-pack"
+    ],
     "task_": [
       "actingctl",
       "actingledger",
@@ -7124,6 +7192,9 @@
     ],
     "pack_schedule_": [
       "policy"
+    ],
+    "scrcpy_": [
+      "device"
     ]
   },
   "fragments": {

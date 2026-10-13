@@ -139,9 +139,11 @@ that Scene. The text reads of locate targets (section Located text) are remember
 request within that Scene; other OCR output is not cached, and callers cannot import an
 old template result.
 The context is bounded by admitted target identities and is released with the frame.
-Best-match score, threshold and the existing color check govern the anchor. This API
-does not establish match uniqueness. Resource authors choose discriminating icons and
-search areas and calibrate offsets for their actual layouts.
+Best-match score, threshold and the existing color check govern the anchor. An anchor that
+declares `unique` (`resource-declarations.md`, section Task schema `0.9` unique matches) is
+matched only while no second place lies within its margin; otherwise this API does not
+establish match uniqueness. Resource authors choose discriminating icons and search areas
+and calibrate offsets for their actual layouts.
 
 An unmatched anchor, checked-coordinate overflow, or out-of-frame ROI produces
 `region_unresolved` with its typed reason and no OCR invocation/execution evidence.
@@ -208,8 +210,9 @@ The other value type is:
 ```
 
 The path is relative to the task's operation directory, bounded to 256 bytes and cannot
-escape it. Source tooling, generated-package closure and Runtime admission verify the
-hash-bound bytes. The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
+escape it. Workflow #336 PKG-S1: `sha256` stays required and must be 64 lowercase hex
+digits, but nothing compares it with the dictionary's bytes (PKG-S2 makes it optional).
+The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
 (`items`, optional `aliases` with `observed`/`canonical`). Trim/lowercase matching selects
 one canonical item, preserving the item's declared spelling. Alias canonical references
 must exactly name a declared item. Duplicate normalized items, duplicate/conflicting
@@ -217,12 +220,13 @@ aliases and invalid canonical references fail admission as ambiguous. Unknown ob
 remain unresolved; no tolerant substitution or retry is applied to fields.
 
 Dictionary and post-admission truth-set preparation read the exact resource-relative
-path from the admitted bundle's manifest. A `files` manifest requires exactly one matching
-entry with `sha256`. Content-directory admission instead derives its `hashes` map from the
-verified in-memory snapshot; preparation reads that map when the manifest has no `files`
-member. Containment verifies every declared hash against the same contained bytes before
-issuing the bundle. Missing or malformed hashes still fail, and preparation compares the
-manifest digest with the task's declared digest under the existing dictionary/truth limits.
+path from the admitted bundle. Workflow #336 PKG-S1: no hash is compared at any step. The
+declared `sha256` must still be well formed (a malformed dictionary reference fails
+`ocr_fields_dictionary_reference_invalid`, a malformed truth-set one
+`contained_task_post_admission_ocr_truth_invalid`), a manifest's per-file hashes are not
+read, and only the existing size limits apply to the bytes: dictionaries above the field
+declaration's `max_total_bytes` fail `ocr_fields_dictionary_limit_exceeded`, a truth set above
+it `contained_task_post_admission_ocr_truth_mismatch`.
 
 A `dictionary_entry` field may explicitly declare `text_extraction`:
 
@@ -396,7 +400,10 @@ A locate target that does not pass carries its typed reason as `failure`:
 rectangle when `cells` is declared, and `truncated`. When the detector found more boxes
 than the folder's `max_boxes`, a read without a hit fails with the evaluation error
 `text_read_blocks_truncated` (`count` boxes detected, `limit_count` the folder's
-`max_boxes`); a hit passes with `truncated: true`. The task diagnostic stream records
+`max_boxes`), and so does a hit of a target that declares `unique` (Workflow #396 REC-2); any
+other hit passes with `truncated: true`. A target that declares `unique` fails with
+`target_match_not_unique` when another matching block lies within its margin
+(`resource-declarations.md`, section Task schema `0.9` unique matches). The task diagnostic stream records
 `failure` on the target row, `located` on its OCR row and the outcome of an evaluation
 error on its recognition error row.
 

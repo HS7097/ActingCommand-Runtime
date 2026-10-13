@@ -25,8 +25,12 @@ mod candidate_identity;
 mod candidate_layout;
 mod codes;
 mod target_consensus;
+// Workflow #396 REC-2.
+mod target_unique;
 mod text_locate;
+pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
+pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
 pub use text_locate::{
     OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
     OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
@@ -40,7 +44,7 @@ pub use candidate_identity::{
     CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
 };
 
-pub use codes::{RecognitionPackCode, RecognitionPackLocation, TextReadBudget};
+pub use codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget};
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
@@ -100,7 +104,8 @@ pub struct RecognitionPackError {
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
     sample: Option<Box<actingcommand_contract::TaskDiagnosticSampleData>>,
-    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude.
+    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude;
+    /// REC-2: of a unique template search past its limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     outcome: Option<Outcome>,
 }
@@ -134,7 +139,8 @@ impl RecognitionPackError {
         error
     }
 
-    /// The registered outcome of a text read that refused to conclude.
+    /// The registered outcome of an evaluation that refused to conclude: a text read
+    /// (Workflow #396 REC-1) or a unique template search past its limit (REC-2).
     pub fn outcome(&self) -> Option<&Outcome> {
         self.outcome.as_ref()
     }
@@ -358,6 +364,9 @@ pub struct TemplateTarget {
     pub rect_move: Option<PackRect>,
     pub color_check: Option<ColorCheck>,
     pub click: Option<PackRect>,
+    /// Schema 0.7: a second place within this margin fails the target (Workflow #396 REC-2).
+    #[serde(default)]
+    pub unique: Option<TargetUnique>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -433,6 +442,10 @@ pub struct OcrTarget {
     /// Schema 0.7: find the text block by block and give its box (Workflow #396 REC-1).
     #[serde(default)]
     pub locate: Option<OcrLocate>,
+    /// Schema 0.7, with `locate`: a second matching block within this margin fails the target
+    /// (Workflow #396 REC-2).
+    #[serde(default)]
+    pub unique: Option<TargetUnique>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -510,6 +523,8 @@ pub struct RecognitionEvaluator {
     pack: RecognitionPack,
     target_indexes: HashMap<String, usize>,
     unsupported_targets: Vec<UnsupportedRecognitionTarget>,
+    /// Workflow #396 REC-2: the clock the 5 s limit of a unique template search is read on.
+    search_clock: recognition::SearchClock,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -774,9 +789,14 @@ pub struct TargetEvaluation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<Box<CompositeEvaluation>>,
     /// Why the target did not pass, when a registered reason exists (Workflow #396 REC-1:
-    /// `text_locate_not_found`, `text_locate_outside_cells`); absent otherwise.
+    /// `text_locate_not_found`, `text_locate_outside_cells`; REC-2: `target_match_not_unique`);
+    /// absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<Outcome>,
+    /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique` (a second
+    /// place makes `failure` `target_match_not_unique`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uniqueness: Option<TargetUniquenessEvidence>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<actingcommand_contract::TaskDiagnosticSamplingData>,
@@ -984,6 +1004,16 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     Ok(pack)
 }
 
+/// The search a joint template and relative color evaluation selects with: the direct joint
+/// search, or (Workflow #396 REC-2) the exact score map of a unique template.
+pub(crate) enum JointSearch<'a> {
+    Filter {
+        template_png: &'a [u8],
+        region: Option<recognition::Rect>,
+    },
+    Map(&'a recognition::ExactScoreMap),
+}
+
 /// A template cache bound to one immutable Scene and its admitted evaluator.
 /// OCR results are not cached, except the text reads of locate targets, which are remembered
 /// per request for this Scene only (Workflow #396 REC-1); callers cannot import evaluations
@@ -999,6 +1029,8 @@ pub struct SceneEvaluation<'a> {
     text_reads: RefCell<text_locate::TextReads>,
     /// The clock an anchor search reads its time limit from.
     search_clock: fn() -> std::time::Instant,
+    /// Workflow #396 REC-2: the transforms of the regions unique templates search in.
+    spectra: RefCell<recognition::RegionSpectra>,
 }
 
 impl SceneEvaluation<'_> {
@@ -1195,6 +1227,7 @@ impl RecognitionEvaluator {
             sample_deadline: None,
             text_reads: RefCell::new(text_locate::TextReads::default()),
             search_clock: std::time::Instant::now,
+            spectra: RefCell::new(recognition::RegionSpectra::default()),
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
@@ -1241,7 +1274,15 @@ impl RecognitionEvaluator {
             pack,
             target_indexes,
             unsupported_targets,
+            search_clock: recognition::SearchClock::system(),
         })
+    }
+
+    /// Workflow #396 REC-2: reads the 5 s limit of unique template searches on `clock` instead
+    /// of the system's monotonic clock.
+    pub fn with_search_clock(mut self, clock: recognition::SearchClock) -> Self {
+        self.search_clock = clock;
+        self
     }
 
     pub fn pack(&self) -> &RecognitionPack {
@@ -1273,7 +1314,7 @@ impl RecognitionEvaluator {
                         target.id
                     )));
                 }
-                self.evaluate_template(scene, target)
+                self.evaluate_template(context, target)
             }
             RecognitionTarget::Color(target) => self.evaluate_color(scene, target),
             RecognitionTarget::ClickOnly(target) => Err(RecognitionPackError::fatal(format!(
@@ -1302,6 +1343,14 @@ impl RecognitionEvaluator {
         if let Some(reason) = unsupported_template_reason(target) {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' uses unsupported recognition semantics: {reason}",
+                target.id
+            )));
+        }
+        // Workflow #396 REC-2: a batch of regions does not check uniqueness; it refuses a
+        // target that declares it instead of ignoring the declaration.
+        if target.unique.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' declares unique, which template-region batch evaluation does not check",
                 target.id
             )));
         }
@@ -1637,9 +1686,10 @@ impl RecognitionEvaluator {
 
     fn evaluate_template(
         &self,
-        scene: &Scene,
+        context: &SceneEvaluation<'_>,
         target: &TemplateTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        let scene = context.scene;
         let template_png = self
             .asset_resolver
             .read_asset(&target.template_path)
@@ -1652,6 +1702,10 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
+        // Workflow #396 REC-2.
+        if let Some(unique) = target.unique {
+            return self.evaluate_unique_template(context, target, unique, &template_png, region);
+        }
         if target
             .color_check
             .as_ref()
@@ -1698,6 +1752,7 @@ impl RecognitionEvaluator {
             color_digest: None,
             composite: None,
             failure: None,
+            uniqueness: None,
             message: template_message(template_ok, color_ok),
         })
     }
@@ -1709,21 +1764,89 @@ impl RecognitionEvaluator {
         template_png: &[u8],
         search_region: Option<recognition::Rect>,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let check = target
+        self.joint_color_evaluation(
+            scene,
+            target,
+            JointSearch::Filter {
+                template_png,
+                region: search_region,
+            },
+        )
+        .map(|(evaluation, _)| evaluation)
+    }
+
+    /// The relative color of `target`'s check at `candidate` (`template-relative-color.md`),
+    /// or why its region is unresolved there.
+    pub(crate) fn relative_color_at(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        candidate: recognition::TemplateMatch,
+    ) -> recognition::RecognitionResult<(Option<ColorEvaluation>, Option<OcrRegionUnresolvedReason>)>
+    {
+        let relative = target
             .color_check
             .as_ref()
-            .ok_or_else(|| RecognitionPackError::fatal("relative color check missing"))?;
-        let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
-            offset,
-            width,
-            height,
-            ..
-        }) = &check.region
-        else {
-            return Err(RecognitionPackError::fatal(
+            .and_then(|check| match &check.region {
+                PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                    offset,
+                    width,
+                    height,
+                    ..
+                }) => Some((check, offset, width, height)),
+                _ => None,
+            });
+        let Some((check, offset, width, height)) = relative else {
+            return Err(recognition::RecognitionError::fatal(
                 "relative color declaration missing",
             ));
         };
+        Ok(
+            match resolve_template_relative_region(
+                scene,
+                PackPoint {
+                    x: candidate.x,
+                    y: candidate.y,
+                },
+                *offset,
+                *width,
+                *height,
+            ) {
+                Ok(region) => {
+                    let measured = scene.compare_color(region.into(), check.expected)?;
+                    (
+                        Some(ColorEvaluation {
+                            distance: measured.distance,
+                            max_distance: self.color_max_distance(check.max_distance),
+                            mean: measured.mean,
+                            expected: check.expected,
+                            region: Some(region),
+                        }),
+                        None,
+                    )
+                }
+                Err((_, reason)) => (None, Some(reason)),
+            },
+        )
+    }
+
+    /// The joint template and relative color evaluation of `target`: the selection `search`
+    /// makes with the joint acceptance, and the accepted candidate.
+    pub(crate) fn joint_color_evaluation(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        search: JointSearch<'_>,
+    ) -> RecognitionPackResult<(TargetEvaluation, Option<recognition::TemplateMatch>)> {
+        if !target
+            .color_check
+            .as_ref()
+            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
+        {
+            return Err(RecognitionPackError::fatal(
+                "relative color declaration missing",
+            ));
+        }
         let threshold = target
             .threshold
             .unwrap_or(self.pack.defaults.template_threshold);
@@ -1731,51 +1854,37 @@ impl RecognitionEvaluator {
         let mut best_color = None;
         let mut best_color_unresolved = None;
         let mut accepted_color = None;
-        let selection = scene
-            .match_template_with_filter(
+        let mut accept =
+            |candidate: recognition::TemplateMatch| -> recognition::RecognitionResult<bool> {
+                let (color, unresolved) = self.relative_color_at(scene, target, candidate)?;
+                if best_color_score.is_none_or(|score| candidate.raw_score > score) {
+                    best_color_score = Some(candidate.raw_score);
+                    best_color = color;
+                    best_color_unresolved = unresolved;
+                }
+                let passed = color.is_some_and(|color| color.distance <= color.max_distance);
+                if passed {
+                    accepted_color = color;
+                }
+                Ok(passed)
+            };
+        let selection = match search {
+            JointSearch::Filter {
                 template_png,
-                search_region,
-                self.default_match_metric(),
-                threshold,
-                |candidate| {
-                    let (color, unresolved) = match resolve_template_relative_region(
-                        scene,
-                        PackPoint {
-                            x: candidate.x,
-                            y: candidate.y,
-                        },
-                        *offset,
-                        *width,
-                        *height,
-                    ) {
-                        Ok(region) => {
-                            let measured = scene.compare_color(region.into(), check.expected)?;
-                            (
-                                Some(ColorEvaluation {
-                                    distance: measured.distance,
-                                    max_distance: self.color_max_distance(check.max_distance),
-                                    mean: measured.mean,
-                                    expected: check.expected,
-                                    region: Some(region),
-                                }),
-                                None,
-                            )
-                        }
-                        Err((_, reason)) => (None, Some(reason)),
-                    };
-                    if best_color_score.is_none_or(|score| candidate.raw_score > score) {
-                        best_color_score = Some(candidate.raw_score);
-                        best_color = color;
-                        best_color_unresolved = unresolved;
-                    }
-                    let passed = color.is_some_and(|color| color.distance <= color.max_distance);
-                    if passed {
-                        accepted_color = color;
-                    }
-                    Ok(passed)
-                },
-            )
-            .map_err(|err| primitive_error(&target.id, err))?;
+                region,
+            } => scene
+                .match_template_with_filter(
+                    template_png,
+                    region,
+                    self.default_match_metric(),
+                    threshold,
+                    &mut accept,
+                )
+                .map_err(|err| primitive_error(&target.id, err))?,
+            JointSearch::Map(map) => map
+                .select(threshold, &mut accept)
+                .map_err(|err| target_unique::search_error(&target.id, err))?,
+        };
         let matched = selection.accepted.unwrap_or(selection.best_template);
         let passed = selection.accepted.is_some();
         let (color, unresolved) = if passed {
@@ -1783,37 +1892,41 @@ impl RecognitionEvaluator {
         } else {
             (best_color, best_color_unresolved)
         };
-        Ok(TargetEvaluation {
-            id: target.id.clone(),
-            kind: TargetKind::Template,
-            sample_evaluations: Vec::new(),
-            sampling: None,
-            passed,
-            template: Some(TemplateEvaluation {
-                x: matched.x,
-                y: matched.y,
-                width: matched.width,
-                height: matched.height,
-                raw_score: matched.raw_score,
-                score: matched.score,
-                threshold,
-            }),
-            color,
-            ocr: None,
-            nn: None,
-            color_digest: None,
-            composite: None,
-            failure: None,
-            message: match unresolved {
-                Some(reason) => format!(
-                    "no joint template/color match; best template color region unresolved: {reason:?}"
-                ),
-                None => template_message(
-                    matched.score >= threshold,
-                    color.is_none_or(|color| color.distance <= color.max_distance),
-                ),
+        Ok((
+            TargetEvaluation {
+                id: target.id.clone(),
+                kind: TargetKind::Template,
+                sample_evaluations: Vec::new(),
+                sampling: None,
+                passed,
+                template: Some(TemplateEvaluation {
+                    x: matched.x,
+                    y: matched.y,
+                    width: matched.width,
+                    height: matched.height,
+                    raw_score: matched.raw_score,
+                    score: matched.score,
+                    threshold,
+                }),
+                color,
+                ocr: None,
+                nn: None,
+                color_digest: None,
+                composite: None,
+                failure: None,
+                uniqueness: None,
+                message: match unresolved {
+                    Some(reason) => format!(
+                        "no joint template/color match; best template color region unresolved: {reason:?}"
+                    ),
+                    None => template_message(
+                        matched.score >= threshold,
+                        color.is_none_or(|color| color.distance <= color.max_distance),
+                    ),
+                },
             },
-        })
+            selection.accepted,
+        ))
     }
 
     fn evaluate_color(
@@ -1843,6 +1956,7 @@ impl RecognitionEvaluator {
             color_digest: None,
             composite: None,
             failure: None,
+            uniqueness: None,
             message: if passed {
                 "color passed".to_string()
             } else {
@@ -1924,6 +2038,7 @@ impl RecognitionEvaluator {
                 color_digest: None,
                 composite: None,
                 failure: None,
+                uniqueness: None,
                 message,
             })
         })()
@@ -1987,6 +2102,7 @@ impl RecognitionEvaluator {
             color_digest: None,
             composite: None,
             failure: None,
+            uniqueness: None,
             message: if passed {
                 "nn passed".to_string()
             } else {
@@ -2042,6 +2158,7 @@ impl RecognitionEvaluator {
             })),
             composite: None,
             failure: None,
+            uniqueness: None,
             message: if passed {
                 "color digest passed".to_string()
             } else {
@@ -2117,6 +2234,7 @@ impl RecognitionEvaluator {
                 ppocr_diagnostics,
             })),
             failure: None,
+            uniqueness: None,
             message,
         })
     }
@@ -2316,6 +2434,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "rect_move",
                     "color_check",
                     "click",
+                    "unique",
                 ][..]
             }
             "color" if schema == SCHEMA_0_7 => {
@@ -2374,6 +2493,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 "model_sha256",
                 "click",
                 "locate",
+                "unique",
             ][..],
             "nn" => &[
                 "type",
@@ -2396,6 +2516,8 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             }
         };
         reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
+        // Workflow #396 REC-2.
+        target_unique::validate_unique_wire(schema, object, index)?;
         if let Some(locate) = object.get("locate") {
             validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
         }
@@ -2867,6 +2989,8 @@ fn validate_pack(
     if let Err(refusal) = text_locate::validate_locate_declarations(pack) {
         errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
     }
+    // Workflow #396 REC-2.
+    target_unique::validate_unique_declarations(pack, errors);
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
@@ -5118,6 +5242,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: Some(rect(5, 6, 7, 8)),
+                    unique: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "color".to_string(),
@@ -5184,6 +5309,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "".to_string(),
@@ -5346,6 +5472,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 })],
                 ..base_pack()
             };
@@ -5372,6 +5499,7 @@ mod tests {
                         max_distance: None,
                     }),
                     click: None,
+                    unique: None,
                 })],
                 ..base_pack()
             };
@@ -5421,6 +5549,7 @@ mod tests {
                         rect_move: None,
                         color_check: None,
                         click: None,
+                        unique: None,
                     }),
                     RecognitionTarget::Color(ColorTarget {
                         id: "color".to_string(),
@@ -5442,6 +5571,7 @@ mod tests {
                         model_sha256: "a".repeat(64),
                         click: None,
                         locate: None,
+                        unique: None,
                     }),
                     RecognitionTarget::Nn(NnTarget {
                         id: "nn/page".to_string(),
