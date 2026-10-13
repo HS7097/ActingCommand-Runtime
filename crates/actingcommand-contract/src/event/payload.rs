@@ -2724,14 +2724,21 @@ pub fn scheduled_failure_class(
 /// `raw_code`, so distinct failures keep distinct failure identities and streaks. The live
 /// settlement, the startup recovery and the ledger's re-derivation all take it from here.
 pub fn scheduled_failure_code(outcome: &Outcome) -> String {
+    scheduled_failure_code_str(outcome).as_str().to_owned()
+}
+
+/// [`scheduled_failure_code`] as a received code, for the readers that keep a code: the
+/// recovery ladder's task trigger (acceptance H-L6). The relayed spelling is read back from the
+/// outcome's `raw_code`.
+pub fn scheduled_failure_code_str(outcome: &Outcome) -> crate::outcome::CodeStr {
     if outcome.is(ContractCode::OutcomeRelayUnregistered)
         && let Some(spelling) = outcome
             .value("raw_code")
-            .and_then(serde_json::Value::as_str)
+            .and_then(|value| crate::outcome::CodeStr::deserialize(value).ok())
     {
-        return spelling.to_owned();
+        return spelling;
     }
-    outcome.code().as_str().to_owned()
+    outcome.code().clone()
 }
 
 /// Whether a failed scheduled run's code is one the Runtime only ever raises as fatal, so its

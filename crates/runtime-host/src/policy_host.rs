@@ -1445,7 +1445,11 @@ impl PolicyHost {
                         deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
-                                code: rejection.outcome.code().as_str().to_owned(),
+                                // Coordinator ruling 7 (acceptance H-L6): an unregistered
+                                // relayed spelling defers under its `raw_code`.
+                                code: actingcommand_contract::scheduled_failure_code(
+                                    &rejection.outcome,
+                                ),
                                 detail: format!(
                                     "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
                                     rejection.budget, rejection.next_eligible_unix_ms

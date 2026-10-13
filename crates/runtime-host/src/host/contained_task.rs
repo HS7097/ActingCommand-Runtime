@@ -7476,7 +7476,9 @@ impl HostShared {
                     FailedTaskTerminal {
                         task_id: draft.task_id,
                         run_id: draft.run_id,
-                        failure_code: failure.code().clone(),
+                        // Coordinator ruling 7 (acceptance H-L6): an unregistered relayed
+                        // spelling triggers the ladder by its `raw_code`.
+                        failure_code: actingcommand_contract::scheduled_failure_code_str(failure),
                     },
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
