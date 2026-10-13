@@ -145,9 +145,6 @@ impl HostShared {
             .contains_key(&instance_id),
             None => false,
         };
-        // One-off (to be reverted): main 6852e7e8 retained the owner and ended the whole
-        // Runtime for every unconfirmed close; no instance is fenced.
-        let registered = registered && owner.is_none();
         let Some(instance_id) = owner
             .filter(|_| registered && error.projection().code != RuntimeErrorCode::LedgerFailure)
         else {
