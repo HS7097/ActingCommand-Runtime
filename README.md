@@ -36,7 +36,7 @@ The current release is **v0.11.6** (pre-release) on this repository's [Releases]
 
 | Zip | Layout | Contents |
 | --- | --- | --- |
-| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`, `actingctl.exe`, `actingd.config.example.json`, `INSTALL.md`, `RELEASE-NOTES.md` |
+| `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`, `actingctl.exe`, `actingd.config.example.json`, `actingd.defaults.json` (from v0.12.0), `INSTALL.md`, `RELEASE-NOTES.md` |
 | `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog launcher `actingwatch.exe`, and Google's official Android platform-tools 37.0.1 under `platform-tools/` (`adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`, `source.properties`) |
 
 Vision models and the ONNX Runtime never ship with a release: the OCR/NN engine is linked into `actingcommand-actingd.exe` and reads its models from `<vision root>\models\<model_ref>\`; without them, a target that needs OCR fails explicitly.
@@ -216,11 +216,11 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 
 | Tier | Tools |
 | --- | --- |
-| observer (read-only, 9) | `ac_overview`, `ac_events`, `ac_material`, `ac_get_run`, `ac_diagnose`, `ac_resources_list`, `ac_targets_get`, `ac_pack_check`, `ac_catalog_check` |
+| observer (reads, and settings the Runtime may change while running; 10) | `ac_overview`, `ac_events`, `ac_material`, `ac_get_run`, `ac_diagnose`, `ac_resources_list`, `ac_targets_get`, `ac_pack_check`, `ac_catalog_check`, `ac_config_set` |
 | operator (devices and scheduling, 6) | `ac_run_pack`, `ac_stop_run`, `ac_pause`, `ac_resume`, `ac_emulator`, `ac_targets_set` |
 | author (Lab recording, 7) | `ac_lab_observe`, `ac_lab_do`, `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status`, `ac_binding_draft` |
 
-**Rules for agents.** Start with `ac_overview`. Long operations return a handle at once; poll `ac_get_run` with `wait_s`. A run's handle is its Runtime request_id and survives restarts. After an uncertain result call `ac_get_run` before anything else, and never resend a write with new arguments. Approvals, `actingd` configuration edits and daemon restarts belong to a person. The agent manual is the skill `skills/actingcommand/` in the umbrella repository.
+**Rules for agents.** Start with `ac_overview`. Long operations return a handle at once; poll `ac_get_run` with `wait_s`. A run's handle is its Runtime request_id and survives restarts. After an uncertain result call `ac_get_run` before anything else, and never resend a write with new arguments. Approvals, `actingd` configuration file edits and daemon restarts belong to a person; a setting the Runtime may change while running is set with `ac_config_set` (or `actingctl config set|clear`), and every change is recorded. The agent manual is the skill `skills/actingcommand/` in the umbrella repository.
 
 **Known issues in v0.11.6** (fixes planned for the 0.12 series):
 
@@ -234,7 +234,7 @@ The Windows exact-SHA Runtime artifact carries the two Runtime executables, a co
 
 The `build.rs` of `apps/actinglab` reads Git metadata to determine HEAD. When Git metadata is available and `ACTINGCOMMAND_RUNTIME_HEAD` is also set, it must be 40 hexadecimal characters and must match the repository HEAD, or the build panics; when Git metadata is unavailable (a source tree with no `.git`, for example), that variable is required.
 
-A normal `actingd` invocation takes `--config <path>` and may append `--install-held <json>` for an installation transaction (see [Host installation control](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)); the first argument may instead select the `ledger-maintenance`, `check-config`, `unlock-owner` or `suspended` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems` / `config.parameters`, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
+A normal `actingd` invocation takes `--config <path>` and may append `--install-held <json>` for an installation transaction (see [Host installation control](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)); the first argument may instead select the `ledger-maintenance`, `check-config`, `unlock-owner` or `suspended` subcommand; anything else is `usage_invalid`. The config schema is `actingcommand.actingd.config.v1`, capped at 1 MiB, and rejects unknown fields; `bind_host` must resolve to an IP **and** must be a loopback address, and `secret_fingerprint_salt` must be 16..=1024 bytes. At startup `actingd` records its in-memory runtime configuration manifest (the subsystems it runs and every effective parameter with its source; the salt only as a byte length) as the program facts `config.subsystems`, `config.selection` and one `config.parameters.<section>` per section, readable with `actingctl facts --program` and printed by `check-config`. For both `actingctl` and `actingledger`, `--state-root` means the runtime state root, not the `ledger` directory.
 
 ```bash
 # Local build and gates; fmt and clippy are identical to CI, while CI splits the test run into the seven module jobs described above (CI's release build additionally uses --locked and an explicit MSVC target)
@@ -248,7 +248,7 @@ actingcommand-actingd --config runtime.json
 
 # Clients (the subcommand must be the first argument, flags come after it; every command needs --state-root)
 actingctl status --state-root <state-root>
-actingctl status --config --state-root <state-root>     # only the config.subsystems / config.parameters program facts
+actingctl status --config --state-root <state-root>     # only the config.* program facts: subsystems, selection, parameters.<section>
 actingctl facts --program --state-root <state-root>
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>

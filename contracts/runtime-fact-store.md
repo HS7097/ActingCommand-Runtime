@@ -164,7 +164,9 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG §3.1�
    tells what changed (no per-feature record type).
 
 **Capacity of `config.parameters`.** The one-revision v0.12.0 configuration adds about 170 keys;
-the row budget (256 per `record_list`) is booked in [the v0.12.0 register](v012-register.md#51-capacity-of-configparameters).
+the row budget is booked in [the v0.12.0 register](v012-register.md#51-capacity-of-configparameters).
+Since Workflow #387 D1b the rows are one `config.parameters.<section>` fact per section, each
+at most 256 rows ([runtime-config.md](runtime-config.md)).
 
 ## Startup replay
 
@@ -271,11 +273,12 @@ JSON. `facts` without `--program` (the per-instance read) is not built and is a
 usage error; the command takes no `--instance`.
 
 `actingctl status --config --state-root <state-root>` runs the same
-`runtime_fact_snapshot` read (no new operation) and prints only the two
-`config.subsystems` and `config.parameters` records, as a JSON array of
-`RuntimeFactRecord` objects in that order and in the same shape the snapshot
-carries them. A snapshot without both records is an error
-(`config_facts_missing`, exit code 1), never an empty array. Plain `status`
+`runtime_fact_snapshot` read (no new operation) and prints only the `config.*`
+records: `config.subsystems`, `config.selection` when recorded, and every
+`config.parameters.<section>` in key order (Workflow #387 D1b), as a JSON array
+of `RuntimeFactRecord` objects in the same shape the snapshot carries them. A
+snapshot without `config.subsystems` or without any `config.parameters.<section>`
+is an error (`config_facts_missing`, exit code 1), never an empty array. Plain `status`
 is unchanged; `--config` on any other command is a usage error.
 
 ## Offline read
@@ -468,23 +471,26 @@ the backend self-check facts (source `device-proxy` or `capture`).
   availability"). The connection preparation phase below writes them at
   startup, after emulator `start` / `restart`, on an instance resume and on
   `SelfCheckInstance`. `actingctl facts --program` lists them.
-- `config.subsystems` and `config.parameters` (Workflow #318, slice 1) —
+- `config.subsystems` and `config.parameters.<section>` (Workflow #318,
+  slice 1; one parameters fact per section since Workflow #387 D1b) —
   runtime scope, `record_list`, no lifetime: the in-memory runtime
   configuration manifest (`RuntimeConfigManifest` in contract module
   `runtime_fact`). `actingd` builds it in `assemble` from what it actually
   applies and hands it to the host with
   `RuntimeHostConfig::with_config_manifest`; `RuntimeHostConfig::validate`
   runs the manifest's own validation (at most 64 subsystems and 256
-  parameters; names and keys non-empty, control-free, at most
-  128 / 128 bytes) and refuses a bad one with
-  `invalid_runtime_config_manifest`. The host records the two facts once per
-  startup, after the startup events, replay and the instance-fact
-  synchronization and before any thread is spawned, with one clock sample
-  shared by both records; a refusal there (stale, capacity, invalid) fails
-  startup through the normal abort path. On a restart the replayed records
-  are superseded by the fresh observation, never refused as stale. Hosts
-  built without a manifest (tests, `actinglab` goldens, `ledger-maintenance`)
-  record nothing.
+  parameters per section; names and keys non-empty, control-free, at most
+  128 / 128 bytes, and a section whose fact key is a valid runtime fact key)
+  and refuses a bad one with `invalid_runtime_config_manifest`. The host
+  records the facts once per startup, after the startup events, replay and
+  the instance-fact synchronization and before any instance is prepared,
+  with the restored instruction values in effect ([runtime-config.md](runtime-config.md),
+  "Restore at start"); a refusal there (stale, capacity, invalid) fails
+  startup through the normal abort path. A section is recorded again when a
+  `ConfigureSettings` instruction changes one of its keys. On a restart the
+  replayed records are superseded by the fresh observation, never refused as
+  stale. Hosts built without a manifest (tests, `actinglab` goldens,
+  `ledger-maintenance`) record nothing.
   - `config.subsystems` rows: `name` (string), `enabled` (boolean),
     `code` (string, the subsystem's `config_subsystem_*` outcome code, ledger
     revision 3) plus each scalar value of that outcome under its own key (for
@@ -493,11 +499,14 @@ the backend self-check facts (source `device-proxy` or `capture`).
     `env_override_ignored`) under `ignored_variables`, comma-separated, so an
     ignored override is never silent (`contracts/actingd-check-config.md`,
     "Environment overrides").
-  - `config.parameters` rows: `key` (string), `value` (the effective scalar:
-    `string`, `integer`, `boolean` or `duration_ms`), `source` (`explicit` for
-    a value set in the configuration file, `default` for a library default,
-    `discovered` is reserved for values learned at startup and is not produced
-    yet). Values are effective values, not raw file contents: since Workflow
+  - `config.parameters.<section>` rows (the section is the key's first
+    segment, `top_level` for a key without a dot): `key` (string), `value`
+    (the effective scalar: `string`, `integer`, `boolean` or `duration_ms`),
+    `source` (`explicit` for a value set in the configuration file, `default`
+    for a library default, `instruction` for a value a `ConfigureSettings`
+    instruction set, `discovered` is reserved for values learned at startup
+    and is not produced yet), `settable` (boolean: whether an instruction may
+    change the key while the Runtime runs; Workflow #387 D1b). Values are effective values, not raw file contents: since Workflow
     #318 cfg2 every one is read back from the assembled `RuntimeHostConfig`
     (scheduler, policy cadence, performance control, performance monitor
     including `performance_monitor.pressure_start_samples` /

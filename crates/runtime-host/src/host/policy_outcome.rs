@@ -777,7 +777,7 @@ impl HostShared {
         let Some(RuntimeResult::ContainedTaskCompleted {
             run_id,
             task_id,
-            outcome,
+            task_result: outcome,
             ..
         }) = receipt.result()
         else {

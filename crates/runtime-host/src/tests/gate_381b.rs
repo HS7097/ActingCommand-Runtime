@@ -16,8 +16,8 @@ use crate::codes::HostCode;
 use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     DiagnosticCode, EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome,
-    RuntimeErrorProjection, RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope,
-    RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload,
+    RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
+    RuntimePayload, SchedulerPayload,
 };
 use actingcommand_device::DeviceProcessPresence;
 use actingcommand_device::codes::DeviceStage;
@@ -90,10 +90,12 @@ fn control(host: &RuntimeHost, action: EmulatorInstanceAction) -> RuntimeReceipt
     )
 }
 
+/// A refused or failed receipt's specific code: the top of its outcome (receipt v2, Workflow
+/// #378 A4).
 fn host_code(receipt: &RuntimeReceipt) -> Option<&str> {
     receipt
         .error_projection()
-        .and_then(RuntimeErrorProjection::host_code)
+        .map(|_| receipt.outcome().code().as_str())
 }
 
 /// The port the Runtime reports the instance bound to (`actingctl emulator status`); `None`
@@ -733,7 +735,8 @@ fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_pro
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
     let error = receipt.error_projection().expect("refusal projection");
     assert_eq!(error.code, RuntimeErrorCode::QueueExpired);
-    assert_eq!(error.host_code(), Some("lease_queue_expired"));
+    // Receipt v2 (Workflow #378 A4): the refusal is the top of the receipt's outcome.
+    assert_eq!(receipt.outcome().code().as_str(), "lease_queue_expired");
     // Ledger revision 3 (acceptance H-L3): the refusal's facts are its outcome's values.
     let refusal = run
         .host

@@ -323,9 +323,8 @@ and `emulator_control_unsupported` (`invalid_request`, denied), `emulator_contro
 `emulator_control_adb_not_ready`, and for a restart `emulator_restart_stop_failed` and
 `emulator_restart_start_failed` (`backend_operation_failed`, failed; registered, pending since
 0.12.0); `emulator_stop_process_unverified` is the stop's Warning record. Device-facing requests on a pending instance are denied with `instance_not_running`
-(`invalid_request`), see "Cold start". The receipt carries the host code and its operation
-in the optional, additive `host_code`/`host_operation` error-projection fields (closed static
-codes; a client built before them cannot decode such a receipt, `deny_unknown_fields`), so
+(`invalid_request`), see "Cold start". The receipt carries the host code on top of its
+`outcome`, with its operation as the `operation` value (receipt v2, Workflow #378 A4), so
 `actingctl` shows, for example, `host code emulator_control_busy during control_emulator_instance`.
 
 ## The `device.connected` program fact

@@ -1869,6 +1869,13 @@ pub enum RuntimeLifecyclePhase {
         preparation: crate::TerminalEvent,
         outcome: Outcome,
     },
+    /// Workflow #373 NAV-6 (model M-373 v1.1 §8.4): a standard-pack game root was read, at
+    /// startup or when a run's preparation found its registered packages changed. `outcome` is
+    /// `standard_pack_registered` (info), `standard_pack_root_invalid` or
+    /// `standard_pack_root_unreadable` (error); a broken root never stops the Runtime.
+    StandardPackRead {
+        outcome: Outcome,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1901,6 +1908,7 @@ impl RuntimeLifecyclePayload {
                 outcome.as_ref()
             }
             RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
+            RuntimeLifecyclePhase::StandardPackRead { outcome } => Some(outcome),
             _ => None,
         }
     }
@@ -3443,6 +3451,26 @@ pub enum TaskEntryTargetDisposition {
     FailClosed,
 }
 
+/// Workflow #373 (model M-373 v1.1 §8.3): the part a package run as a layer of the run plays,
+/// on its `EntryRecovery*` records. NAV-6 brings the member and its value `interrupt_handler`
+/// (a shared interrupt page's handler or its `then.run` package); the other layers' records
+/// carry no role until their slices add theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskEntryRecoveryRole {
+    InterruptHandler,
+}
+
+/// Workflow #373 NAV-6 (§6.2): where the run went after a shared interrupt page's handler:
+/// back to what it awaited, to its end, or through the named `then.run` package and back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskInterruptThen {
+    Resume,
+    EndRun,
+    Run(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskGeometryPhase {
@@ -3762,15 +3790,38 @@ pub enum TaskSemanticFact {
     },
     EntryRecoveryPackageAdmitted {
         package_sha256: crate::PackageRef,
+        /// Workflow #373 NAV-6: the layer's part; absent on the layers that have none yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<TaskEntryRecoveryRole>,
     },
     EntryRecoveryCompleted {
         package_sha256: crate::PackageRef,
         final_page: String,
         executed_steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<TaskEntryRecoveryRole>,
     },
     /// The entry recovery package failed; `outcome` is its failure (ledger revision 3).
     EntryRecoveryFailed {
         package_sha256: crate::PackageRef,
+        outcome: Outcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<TaskEntryRecoveryRole>,
+    },
+    /// Workflow #373 NAV-6 (§8.3): the shared interrupt page `page` (its `pages.json` id) was
+    /// handled by the package `handler_package_label`, the `count`-th time this run; `outcome`
+    /// is `contained_task_interrupt_handled`.
+    InterruptHandled {
+        page: String,
+        handler_package_label: String,
+        then: TaskInterruptThen,
+        count: u8,
+        outcome: Outcome,
+    },
+    /// Workflow #373 NAV-6 (§6.3): one frame matched two or more shared interrupt pages, so
+    /// none was handled and the run went on; `outcome` is `contained_task_interrupt_ambiguous`.
+    InterruptAmbiguous {
+        page_ids: Vec<String>,
         outcome: Outcome,
     },
     /// A fail-closed disposition carries the entry's failure as `outcome`.
@@ -4426,9 +4477,10 @@ impl TaskSemanticFact {
     /// select step's failed confirmation.
     pub fn outcome(&self) -> Option<&Outcome> {
         match self {
-            Self::EntryRecoveryFailed { outcome, .. } | Self::TerminalRejected { outcome, .. } => {
-                Some(outcome)
-            }
+            Self::EntryRecoveryFailed { outcome, .. }
+            | Self::TerminalRejected { outcome, .. }
+            | Self::InterruptHandled { outcome, .. }
+            | Self::InterruptAmbiguous { outcome, .. } => Some(outcome),
             Self::EntryTargetDisposition { outcome, .. }
             | Self::TerminalCommitted { outcome, .. } => outcome.as_ref(),
             Self::SelectionEvaluated { selection, .. } => match &selection.confirmation {
@@ -4445,7 +4497,10 @@ impl TaskSemanticFact {
     fn public_summary(&self) -> Self {
         let mut fact = self.clone();
         match &mut fact {
-            Self::EntryRecoveryFailed { outcome, .. } | Self::TerminalRejected { outcome, .. } => {
+            Self::EntryRecoveryFailed { outcome, .. }
+            | Self::TerminalRejected { outcome, .. }
+            | Self::InterruptHandled { outcome, .. }
+            | Self::InterruptAmbiguous { outcome, .. } => {
                 *outcome = outcome.codes_only();
             }
             Self::EntryTargetDisposition {
@@ -4508,7 +4563,9 @@ impl TaskSemanticFact {
             | Self::EntryRecoveryPackageAdmitted { .. }
             | Self::EntryRecoveryCompleted { .. }
             | Self::EntryRecoveryFailed { .. }
-            | Self::EntryTargetDisposition { .. } => EventType::TaskEntryPreflight,
+            | Self::EntryTargetDisposition { .. }
+            | Self::InterruptHandled { .. }
+            | Self::InterruptAmbiguous { .. } => EventType::TaskEntryPreflight,
             Self::StepStarted { .. } => EventType::TaskStepStarted,
             Self::SelectionEvaluated { .. } => EventType::TaskSelectionEvaluated,
             Self::EffectIntent { .. } => EventType::TaskEffectIntent,
@@ -4616,13 +4673,14 @@ impl TaskSemanticFact {
                 }
             }
             Self::EntryRecoveryDecision { .. } => {}
-            Self::EntryRecoveryPackageAdmitted { package_sha256 } => {
+            Self::EntryRecoveryPackageAdmitted { package_sha256, .. } => {
                 validate_task_package_sha256(package_sha256)?;
             }
             Self::EntryRecoveryCompleted {
                 package_sha256,
                 final_page,
                 executed_steps,
+                ..
             } => {
                 validate_task_package_sha256(package_sha256)?;
                 validate_task_semantic_label(final_page, "final_page")?;
@@ -4635,6 +4693,36 @@ impl TaskSemanticFact {
             }
             Self::EntryRecoveryFailed { package_sha256, .. } => {
                 validate_task_package_sha256(package_sha256)?;
+            }
+            Self::InterruptHandled {
+                page,
+                handler_package_label,
+                then,
+                count,
+                ..
+            } => {
+                validate_task_semantic_label(page, "page")?;
+                validate_task_semantic_label(handler_package_label, "handler_package_label")?;
+                if let TaskInterruptThen::Run(package_label) = then {
+                    validate_task_semantic_label(package_label, "then")?;
+                }
+                if *count == 0 || *count > crate::MAX_INTERRUPT_HANDLINGS_PER_PAGE {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskInterrupt,
+                        "count",
+                    ));
+                }
+            }
+            Self::InterruptAmbiguous { page_ids, .. } => {
+                if page_ids.len() < 2 || page_ids.len() > crate::MAX_STANDARD_PACK_INTERRUPTS {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskInterrupt,
+                        "page_ids",
+                    ));
+                }
+                for page in page_ids {
+                    validate_task_semantic_label(page, "page_ids")?;
+                }
             }
             Self::EntryTargetDisposition {
                 disposition,
@@ -8579,6 +8667,20 @@ impl CommandPayloadDraft {
             effect,
             audit,
         )))
+    }
+
+    /// `command.rejected` whose outcome is the refusal itself rather than the diagnostic code
+    /// (ledger revision 3; Workflow #387 D1b, a refused `ConfigureSettings`).
+    pub fn rejected_with_outcome(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        outcome: Outcome,
+        audit: AuditInput,
+    ) -> Self {
+        let mut draft = DiagnosticOutcomeDraft::new(action, diagnostic_code, effect, audit);
+        draft.outcome = Some(outcome);
+        Self(CommandDraftKind::Rejected(draft))
     }
 }
 

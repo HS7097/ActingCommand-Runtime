@@ -15,6 +15,8 @@ actingcommand-execution-kernel = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-ppocr-onnx-json-provider = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
+# Workflow #387 D1b: the key table, the defaults file and the per-instance section.
+actingcommand-runtime-config = { workspace = true }
 actingcommand-runtime-host = { workspace = true, features = ["fixture-backends"] }
 actingcommand-vision-ffi = { workspace = true }
 serde = { workspace = true }

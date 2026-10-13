@@ -1674,11 +1674,12 @@ fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
     // does it write the intent and an Info `dispatch_rejected` with `dispatch_instance_held`.
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    let instance = instance_id();
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
-            instance_id(),
+            instance,
             Arc::clone(&state),
         )),
     )
@@ -1703,14 +1704,21 @@ fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
     let EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) = rejected.payload() else {
         panic!("rejection payload");
     };
+    let rejection = payload.rejection().expect("rejection facts");
+    assert_eq!(rejection.outcome.code().as_str(), "dispatch_instance_held");
+    // Workflow #378 A4 (part B L3, L4): the resolved instance's identifier, the holder's kind
+    // and the number of eligible waiting claims (none waits).
     assert_eq!(
-        payload
-            .rejection()
-            .expect("rejection facts")
-            .outcome
-            .code()
-            .as_str(),
-        "dispatch_instance_held"
+        rejection.outcome.value("instance_id"),
+        Some(&serde_json::to_value(instance).expect("instance id"))
+    );
+    assert_eq!(
+        rejection.outcome.value("holder_kind"),
+        Some(&serde_json::json!("client_lease"))
+    );
+    assert_eq!(
+        rejection.outcome.value("count"),
+        Some(&serde_json::json!(0))
     );
     // Review M1: a wait is not a failure. Its key tokens are recorded at Info; no Error
     // `runtime.failed` follows the rejection (§5.10: no error point).
@@ -1746,11 +1754,12 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
     let root = TempDir::new().expect("tempdir");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let state = Arc::new(FakeState::default());
+    let instance = instance_id();
     let host = RuntimeHost::start(
         config(&root).with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
-            instance_id(),
+            instance,
             Arc::clone(&state),
         )),
     )
@@ -1796,6 +1805,18 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
     assert_eq!(
         rejection.next_eligible_unix_ms,
         Some(intent.prerequisites.evaluated_at_unix_ms + 1_000)
+    );
+    // Workflow #378 A4 (part B L3, L4): the resolved instance's identifier and the time the
+    // candidate may run again.
+    assert_eq!(
+        rejection.outcome.value("instance_id"),
+        Some(&serde_json::to_value(instance).expect("instance id"))
+    );
+    assert_eq!(
+        rejection.outcome.value("next_eligible_unix_ms"),
+        Some(&serde_json::json!(
+            intent.prerequisites.evaluated_at_unix_ms + 1_000
+        ))
     );
     assert!(
         host.query_persisted_events_for_test(EventQuery::default())

@@ -116,6 +116,7 @@ impl HostShared {
             result: RuntimeResult::ProjectInterface {
                 response: Box::new(response),
             },
+            failure_outcome: None,
         })
     }
 
@@ -302,6 +303,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::EventBatch { batch },
+            failure_outcome: None,
         })
     }
 
@@ -333,6 +335,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::EventPage { page },
+            failure_outcome: None,
         })
     }
 
@@ -357,6 +360,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::Status { status },
+            failure_outcome: None,
         })
     }
 
@@ -562,6 +566,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::MonitorStatus { status },
+            failure_outcome: None,
         })
     }
 }

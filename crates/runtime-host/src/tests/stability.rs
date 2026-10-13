@@ -146,7 +146,7 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             executed_steps: 5,
             ..
         })

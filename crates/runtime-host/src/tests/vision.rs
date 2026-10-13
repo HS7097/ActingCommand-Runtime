@@ -174,7 +174,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     assert!(matches!(
         injected_receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             final_page: Some(page),
             ..
         }) if page == "neutral/terminal"

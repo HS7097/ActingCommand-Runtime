@@ -146,8 +146,8 @@ fn gate_an_ignored_env_override_is_warned_as_the_fixed_code_with_the_variable() 
         subsystems: vec![config::env_overrides_subsystem(Some(false), &ignored)],
         parameters: Vec::new(),
     };
-    let [subsystems, _] =
-        manifest.to_fact_records(0, actingcommand_contract::OriginModule::Runtime);
+    let subsystems =
+        manifest.subsystems_fact_record(0, actingcommand_contract::OriginModule::Runtime);
     assert!(
         matches!(
             &subsystems.value,

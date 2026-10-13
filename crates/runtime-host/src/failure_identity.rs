@@ -543,7 +543,7 @@ pub(crate) fn failure_step(rows: &[PersistedEvent], chain: bool) -> (String, Str
     };
     for fact in rows.iter().filter_map(semantic_fact) {
         match fact {
-            TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } if !started => {
+            TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256, .. } if !started => {
                 open.push(package_digest_prefix(package_sha256));
             }
             TaskSemanticFact::EntryRecoveryCompleted { package_sha256, .. } if !started => {

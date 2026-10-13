@@ -495,6 +495,7 @@ impl HostShared {
                     .saturating_add(driven.adb_wait_ms),
                 startup_package,
             },
+            failure_outcome: None,
         })
     }
 

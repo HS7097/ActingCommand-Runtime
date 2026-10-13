@@ -286,8 +286,9 @@ stdout is one JSON object:
 - `repeating`: each pair whose latest execution is a failure that does not accumulate and whose
   previous execution failed with the same identity prefix: a prerequisite or return-home
   package, the restart segment or the device failing again and again.
-- `daemon_started_at_unix_ms`: the observation time of the ledger's latest `config.parameters`
-  fact, recorded at every start. Warnings: `config_newer_than_daemon_start` when the
+- `daemon_started_at_unix_ms`: the observation time of the ledger's latest `config.subsystems`
+  fact, recorded at every start (and only then; a `config.parameters.<section>` is also recorded
+  when an instruction changes a setting, Workflow #387 D1b). Warnings: `config_newer_than_daemon_start` when the
   configuration file changed after it, `daemon_start_unknown` without it,
   `error_code_unparsed:<task>/<instance>` for a failure identity that does not
   parse (judged on its main digest only), `task_not_in_catalog:<task>/<instance>`.

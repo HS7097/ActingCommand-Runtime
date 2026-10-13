@@ -8,7 +8,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -24,7 +27,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -40,7 +46,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -56,7 +65,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -72,7 +84,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -88,7 +103,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -104,7 +122,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -120,7 +141,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -136,7 +160,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -152,7 +179,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -168,7 +198,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -184,7 +217,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -200,7 +236,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -216,7 +255,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -232,7 +274,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -248,7 +293,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -264,7 +312,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -280,7 +331,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -296,7 +350,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -312,7 +369,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -328,7 +388,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -344,7 +407,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -360,7 +426,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "mumu_root": "optional"
+        "mumu_root": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -375,7 +444,11 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -389,7 +462,11 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -403,7 +480,11 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -417,7 +498,11 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -431,7 +516,11 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -446,7 +535,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "device_state_probe": "required"
+        "device_state_probe": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -462,7 +554,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "device_label": "required"
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -478,7 +573,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "device_label": "required"
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -494,7 +592,10 @@
       "layer": "device",
       "uncertain": false,
       "values": {
-        "device_label": "required"
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",

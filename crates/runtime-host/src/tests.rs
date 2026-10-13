@@ -112,11 +112,15 @@ mod gate_369s5;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
+// Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
+mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
+// Workflow #387 D1b: D1-M3 to D1-M7.
+mod gate_387_d1b;
 mod gate_392_daa;
 mod gate_398_rd1a;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
@@ -145,6 +149,8 @@ mod policy_budget;
 mod policy_completion;
 mod project_interface;
 mod proposals;
+// Workflow #378 A4: receipt v2 outcomes and the class detail.
+mod receipt_outcome;
 mod releases;
 mod sampling;
 mod scheduled_execution;

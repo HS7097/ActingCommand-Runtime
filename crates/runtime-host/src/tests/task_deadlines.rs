@@ -64,7 +64,7 @@ fn direct_contained_task_max_deadline_survives_past_default_lease_boundary() {
     let deadline = match receipt.result() {
         Some(RuntimeResult::ContainedTaskCompleted {
             response_deadline_monotonic_ms: Some(deadline),
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         }) => *deadline,
         result => panic!("unexpected long task result: {result:?}"),
@@ -185,7 +185,7 @@ fn contained_task_deadline_checkpoint_fails_closed_on_lease_identity_mismatch() 
     assert!(matches!(
         receipt.result(),
         Some(RuntimeResult::ContainedTaskCompleted {
-            outcome: TaskOutcome::Success,
+            task_result: TaskOutcome::Success,
             ..
         })
     ));
@@ -370,7 +370,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         Some(RuntimeResult::ContainedTaskCancellation {
             task_request_id,
             status: actingcommand_contract::ContainedTaskCancellationStatus::Terminal {
-                outcome: TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Cancelled,
                 lease_disposition:
                     actingcommand_contract::ContainedTaskLeaseTerminal::Released,
                 ..
@@ -530,7 +530,7 @@ fn scheduled_contained_task_deadline_uses_existing_failure_settlement() {
         assert!(matches!(
             receipt.result(),
             Some(RuntimeResult::ContainedTaskCompleted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 response_deadline_monotonic_ms: Some(deadline),
                 ..
             }) if *deadline == budget_ms

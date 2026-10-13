@@ -8,7 +8,7 @@ use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_ma
 use actingcommand_runtime_host::{
     CatalogGeneration, CatalogPreview, CatalogPreviewRequest, ExecutionBackendProvider,
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
-    preview_policy_catalog_transition,
+    inspect_standard_packs, preview_policy_catalog_transition,
 };
 use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
 use config::InstanceBindingKey;
@@ -18,8 +18,10 @@ use std::path::Path;
 const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1";
 /// Inputs this command cannot validate: vision model content is read and hashed only when a
 /// model is first used (Workflow #360). Since Workflow #361 C3 the state root is read
-/// read-only; `state_root_absent` is added when it does not exist.
-const NOT_CHECKED: [&str; 1] = ["vision_model_content"];
+/// read-only; `state_root_absent` is added when it does not exist. Workflow #387 D1b: the
+/// instruction values a running Runtime holds are not read (only the files are); a running
+/// Runtime reports them in `config.parameters.<section>` (`actingctl status --config`).
+const NOT_CHECKED: [&str; 2] = ["vision_model_content", "instruction_values"];
 /// Added to `not_checked` when the configured state root does not exist (Workflow #361 C3).
 const STATE_ROOT_ABSENT_NOT_CHECKED: &str = "state_root_absent";
 /// Added to `not_checked` when no MuMu install root could be resolved.
@@ -70,6 +72,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             provider,
             policy,
             manifest,
+            config_selection,
             resource_packages,
             ignored_env_overrides,
             adb_requirement,
@@ -127,6 +130,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             env_nemu_folder,
             policy_configured: policy.is_some(),
             manifest,
+            config_selection,
             ignored_env_overrides,
             adb_default,
             vision,
@@ -281,6 +285,8 @@ struct CheckedAssembly {
     env_nemu_folder: Option<PathBuf>,
     policy_configured: bool,
     manifest: RuntimeConfigManifest,
+    /// Workflow #387 D1b: the configuration layers read, as startup records `config.selection`.
+    config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Set `ACTINGCOMMAND_*` variables ignored because `allow_env_overrides` is off.
     ignored_env_overrides: Vec<&'static str>,
     /// Workflow #337: the install root's adb and its state; `None` outside an install root.
@@ -493,6 +499,9 @@ fn summarize(
         "performance": performance,
         "device_paths": device_paths,
         "config_manifest": checked.manifest,
+        // Workflow #387 D1b: what startup records as `config.selection`; the build compares
+        // `defaults_sha256` with the shipped defaults file.
+        "config_selection": checked.config_selection,
         "not_checked": not_checked,
         "mumu_root": mumu_root,
         // Workflow #337: `null` outside an install root, else `{ path, state }`.
@@ -512,6 +521,24 @@ fn summarize(
     if let Some(unresolved) = mumu_root_unresolved {
         report["mumu_root_unresolved"] = unresolved;
     }
+    // Workflow #373 NAV-6 (M-373 §7): the standard-pack root as startup reads it (root files
+    // only, no package admitted). A broken game root is that game's problem and one warning
+    // (`<code>:<game>`); the configuration itself is not refused.
+    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root());
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        if let Some(problem) = &standard_packs.root_problem {
+            warnings.push(json!(problem.code().to_string()));
+        }
+        for (game, problem) in standard_packs.problems() {
+            warnings.push(json!(format!("{}:{game}", problem.code())));
+        }
+    }
+    report["standard_packs"] = serde_json::to_value(&standard_packs).map_err(|_| {
+        registered(
+            ActingdCode::CheckConfigReportEncodeFailed,
+            ActingdLocation::ConfigAssemble,
+        )
+    })?;
     Ok(report)
 }
 

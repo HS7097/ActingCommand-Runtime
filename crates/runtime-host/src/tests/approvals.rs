@@ -263,7 +263,10 @@ fn governance_authority_requires_an_accepted_identity_card_and_is_connection_bou
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
     let denial = receipt.error_projection().expect("denial");
     assert_eq!(denial.code, RuntimeErrorCode::InvalidRequest);
-    assert_eq!(denial.host_code(), Some("governance_client_not_allowed"));
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        "governance_client_not_allowed"
+    );
     assert!(receipt.terminal().is_some(), "the refusal is recorded");
 
     client.declare_governance_identity();

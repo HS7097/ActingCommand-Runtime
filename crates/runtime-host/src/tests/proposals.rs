@@ -402,7 +402,10 @@ fn proposal_with_a_missing_report_is_refused_without_poisoning_runtime() {
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
     let error = receipt.error_projection().expect("request error");
-    assert_eq!(error.host_code(), Some("proposal_report_unavailable"));
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        "proposal_report_unavailable"
+    );
     assert!(!error.fatal);
     drop(client);
     assert!(host.fatal_error().expect("runtime health").is_none());

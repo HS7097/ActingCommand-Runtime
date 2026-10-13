@@ -1386,7 +1386,7 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
             assert!(matches!(
                 receipt.result(),
                 Some(RuntimeResult::ContainedTaskCompleted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     final_page: Some(page),
                     ..
                 }) if page == "neutral/terminal"

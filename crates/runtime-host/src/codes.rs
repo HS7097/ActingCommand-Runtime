@@ -1147,6 +1147,31 @@ actingcommand_contract::outcome_codes! {
         /// optional `request_id`, `instance_id`).
         PackRegistryDispatchWithdrawn => "pack_registry_dispatch_withdrawn": info / none,
         // ---- end of #389 U-0 registrations
+        // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin
+        /// Info. A standard-pack game root's registry was read at startup, or a run's
+        /// preparation read one that differs from the last (keys `game`, `count`; optional
+        /// `added_package_ids`, `removed_package_ids`).
+        StandardPackRegistered => "standard_pack_registered": info / none,
+        /// Error. A standard-pack game directory or root file could not be read; the OS error
+        /// is the cause (key `path`; optional `game`, absent when the root itself cannot be
+        /// listed).
+        StandardPackRootUnreadable => "standard_pack_root_unreadable": error / declaration_error,
+        /// Error. A standard-pack package named for a part in a run is not of the run's server,
+        /// cannot be admitted or is not eligible (keys `package_id`, `navigation_role`,
+        /// `navigation_problem`).
+        ContainedTaskNavigationPackageInvalid => "contained_task_navigation_package_invalid": error / declaration_error,
+        /// Info. A shared interrupt page was handled (keys `page_id`, `count`).
+        ContainedTaskInterruptHandled => "contained_task_interrupt_handled": info / none,
+        /// Warning. One frame matched two or more shared interrupt pages; none was handled
+        /// (keys `page_ids`).
+        ContainedTaskInterruptAmbiguous => "contained_task_interrupt_ambiguous": warning / none,
+        /// Error. A shared interrupt page was seen once more than the run may handle it (keys
+        /// `page_id`, `count`, `limit_count`).
+        ContainedTaskInterruptLimitReached => "contained_task_interrupt_limit_reached": error / pack_logic_mismatch,
+        /// Error. A shared interrupt page whose `then` is `end_run` was handled (keys
+        /// `page_id`).
+        ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
+        // ---- Workflow #373 NAV-6: end
         /// Error. A performance observation event the contract refused was dropped and the
         /// performance monitor degraded instead of ending the Runtime (keys `event_type`; its
         /// `caused_by` link is the contract's sanitization outcome; Workflow #378 A2-P).
@@ -1960,6 +1985,12 @@ actingcommand_contract::outcome_locations! {
         RuntimeLifecyclePolicyBootstrap => "runtime_lifecycle_policy_bootstrap",
         RuntimeLifecycleSelectionRecord => "runtime_lifecycle_selection_record",
         RuntimeLifecycleShutdownRequested => "runtime_lifecycle_shutdown_requested",
+        // Workflow #373 NAV-6: reading and recording a standard-pack game root, and the shared
+        // interrupt pages of a run.
+        StandardPackRead => "standard_pack_read",
+        StandardPackRegister => "standard_pack_register",
+        InterruptCheck => "interrupt_check",
+        InterruptHandle => "interrupt_handle",
         AdbEndpointPending => "adb_endpoint_pending",
         AdbEndpointUnresolved => "adb_endpoint_unresolved",
         DeviceRegistryInputOperation => "device_registry_input_operation",
@@ -2066,6 +2097,7 @@ pub(crate) mod test_spellings {
             ReadReleasedOwner => "read_released_owner",
             ReadRetainedOwner => "read_retained_owner",
             ReadSchedulingPausesForTest => "read_scheduling_pauses_for_test",
+            ReadStuckRecoveryForTest => "read_stuck_recovery_for_test",
             ReadTestLeaseExpiryCheckpoint => "read_test_lease_expiry_checkpoint",
             ReadTestLeaseExpiryConnection => "read_test_lease_expiry_connection",
             ReadTestLeaseExpiryPosition => "read_test_lease_expiry_position",
@@ -2137,9 +2169,6 @@ actingcommand_contract::outcome_codes! {
         /// Error. A run still active when a blackout started was stopped at its next
         /// checkpoint (keys `blackout_id`, `blackout_start_unix_ms`; SR-4b).
         BlackoutRunStopped => "blackout_run_stopped": error / planned_stop,
-        /// Error. A host blackout entry of the configuration breaks a rule (keys `field`, and
-        /// `blackout_id` when the entry has one; SR-4a).
-        BlackoutConfigInvalid => "blackout_config_invalid": error / none,
         /// Error. A `session.feature.*` record breaks the feature-lock fact rules; the request
         /// is refused (keys `fact_key`; SR-5a).
         SessionFeatureFactInvalid => "session_feature_fact_invalid": error / none,
@@ -2156,3 +2185,36 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #386 SR-0 (scheduling rules): end ----
+
+// ---- Workflow #387 D1b (shared configuration mechanism): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the configuration in effect (Workflow #387 D1b, model v1.2 §5.6,
+    /// §5.7). The refusals of a `ConfigureSettings` change are the configuration crate's
+    /// (`actingcommand_runtime_config::ConfigCode`).
+    pub(crate) enum ConfigHostCode {
+        /// Error. At start the recorded `host.config_overrides` is not of the shape this build
+        /// writes; the start fails, and every later start until the ledger is repaired.
+        OverridesFactInvalid => "host_config_overrides_fact_invalid": error / none,
+        /// Error. A `ConfigureSettings` change could not record `host.config_overrides`; nothing
+        /// changed and the request is refused (`caused_by`: the ledger's refusal).
+        OverridesPersistFailed => "host_config_overrides_persist_failed": error / none,
+        /// Error. A configuration fact cannot be recorded after the previous one: its observation
+        /// time would overflow.
+        OverridesFactClockOverflow => "host_config_overrides_fact_clock_overflow": error / none,
+        /// Error. A value the configuration in effect holds, or an identity a configuration
+        /// record needs, is not of the type the reader expects (an internal invariant).
+        ValueTypeInvalid => "host_config_value_type_invalid": error / none,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the configuration in effect (Workflow #387 D1b).
+    pub(crate) enum ConfigHostLocation {
+        ConfigureSettings => "configure_settings",
+        RestoreConfigOverrides => "restore_config_overrides",
+        PersistConfigOverrides => "persist_config_overrides",
+        ReadRuntimeConfig => "read_runtime_config",
+        RecordRuntimeConfig => "record_runtime_config",
+    }
+}
+// ---- Workflow #387 D1b (shared configuration mechanism): end ----

@@ -48,7 +48,9 @@ moved, it keeps its v0.11 shape.
   diagnostic sink. The record form (ledger, A3) is the same body without `schema_version` and
   `detail`, always full.
 - **Codes mode** (`detail: "codes"`) keeps every node's `code`, `category` and `relation`, and
-  only the values whose type is `code`, `location`, `vocab:*` or a list of them.
+  only the values whose type is `code`, `location`, `vocab:*` or a list of them. One exception:
+  a denied or failed receipt keeps its top's `host_halted` in every detail mode, because the
+  client's own fatal handling runs on it (Workflow #378 A4, coordinator ruling A-M1).
 - **Foreign text** goes only into `raw_text` on a `foreign_*` or `panic_caught` link, verbatim.
   A child process's foreign code carries `exit_code` when the process exited.
 

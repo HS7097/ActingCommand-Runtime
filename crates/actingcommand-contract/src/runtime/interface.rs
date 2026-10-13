@@ -11,6 +11,8 @@
 //! validates them too (section 3.1), and they never pass the door.
 
 use super::RuntimeOperation;
+use crate::codes::ReceiptCode;
+use crate::outcome::Code;
 use crate::{FactKeyFamily, FactObservation, fact_key_family};
 use serde::{Deserialize, Serialize};
 
@@ -216,6 +218,7 @@ runtime_operation_kinds! {
     PromoteProposal,
     ApplyResourceTargets,
     ResourceTargetView,
+    ConfigureSettings,
     BindChannel,
     UpgradeState,
     UpgradeStateStatus,
@@ -256,6 +259,7 @@ impl RuntimeOperationKind {
             | Self::PublishFact
             | Self::PublishFacts
             | Self::ApplyResourceTargets
+            | Self::ConfigureSettings
             | Self::UpgradeState => GENERAL_INSTRUCTION,
             // Option one, authoring: the agent planning session and the packaging tools.
             Self::StartAgentSession
@@ -299,6 +303,103 @@ impl RuntimeOperationKind {
             Self::RecordApprovalDecision => RETIRED_INSTRUCTION,
             // install-control revision 1, until the upgrade state replaces it.
             Self::InstallTransition => COMPAT_INSTRUCTION,
+        }
+    }
+}
+
+impl RuntimeOperationKind {
+    /// Workflow #378 A4 (model section 7.2, review L1): the success code a completed receipt of
+    /// this kind carries, one per kind. A kind that never answers completed has none: its
+    /// receipt carries the info code of its state instead (a granted lease or an accepted
+    /// shutdown is admitted, a waiting lease is queued, a cancelled queue entry is cancelled, a
+    /// contained page observation is observed). The five kinds of section 2.3 get theirs from
+    /// the slices that add their behaviour (U-2, U-3, U-4); until then they are refused.
+    pub const fn success_code(self) -> Option<Code> {
+        match self {
+            Self::Health => Some(ReceiptCode::HealthCompleted.code()),
+            Self::InstallTransition => Some(ReceiptCode::InstallTransitionCompleted.code()),
+            Self::Status => Some(ReceiptCode::StatusCompleted.code()),
+            Self::ProjectInterface => Some(ReceiptCode::ProjectInterfaceCompleted.code()),
+            Self::ProjectPolicyInputIdentity => {
+                Some(ReceiptCode::ProjectPolicyInputIdentityCompleted.code())
+            }
+            Self::MonitorStatus => Some(ReceiptCode::MonitorStatusCompleted.code()),
+            Self::RuntimeFactSnapshot => Some(ReceiptCode::RuntimeFactSnapshotCompleted.code()),
+            Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
+            Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
+            Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
+            Self::RenewLease => Some(ReceiptCode::RenewLeaseCompleted.code()),
+            Self::ReleaseLease => Some(ReceiptCode::ReleaseLeaseCompleted.code()),
+            Self::ObserveReadonly => Some(ReceiptCode::ObserveReadonlyCompleted.code()),
+            Self::RecognizeArtifact => Some(ReceiptCode::RecognizeArtifactCompleted.code()),
+            Self::RunContainedLabOperation => {
+                Some(ReceiptCode::RunContainedLabOperationCompleted.code())
+            }
+            Self::CaptureSequence => Some(ReceiptCode::CaptureSequenceCompleted.code()),
+            Self::SafeReset => Some(ReceiptCode::SafeResetCompleted.code()),
+            Self::ApplicationLifecycle => Some(ReceiptCode::ApplicationLifecycleCompleted.code()),
+            Self::ControlEmulatorInstance => {
+                Some(ReceiptCode::ControlEmulatorInstanceCompleted.code())
+            }
+            Self::DiscoverInstances => Some(ReceiptCode::DiscoverInstancesCompleted.code()),
+            Self::PauseScheduling => Some(ReceiptCode::PauseSchedulingCompleted.code()),
+            Self::ResumeScheduling => Some(ReceiptCode::ResumeSchedulingCompleted.code()),
+            Self::SelfCheckInstance => Some(ReceiptCode::SelfCheckInstanceCompleted.code()),
+            Self::RunContainedTask => Some(ReceiptCode::RunContainedTaskCompleted.code()),
+            Self::Input => Some(ReceiptCode::InputCompleted.code()),
+            Self::PublishFact => Some(ReceiptCode::PublishFactCompleted.code()),
+            Self::PublishFacts => Some(ReceiptCode::PublishFactsCompleted.code()),
+            Self::QueryEvents => Some(ReceiptCode::QueryEventsCompleted.code()),
+            Self::ReadMaterial => Some(ReceiptCode::ReadMaterialCompleted.code()),
+            Self::SubscribeEvents => Some(ReceiptCode::SubscribeEventsCompleted.code()),
+            Self::RegisterDiagnosticSignature => {
+                Some(ReceiptCode::RegisterDiagnosticSignatureCompleted.code())
+            }
+            Self::MatchDiagnosticSignatures => {
+                Some(ReceiptCode::MatchDiagnosticSignaturesCompleted.code())
+            }
+            Self::RetireDiagnosticSignature => {
+                Some(ReceiptCode::RetireDiagnosticSignatureCompleted.code())
+            }
+            Self::DebugPackage => Some(ReceiptCode::DebugPackageCompleted.code()),
+            Self::ExportEvidence => Some(ReceiptCode::ExportEvidenceCompleted.code()),
+            Self::RecordAuthoringEvent => Some(ReceiptCode::RecordAuthoringEventCompleted.code()),
+            Self::RecordDebugEvent => Some(ReceiptCode::RecordDebugEventCompleted.code()),
+            Self::ReleaseLabPin => Some(ReceiptCode::ReleaseLabPinCompleted.code()),
+            Self::RecordClientAction => Some(ReceiptCode::RecordClientActionCompleted.code()),
+            Self::DeclareGovernanceIdentity => {
+                Some(ReceiptCode::DeclareGovernanceIdentityCompleted.code())
+            }
+            Self::RecordApprovalDecision => {
+                Some(ReceiptCode::RecordApprovalDecisionCompleted.code())
+            }
+            Self::StartAgentSession => Some(ReceiptCode::StartAgentSessionCompleted.code()),
+            Self::ResumeAgentSession => Some(ReceiptCode::ResumeAgentSessionCompleted.code()),
+            Self::AgentSessionStatus => Some(ReceiptCode::AgentSessionStatusCompleted.code()),
+            Self::RecordAgentResponse => Some(ReceiptCode::RecordAgentResponseCompleted.code()),
+            Self::PrepareStrategicReport => {
+                Some(ReceiptCode::PrepareStrategicReportCompleted.code())
+            }
+            Self::ProjectPolicyForward => Some(ReceiptCode::ProjectPolicyForwardCompleted.code()),
+            Self::AssessPredictiveMaintenance => {
+                Some(ReceiptCode::AssessPredictiveMaintenanceCompleted.code())
+            }
+            Self::CompileProposal => Some(ReceiptCode::CompileProposalCompleted.code()),
+            Self::PromoteProposal => Some(ReceiptCode::PromoteProposalCompleted.code()),
+            Self::ApplyResourceTargets => Some(ReceiptCode::ApplyResourceTargetsCompleted.code()),
+            Self::ResourceTargetView => Some(ReceiptCode::ResourceTargetViewCompleted.code()),
+            Self::ConfigureSettings => Some(ReceiptCode::ConfigureSettingsCompleted.code()),
+            Self::RequestShutdown
+            | Self::AcquireLease
+            | Self::QueueLease
+            | Self::PollQueuedLease
+            | Self::CancelQueuedLease
+            | Self::ObserveContainedPage => None,
+            Self::BindChannel
+            | Self::UpgradeState
+            | Self::UpgradeStateStatus
+            | Self::LoadPack
+            | Self::UnloadPack => None,
         }
     }
 }
@@ -376,6 +477,7 @@ impl RuntimeOperation {
             Self::PromoteProposal { .. } => Kind::PromoteProposal,
             Self::ApplyResourceTargets { .. } => Kind::ApplyResourceTargets,
             Self::ResourceTargetView { .. } => Kind::ResourceTargetView,
+            Self::ConfigureSettings { .. } => Kind::ConfigureSettings,
             Self::BindChannel { .. } => Kind::BindChannel,
             Self::UpgradeState { .. } => Kind::UpgradeState,
             Self::UpgradeStateStatus { .. } => Kind::UpgradeStateStatus,
@@ -455,6 +557,9 @@ mod tests {
             K::PublishFacts => (General, Some(Instruction), true),
             // section 14.2: writing resource targets is a general instruction.
             K::ApplyResourceTargets => (General, Some(Instruction), true),
+            // Workflow #387 D1b (model v1.2 §5.6): changing a setting while running is a general
+            // instruction the three counters send, recorded through G14.
+            K::ConfigureSettings => (General, Some(Instruction), true),
             // section 2.2 option one, authoring.
             K::StartAgentSession => (Lab(Authoring), Some(Instruction), true),
             K::ResumeAgentSession => (Lab(Authoring), Some(Instruction), true),
