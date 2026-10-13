@@ -17,6 +17,23 @@
       "description": "An actinglab offline package-tool command (recording, binding draft, package check, resource catalog and the like) ran while Lab option one (authoring) is not installed. It prints one JSON line, exits 1 and changes no file. actinglab reads the two options from the Runtime's configuration facts, or from the selected configuration generation when the Runtime does not answer; until #389 U-6, a configuration that names neither option counts as both installed.",
       "common_causes": "Only the debugging option is installed.",
       "handling": "Tick the authoring option on the installer's Lab page."
+    },
+    "observe_identity_limit_exceeded": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "actual_bytes": "required",
+        "limit_bytes": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
+      "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
+      "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
     }
   }
 }
