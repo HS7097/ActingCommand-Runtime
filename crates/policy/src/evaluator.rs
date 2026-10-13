@@ -2385,7 +2385,7 @@ fn apply_priority_selection(
             .push(reason(PolicyCode::ScoreComputed, detail));
         if let Some(rule) = unknown_rule {
             task_work.reasons.push(reason_with(
-                Outcome::new(PolicyCode::ScoreUnknown).rule_id(rule.as_str()),
+                Outcome::new(PolicyCode::ScoreUnknown).rule_id(rule),
                 match applied.map(|applied| applied.mode) {
                     Some(TargetMode::Adjust) => {
                         "the selection document could not score this candidate; the utility term, the manual offset and the applied resource target apply"

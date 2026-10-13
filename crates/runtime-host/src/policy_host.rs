@@ -1419,7 +1419,10 @@ impl PolicyHost {
                 (None, Some(InstanceOccupancy::Held { holder_kind, count })) => {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            outcome: Outcome::new(HostCode::DispatchInstanceHeld),
+                            outcome: Outcome::new(HostCode::DispatchInstanceHeld)
+                                .instance_id(intent.instance_id.as_str())
+                                .holder_kind(crate::error::ClaimKindToken(holder_kind))
+                                .count(count),
                             detail: format!("holder_kind={} count={count}", holder_kind.as_str()),
                         },
                         next_wake_unix_ms: None,
@@ -1429,7 +1432,9 @@ impl PolicyHost {
                 (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            outcome: Outcome::new(HostCode::DispatchInstanceCooldown),
+                            outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
+                                .instance_id(intent.instance_id.as_str())
+                                .next_eligible_unix_ms(until_unix_ms),
                             detail: format!("next_eligible_unix_ms={until_unix_ms}"),
                         },
                         next_wake_unix_ms: Some(until_unix_ms),
@@ -1447,9 +1452,7 @@ impl PolicyHost {
                         deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
-                                // The denial's own outcome: its code with its values (an
-                                // unregistered relayed spelling stays its relay outcome, with
-                                // the spelling as `raw_code`).
+                                // The denial's own outcome: its host code with its values.
                                 outcome: rejection.outcome.clone(),
                                 detail: format!(
                                     "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",

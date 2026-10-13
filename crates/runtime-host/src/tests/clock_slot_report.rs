@@ -357,7 +357,7 @@ fn a_clock_slot_token_that_does_not_read_back_is_unparsed_without_a_warning() {
         },
         at(1, 12, 0),
     );
-    signal.outcome = Outcome::new(HostCode::MaintenanceRecheckSuggested);
+    signal.outcome = Outcome::new(HostCode::DispatchPausedGlobal);
     let id = signal.signal_id.clone();
 
     let without = appended(Vec::new());
@@ -367,7 +367,7 @@ fn a_clock_slot_token_that_does_not_read_back_is_unparsed_without_a_warning() {
         json!([{
             "parse_state": "unparsed",
             "signal_id": id,
-            "code": "maintenance_recheck_suggested"
+            "code": "dispatch_paused_global"
         }]),
         "{report:#}"
     );
