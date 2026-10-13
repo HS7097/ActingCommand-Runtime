@@ -195,9 +195,10 @@ fn tool_error(error: EventsError) -> ToolError {
 /// The tool's input schema: every parameter of `actingctl events`, by the same names.
 pub(super) fn input_schema() -> Value {
     let id = |what: &str| json!({"type": "string", "minLength": 1, "description": what});
+    // Ledger revision 3 (#378 A3): `success` sits between `debug` and `info`.
     let severity = json!({
         "type": "string",
-        "enum": ["debug", "info", "warning", "error", "fatal"],
+        "enum": ["debug", "success", "info", "warning", "error", "fatal"],
     });
     json!({
         "type": "object",
