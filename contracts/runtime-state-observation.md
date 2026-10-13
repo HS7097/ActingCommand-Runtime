@@ -80,7 +80,11 @@ states. The internal first-fact sequence drives interruption classification;
 admission. Main package metadata remains absent until recorded, and maintenance
 hashes belong only to `recovery_packages`.
 
-`recent_runs` discovers semantic facts, deduplicates their request/run identities
+`recent_runs` reads by run (Workflow #391 item 3): it first lists the runs of the
+window by the facts each run records only a few of, its main admission
+(`task.requested`), its entry facts (`task.entry_preflight`) and its terminal
+(`task.completed`, `task.failed`, `task.cancelled`), one query per type, and never
+reads the instance's other events. It deduplicates their request/run identities
 before selecting the requested 1–10 runs, and orders them by their first fact,
 newest first. A later fact in the time window does not make an older run recent.
 The listing and each projection share one snapshot and the existing 20-second
