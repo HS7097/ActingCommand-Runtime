@@ -150,11 +150,7 @@ impl HostShared {
                     .instance_id(instance_alias)
                     .holder_kind(crate::error::ClaimKindToken(holder_kind))
                     .count(count)
-            })
-            .with_native_detail(format!(
-                "holder_kind={} count={count}",
-                holder_kind.as_str()
-            )),
+            }),
         ))
     }
 }

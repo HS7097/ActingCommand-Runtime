@@ -126,6 +126,21 @@ fn assert_queue_expired(receipt: &RuntimeReceipt) {
 /// The one record of the expiry: `scheduler.denied` `lease.queue_expired` under the request's
 /// links, naming the instance. Ledger revision 3 (#378 A3): its severity is its outcome's
 /// category, `lease_queue_expired`'s `error`.
+/// A queue expiry's outcome: `lease_queue_expired` with the wait, the holder's kind and the
+/// queue position as values (ledger revision 3).
+fn assert_queue_expiry_values(outcome: &actingcommand_contract::outcome::Outcome, timeout_ms: u64) {
+    assert_eq!(outcome.code().as_str(), "lease_queue_expired");
+    assert_eq!(
+        outcome.value("timeout_ms"),
+        Some(&serde_json::json!(timeout_ms))
+    );
+    assert_eq!(
+        outcome.value("holder_kind"),
+        Some(&serde_json::json!("client_lease"))
+    );
+    assert_eq!(outcome.value("queue_position"), Some(&serde_json::json!(1)));
+}
+
 fn assert_one_expiry_record(host: &RuntimeHost, request: &RuntimeRequest, instance: InstanceId) {
     let recorded = of_request(host, request.request_id());
     let denied = only(&recorded, EventType::SchedulerDenied);
@@ -243,11 +258,13 @@ fn gate_a_direct_run_whose_wait_expires_is_denied_without_task_events() {
         .expect("run receipt");
 
     assert_queue_expired(&receipt);
-    assert_eq!(
-        host.failure_detail_for_test(run.request_id())
-            .expect("refusal detail")
-            .as_deref(),
-        Some("timeout_ms=1000 holder_kind=client_lease queue_position=1")
+    // Ledger revision 3 (acceptance H-L3): the refusal's facts are its outcome's values.
+    assert_queue_expiry_values(
+        &host
+            .failure_outcome_for_test(run.request_id())
+            .expect("refusal outcome")
+            .expect("the refusal's outcome"),
+        1000,
     );
     assert_one_expiry_record(&host, &run, instance);
     assert!(
@@ -286,11 +303,13 @@ fn gate_a_self_check_behind_a_holder_expires_without_preparation_or_ladder() {
         .expect("self-check receipt");
 
     assert_queue_expired(&receipt);
-    assert_eq!(
-        host.failure_detail_for_test(check.request_id())
-            .expect("refusal detail")
-            .as_deref(),
-        Some("timeout_ms=3000 holder_kind=client_lease queue_position=1")
+    // Ledger revision 3 (acceptance H-L3): the refusal's facts are its outcome's values.
+    assert_queue_expiry_values(
+        &host
+            .failure_outcome_for_test(check.request_id())
+            .expect("refusal outcome")
+            .expect("the refusal's outcome"),
+        3000,
     );
     assert_one_expiry_record(&host, &check, instance);
     let preparation = of_correlation(&host, &check)

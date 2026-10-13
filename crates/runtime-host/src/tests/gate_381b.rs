@@ -705,13 +705,19 @@ fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_pro
     let error = receipt.error_projection().expect("refusal projection");
     assert_eq!(error.code, RuntimeErrorCode::QueueExpired);
     assert_eq!(error.host_code(), Some("lease_queue_expired"));
+    // Ledger revision 3 (acceptance H-L3): the refusal's facts are its outcome's values.
+    let refusal = run
+        .host
+        .failure_outcome_for_test(receipt.request_id())
+        .expect("refusal outcome")
+        .expect("the refusal's outcome");
+    assert_eq!(refusal.code().as_str(), "lease_queue_expired");
+    assert_eq!(refusal.value("timeout_ms"), Some(&serde_json::json!(5000)));
     assert_eq!(
-        run.host
-            .failure_detail_for_test(receipt.request_id())
-            .expect("refusal detail")
-            .as_deref(),
-        Some("timeout_ms=5000 holder_kind=client_lease queue_position=1")
+        refusal.value("holder_kind"),
+        Some(&serde_json::json!("client_lease"))
     );
+    assert_eq!(refusal.value("queue_position"), Some(&serde_json::json!(1)));
     assert!(
         control_calls(&run.state.emulator.calls()).is_empty(),
         "no provider call"

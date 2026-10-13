@@ -3829,12 +3829,7 @@ impl HostShared {
         drop(order);
         // Q-4: a removed entry may leave an eligible one first on a free instance.
         self.pump(instance_id)?;
-        let mut detail = format!("timeout_ms={cap_ms}");
-        if let Some(holder_kind) = holder_kind {
-            detail.push_str(&format!(" holder_kind={}", holder_kind.as_str()));
-        }
         let queue_position = removed.queued().position();
-        detail.push_str(&format!(" queue_position={queue_position}"));
         Err(RequestFailure::request(
             RuntimeHostError::request(
                 actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
@@ -3848,8 +3843,7 @@ impl HostShared {
                     Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
                     None => outcome,
                 }
-            })
-            .with_native_detail(detail),
+            }),
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),
         ))

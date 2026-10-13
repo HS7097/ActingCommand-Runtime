@@ -98,12 +98,12 @@ impl HostShared {
                     self.fatal.mark((*failure.error).clone())?;
                 }
                 #[cfg(test)]
-                if let Some(detail) = failure.error.native_detail() {
+                {
                     lock(
-                        &self.failure_details_for_test,
+                        &self.failure_outcomes_for_test,
                         crate::codes::test_spellings::TestLocation::RecordFailureDetailForTest,
                     )?
-                    .insert(request.request_id(), detail.to_owned());
+                    .insert(request.request_id(), failure.error.outcome());
                 }
                 let projection = failure
                     .error

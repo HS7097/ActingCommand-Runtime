@@ -293,12 +293,7 @@ impl HostShared {
                             .event_id(crate::failure_identity::identifier_text(
                                 &request.event.event_id,
                             ))
-                    })
-                    .with_native_detail(format!(
-                        "artifact_id={} event_id={}",
-                        crate::failure_identity::identifier_text(&request.artifact_id),
-                        crate::failure_identity::identifier_text(&request.event.event_id)
-                    )),
+                    }),
                     None,
                 ),
                 MaterialReadError::Artifact(error) => {

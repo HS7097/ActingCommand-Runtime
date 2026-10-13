@@ -1493,7 +1493,7 @@ impl RuntimeHost {
             #[cfg(test)]
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             #[cfg(test)]
-            failure_details_for_test: Mutex::new(BTreeMap::new()),
+            failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -2619,16 +2619,17 @@ impl RuntimeHost {
             .process_request(request, connection_id)
     }
 
-    /// Workflow #369 S5: the native detail of a refused request (its `key=value` tokens).
+    /// Workflow #369 S5: the outcome of a refused request; ledger revision 3 carries the
+    /// refusal's facts as its values (they were the native detail's `key=value` tokens).
     #[cfg(test)]
-    pub(crate) fn failure_detail_for_test(
+    pub(crate) fn failure_outcome_for_test(
         &self,
         request_id: RequestId,
-    ) -> RuntimeHostResult<Option<String>> {
+    ) -> RuntimeHostResult<Option<actingcommand_contract::outcome::Outcome>> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest)?;
         Ok(lock(
-            &shared.failure_details_for_test,
+            &shared.failure_outcomes_for_test,
             crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest,
         )?
         .get(&request_id)
@@ -3910,10 +3911,10 @@ struct HostShared {
     lease_expiry_scan_test_gate: Mutex<()>,
     #[cfg(test)]
     lease_expiry_test_checkpoints: Mutex<Vec<LeaseExpiryTestCheckpoint>>,
-    /// Workflow #369 S5: the native detail of each refused request, by request id; it carries
-    /// the refusal's `key=value` tokens, which no receipt carries until #378 A2/A3.
+    /// Workflow #369 S5: the outcome of each refused request, by request id; its values are the
+    /// refusal's facts, which no receipt carries (ledger revision 3).
     #[cfg(test)]
-    failure_details_for_test: Mutex<BTreeMap<RequestId, String>>,
+    failure_outcomes_for_test: Mutex<BTreeMap<RequestId, actingcommand_contract::outcome::Outcome>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
