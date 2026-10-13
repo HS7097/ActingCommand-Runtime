@@ -4555,6 +4555,39 @@
         },
         "repeated_key": {
           "description": "The request names the key more than once."
+        },
+        "duplicate_id": {
+          "description": "Two trigger items of recovery_ladder.triggers share an id (Workflow #387 D1c)."
+        },
+        "stage_not_allowed": {
+          "description": "A trigger item names no stage, a stage twice, or a stage no item may name (recovery_preparation, resource_fence)."
+        },
+        "match_missing": {
+          "description": "A trigger item names neither classes nor codes."
+        },
+        "code_unknown": {
+          "description": "A code, a code prefix or a ladder class the catalog does not list."
+        },
+        "code_retired": {
+          "description": "A code the catalog lists as retired; its replaced_by names the successor."
+        },
+        "burst_invalid": {
+          "description": "count and window_ms missing or zero on a stability_warnings item, or present on another."
+        },
+        "start_rung_out_of_range": {
+          "description": "A start rung beyond the configured rungs."
+        },
+        "rungs_invalid": {
+          "description": "No rung or more than three, an action twice or unknown, or a member of another action."
+        },
+        "bound_out_of_range": {
+          "description": "A rung's bound below the device layer's own bound or outside its allowed range."
+        },
+        "renewal_cap_exceeded": {
+          "description": "A rung's bound and the hold margin beyond the longest renewal a claim is granted."
+        },
+        "claim_ttl_out_of_range": {
+          "description": "A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or below the hold margin."
         }
       }
     }
@@ -16543,6 +16576,25 @@
       "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part. The run ends; data errors stop it (Fail Loud).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "contained_task_navigation_recovery_exhausted": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's navigation recovery chain ran out without reaching its entry page (count is the number of steps run; caused by the last locate's code; Workflow #373 M-373 sections 5 and 9). Registered with Workflow #387 D1c for its default trigger item navigation_exhausted; NAV-5 emits it.",
+      "common_causes": "The game shows a page the standard pack's navigation data cannot leave, or its recovery chain is too short.",
+      "handling": "The recovery ladder's trigger item navigation_exhausted starts at the emulator restart rung by default; check the standard pack's navigation data if it recurs."
     },
     "contained_task_ocr_fields_unresolved": {
       "category": "error",
@@ -50441,6 +50493,7 @@
       "layer": "config",
       "uncertain": false,
       "values": {
+        "raw_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -50448,9 +50501,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The recovery ladder met a code the embedded catalog does not list and read it as ladder class none. D1c, which emits it, fixes its values (the code met) and its layer.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The recovery ladder met a code the embedded catalog does not list and read it as ladder class none (raw_code is its spelling); recorded once per process and code. No trigger item matches it by class.",
+      "common_causes": "A code a newer component emits that this build's catalog does not list yet.",
+      "handling": "Update the Runtime; to start a ladder on the code, list it in a trigger item's codes once the catalog has it."
     },
     "recovery_ladder_config_invalid": {
       "category": "error",
@@ -50460,6 +50513,7 @@
       "uncertain": false,
       "values": {
         "config_key": "required",
+        "config_value_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -50467,9 +50521,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The recovery_ladder section breaks a rule; startup and check-config refuse the configuration, an instruction is refused as config_value_invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The recovery_ladder section breaks a rule of its whole-section check (config_key names the key, config_value_problem the rule); startup and check-config refuse the configuration. The same values sent by a ConfigureSettings instruction are refused as config_value_invalid with the same key and problem, and the Runtime keeps its configuration.",
+      "common_causes": "Two trigger items with one id, a stage no item may name, a code or class the catalog does not list, count and window_ms on the wrong item, a start rung beyond the rungs, a rung bound below the device layer's, or a claim TTL or bound beyond the longest renewal.",
+      "handling": "Fix the key config_key names as config_value_problem says, then commit the configuration again."
     },
     "recovery_ladder_continuation_granted_early": {
       "category": "error",
@@ -50725,6 +50779,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recovery_rung_skipped_before_start_rung": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung before the start rung its trigger item names (the rung's recovery_rung_finished outcome; Workflow #387 D1c, recovery_ladder.triggers[].start_rung or trigger_defaults.start_rung).",
+      "common_causes": "A trigger item, or the trigger defaults, start the climb at a later rung.",
+      "handling": "Nothing to do; change the trigger item's start_rung to climb from an earlier rung."
+    },
     "recovery_rung_skipped_capture_unavailable": {
       "category": "info",
       "ladder_class": "none",
@@ -50740,6 +50812,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A stuck-recovery ladder skipped a rung because the instance's capture channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason capture_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_device_not_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung whose entry the device-state gate holds: a locked screen, heat, a low battery or a device in use (the rung's recovery_rung_finished outcome; skip reason device_not_ready, Workflow #398 M398 section 6.4, registered with Workflow #387 D1c; the device-state slice emits it).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -77852,6 +77942,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: recover unreleased policy runs."
+    },
+    "recovery_stability_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the lease sweep admits the warning bursts direction one of the recovery ladder registered (Workflow #387 D1c)."
+    },
+    "recovery_stability_count": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host stage: direction one of the recovery ladder counts a committed record on the append path (Workflow #387 D1c)."
+    },
+    "recovery_unclassified_note": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: record once a code the recovery ladder met that the embedded catalog does not list (Workflow #387 D1c)."
     },
     "refuse_monitor_probe": {
       "owner": "runtime-host",
