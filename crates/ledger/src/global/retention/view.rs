@@ -379,9 +379,7 @@ impl FrameFacts {
                 .payload()
                 .outcome()
                 .map(|outcome| outcome.code().as_str().to_owned()),
-            own.as_ref().and_then(|value| {
-                nested_string(value, "rejection", "code").or_else(|| first_string(value, "code"))
-            }),
+            own.as_ref().and_then(|value| first_string(value, "code")),
             preceding_failure,
             event.event_type(),
         );
@@ -971,10 +969,10 @@ fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
     ))
 }
 
-/// The `<code>` part of an error leaf: the event's own outcome code, else its own code (a
-/// `rejection.code` before any other `code`), else the failure code of its run's failure
-/// terminal when that terminal precedes it, else its event type with `.` as `_`; at most 64
-/// characters, outside `[A-Za-z0-9_-]` as `_`.
+/// The `<code>` part of an error leaf: the event's own outcome code (a dispatch rejection's is
+/// its rejection's outcome), else its own `code` member, else the failure code of its run's
+/// failure terminal when that terminal precedes it, else its event type with `.` as `_`; at
+/// most 64 characters, outside `[A-Za-z0-9_-]` as `_`.
 fn leaf_name(
     own_failure: Option<String>,
     own_value: Option<String>,
@@ -996,24 +994,6 @@ fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
             _ => first_string(item, key),
         }),
         serde_json::Value::Array(items) => items.iter().find_map(|item| first_string(item, key)),
-        _ => None,
-    }
-}
-
-/// The string `key` of the first object named `parent`, depth first in field order.
-fn nested_string(value: &serde_json::Value, parent: &str, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| {
-            if name == parent
-                && let Some(serde_json::Value::String(text)) = item.get(key)
-            {
-                return Some(text.clone());
-            }
-            nested_string(item, parent, key)
-        }),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| nested_string(item, parent, key)),
         _ => None,
     }
 }
@@ -1808,23 +1788,6 @@ mod tests {
             }
         });
         assert_eq!(first_string(&payload, "code").as_deref(), Some("first"));
-        assert_eq!(nested_string(&payload, "rejection", "code"), None);
-        // A dispatch rejection names its leaf by `rejection.code`, not by an earlier `code`.
-        let rejected = serde_json::json!({
-            "family": "policy",
-            "payload": {
-                "kind": "dispatch_rejected",
-                "data": {
-                    "candidates": [{ "code": "eligible" }],
-                    "rejection": { "code": "instance_busy", "detail": { "code": "inner" } }
-                }
-            }
-        });
-        assert_eq!(first_string(&rejected, "code").as_deref(), Some("eligible"));
-        assert_eq!(
-            nested_string(&rejected, "rejection", "code").as_deref(),
-            Some("instance_busy")
-        );
         assert_eq!(
             first_string(&payload, "failure_code").as_deref(),
             Some("failed")
