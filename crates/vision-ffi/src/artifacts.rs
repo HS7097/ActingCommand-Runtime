@@ -8,6 +8,11 @@ pub const OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION: &str =
     "actingcommand.ocr_execution_attestation.v1";
 
 const MAX_OCR_ID_BYTES: usize = 96;
+/// The prefix of an adapter-issued invocation id; the ids keep it whatever the error module
+/// token is called (the module tokens are snake_case since Workflow #378 A2-P).
+const OCR_INVOCATION_ID_PREFIX: &str = "ocr-invocation-";
+/// The prefix of an adapter-issued session id.
+const OCR_SESSION_ID_PREFIX: &str = "ocr-session-";
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 256;
 pub const MAX_CUDA_DEVICES: usize = 64;
 
@@ -17,7 +22,7 @@ pub struct OcrInvocationId(String);
 
 impl OcrInvocationId {
     pub(crate) fn from_sequence(sequence: u64) -> Self {
-        Self(format!("ocr-invocation-{sequence:016x}"))
+        Self(format!("{OCR_INVOCATION_ID_PREFIX}{sequence:016x}"))
     }
 
     pub fn as_str(&self) -> &str {
@@ -25,7 +30,12 @@ impl OcrInvocationId {
     }
 
     pub fn validate(&self) -> VisionFfiResult<()> {
-        validate_opaque_id("ocr_invocation", "invocation_id", &self.0)
+        validate_opaque_id(
+            "ocr_invocation",
+            OCR_INVOCATION_ID_PREFIX,
+            "invocation_id",
+            &self.0,
+        )
     }
 }
 
@@ -35,7 +45,7 @@ pub struct OcrSessionId(String);
 
 impl OcrSessionId {
     pub(crate) fn from_sequence(sequence: u64) -> Self {
-        Self(format!("ocr-session-{sequence:016x}"))
+        Self(format!("{OCR_SESSION_ID_PREFIX}{sequence:016x}"))
     }
 
     pub fn as_str(&self) -> &str {
@@ -43,7 +53,7 @@ impl OcrSessionId {
     }
 
     pub fn validate(&self) -> VisionFfiResult<()> {
-        validate_opaque_id("ocr_session", "session_id", &self.0)
+        validate_opaque_id("ocr_session", OCR_SESSION_ID_PREFIX, "session_id", &self.0)
     }
 }
 
@@ -535,9 +545,13 @@ fn ppocr_provider_options_sha256(
     lower_hex(&hasher.finalize())
 }
 
-fn validate_opaque_id(module: &'static str, field: &str, value: &str) -> VisionFfiResult<()> {
-    let prefix = format!("{module}-");
-    let suffix = value.strip_prefix(&prefix).ok_or_else(|| {
+fn validate_opaque_id(
+    module: &'static str,
+    prefix: &str,
+    field: &str,
+    value: &str,
+) -> VisionFfiResult<()> {
+    let suffix = value.strip_prefix(prefix).ok_or_else(|| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidRequest,
             module,

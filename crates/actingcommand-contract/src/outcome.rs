@@ -1237,7 +1237,8 @@ impl Outcome {
     /// This outcome's top node alone (Workflow #378 A2-P): its code, category and every value,
     /// without its links or `causes_total`. A record that keeps another record's failure as its
     /// own (a failed policy execution keeps its run's terminal failure) stores this node, so it
-    /// copies neither the cause chain nor its foreign text. Unlike [`Self::codes_only`] it keeps
+    /// copies no link and none of the foreign text its links carry (the node's own values,
+    /// `raw_text` included, are kept). Unlike [`Self::codes_only`] it keeps
     /// every value, so a relayed unregistered spelling keeps its `raw_code` and distinct
     /// spellings stay distinct. It is a projection, not an emission, so it is relayed unchanged
     /// like a received outcome.

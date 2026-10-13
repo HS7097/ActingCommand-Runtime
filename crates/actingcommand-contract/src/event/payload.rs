@@ -4448,6 +4448,16 @@ impl TaskSemanticFact {
                 ..
             } => *outcome = outcome.codes_only(),
             Self::SelectionEvaluated { selection, .. } => {
+                // Workflow #378 A2-P: every reason is an outcome; the projection keeps its codes.
+                let selection = &mut **selection;
+                for reason in selection.reasons.iter_mut().chain(
+                    selection
+                        .verdicts
+                        .iter_mut()
+                        .flat_map(|verdict| verdict.reasons.iter_mut()),
+                ) {
+                    reason.0 = reason.0.codes_only();
+                }
                 if let TaskSelectionConfirmation::GuardFailed { outcome }
                 | TaskSelectionConfirmation::CaptureFailed { outcome } =
                     &mut selection.confirmation

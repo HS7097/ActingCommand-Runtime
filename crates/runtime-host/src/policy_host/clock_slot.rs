@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #372 K2: a due clock slot that the policy does not dispatch leaves one trace, an
-//! informational `goal_missed` planning signal. A persistent gate refuses the slot
+//! Workflow #372 K2: a due clock slot that the policy does not dispatch leaves one trace, a
+//! `goal_missed` planning signal whose outcome is its record's code (a refusal records at
+//! `warning`, a deferral or an owed slot at `info`). A persistent gate refuses the slot
 //! (`clock_slot_refused`); a transient gate defers it (`clock_slot_deferred`): an operator pause
 //! at first sight, a queue wait or an unavailable instance only once the pair's activity window
 //! has closed. A selected dispatch that serves an occurrence from before its window opened is

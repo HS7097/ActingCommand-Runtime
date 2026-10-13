@@ -96,14 +96,24 @@ pub fn running_state(adb_port: u16) -> InstanceState {
     }
 }
 
-/// The device stage's error category, as the device crate types it.
+/// The device stage's error category, as the device crate types it (typed stages, never
+/// spellings).
 fn stage_category(stage: Location) -> DeviceErrorCategory {
-    match stage.as_str() {
-        "mumu_manager_control_exit" | "mumu_manager_exit" => DeviceErrorCategory::ChildExit,
-        "mumu_manager_run" | "mumu_manager_timeout" | "mumu_manager_path" => {
-            DeviceErrorCategory::BackendLaunch
-        }
-        _ => DeviceErrorCategory::Response,
+    use actingcommand_device::codes::DeviceStage;
+    let any = |stages: &[DeviceStage]| stages.iter().any(|known| known.location() == stage);
+    if any(&[
+        DeviceStage::MumuManagerControlExit,
+        DeviceStage::MumuManagerExit,
+    ]) {
+        DeviceErrorCategory::ChildExit
+    } else if any(&[
+        DeviceStage::MumuManagerRun,
+        DeviceStage::MumuManagerTimeout,
+        DeviceStage::MumuManagerPath,
+    ]) {
+        DeviceErrorCategory::BackendLaunch
+    } else {
+        DeviceErrorCategory::Response
     }
 }
 

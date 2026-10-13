@@ -438,13 +438,14 @@ fn gate_only_a_stop_whose_wait_expired_is_followed_by_a_start() {
         ..stopped_state()
     };
     // Each Stop stage with the `stop_result` token the host's stop-result table gives it.
-    let rows: [(
+    type StopRow = (
         Location,
         &'static str,
         Option<i32>,
         Option<InstanceState>,
         bool,
-    ); 5] = [
+    );
+    let rows: [StopRow; 5] = [
         (
             DeviceStage::MumuManagerWaitTimeout.location(),
             "wait_timeout",

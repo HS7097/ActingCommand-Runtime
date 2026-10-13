@@ -5,8 +5,9 @@
 //! directions. A2e is mechanical: it registers the spellings the crate emits that already follow
 //! the naming form and changes no emitted string. A2-P registers the device stages
 //! (`DeviceStage`, the former dotted tokens) and the input operations; the device error's other
-//! text channels stay strings behind bridge entries (B5 settles the device layer). Codes and locations several owners share are
-//! the contract's (`SharedCode`, `ContractLocation`). Every entry is pending.
+//! text channels stay strings behind bridge entries (B5 settles the device layer). Codes and
+//! locations several owners share are the contract's (`SharedCode`, `ContractLocation`). Every
+//! entry is pending.
 
 actingcommand_contract::outcome_codes! {
     /// Why resolving MuMu's external renderer (Nemu) for capture or input failed. A Nemu

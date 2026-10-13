@@ -1620,7 +1620,7 @@ fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
         DeviceError::transient("fixture input handshake failed")
             .with_diagnostic(
                 DeviceErrorCategory::Handshake,
-                actingcommand_device::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
+                crate::codes::HostLocation::DeviceRegistryInputOperation,
             )
             .with_diagnostic_context(
                 "adb_shell_input",
@@ -1800,7 +1800,7 @@ fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_
         DeviceError::transient("fixture input handshake failed")
             .with_diagnostic(
                 DeviceErrorCategory::Handshake,
-                actingcommand_device::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
+                crate::codes::HostLocation::DeviceRegistryInputOperation,
             )
             .with_diagnostic_context(
                 "adb_shell_input",
