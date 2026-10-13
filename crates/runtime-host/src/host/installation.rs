@@ -903,7 +903,11 @@ impl HostShared {
             .as_ref()
             .and_then(|transition| transition.entered_event_id);
         for (instance_id, check) in failed {
-            let mut unavailable = install_error(HostCode::InstallPreparationInstanceUnavailable);
+            // Ledger revision 3: the instance is the outcome's required value `instance_id`.
+            let mut unavailable = install_error(HostCode::InstallPreparationInstanceUnavailable)
+                .with_outcome_values(|outcome| {
+                    outcome.instance_id(crate::failure_identity::identifier_text(instance_id))
+                });
             unavailable.lifecycle.instance_id = Some(*instance_id);
             // Ledger revision 3 (#378 A3): the self-check failure is the `caused_by` link (it
             // was the `cause=<code>` token).

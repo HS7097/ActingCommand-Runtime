@@ -3415,33 +3415,6 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
             EventType::TaskSelectionEvaluated,
             crate::outcome::Code::relayed("selection_confirmation_capture_failed"),
         ),
-        // A geometry failure is not the record's outcome (its `outcome()` is `None`); the
-        // round trip's equality carries both failures.
-        (
-            TaskPayloadDraft::semantic(
-                TaskSemanticFact::GeometryObserved {
-                    observation: Box::new(TaskGeometryObservation {
-                        phase: TaskGeometryPhase::Recheck,
-                        frame: None,
-                        observation: None,
-                        conclusion: TaskGeometryConclusion::Unavailable,
-                        trigger: Some(TaskGeometryRecheckTrigger::RecognitionFailed),
-                        original_failure: Some(TaskGeometryFailure {
-                            outcome: Outcome::relayed("recognition_failed"),
-                            event_id: None,
-                        }),
-                        unavailable: Some(TaskGeometryFailure {
-                            outcome: failure.clone(),
-                            event_id: None,
-                        }),
-                    }),
-                },
-                AuditInput::new(),
-            )
-            .into(),
-            EventType::TaskGeometryObserved,
-            None,
-        ),
         // A volume whose free space is unknown carries its OS failure as `cause`.
         (
             PerformancePayloadDraft::summary(
@@ -3539,6 +3512,83 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
             Some(DiagnosticCode::LeaseBusy.code()),
         ),
     ]
+}
+
+/// Workflow #378 A3 (acceptance CL-L6): a geometry recheck's two failures
+/// (`TaskGeometryFailure`) round-trip with their outcomes. A geometry record needs the Runtime's
+/// origin and a frame link only when it names a frame, so it is not one of
+/// [`revision_3_records`]; its failures are not the record's outcome.
+#[test]
+fn revision_3_geometry_failures_round_trip() {
+    let issuer = identifier_issuer();
+    let failure = Outcome::new(crate::RuntimeErrorCode::BackendOperationFailed)
+        .operation(crate::codes::ContractLocation::ControlInstance);
+    let sanitized = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_001,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default()
+            .with_instance_id(issuer.mint_instance_id().expect("instance id"))
+            .with_request_id(issuer.mint_request_id().expect("request id"))
+            .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+            .with_task_id(issuer.mint_task_id().expect("task id"))
+            .with_run_id(issuer.mint_run_id().expect("run id")),
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::GeometryObserved {
+                observation: Box::new(TaskGeometryObservation {
+                    phase: TaskGeometryPhase::Recheck,
+                    frame: None,
+                    observation: None,
+                    conclusion: TaskGeometryConclusion::Unavailable,
+                    trigger: Some(TaskGeometryRecheckTrigger::RecognitionFailed),
+                    original_failure: Some(TaskGeometryFailure {
+                        outcome: Outcome::relayed("recognition_failed"),
+                        event_id: None,
+                    }),
+                    unavailable: Some(TaskGeometryFailure {
+                        outcome: failure.clone(),
+                        event_id: None,
+                    }),
+                }),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    )
+    .sanitize(&SpyFingerprinter::new())
+    .expect("sanitize the geometry record");
+    let json = serde_json::to_string(sanitized.payload()).expect("record JSON");
+    assert_outcome_members_are_envelopes(&json);
+    let round_trip: EventPayload = serde_json::from_str(&json).expect("record round trip");
+    round_trip
+        .validate()
+        .expect("round-tripped record validates");
+    assert_eq!(round_trip, *sanitized.payload());
+    let EventPayload::Task(TaskPayload::Semantic(semantic)) = &round_trip else {
+        panic!("task semantic record")
+    };
+    let TaskSemanticFact::GeometryObserved { observation } = semantic.fact() else {
+        panic!("geometry record")
+    };
+    assert_eq!(
+        observation
+            .original_failure
+            .as_ref()
+            .map(|failure| failure.outcome.code().as_str()),
+        Some("recognition_failed")
+    );
+    assert_eq!(
+        observation
+            .unavailable
+            .as_ref()
+            .map(|failure| &failure.outcome),
+        Some(&failure)
+    );
 }
 
 #[test]

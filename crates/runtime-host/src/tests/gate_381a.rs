@@ -609,6 +609,7 @@ fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_star
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
                 failure.instance_id(),
+                outcome.value("instance_id").cloned(),
                 outcome_links(
                     outcome,
                     actingcommand_contract::outcome::CauseRelation::CausedBy,
@@ -625,6 +626,7 @@ fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_star
             EventSeverity::Warning,
             Some("runtime_lifecycle_install_release".to_owned()),
             Some(unreachable),
+            Some(serde_json::to_value(unreachable).expect("instance id value")),
             vec![
                 DeviceSelfCheckFailure::InputBackendOpenFailed
                     .as_str()

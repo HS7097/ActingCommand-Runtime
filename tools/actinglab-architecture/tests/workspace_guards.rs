@@ -4717,6 +4717,10 @@ const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
         "ledger: the selected read of the check-config preview opens the existing database read-only (Workflow #375 R375-3)",
     ),
     (
+        "crates/ledger/src/global/sqlite.rs::refuse_unsupported_ledger_format -> RuntimeDatabase",
+        "ledger: the start's read-only format check of an existing database, before the owner journal and writer.lock (Workflow #378 A3, CL-M1)",
+    ),
+    (
         "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> RuntimeDatabase",
         "runtime-host: startup opens existing storage (fresh storage goes through runtime-state)",
     ),
