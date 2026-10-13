@@ -172,12 +172,21 @@ fn h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs() 
         ),
         (
             "rungs reordered by action alone",
-            json!({"rungs": [{"action": "application_restart"}, {"action": "return_home"}]}),
+            // Three rungs, so every default trigger item's start rung lies within them (§4.1).
+            json!({"rungs": [
+                {"action": "application_restart"},
+                {"action": "return_home"},
+                {"action": "emulator_restart"},
+            ]}),
             Some((
                 "pack_logic",
                 vec![
                     pending(RecoveryRung::ApplicationRestart),
                     pending(RecoveryRung::ReturnHome),
+                    skipped(
+                        RecoveryRung::EmulatorRestart,
+                        RecoveryRungSkipReason::NoEmulatorControl,
+                    ),
                 ],
             )),
         ),

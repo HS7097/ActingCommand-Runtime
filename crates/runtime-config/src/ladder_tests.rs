@@ -423,9 +423,22 @@ fn rb_h3_rung_three_s_bounds_are_the_configuration_s() {
     // A rung that names only its action takes the defaults file's bounds of that action; one
     // that names its window has that window.
     let window = as_ms(&configured["readiness_window_ms"]) / 2;
-    let changed = from_file(json!({"rungs": [
-        {"action": "emulator_restart", "readiness_window_ms": window},
-    ]}))
+    // The section names one rung, so it keeps the defaults file's trigger items that start
+    // within it: a start rung beyond the rungs is refused (§4.1, §5.3).
+    let default_start = shipped["recovery_ladder"]["trigger_defaults"]["start_rung"]
+        .as_u64()
+        .expect("the default start rung is a number");
+    let triggers: Vec<Value> = shipped["recovery_ladder"]["triggers"]
+        .as_array()
+        .expect("triggers is a list")
+        .iter()
+        .filter(|item| item["start_rung"].as_u64().unwrap_or(default_start) <= 1)
+        .cloned()
+        .collect();
+    let changed = from_file(json!({
+        "rungs": [{"action": "emulator_restart", "readiness_window_ms": window}],
+        "triggers": triggers,
+    }))
     .recovery_ladder(&context())
     .expect("a shorter window passes");
     assert_eq!(
