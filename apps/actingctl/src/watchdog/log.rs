@@ -2,16 +2,21 @@
 
 //! `<root>\watchdog\watchdog.log`: one UTF-8 line per decision change, start, error or
 //! install, `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`. The launcher appends its
-//! own failures and the tick's stderr to the same file.
+//! own failures and the tick's stderr to the same file. It is a developer log (Workflow #378
+//! A5, model v2.2 §7.5): a decision line carries the decision's code, its fields come from the
+//! outcome's values and links, and developer text may follow.
 
-use super::Failure;
+use super::io_failure;
 use crate::codes::ActingctlCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, CodeStr, IoOp, Outcome};
+use serde_json::Value;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 pub(crate) const LOG_FILE: &str = "watchdog.log";
+/// The field that names the failure a `watchdog_misconfigured` line is about.
+const FAILURE_FIELD: &str = "failure_code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Level {
@@ -30,32 +35,84 @@ impl Level {
     }
 }
 
+/// Appends one line; a log that refuses it is `watchdog_log_unwritable` (`path`).
 pub(crate) fn append(
     directory: &Path,
     now_unix_ms: u64,
     level: Level,
     code: impl Into<Code>,
     fields: &[(&str, String)],
-) -> Result<(), Failure> {
+) -> Result<(), Outcome> {
+    write(
+        directory,
+        &format_line(now_unix_ms, level, &CodeStr::from(code.into()), fields),
+    )
+}
+
+/// Appends one line for an outcome: its code, its values and links ([`outcome_fields`]).
+pub(crate) fn append_outcome(
+    directory: &Path,
+    now_unix_ms: u64,
+    level: Level,
+    outcome: &Outcome,
+) -> Result<(), Outcome> {
+    write(
+        directory,
+        &format_line(now_unix_ms, level, outcome.code(), &outcome_fields(outcome)),
+    )
+}
+
+fn write(directory: &Path, line: &str) -> Result<(), Outcome> {
     let path = directory.join(LOG_FILE);
-    let line = format_line(now_unix_ms, level, code.into(), fields);
-    OpenOptions::new()
+    let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-        .and_then(|mut file| file.write_all(line.as_bytes()))
         .map_err(|error| {
-            Failure::misconfigured(
+            io_failure(
                 ActingctlCode::WatchdogLogUnwritable,
-                format!("{}: {error}", path.display()),
+                &path,
+                &error,
+                IoOp::Open,
             )
-        })
+        })?;
+    file.write_all(line.as_bytes()).map_err(|error| {
+        io_failure(
+            ActingctlCode::WatchdogLogUnwritable,
+            &path,
+            &error,
+            IoOp::Write,
+        )
+    })
 }
 
-/// Whether the log's last structured line is `<code>` with `code=<value>`; a misconfiguration
-/// found before the state is readable is written once, not every minute. Lines the launcher
-/// appended from a tick's stderr are skipped.
-pub(crate) fn last_line_matches(directory: &Path, code: Code, value: Code) -> bool {
+/// An outcome's values as log fields, then each link as one `cause` field in its developer
+/// form (`<relation>: <code> key=value… [links]`).
+pub(crate) fn outcome_fields(outcome: &Outcome) -> Vec<(&str, String)> {
+    let mut fields = outcome
+        .values()
+        .iter()
+        .map(|(key, value)| {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            (key.as_str(), text)
+        })
+        .collect::<Vec<_>>();
+    fields.extend(
+        outcome
+            .causes()
+            .iter()
+            .map(|link| ("cause", format!("{}: {}", link.relation(), link.outcome()))),
+    );
+    fields
+}
+
+/// Whether the log's last structured line is `<code>` with `failure_code=<failure>`; a
+/// misconfiguration found before the state is readable is written once, not every minute.
+/// Lines the launcher appended from a tick's stderr are skipped.
+pub(crate) fn last_line_matches(directory: &Path, code: Code, failure: Code) -> bool {
     let mut tail = Vec::new();
     let read = File::open(directory.join(LOG_FILE)).and_then(|mut file| {
         let length = file.metadata()?.len();
@@ -65,7 +122,7 @@ pub(crate) fn last_line_matches(directory: &Path, code: Code, value: Code) -> bo
     if read.is_err() {
         return false;
     }
-    let wanted = format!("code={value}");
+    let wanted = format!("{FAILURE_FIELD}={failure}");
     String::from_utf8_lossy(&tail)
         .lines()
         .rev()
@@ -88,7 +145,12 @@ fn structured(line: &str) -> bool {
             .is_some_and(|level| matches!(level, "INFO" | "WARN" | "ERROR"))
 }
 
-fn format_line(now_unix_ms: u64, level: Level, code: Code, fields: &[(&str, String)]) -> String {
+fn format_line(
+    now_unix_ms: u64,
+    level: Level,
+    code: &CodeStr,
+    fields: &[(&str, String)],
+) -> String {
     let mut line = format!(
         "{} {now_unix_ms} {} {code}",
         rfc3339_utc(now_unix_ms),
@@ -152,7 +214,7 @@ mod tests {
             format_line(
                 1_759_800_000_123,
                 Level::Warn,
-                ActingctlCode::WatchdogStartedRuntime.code(),
+                &CodeStr::from(ActingctlCode::WatchdogStartedRuntime.code()),
                 &[
                     ("method", "breakaway".to_owned()),
                     ("log", r"C:\Install Root\watchdog\actingd-1.log".to_owned()),
@@ -171,13 +233,13 @@ mod tests {
             1_759_800_000_123,
             Level::Error,
             ActingctlCode::WatchdogMisconfigured,
-            &[("code", "watchdog_layout_unknown".to_owned())],
+            &[("failure_code", "watchdog_layout_unknown".to_owned())],
         )
         .expect("append");
         std::fs::OpenOptions::new()
             .append(true)
             .open(directory.path().join(LOG_FILE))
-            .and_then(|mut file| file.write_all(b"ERROR actingctl watchdog: stderr\n"))
+            .and_then(|mut file| file.write_all(b"ERROR actingctl: stderr\n"))
             .expect("stderr line");
         assert!(last_line_matches(
             directory.path(),

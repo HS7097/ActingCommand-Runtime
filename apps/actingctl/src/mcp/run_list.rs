@@ -9,6 +9,8 @@ use super::runtime::{Connected, client_error};
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
+use crate::codes::ArgumentProblem;
+use crate::events::MAX_INTEGER;
 use crate::run_list::{self, Failure, RunsRequest, StateFilter};
 use serde_json::{Map, Value, json};
 use std::time::Duration;
@@ -30,25 +32,21 @@ pub(super) fn runs(context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
     let arguments = Arguments::new(arguments, &ARGUMENTS)?;
     let request = RunsRequest {
         instance: arguments.string("instance")?.map(str::to_owned),
-        since_unix_ms: arguments.integer("since_unix_ms", 0, u64::MAX)?,
-        until_unix_ms: arguments.integer("until_unix_ms", 0, u64::MAX)?,
+        since_unix_ms: arguments.integer("since_unix_ms", 0, MAX_INTEGER)?,
+        until_unix_ms: arguments.integer("until_unix_ms", 0, MAX_INTEGER)?,
         task_prefix: arguments.string("task_prefix")?.map(str::to_owned),
         dispatch: arguments
             .string("dispatch")?
             .map(|text| {
                 run_list::parse_dispatch(text)
-                    .ok_or_else(|| invalid_argument("dispatch", "must be manual or scheduled"))
+                    .ok_or_else(|| invalid_argument("dispatch", ArgumentProblem::NotRecognised))
             })
             .transpose()?,
         state: arguments
             .string("state")?
             .map(|text| {
-                StateFilter::parse(text).ok_or_else(|| {
-                    invalid_argument(
-                        "state",
-                        "must be open, succeeded, failed, cancelled or interrupted_unterminated",
-                    )
-                })
+                StateFilter::parse(text)
+                    .ok_or_else(|| invalid_argument("state", ArgumentProblem::NotRecognised))
             })
             .transpose()?,
         limit: arguments
@@ -65,7 +63,11 @@ pub(super) fn runs(context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
         .unwrap_or(context.deadline);
     let answer = run_list::read(&connected.client, &request, now_unix_ms, deadline)
         .map_err(|failure| tool_error(context, Some(&connected), failure))?;
-    let warnings = answer.warnings();
+    let warnings = answer
+        .warnings()
+        .iter()
+        .map(tools::warning)
+        .collect::<Vec<_>>();
     let mut kept = answer.row_count();
     loop {
         let result = answer.render(kept);
@@ -77,24 +79,26 @@ pub(super) fn runs(context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
     }
 }
 
-/// The CLI's failure as a tool error: an argument is `arguments_invalid` here.
+/// The CLI's failure as a tool error: an argument is `arguments_invalid` here, with the CLI's
+/// values; every other failure keeps the CLI's outcome.
 fn tool_error(
     context: &ToolContext<'_>,
     connected: Option<&Connected>,
     failure: Failure,
 ) -> ToolError {
     match &failure {
-        Failure::Argument { field, detail } => invalid_argument(field, detail),
-        Failure::SinceOutOfRange { oldest_unix_ms } => {
-            ToolError::usage(failure.code(), failure.message())
-                .with_detail("oldest_unix_ms", json!(oldest_unix_ms))
+        Failure::Argument {
+            argument,
+            range: Some((minimum, maximum)),
+            ..
+        } => tools::out_of_range(argument, *minimum, *maximum),
+        Failure::Argument {
+            argument, problem, ..
+        } => invalid_argument(argument, *problem),
+        Failure::SinceOutOfRange { .. } | Failure::CursorInvalid | Failure::Selector { .. } => {
+            ToolError::outcome("usage", failure.outcome())
         }
-        Failure::Usage | Failure::CursorInvalid | Failure::Selector { .. } => {
-            ToolError::usage(failure.code(), failure.message())
-        }
-        Failure::Clock | Failure::Output => {
-            ToolError::new("runtime", failure.code(), failure.message())
-        }
+        Failure::Clock => ToolError::outcome("runtime", failure.outcome()),
         Failure::Runtime(error) => match connected {
             Some(connected) => context.runtime.failure(connected, error),
             None => client_error(error),

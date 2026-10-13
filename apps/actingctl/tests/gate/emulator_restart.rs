@@ -256,7 +256,36 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
     let events = closed_ledger_events(root.path());
 
     assert!(started.status.success(), "{}", describe(&started));
+    let started: Value = serde_json::from_slice(&started.stdout).expect("start JSON");
+    assert_eq!(
+        (&started["outcome"]["code"], &started["outcome"]["category"]),
+        (
+            &Value::from("instance_emulator_controlled"),
+            &Value::from("success")
+        ),
+        "{started}"
+    );
     assert!(!restarted.status.success(), "{}", describe(&restarted));
+    // Workflow #378 A5 (model §7.3): the failed restart prints one stdout line, `{outcome}`, whose
+    // top is the failed receipt's outcome, and then the developer line with that code.
+    let restart_line: Value = serde_json::from_slice(&restarted.stdout).expect("restart JSON");
+    assert_eq!(
+        restart_line
+            .as_object()
+            .map(|members| members.keys().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["outcome"]),
+        "{restart_line}"
+    );
+    assert_eq!(
+        restart_line["outcome"]["code"], "emulator_restart_start_failed",
+        "{restart_line}"
+    );
+    assert!(
+        String::from_utf8_lossy(&restarted.stderr)
+            .starts_with("ERROR actingctl: emulator_restart_start_failed"),
+        "{}",
+        describe(&restarted)
+    );
     let controls = controller
         .calls()
         .into_iter()
@@ -295,12 +324,23 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
     );
     assert!(status.status.success(), "{}", describe(&status));
     let status: Value = serde_json::from_slice(&status.stdout).expect("status JSON");
+    assert_eq!(
+        status["outcome"]["code"], "instance_status_reported",
+        "{status}"
+    );
     assert!(
         status.get("adb_port").is_none_or(Value::is_null),
         "the instance is pending: {status}"
     );
     assert!(facts.status.success(), "{}", describe(&facts));
-    let facts: RuntimeFactSnapshot = serde_json::from_slice(&facts.stdout).expect("facts JSON");
+    // The line is the snapshot's members beside `outcome` (Workflow #378 A5).
+    let mut facts: Value = serde_json::from_slice(&facts.stdout).expect("facts JSON");
+    let outcome = facts
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"))
+        .expect("the facts line's outcome");
+    assert_eq!(outcome["code"], "runtime_facts_reported", "{outcome}");
+    let facts: RuntimeFactSnapshot = serde_json::from_value(facts).expect("facts snapshot");
     assert!(
         !facts.records.iter().any(|record| {
             record.key == "device.connected" && record.value == FactValue::Boolean(true)

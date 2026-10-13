@@ -8,11 +8,14 @@
 
 use super::observer::{self, select_instance};
 use super::runtime::Connected;
-use super::tools::{self, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument};
+use super::tools::{self, ToolContext, ToolError, ToolOutcome, ToolSuccess};
 use crate::codes::ActingctlCode;
 use crate::events::{self, CursorBinding, Detail, EventsError, Page};
-use actingcommand_contract::{ArtifactMaterialAccumulator, InstanceId};
+use actingcommand_contract::InstanceId;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{Outcome, RawSource};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -119,9 +122,9 @@ fn brief_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
     }
 }
 
-/// The page whole; over the output budget, the page the CLI prints is written whole to the
-/// export directory and answered as `{export, events_count, next_cursor?, last_sequence}` with
-/// the warning `answer_exported`.
+/// The page whole; over the output budget, the page the CLI prints (without its `outcome`) is
+/// written whole to the export directory and answered as `{export, events_count, next_cursor?,
+/// last_sequence}` with the warning `answer_exported` naming the file (`path`).
 fn payload_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
     let rows = page
         .events()
@@ -146,49 +149,46 @@ fn payload_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
     if let Some(last) = result.get("last_sequence") {
         answer.insert("last_sequence".to_owned(), last.clone());
     }
-    let path = export["path"].as_str().unwrap_or_default();
-    let warning = ToolError::new(
-        "runtime",
-        ActingctlCode::AnswerExported,
-        format!(
-            "the page with its payloads is larger than the output budget and is whole in the exported file {path}; read it there, or ask for fewer rows with limit"
-        ),
-    )
-    .with_detail("export", export.clone())
-    .into_warning();
+    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
+    if let Some(path) = export["path"].as_str() {
+        warning = warning.path(path);
+    }
     Ok(ToolSuccess {
         result: Value::Object(answer),
-        warnings: vec![warning],
+        warnings: vec![tools::warning(&warning)],
     })
 }
 
-/// The page as JSON, written by the export writer as `<sha256>.json`.
+/// The page as JSON, written by the export writer as `<sha256>.json`. A page that does not
+/// encode is `material_export_failed` caused by the encoder's failure.
 fn export_json(page: &Value) -> Result<Value, ToolError> {
-    let failed =
-        |reason: String| ToolError::new("runtime", ActingctlCode::MaterialExportFailed, reason);
-    let bytes = serde_json::to_vec(page)
-        .map_err(|error| failed(format!("cannot encode the page: {error}")))?;
-    let mut material = ArtifactMaterialAccumulator::default();
-    material
-        .update(&bytes)
-        .map_err(|error| failed(format!("cannot hash the page: {error}")))?;
-    observer::export_bytes(material.finish().sha256(), "json", &bytes)
+    let bytes = serde_json::to_vec(page).map_err(|error| {
+        ToolError::new("runtime", ActingctlCode::MaterialExportFailed).caused_by(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Json)
+                .raw_text(error.to_string()),
+        )
+    })?;
+    observer::export_bytes(
+        &format!("sha256:{:x}", Sha256::digest(&bytes)),
+        "json",
+        &bytes,
+    )
 }
 
-/// A failure that is not the Runtime read's, as the tool answers it.
+/// A failure that is not the Runtime read's, as the tool answers it: an argument is
+/// `arguments_invalid` with the CLI's values; every other failure keeps the CLI's outcome.
 fn tool_error(error: EventsError) -> ToolError {
-    let message = error.message();
     match error {
-        EventsError::Argument { field, problem } => invalid_argument(&field, &problem.to_string()),
-        EventsError::Selector { miss, .. } => ToolError::usage(miss.code(), message),
-        EventsError::Query(error) => {
-            ToolError::usage(error.code(), message).with_detail("field", json!(error.field()))
-        }
-        EventsError::CursorInvalid => ToolError::usage(ActingctlCode::CursorInvalid, message),
-        EventsError::CursorEncode(_) => {
-            ToolError::new("runtime", ActingctlCode::CursorEncodeFailed, message)
-        }
+        EventsError::Argument { field, problem } => match problem.range() {
+            Some((minimum, maximum)) => tools::out_of_range(&field, minimum, maximum),
+            None => tools::invalid_argument(&field, problem.token()),
+        },
         EventsError::Runtime(error) => super::runtime::client_error(&error),
+        EventsError::CursorEncode(_) => ToolError::outcome("runtime", error.outcome()),
+        EventsError::Selector { .. } | EventsError::Query(_) | EventsError::CursorInvalid => {
+            ToolError::outcome("usage", error.outcome())
+        }
     }
 }
 
@@ -278,7 +278,7 @@ pub(super) fn input_schema() -> Value {
 
 /// A page inline, or a payload page exported whole.
 pub(super) fn result_schema() -> Value {
-    let row = json!({
+    let mut row = json!({
         "type": "object",
         "properties": {
             "seq": {"type": "integer"},
@@ -290,7 +290,6 @@ pub(super) fn result_schema() -> Value {
             "run_id": {"type": "string"},
             "task_id": {"type": "string"},
             "correlation_id": {"type": "string"},
-            "code": {"type": "string"},
             "materials": {
                 "type": "array",
                 "items": {
@@ -308,6 +307,9 @@ pub(super) fn result_schema() -> Value {
         },
         "required": ["seq", "ts", "type", "severity"],
     });
+    // The ledger's diagnostic code, a member of the row like its type (Workflow #378 A5: a row
+    // member, inserted outside `json!`).
+    row["properties"]["code"] = json!({"type": "string"});
     json!({
         "anyOf": [
             {

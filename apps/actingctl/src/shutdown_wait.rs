@@ -2,10 +2,15 @@
 
 //! `request-shutdown --wait`: a read-only observation that the accepted owner epoch closed its
 //! owner journal record and that its process exited. It writes nothing and takes no file lock.
+//!
+//! Workflow #378 A5 (model §7.3): a wait that fails is an outcome, `shutdown_wait_timeout` or
+//! `shutdown_wait_journal_unreadable`, with what it observed as values and the OS and decoder
+//! failures as `foreign_*` links; it carries no prose.
 
 use crate::ActingctlError;
 use crate::codes::ActingctlCode;
 use crate::process_probe::pid_alive;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{OWNER_JOURNAL_LIMIT, RuntimeShutdownTarget};
 use serde_json::{Value, json};
 use std::fs::File;
@@ -19,12 +24,11 @@ const OWNER_JOURNAL_FILE: &str = "owner.lock";
 
 #[derive(Default)]
 struct Observation {
-    journal_locked: bool,
     active: Option<bool>,
-    revision: Option<u64>,
     closed_at_unix_ms: Option<u64>,
     pid_alive: Option<bool>,
-    pid_probe_error: Option<String>,
+    /// The failure of the last liveness probe, which left `pid_alive` unknown.
+    pid_probe_failure: Option<Outcome>,
 }
 
 pub(crate) fn wait_for_shutdown(
@@ -35,15 +39,21 @@ pub(crate) fn wait_for_shutdown(
     let started = Instant::now();
     let deadline = started + wait;
     let journal = state_root.join(OWNER_JOURNAL_FILE);
+    let epoch = serde_json::to_value(target.owner_epoch)
+        .map_err(|error| unreadable(unreadable_journal(&journal).caused_by(decode(&error))))?;
     let mut observed = Observation::default();
     loop {
-        observe_journal(&journal, target, &mut observed)?;
+        observe_journal(&journal, &epoch, target.pid, &mut observed)?;
         let timed_out = Instant::now() >= deadline;
-        // The process is probed once the epoch closed, and once more for the timeout detail.
+        // The process is probed once the epoch closed, and once more for the timeout's values.
         if observed.active == Some(false) || timed_out {
             match pid_alive(target.pid) {
-                Ok(alive) => (observed.pid_alive, observed.pid_probe_error) = (Some(alive), None),
-                Err(error) => (observed.pid_alive, observed.pid_probe_error) = (None, Some(error)),
+                Ok(alive) => {
+                    (observed.pid_alive, observed.pid_probe_failure) = (Some(alive), None);
+                }
+                Err(failure) => {
+                    (observed.pid_alive, observed.pid_probe_failure) = (None, Some(failure));
+                }
             }
         }
         if let (Some(false), Some(false), Some(closed_at_unix_ms)) = (
@@ -58,18 +68,38 @@ pub(crate) fn wait_for_shutdown(
             }));
         }
         if timed_out {
-            let detail = json!({
-                "owner_epoch": target.owner_epoch,
-                "pid": target.pid,
-                "journal_locked": observed.journal_locked,
-                "active": observed.active,
-                "revision": observed.revision,
-                "pid_alive": observed.pid_alive,
-                "pid_probe_error": observed.pid_probe_error,
-            });
-            return Err(failure(ActingctlCode::ShutdownWaitTimeout, detail));
+            return Err(ActingctlError::ShutdownWait(timeout(
+                target, wait, &epoch, observed,
+            )));
         }
         std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+}
+
+/// `shutdown_wait_timeout`: the accepted owner (`owner_epoch`, `pid`) did not close and exit
+/// within `timeout_ms`. `owner_closed` and `process_alive` are what the wait last saw (absent
+/// when it saw no record of the epoch, or the probe failed); a failed probe is the cause.
+fn timeout(
+    target: &RuntimeShutdownTarget,
+    wait: Duration,
+    epoch: &Value,
+    observed: Observation,
+) -> Outcome {
+    let mut outcome = Outcome::new(ActingctlCode::ShutdownWaitTimeout)
+        .pid(target.pid)
+        .timeout_ms(wait);
+    if let Some(epoch) = epoch.as_str() {
+        outcome = outcome.owner_epoch(epoch);
+    }
+    if let Some(active) = observed.active {
+        outcome = outcome.owner_closed(!active);
+    }
+    if let Some(alive) = observed.pid_alive {
+        outcome = outcome.process_alive(alive);
+    }
+    match observed.pid_probe_failure {
+        Some(failure) => outcome.caused_by(failure),
+        None => outcome,
     }
 }
 
@@ -78,60 +108,85 @@ pub(crate) fn wait_for_shutdown(
 /// on Windows, WouldBlock elsewhere) is an observation retried on the next tick, not a failure.
 fn observe_journal(
     path: &Path,
-    target: &RuntimeShutdownTarget,
+    epoch: &Value,
+    pid: u32,
     observed: &mut Observation,
 ) -> Result<(), ActingctlError> {
-    let unreadable = |error: &dyn std::fmt::Display| {
-        let detail = json!({ "path": path.display().to_string(), "error": error.to_string() });
-        failure(ActingctlCode::ShutdownWaitJournalUnreadable, detail)
-    };
     let mut bytes = Vec::new();
-    match File::open(path)
-        .and_then(|file| file.take(OWNER_JOURNAL_LIMIT + 1).read_to_end(&mut bytes))
-    {
-        Err(error) if error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(33) => {
-            observed.journal_locked = true;
+    let read = File::open(path)
+        .map_err(|error| (error, IoOp::Open))
+        .and_then(|file| {
+            file.take(OWNER_JOURNAL_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| (error, IoOp::Read))
+        });
+    match read {
+        Err((error, _))
+            if error.kind() == ErrorKind::WouldBlock || error.raw_os_error() == Some(33) =>
+        {
             return Ok(());
         }
-        Err(error) => return Err(unreadable(&error)),
-        Ok(_) if bytes.len() as u64 > OWNER_JOURNAL_LIMIT => {
-            return Err(unreadable(&"owner journal exceeds its size limit"));
+        Err((error, op)) => {
+            return Err(unreadable(
+                unreadable_journal(path).caused_by(Outcome::from_io_error(&error, op)),
+            ));
         }
-        Ok(_) => observed.journal_locked = false,
+        Ok(_) if bytes.len() as u64 > OWNER_JOURNAL_LIMIT => {
+            return Err(unreadable(
+                unreadable_journal(path).limit_bytes(OWNER_JOURNAL_LIMIT),
+            ));
+        }
+        Ok(_) => {}
     }
     // Only complete records count; a torn tail of an append in progress is read again next tick.
     let complete = bytes
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |end| end + 1);
-    let text = std::str::from_utf8(&bytes[..complete]).map_err(|error| unreadable(&error))?;
-    let epoch = serde_json::to_value(target.owner_epoch).map_err(|error| unreadable(&error))?;
+    let text = std::str::from_utf8(&bytes[..complete])
+        .map_err(|error| unreadable(unreadable_journal(path).caused_by(decode(&error))))?;
     let mut last = None;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let record: Value = serde_json::from_str(line).map_err(|error| unreadable(&error))?;
-        if record["owner_epoch"] == epoch && record["pid"] == target.pid {
-            last = Some(record);
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: Value = serde_json::from_str(line).map_err(|error| {
+            unreadable(
+                unreadable_journal(path)
+                    .line(index + 1)
+                    .caused_by(decode(&error)),
+            )
+        })?;
+        if record["owner_epoch"] == *epoch && record["pid"] == pid {
+            last = Some((index + 1, record));
         }
     }
-    let Some(record) = last else {
+    let Some((line, record)) = last else {
         return Ok(());
     };
     let active = record["active"].as_bool();
     let closed_at_unix_ms = record["closed_at_unix_ms"].as_u64();
-    let (Some(active), Some(revision)) = (active, record["revision"].as_u64()) else {
-        return Err(unreadable(&"owner record lacks active or revision"));
+    // The owner guard's record has `active` and `revision`, and a closed one `closed_at_unix_ms`.
+    let Some(active) = active.filter(|_| record["revision"].as_u64().is_some()) else {
+        return Err(unreadable(unreadable_journal(path).line(line)));
     };
     if !active && closed_at_unix_ms.is_none() {
-        return Err(unreadable(&"closed owner record lacks closed_at_unix_ms"));
+        return Err(unreadable(unreadable_journal(path).line(line)));
     }
-    (observed.active, observed.revision) = (Some(active), Some(revision));
-    observed.closed_at_unix_ms = closed_at_unix_ms;
+    (observed.active, observed.closed_at_unix_ms) = (Some(active), closed_at_unix_ms);
     Ok(())
 }
 
-fn failure(code: ActingctlCode, detail: Value) -> ActingctlError {
-    ActingctlError::ShutdownWait {
-        code: code.code(),
-        detail: detail.to_string(),
-    }
+/// `shutdown_wait_journal_unreadable` for the owner journal at `path`.
+fn unreadable_journal(path: &Path) -> Outcome {
+    Outcome::new(ActingctlCode::ShutdownWaitJournalUnreadable).path(path)
+}
+
+fn unreadable(outcome: Outcome) -> ActingctlError {
+    ActingctlError::ShutdownWait(outcome)
+}
+
+/// The decoder's refusal of the journal's text (`foreign_data_error`, `raw_source` json).
+fn decode(error: &impl std::fmt::Display) -> Outcome {
+    crate::foreign_data_error(error)
 }

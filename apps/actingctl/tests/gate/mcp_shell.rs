@@ -5,8 +5,10 @@
 //! Rows without a Runtime give the server an empty state root; the others give it the root of
 //! the c4 fake Runtime child (`tests/support/c4_runtime.rs`). Every server runs with the
 //! default tier set and only observer tools are called. Every expected value comes from the
-//! frozen #338 model and its rulings. JSON-RPC errors are read only through `rpc_error`, tool
-//! errors only through `tool_error`.
+//! frozen #338 model and its rulings, and since Workflow #378 A5 from model v2.2 §7.3 (a tool
+//! error is `{class, outcome}`; a JSON-RPC error carries its outcome code's spelling as
+//! `message` and `{outcome}` as `data`). JSON-RPC errors are read only through `rpc_error` and
+//! `rpc_outcome`, tool errors only through `tool_error`.
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
@@ -167,11 +169,21 @@ fn gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rp
         Some(&Value::Null),
         "a line that is not JSON: {unparsed}"
     );
+    assert_eq!(
+        rpc_outcome(&unparsed)["code"],
+        json!("mcp_message_malformed"),
+        "a line that is not JSON: {unparsed}"
+    );
     mcp.send(&json!({"jsonrpc": "1.0", "id": 2, "method": "ping"}));
     let invalid = mcp.recv();
     assert_eq!(
         rpc_error(&invalid).0,
         INVALID_REQUEST,
+        "a message that is not JSON-RPC 2.0: {invalid}"
+    );
+    assert_eq!(
+        rpc_outcome(&invalid)["code"],
+        json!("mcp_request_invalid"),
         "a message that is not JSON-RPC 2.0: {invalid}"
     );
 
@@ -180,6 +192,11 @@ fn gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rp
     assert_eq!(
         rpc_error(&unknown_method).0,
         METHOD_NOT_FOUND,
+        "an unknown method: {unknown_method}"
+    );
+    assert_eq!(
+        rpc_outcome(&unknown_method)["code"],
+        json!("mcp_method_unknown"),
         "an unknown method: {unknown_method}"
     );
     let unknown_tool = mcp.request(
@@ -192,6 +209,20 @@ fn gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rp
         INVALID_PARAMS,
         "tools/call of an unknown tool: {unknown_tool}"
     );
+    let outcome = rpc_outcome(&unknown_tool);
+    assert_eq!(
+        (
+            &outcome["code"],
+            &outcome["values"]["argument"],
+            &outcome["values"]["argument_problem"],
+        ),
+        (
+            &json!("mcp_params_invalid"),
+            &json!("name"),
+            &json!("not_recognised"),
+        ),
+        "tools/call of an unknown tool: {unknown_tool}"
+    );
     let arguments_not_object = mcp.request(
         6,
         "tools/call",
@@ -200,6 +231,20 @@ fn gate_malformed_messages_unknown_methods_and_malformed_calls_get_their_json_rp
     assert_eq!(
         rpc_error(&arguments_not_object).0,
         INVALID_PARAMS,
+        "tools/call whose arguments are not an object: {arguments_not_object}"
+    );
+    let outcome = rpc_outcome(&arguments_not_object);
+    assert_eq!(
+        (
+            &outcome["code"],
+            &outcome["values"]["argument"],
+            &outcome["values"]["argument_problem"],
+        ),
+        (
+            &json!("mcp_params_invalid"),
+            &json!("arguments"),
+            &json!("wrong_type"),
+        ),
         "tools/call whose arguments are not an object: {arguments_not_object}"
     );
 }
@@ -586,19 +631,49 @@ fn rpc_error(answer: &Value) -> (i64, &Value) {
     (code, &error["data"])
 }
 
-/// A tool error answer's class and code (`isError` true).
+/// The outcome a JSON-RPC error answer carries (Workflow #378 A5, model v2.2 §7.3): its
+/// `message` is the outcome code's spelling, never a sentence, and its `data` is `{outcome}`
+/// and nothing else.
+#[track_caller]
+fn rpc_outcome(answer: &Value) -> &Value {
+    let data = rpc_error(answer).1;
+    let members = data
+        .as_object()
+        .map(|members| members.keys().map(String::as_str).collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    assert_eq!(
+        members,
+        BTreeSet::from(["outcome"]),
+        "a JSON-RPC error whose data is not {{outcome}}: {answer}"
+    );
+    let outcome = &data["outcome"];
+    assert!(
+        outcome["code"].is_string(),
+        "a JSON-RPC error whose outcome has no code: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["message"], outcome["code"],
+        "a JSON-RPC error whose message is not its outcome code: {answer}"
+    );
+    outcome
+}
+
+/// A tool error answer's class and code (`isError` true): the code of its outcome.
 #[track_caller]
 fn tool_error(answer: &Value) -> (String, String) {
     let result = &answer["result"];
     assert_eq!(result["isError"], json!(true), "not a tool error: {answer}");
     let error = &result["structuredContent"]["error"];
-    let text = |member: &str| {
-        error[member]
+    let text = |member: &Value, name: &str| {
+        member
             .as_str()
-            .unwrap_or_else(|| panic!("a tool error without {member}: {answer}"))
+            .unwrap_or_else(|| panic!("a tool error without {name}: {answer}"))
             .to_owned()
     };
-    (text("class"), text("code"))
+    (
+        text(&error["class"], "class"),
+        text(&error["outcome"]["code"], "outcome.code"),
+    )
 }
 
 /// `params._meta` naming `version`, with an empty clientCapabilities object when `capabilities`.

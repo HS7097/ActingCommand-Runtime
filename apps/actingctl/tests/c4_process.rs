@@ -51,6 +51,7 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
         String::from_utf8_lossy(&observe.stderr)
     );
     let observe_json: Value = serde_json::from_slice(&observe.stdout).expect("observe JSON");
+    assert_success(&observe_json, "instance_observed");
     assert_eq!(
         observe_json["receipt"]["result"]["kind"],
         "readonly_observation_completed"
@@ -82,6 +83,7 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
         String::from_utf8_lossy(&reset.stderr)
     );
     let reset_json: Value = serde_json::from_slice(&reset.stdout).expect("reset JSON");
+    assert_success(&reset_json, "instance_reset_done");
     assert_eq!(
         reset_json["receipt"]["result"]["kind"],
         "safe_reset_completed"
@@ -117,6 +119,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
     let state_root = root.path().to_str().expect("state root");
 
     let status = run_json(binary, ["status", "--state-root", state_root]);
+    assert_success(&status, "runtime_status_reported");
     assert_eq!(status["instances"][0]["instance_alias"], "node.a");
     let holder = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
@@ -132,7 +135,26 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
         .output()
         .expect("request shutdown through ordinary CLI");
     assert!(!busy.status.success());
-    assert!(String::from_utf8_lossy(&busy.stderr).contains("runtime_busy"));
+    // Workflow #378 A5 (model §7.3): a failure prints one stdout line, `{outcome}` (the refused
+    // receipt's outcome), and then the developer line `ERROR actingctl: <code> …`.
+    let busy_stdout = String::from_utf8(busy.stdout).expect("UTF-8 stdout");
+    let busy_lines = busy_stdout.lines().collect::<Vec<_>>();
+    assert_eq!(busy_lines.len(), 1, "stdout: {busy_stdout}");
+    let busy_json: Value = serde_json::from_str(busy_lines[0]).expect("refusal JSON");
+    let busy_members = busy_json.as_object().expect("a JSON object");
+    assert_eq!(
+        busy_members.keys().collect::<Vec<_>>(),
+        ["outcome"],
+        "{busy_json}"
+    );
+    assert_eq!(busy_json["outcome"]["category"], "error", "{busy_json}");
+    let busy_stderr = String::from_utf8_lossy(&busy.stderr);
+    let busy_code = busy_json["outcome"]["code"].as_str().expect("outcome code");
+    assert!(
+        busy_stderr.starts_with(&format!("ERROR actingctl: {busy_code}")),
+        "stderr: {busy_stderr}"
+    );
+    assert!(busy_stderr.contains("runtime_busy"));
     runtime.assert_alive();
     holder
         .release_lease(&token)
@@ -140,6 +162,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
     drop(holder);
 
     let monitor_status = run_json(binary, ["monitor-status", "--state-root", state_root]);
+    assert_success(&monitor_status, "monitor_status_reported");
     assert_eq!(monitor_status["instances"][0]["instance_alias"], "node.a");
     assert!(monitor_status["instances"][0].get("policy").is_none());
 
@@ -157,6 +180,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "home",
         ],
     );
+    assert_success(&configured, "monitor_policy_set");
     assert_eq!(configured["instance_alias"], "node.a");
     assert_eq!(configured["policy"]["expected_page"], "home");
 
@@ -170,6 +194,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "node.a",
         ],
     );
+    assert_success(&cleared, "monitor_policy_cleared");
     assert_eq!(cleared["instance_alias"], "node.a");
     assert!(cleared.get("policy").is_none());
 
@@ -187,6 +212,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "1",
         ],
     );
+    assert_success(&stream, "instance_frames_captured");
     assert_eq!(
         stream["receipt"]["result"]["kind"],
         "capture_sequence_completed"
@@ -230,6 +256,7 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
         ],
     );
 
+    assert_success(&output, "task_run_reported");
     assert_eq!(
         output["receipt"]["result"]["kind"],
         "contained_task_completed"
@@ -329,6 +356,7 @@ fn actingctl_task_run_that_waited_prints_exactly_one_stdout_json_line() {
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 1, "stdout: {stdout}");
     let document: Value = serde_json::from_str(lines[0]).expect("one JSON document");
+    assert_success(&document, "task_run_reported");
     assert_eq!(
         document["receipt"]["result"]["kind"],
         "contained_task_completed"
@@ -776,6 +804,16 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
     let bytes = zip.finish().expect("finish zip").into_inner();
     fs::write(path, &bytes).expect("write neutral contained package");
     Sha256Hash::digest(&bytes).to_string()
+}
+
+/// Workflow #378 A5 (model §7.3): a successful subcommand's line is `{…result, outcome}` with
+/// the subcommand's own success code.
+fn assert_success(line: &Value, code: &str) {
+    assert_eq!(
+        (&line["outcome"]["code"], &line["outcome"]["category"]),
+        (&Value::from(code), &Value::from("success")),
+        "{line}"
+    );
 }
 
 fn run_json<const N: usize>(binary: &str, arguments: [&str; N]) -> Value {

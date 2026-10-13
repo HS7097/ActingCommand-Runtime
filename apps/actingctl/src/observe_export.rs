@@ -8,22 +8,24 @@
 //! `{width, height, verdict, capture_backend, frame {ref, media_type, size, sha256},
 //! export {path, sha256, size}}`. Only `export.path` differs between the two: ac_observe writes
 //! to the MCP export directory. `observe` without `--export` is unchanged (`Invocation::parse`).
+//! The stdout line also carries `outcome` (Workflow #378 A5): `instance_frame_exported`, or the
+//! failure alone.
 
-use crate::codes::ActingctlCode;
+use crate::cli_line;
+use crate::codes::{ActingctlCode, ArgumentProblem, MaterialLimit, MaterialState};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export::{self, MAX_EXPORT_BYTES, WriteFailure};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     EventActor, EventSource, LedgerEventPosition, ProjectedEvent, ReadonlyObservation,
-    RuntimeMaterialReadFailure, RuntimeMaterialReadState, RuntimeResult,
+    RuntimeMaterialReadFailure, RuntimeMaterialReadLimit, RuntimeMaterialReadState, RuntimeResult,
 };
 use actingcommand_runtime_client::{
     RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeFlowOutput,
     RuntimeMaterialCompleteResult, RuntimeMaterialSelection,
 };
 use serde_json::{Value, json};
-use std::ffi::OsString;
-use std::fmt;
-use std::io::{self, Write};
+use std::ffi::{OsStr, OsString};
 use std::path::{self, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -43,12 +45,13 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     {
         return None;
     }
-    Some(match run(arguments).and_then(|output| print(&output)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failure) => {
-            eprintln!("FATAL actingctl: {failure}");
-            ExitCode::FAILURE
-        }
+    Some(match run(arguments) {
+        Ok(answer) => cli_line::success(
+            cli_line::members(answer, "frame"),
+            &Outcome::new(ActingctlCode::InstanceFrameExported),
+        ),
+        Err(failure @ Failure::Usage { .. }) => cli_line::failure(&failure.outcome(), Some(USAGE)),
+        Err(failure) => cli_line::failure(&failure.outcome(), None),
     })
 }
 
@@ -117,29 +120,41 @@ struct Parsed {
 }
 
 /// `--state-root`, `--instance` and `--export`, each exactly once; any other flag, a repeated
-/// one or a missing value is `actingctl_usage_invalid`.
+/// one or a missing value is `actingctl_usage_invalid` with the flag (`argument`) and what is
+/// wrong with it (`argument_problem`).
 fn parse(arguments: &[OsString]) -> Result<Parsed, Failure> {
     let (mut state_root, mut selector, mut directory) = (None, None, None);
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
-        let slot = match flag.to_str() {
-            Some("--state-root") => &mut state_root,
-            Some("--instance") => &mut selector,
-            Some("--export") => &mut directory,
-            _ => return Err(Failure::Usage),
+        let (name, slot) = match flag.to_str() {
+            Some(name @ "--state-root") => (name, &mut state_root),
+            Some(name @ "--instance") => (name, &mut selector),
+            Some(name @ "--export") => (name, &mut directory),
+            Some(_) => return Err(Failure::usage(flag, ArgumentProblem::Unknown)),
+            None => return Err(Failure::usage(flag, ArgumentProblem::NotUtf8)),
         };
-        let value = rest.next().ok_or(Failure::Usage)?;
+        let value = rest
+            .next()
+            .ok_or_else(|| Failure::usage(name, ArgumentProblem::ValueMissing))?;
         if slot.replace(value.clone()).is_some() {
-            return Err(Failure::Usage);
+            return Err(Failure::usage(name, ArgumentProblem::Repeated));
         }
     }
     let selector = selector
-        .and_then(|selector| selector.into_string().ok())
-        .filter(|selector| !selector.trim().is_empty())
-        .ok_or(Failure::Usage)?;
-    let directory = path::absolute(directory.ok_or(Failure::Usage)?).map_err(|_| Failure::Usage)?;
+        .ok_or_else(|| Failure::usage("--instance", ArgumentProblem::Required))?
+        .into_string()
+        .map_err(|_| Failure::usage("--instance", ArgumentProblem::NotUtf8))?;
+    if selector.trim().is_empty() {
+        return Err(Failure::usage("--instance", ArgumentProblem::ValueMissing));
+    }
+    let directory = path::absolute(
+        directory.ok_or_else(|| Failure::usage("--export", ArgumentProblem::Required))?,
+    )
+    .map_err(|_| Failure::usage("--export", ArgumentProblem::Unusable))?;
     Ok(Parsed {
-        state_root: PathBuf::from(state_root.ok_or(Failure::Usage)?),
+        state_root: PathBuf::from(
+            state_root.ok_or_else(|| Failure::usage("--state-root", ArgumentProblem::Required))?,
+        ),
         selector,
         directory,
     })
@@ -209,28 +224,22 @@ fn read_frame(client: &RuntimeClient, frame: &ObservedFrame<'_>) -> Result<Vec<u
             error: Some(error), ..
         }
         | RuntimeMaterialCompleteResult::Failed { error, .. } => Err(Failure::Runtime(error)),
-        RuntimeMaterialCompleteResult::NotProvided { failure, .. } => Err(Failure::NotProvided {
-            failure: failure.map(Box::new),
-        }),
+        RuntimeMaterialCompleteResult::NotProvided { limit, failure, .. } => {
+            Err(Failure::NotProvided {
+                limit,
+                failure: failure.map(Box::new),
+            })
+        }
     }
 }
 
-fn state_text(state: RuntimeMaterialReadState) -> String {
-    match json!(state) {
-        Value::String(text) => text,
-        other => other.to_string(),
-    }
-}
-
-fn print(output: &Value) -> Result<(), Failure> {
-    let mut stdout = io::stdout().lock();
-    serde_json::to_writer(&mut stdout, output).map_err(|error| Failure::Output(error.into()))?;
-    stdout.write_all(b"\n").map_err(Failure::Output)
-}
-
-/// Why `observe --export` printed no answer; every one exits 1 with its code.
+/// Why `observe --export` printed no answer; every one exits 1 with its outcome.
 enum Failure {
-    Usage,
+    /// A flag is unknown, repeated, missing or without its value.
+    Usage {
+        argument: String,
+        problem: ArgumentProblem,
+    },
     Runtime(RuntimeClientError),
     Selector {
         miss: SelectorMiss,
@@ -241,61 +250,47 @@ enum Failure {
     TooLarge {
         byte_count: u64,
     },
-    /// The Runtime answered the read without the frame. Its typed failure is kept as it came,
-    /// so the code it carries is relayed unchanged (A5 relays it as an outcome link).
+    /// The Runtime answered the read without the frame: why it stopped short, and its typed
+    /// failure as it came.
     NotProvided {
+        limit: RuntimeMaterialReadLimit,
         failure: Option<Box<RuntimeMaterialReadFailure>>,
     },
     Write(WriteFailure),
-    Output(io::Error),
 }
 
-impl fmt::Display for Failure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Failure {
+    fn usage(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
+        Self::Usage {
+            argument: argument.as_ref().to_string_lossy().into_owned(),
+            problem,
+        }
+    }
+
+    /// The failure as an outcome (Workflow #378 A5). A frame the Runtime did not provide is
+    /// `material_unavailable` with its read state and limit, the Runtime's own failure code, when
+    /// it gave one, relayed as its cause.
+    fn outcome(&self) -> Outcome {
         match self {
-            Self::Usage => write!(
-                formatter,
-                "{}: {USAGE}",
-                ActingctlCode::ActingctlUsageInvalid.as_str()
-            ),
-            Self::Runtime(error) => write!(formatter, "{error}"),
-            Self::Selector { miss, selector } => {
-                write!(formatter, "{}: {}", miss.code(), miss.message(selector))
-            }
-            Self::FrameUnrecorded => write!(
-                formatter,
-                "{}: none of this observation's events carries the frame it reports",
-                ActingctlCode::MaterialRefUnknown.as_str()
-            ),
-            Self::TooLarge { byte_count } => write!(
-                formatter,
-                "{}: the frame has {byte_count} bytes; an export writes at most {MAX_EXPORT_BYTES}",
-                ActingctlCode::MaterialTooLarge.as_str()
-            ),
-            // As ac_material relays it: the Runtime's typed failure, or actingctl's own
-            // `material_<state>` family when it gave none (A5 splits that family).
-            Self::NotProvided { failure } => {
-                let state = state_text(RuntimeMaterialReadState::NotProvided);
+            Self::Usage { argument, problem } => Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+                .argument(argument.as_str())
+                .argument_problem(*problem),
+            Self::Runtime(error) => error.outcome(),
+            Self::Selector { miss, selector } => miss.outcome(selector),
+            Self::FrameUnrecorded => Outcome::new(ActingctlCode::MaterialRefUnknown),
+            Self::TooLarge { byte_count } => Outcome::new(ActingctlCode::MaterialTooLarge)
+                .actual_bytes(*byte_count)
+                .limit_bytes(MAX_EXPORT_BYTES),
+            Self::NotProvided { limit, failure } => {
+                let outcome = Outcome::new(ActingctlCode::MaterialUnavailable)
+                    .material_state(MaterialState::of(RuntimeMaterialReadState::NotProvided))
+                    .material_limit(MaterialLimit::of(*limit));
                 match failure {
-                    Some(failure) => write!(formatter, "{}", failure.code),
-                    None => write!(formatter, "material_{state}"),
-                }?;
-                write!(
-                    formatter,
-                    ": the Runtime did not provide the frame (state {state})"
-                )
+                    Some(failure) => outcome.caused_by(Outcome::relayed(&failure.code)),
+                    None => outcome,
+                }
             }
-            Self::Write(failure) => write!(
-                formatter,
-                "{}: {}",
-                ActingctlCode::MaterialExportFailed.as_str(),
-                failure.message()
-            ),
-            Self::Output(error) => write!(
-                formatter,
-                "{}: cannot write stdout: {error}",
-                ActingctlCode::ActingctlOutputFailed.as_str()
-            ),
+            Self::Write(failure) => failure.outcome(),
         }
     }
 }

@@ -2,13 +2,15 @@
 
 //! Workflow #382 MCP-T1 (test plan A-5a), the in-binary rows: the tool result envelope and
 //! its output budget (inventory key 30) and the background jobs (key 31). Every expected value
-//! comes from the frozen #338 model and its rulings. Tool-error codes are read only through
-//! `tool_error_code`.
+//! comes from the frozen #338 model and its rulings, and since Workflow #378 A5 from model v2.2
+//! §7.3 (a tool error is `{class, outcome}`; a job's result is `job_result`). Tool-error codes
+//! are read only through `tool_error_code`.
 
 use super::super::jobs::{Job, Jobs};
 use super::super::protocol::{Era, LegacyVersion};
-use super::super::tools::{ToolSuccess, call_result};
+use super::super::tools::{ToolSuccess, call_result, find, tier_not_enabled};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender, TryRecvError};
@@ -28,10 +30,10 @@ fn unreached_deadline() -> Instant {
     Instant::now() + Duration::from_secs(60 * 60)
 }
 
-/// The code of a tool error envelope `{ok: false, error}`.
+/// The code of a tool error envelope `{ok: false, error {class, outcome}}`: its outcome's code.
 #[track_caller]
 fn tool_error_code(envelope: &Value) -> &str {
-    envelope["error"]["code"]
+    envelope["error"]["outcome"]["code"]
         .as_str()
         .unwrap_or_else(|| panic!("not a tool error envelope: {envelope}"))
 }
@@ -241,5 +243,58 @@ fn gate_a_cancelled_wait_returns_false_and_leaves_the_job_running() {
     );
     let snapshot = job.snapshot();
     assert_eq!(snapshot["phase"], json!("done"), "{snapshot}");
-    assert_eq!(snapshot["outcome"], outcome, "{snapshot}");
+    // Workflow #378 A5 (L6): the job's result is `job_result`; `outcome` names only the
+    // envelope.
+    assert_eq!(snapshot["job_result"], outcome, "{snapshot}");
+    assert!(snapshot.get("outcome").is_none(), "{snapshot}");
+}
+
+#[test]
+fn gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker() {
+    // Workflow #378 A5 (model v2.2 §7.3): a tool error is `{class, outcome}` and nothing else;
+    // what must change is the value `mcp_blocker`, and `tier_not_enabled` names the tool's
+    // tier (`required_tier`).
+    let tool = find("ac_run_pack").expect("ac_run_pack is in the tool table");
+    for era in [
+        Era::Legacy(LegacyVersion::V20250326),
+        Era::Legacy(LegacyVersion::V20251125),
+        Era::Modern,
+    ] {
+        let answer = call_result(Err(tier_not_enabled(tool)), era);
+        assert_eq!(answer["isError"], json!(true), "{era:?}: {answer}");
+        let mut envelopes = vec![text_envelope(&answer)];
+        if era != Era::Legacy(LegacyVersion::V20250326) {
+            envelopes.push(answer["structuredContent"].clone());
+        }
+        for envelope in &envelopes {
+            let error = &envelope["error"];
+            let members = error
+                .as_object()
+                .map(|members| members.keys().map(String::as_str).collect::<BTreeSet<_>>())
+                .unwrap_or_default();
+            assert_eq!(
+                members,
+                BTreeSet::from(["class", "outcome"]),
+                "{era:?}: {answer}"
+            );
+            assert_eq!(error["class"], json!("safety"), "{era:?}: {answer}");
+            let outcome = &error["outcome"];
+            assert_eq!(
+                outcome["code"],
+                json!("tier_not_enabled"),
+                "{era:?}: {answer}"
+            );
+            assert_eq!(outcome["category"], json!("error"), "{era:?}: {answer}");
+            assert_eq!(
+                outcome["values"]["mcp_blocker"],
+                json!("server_tier"),
+                "{era:?}: {answer}"
+            );
+            assert_eq!(
+                outcome["values"]["required_tier"],
+                json!("operator"),
+                "{era:?}: {answer}"
+            );
+        }
+    }
 }

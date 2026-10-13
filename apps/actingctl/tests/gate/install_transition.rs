@@ -71,6 +71,20 @@ fn gate_install_transition_query_answers_while_the_ledger_writer_is_stalled_in_p
         output["receipt"]["result"]["status"]["phase"], "preparing",
         "{output}"
     );
+    // Workflow #378 A5 (model §7.3): the line's outcome reports the transition and its phase.
+    assert_eq!(
+        (
+            &output["outcome"]["code"],
+            &output["outcome"]["values"]["transition_id"],
+            &output["outcome"]["values"]["phase"],
+        ),
+        (
+            &Value::from("install_transition_reported"),
+            &Value::from(HELD_TRANSITION_ID),
+            &Value::from("preparing"),
+        ),
+        "{output}"
+    );
     declared.expect("the held declaration completes after the gate opens");
     released
         .expect("the released start finishes")

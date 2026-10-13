@@ -23,12 +23,19 @@
 //! starts it) or, with `--config`, a verification root started with that config. Processes are
 //! recognised by the owner lock, runtime-info and the accepted shutdown target only, never by
 //! image name.
+//!
+//! Workflow #378 A5: both print one result line through `crate::cli_line`: on success
+//! `{…report, outcome}` with `start_runtime_started` or `start_runtime_restarted` (`pid`,
+//! `owner_epoch`, `log`), on failure `{outcome}` with the failure. A refusal the watchdog
+//! decides as info (the installer holds its writer lock, a tick holds the run lock) is
+//! `start_runtime_refused` caused by that decision, so it exits 1.
 
 use crate::ActingctlError;
+use crate::cli_line;
 use crate::codes::ActingctlCode;
 use crate::shutdown_wait;
-use crate::watchdog::{self, Failure, decide, observe, start};
-use actingcommand_contract::outcome::Code;
+use crate::watchdog::{self, decide, io_failure, json_failure, observe, start};
+use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
     EventActor, EventSource, InstancePauseState, OwnerEpoch, RuntimeReceipt, SchedulingPauseState,
 };
@@ -36,9 +43,8 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeCl
 use serde::Serialize;
 use serde_json::Value;
 use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::thread;
@@ -67,24 +73,27 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
         "restart" => Mode::Restart,
         _ => return None,
     };
-    let result = match Arguments::parse(mode, &arguments[1..]) {
-        Some(parsed) => run(mode, &parsed),
-        None => Err(Failed::new(ActingctlCode::ActingctlUsageInvalid, USAGE)),
+    if let Err(invalid) = cli_line::detail() {
+        return Some(cli_line::failure(&invalid, None));
+    }
+    let Some(parsed) = Arguments::parse(mode, &arguments[1..]) else {
+        let usage = Outcome::new(ActingctlCode::ActingctlUsageInvalid);
+        return Some(cli_line::failure(&usage, Some(USAGE)));
     };
-    let written = result.and_then(|report| {
-        let failed = |error: &dyn fmt::Display| {
-            Failed::new(ActingctlCode::ActingctlOutputFailed, error.to_string())
-        };
-        let mut writer = std::io::stdout().lock();
-        serde_json::to_writer(&mut writer, &report).map_err(|error| failed(&error))?;
-        writer.write_all(b"\n").map_err(|error| failed(&error))
-    });
-    Some(match written {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failed) => {
-            eprintln!("FATAL actingctl: {failed}");
-            ExitCode::FAILURE
-        }
+    Some(match run(mode, &parsed) {
+        Ok((report, outcome)) => match serde_json::to_value(&report) {
+            Ok(value) => cli_line::success(cli_line::members(value, "result"), &outcome),
+            Err(error) => {
+                cli_line::developer_line(
+                    &Outcome::new(ActingctlCode::ActingctlOutputFailed),
+                    Some(&error.to_string()),
+                );
+                ExitCode::FAILURE
+            }
+        },
+        // A Runtime refusal topped with an info or warning code still failed (A4 part B L2):
+        // `crate::failed` exits non-zero whatever the top's category.
+        Err(failed) => crate::failed(&failed.outcome, failed.text.as_deref()),
     })
 }
 
@@ -150,55 +159,56 @@ fn seconds(value: &OsStr, range: std::ops::RangeInclusive<u64>) -> Option<Durati
         .then_some(Duration::from_secs(seconds))
 }
 
-/// A failure of `start` or `restart`: its registered code and the developer detail of the
-/// `FATAL actingctl:` line (A5 replaces the line with the outcome envelope).
+/// A failure of `start` or `restart`: its outcome, and developer text for the stderr line (what
+/// was already done, the start log's last line).
 #[derive(Debug)]
 struct Failed {
-    code: Code,
-    detail: String,
+    outcome: Outcome,
+    text: Option<String>,
 }
 
 impl Failed {
-    fn new(code: impl Into<Code>, detail: impl Into<String>) -> Self {
+    fn new(outcome: Outcome) -> Self {
         Self {
-            code: code.into(),
-            detail: detail.into(),
+            outcome,
+            text: None,
         }
     }
 
     fn runtime(error: &RuntimeClientError) -> Self {
-        Self::new(error.code(), error.to_string())
+        Self::new(error.outcome())
     }
 
     fn after(self, done: &str) -> Self {
         Self {
-            code: self.code,
-            detail: format!("{}; {done}", self.detail),
+            outcome: self.outcome,
+            text: Some(match self.text {
+                Some(text) => format!("{text}; {done}"),
+                None => done.to_owned(),
+            }),
         }
     }
 }
 
-impl From<Failure> for Failed {
-    fn from(failure: Failure) -> Self {
-        Self::new(failure.code, failure.detail)
-    }
-}
-
-impl From<start::StartError> for Failed {
-    fn from(error: start::StartError) -> Self {
-        Self::new(error.code, error.detail)
+impl From<Outcome> for Failed {
+    fn from(outcome: Outcome) -> Self {
+        Self::new(outcome)
     }
 }
 
 impl From<ActingctlError> for Failed {
     fn from(error: ActingctlError) -> Self {
-        Self::new(error.code(), error.to_string())
+        Self::new(error.outcome())
     }
 }
 
-impl fmt::Display for Failed {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.detail)
+/// A watchdog refusal: an info decision (`watchdog_installer_busy`, `watchdog_run_in_progress`)
+/// under `start_runtime_refused`, so it exits 1; any other failure as it is.
+fn refused(failure: Outcome) -> Failed {
+    if failure.category() < Category::Error {
+        Failed::new(Outcome::new(ActingctlCode::StartRuntimeRefused).caused_by(failure))
+    } else {
+        Failed::new(failure)
     }
 }
 
@@ -240,7 +250,9 @@ struct ShutdownReport {
     wait: Value,
 }
 
-fn run(mode: Mode, arguments: &Arguments) -> Result<Report, Failed> {
+/// The report and its success outcome: `start_runtime_started` or `start_runtime_restarted`,
+/// with the answering owner's `pid`, `owner_epoch` and the start `log`.
+fn run(mode: Mode, arguments: &Arguments) -> Result<(Report, Outcome), Failed> {
     let located = Located::resolve(arguments)?;
     let target = start::Target {
         root_plain: &located.root_plain,
@@ -248,9 +260,22 @@ fn run(mode: Mode, arguments: &Arguments) -> Result<Report, Failed> {
         state_root: &located.state_root,
         ready_timeout: arguments.ready_timeout,
     };
-    match mode {
-        Mode::Start => start_runtime(&located, &target).map(Report::Start),
-        Mode::Restart => restart_runtime(&located, &target, arguments.wait_idle),
+    let report = match mode {
+        Mode::Start => Report::Start(start_runtime(&located, &target)?),
+        Mode::Restart => restart_runtime(&located, &target, arguments.wait_idle)?,
+    };
+    let outcome = match &report {
+        Report::Start(start) => started(ActingctlCode::StartRuntimeStarted, start),
+        Report::Restart { start, .. } => started(ActingctlCode::StartRuntimeRestarted, start),
+    };
+    Ok((report, outcome))
+}
+
+fn started(code: ActingctlCode, report: &StartReport) -> Outcome {
+    let outcome = Outcome::new(code).pid(report.pid).log(&report.log);
+    match serde_json::to_value(report.owner_epoch) {
+        Ok(Value::String(epoch)) => outcome.owner_epoch(epoch),
+        _ => outcome,
     }
 }
 
@@ -267,17 +292,19 @@ struct Located {
 impl Located {
     fn resolve(arguments: &Arguments) -> Result<Self, Failed> {
         let root = fs::canonicalize(&arguments.root).map_err(|error| {
-            Failed::new(
+            io_failure(
                 ActingctlCode::InstallRootUnresolved,
-                format!("path={}: {error}", arguments.root.display()),
+                &arguments.root,
+                &error,
+                IoOp::Canonicalize,
             )
         })?;
         let (installation, config_plain, configured) = match &arguments.config {
             // The selected generation, exactly as the watchdog starts it.
             None => {
                 let installation = observe::Installation::resolve(&root).map_err(|failure| {
-                    let hint = failure.code == ActingctlCode::WatchdogLayoutUnknown.code();
-                    let failed = Failed::from(failure);
+                    let hint = failure.is(ActingctlCode::WatchdogLayoutUnknown);
+                    let failed = Failed::new(failure);
                     if hint {
                         failed.after("pass --config <file> to start a root without one")
                     } else {
@@ -289,24 +316,27 @@ impl Located {
                 (Some(installation), config, state_root)
             }
             Some(config) => {
-                let unreadable = |detail: String| {
-                    Failed::new(
-                        ActingctlCode::WatchdogConfigUnreadable,
-                        format!("path={}: {detail}", config.display()),
-                    )
+                let unreadable = |path: &Path, error: &std::io::Error, op: IoOp| {
+                    io_failure(ActingctlCode::WatchdogConfigUnreadable, path, error, op)
                 };
-                let config =
-                    fs::canonicalize(config).map_err(|error| unreadable(error.to_string()))?;
+                let config = fs::canonicalize(config)
+                    .map_err(|error| unreadable(config, &error, IoOp::Canonicalize))?;
                 let mut bytes = Vec::new();
                 File::open(&config)
-                    .and_then(|file| file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes))
-                    .map_err(|error| unreadable(error.to_string()))?;
+                    .map_err(|error| unreadable(&config, &error, IoOp::Open))?
+                    .take(MAX_CONFIG_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| unreadable(&config, &error, IoOp::Read))?;
                 if bytes.len() as u64 > MAX_CONFIG_BYTES {
-                    return Err(unreadable(format!("larger than {MAX_CONFIG_BYTES} bytes")));
+                    return Err(Failed::new(
+                        Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
+                            .path(&config)
+                            .limit_bytes(MAX_CONFIG_BYTES),
+                    ));
                 }
-                let state_root = configured_state_root(&bytes)
-                    .map_err(|failed| failed.after(&format!("path={}", config.display())))?;
-                (None, observe::plain_path(&config), state_root)
+                let config = observe::plain_path(&config);
+                let state_root = configured_state_root(&bytes, &config)?;
+                (None, config, state_root)
             }
         };
         let state_root = match &arguments.state_root {
@@ -323,69 +353,61 @@ impl Located {
     }
 }
 
-/// The config's absolute `state_root`, as the watchdog reads a selected config.
-fn configured_state_root(bytes: &[u8]) -> Result<PathBuf, Failed> {
-    let document: Value = serde_json::from_slice(bytes)
-        .map_err(|error| Failed::new(ActingctlCode::WatchdogConfigUnreadable, error.to_string()))?;
+/// The config's absolute `state_root`, as the watchdog reads a selected config: a config that
+/// is not JSON is `watchdog_config_unreadable`, one without an absolute `state_root`
+/// `watchdog_state_root_invalid`, each with the config's `path`.
+fn configured_state_root(bytes: &[u8], config: &Path) -> Result<PathBuf, Outcome> {
+    let document: Value = serde_json::from_slice(bytes).map_err(|error| {
+        Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
+            .path(config)
+            .caused_by(json_failure(&error))
+    })?;
     document
         .get("state_root")
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .ok_or_else(|| {
-            Failed::new(
-                ActingctlCode::WatchdogStateRootInvalid,
-                "the config's state_root must be an absolute path",
-            )
-        })
+        .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(config))
 }
 
 /// `--state-root` only checks the config's state root: the same spelling, or the same
-/// directory once both resolve.
-fn same_state_root(requested: &Path, configured: PathBuf) -> Result<PathBuf, Failed> {
+/// directory once both resolve; otherwise `install_process_state_root_mismatch` with the
+/// requested `path` and the config's `state_root`.
+fn same_state_root(requested: &Path, configured: PathBuf) -> Result<PathBuf, Outcome> {
     if requested == configured {
         return Ok(configured);
     }
     match (fs::canonicalize(requested), fs::canonicalize(&configured)) {
         (Ok(requested), Ok(resolved)) if requested == resolved => Ok(configured),
-        _ => Err(Failed::new(
-            ActingctlCode::InstallProcessStateRootMismatch,
-            format!(
-                "path={}: the config's state_root is {}",
-                requested.display(),
-                configured.display()
-            ),
-        )),
+        _ => Err(Outcome::new(ActingctlCode::InstallProcessStateRootMismatch)
+            .path(requested)
+            .state_root(&configured)),
     }
 }
 
-/// Step 1: a live Runtime on this state root (its owner lock held) refuses the start.
+/// Step 1: a live Runtime on this state root (its owner lock held) refuses the start with
+/// `start_runtime_already_running` (`path` = the state root; the answering owner's `pid` and
+/// `owner_epoch`, or the client's failure as a `related` link when it does not answer).
 fn refuse_live(state_root: &Path) -> Result<(), Failed> {
-    let (lock, _) = observe::owner_journal(state_root).map_err(Failed::from)?;
+    let (lock, _) = observe::owner_journal(state_root)?;
     if lock != decide::OwnerLock::Locked {
         return Ok(());
     }
-    let owner = match observe::live_owner(state_root, None) {
-        Ok(owner) => format!("pid={} owner_epoch={}", owner.pid, owner.owner_epoch),
-        Err(error) => format!("the owner does not answer: {error}"),
-    };
-    Err(Failed::new(
-        ActingctlCode::StartRuntimeAlreadyRunning,
-        format!("path={} {owner}", state_root.display()),
-    ))
+    let refusal = Outcome::new(ActingctlCode::StartRuntimeAlreadyRunning).path(state_root);
+    Err(Failed::new(match observe::live_owner(state_root, None) {
+        Ok(owner) => refusal.pid(owner.pid).owner_epoch(owner.owner_epoch),
+        Err(failure) => refusal.link(CauseRelation::Related, failure),
+    }))
 }
 
 /// Row 7a as the watchdog decides it (`watchdog/decide.rs`), through its own probe: while
-/// acsetup holds `install\writer.lock` nothing starts, refused with the watchdog's
-/// `watchdog_installer_busy`. A free lock comes back held shared, so acsetup cannot begin
-/// before the guard is dropped, as during a tick's start (review L4).
+/// acsetup holds `install\writer.lock` nothing starts, refused with `start_runtime_refused`
+/// caused by the watchdog's `watchdog_installer_busy`. A free lock comes back held shared, so
+/// acsetup cannot begin before the guard is dropped, as during a tick's start (review L4).
 fn refuse_installer_busy(root: &Path) -> Result<Option<File>, Failed> {
-    match observe::writer_lock(root).map_err(Failed::from)? {
+    match observe::writer_lock(root)? {
         observe::WriterProbe::Free(guard) => Ok(guard),
-        observe::WriterProbe::Busy => Err(Failed::new(
-            ActingctlCode::WatchdogInstallerBusy,
-            "acsetup holds install\\writer.lock; start the Runtime after it finishes",
-        )),
+        observe::WriterProbe::Busy => Err(refused(decide::Decision::InstallerBusy.outcome())),
     }
 }
 
@@ -394,16 +416,18 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
     refuse_live(&located.state_root)?;
     // Row 7a: an installer write refuses too, still before anything is touched.
     let writer = refuse_installer_busy(&located.root)?;
-    start::preflight(target).map_err(Failed::from)?;
+    start::preflight(target)?;
     // 2. The watchdog's run lock, so no tick starts beside this start.
     let directory = located.root.join("watchdog");
     fs::create_dir_all(&directory).map_err(|error| {
-        Failed::new(
+        io_failure(
             ActingctlCode::WatchdogDirectoryUnavailable,
-            format!("path={}: {error}", directory.display()),
+            &directory,
+            &error,
+            IoOp::CreateDir,
         )
     })?;
-    let run_lock = watchdog::hold_run_lock(&directory, RUN_LOCK_WAIT).map_err(Failed::from)?;
+    let run_lock = watchdog::hold_run_lock(&directory, RUN_LOCK_WAIT).map_err(refused)?;
     // A tick that held the lock may have started the Runtime meanwhile.
     refuse_live(&located.state_root)?;
     // 3-4. The watchdog's manual start and readiness. The log lies in the root, where the
@@ -412,10 +436,12 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
     let log = located
         .root_plain
         .join(format!("actingd-{spawn_at_unix_ms}.log"));
-    let outcome = start::start_target(target, &log, spawn_at_unix_ms, false);
+    let attempt = start::start_target(target, &log, spawn_at_unix_ms, false);
     drop(run_lock);
     drop(writer);
-    let owner = outcome.result.map_err(Failed::from)?;
+    let owner = attempt
+        .result
+        .map_err(|failure| Failed::new(failure).after(&start::last_log_line(&log)))?;
     let ready_ms = observe::unix_ms(SystemTime::now()).saturating_sub(spawn_at_unix_ms);
     // 5. One Status: the pauses the new owner restored.
     let started = format!(
@@ -431,7 +457,7 @@ fn start_runtime(located: &Located, target: &start::Target<'_>) -> Result<StartR
     Ok(StartReport {
         pid: info.pid(),
         owner_epoch: info.owner_epoch(),
-        method: outcome.method,
+        method: attempt.method,
         config: located.config_plain.display().to_string(),
         log: log.display().to_string(),
         ready_ms,
@@ -457,9 +483,10 @@ fn restart_runtime(
     // What the start needs is checked before anything stops: no installer write (row 7a),
     // held off until the restart ends, and the fixed entry and its paths.
     let _writer = refuse_installer_busy(&located.root)?;
-    start::preflight(target).map_err(Failed::from)?;
+    start::preflight(target)?;
     let client = connect(&located.state_root)?;
-    // 1. Every instance idle: no lease, nothing queued; past `--wait-idle` nothing is stopped.
+    // 1. Every instance idle: no lease, nothing queued; past `--wait-idle` nothing is stopped
+    // (`start_wait_idle_expired` with `timeout_ms` and the busy `aliases`).
     let deadline = Instant::now() + wait_idle;
     loop {
         let status = client.status().map_err(|error| Failed::runtime(&error))?;
@@ -475,12 +502,9 @@ fn restart_runtime(
         let now = Instant::now();
         if now >= deadline {
             return Err(Failed::new(
-                ActingctlCode::StartWaitIdleExpired,
-                format!(
-                    "timeout_ms={} aliases={}",
-                    wait_idle.as_millis(),
-                    busy.join(",")
-                ),
+                Outcome::new(ActingctlCode::StartWaitIdleExpired)
+                    .timeout_ms(wait_idle)
+                    .aliases(busy),
             ));
         }
         thread::sleep(IDLE_POLL.min(deadline - now));

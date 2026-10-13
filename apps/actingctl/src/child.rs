@@ -11,6 +11,8 @@
 //! children left behind when this server itself is killed would need a Job Object (a new
 //! dependency) to end.
 
+use actingcommand_contract::outcome::{IoOp, Outcome};
+use std::fmt;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
@@ -34,6 +36,45 @@ pub(crate) enum ChildFailure {
     Io(io::Error),
     /// The child was still running at the deadline; it keeps running.
     StillRunning,
+}
+
+impl ChildFailure {
+    /// The OS failure beneath a spawn or I/O failure, as its `foreign_os_error` link (Workflow
+    /// #378 A5). `None` when the child was still running, and when a thread reading its output
+    /// panicked: that error is actingctl's own (`reader_panicked`), not one the OS raised.
+    pub(crate) fn os_failure(&self) -> Option<Outcome> {
+        match self {
+            Self::Spawn(error) => Some(Outcome::from_io_error(error, IoOp::Spawn)),
+            Self::Io(error) if !reader_panicked(error) => {
+                Some(Outcome::from_io_error(error, IoOp::Wait))
+            }
+            Self::Io(_) | Self::StillRunning => None,
+        }
+    }
+
+    /// Whether a thread reading the child's output panicked.
+    pub(crate) fn reader_panicked(&self) -> bool {
+        matches!(self, Self::Io(error) if reader_panicked(error))
+    }
+}
+
+/// The error of an output reader thread that panicked: actingctl's own, so it is told apart from
+/// the OS's I/O errors.
+#[derive(Debug)]
+struct ReaderPanicked;
+
+impl fmt::Display for ReaderPanicked {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("child output reader panicked")
+    }
+}
+
+impl std::error::Error for ReaderPanicked {}
+
+fn reader_panicked(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<ReaderPanicked>())
 }
 
 pub(crate) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
@@ -112,7 +153,7 @@ fn drain<R: Read + Send + 'static>(source: Option<R>) -> JoinHandle<io::Result<V
 fn collect(reader: JoinHandle<io::Result<Vec<u8>>>) -> Result<Vec<u8>, ChildFailure> {
     reader
         .join()
-        .map_err(|_| ChildFailure::Io(io::Error::other("child output reader panicked")))?
+        .map_err(|_| ChildFailure::Io(io::Error::other(ReaderPanicked)))?
         .map_err(ChildFailure::Io)
 }
 

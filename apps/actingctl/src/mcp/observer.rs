@@ -3,14 +3,17 @@
 //! Observer tools (#338 §四 工具表): ac_overview and ac_material. They only read; like the
 //! CLI's reads they record no client.action. Every fact comes from the Runtime and
 //! runtime-client unchanged; this module only selects, pages and bounds it. ac_events lives in
-//! `events` (Workflow #389 MCP-1).
+//! `events` (Workflow #389 MCP-1). Errors and warnings are outcomes (Workflow #378 A5).
 
 use super::runs;
 use super::runtime::{Connected, Location, read_bounded};
 use super::tools::{
-    self, Arguments, ToolCode, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
+    self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
+    invalid_argument, out_of_range,
 };
-use crate::codes::ActingctlCode;
+use crate::codes::{ActingctlCode, ArgumentProblem, MaterialLimit, MaterialState};
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{CauseRelation, Outcome, RawSource};
 use actingcommand_contract::{
     ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectionProfile,
@@ -49,13 +52,10 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
         Ok(connected) => connected,
         Err(error) => {
             // No instance data at all, rather than an empty list that reads as an empty
-            // system: the daemon section says why.
+            // system: the daemon section says why, as the tool error `{class, outcome}`.
             result.insert(
                 "daemon".to_owned(),
-                json!({
-                    "online": false,
-                    "error": {"code": error.code_spelling(), "message": error.message()},
-                }),
+                json!({"online": false, "error": error.into_value()}),
             );
             result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
             result.insert("install".to_owned(), install);
@@ -152,14 +152,13 @@ fn instance_row(
     row.insert("lease_active".to_owned(), json!(instance.lease_active()));
     row.insert("queued".to_owned(), json!(instance.queued_request_count()));
     if let Some(pause) = instance.pause() {
-        row.insert(
-            "pause".to_owned(),
-            json!({
-                "revision": pause.revision,
-                "stage": pause.stage,
-                "pause_reason": pause.pause_reason,
-            }),
-        );
+        // Data members whose names a code would take (`stage`, `*_reason`) are inserted by
+        // name, outside `json!`.
+        let mut members = Map::new();
+        members.insert("revision".to_owned(), json!(pause.revision));
+        members.insert("stage".to_owned(), json!(pause.stage));
+        members.insert("pause_reason".to_owned(), json!(pause.pause_reason));
+        row.insert("pause".to_owned(), Value::Object(members));
     }
     // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person.
     if let Some(fence) = instance.resource_fence() {
@@ -188,7 +187,7 @@ pub(super) fn select_instance<'s>(
     selector: &str,
 ) -> Result<&'s RuntimeInstanceStatus, ToolError> {
     crate::instance_selector::select(instances, selector)
-        .map_err(|miss| ToolError::usage(miss.code(), miss.message(selector)))
+        .map_err(|miss| ToolError::outcome("usage", miss.outcome(selector)))
 }
 
 fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
@@ -208,9 +207,15 @@ fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
         .map(|root| root.join("runtime").join("BUILD-MANIFEST.json"))
         .filter(|manifest| manifest.is_file());
     if let Some(manifest) = manifest {
+        // An unreadable manifest is the warning `install_build_manifest_unreadable` (`path`),
+        // caused by the read failure or the parser's `foreign_data_error`.
         let document = read_bounded(&manifest, MAX_MANIFEST_BYTES).and_then(|bytes| {
-            serde_json::from_slice::<Value>(&bytes)
-                .map_err(|error| format!("{} is not JSON: {error}", manifest.display()))
+            serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+                Outcome::new(ContractCode::ForeignDataError)
+                    .raw_source(RawSource::Json)
+                    .raw_text(error.to_string())
+                    .path(&manifest)
+            })
         });
         match document {
             Ok(document) => {
@@ -222,10 +227,11 @@ fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
                 }
                 install.insert("build".to_owned(), Value::Object(build));
             }
-            Err(reason) => warnings.push(json!({
-                "code": ActingctlCode::InstallBuildManifestUnreadable.as_str(),
-                "message": reason,
-            })),
+            Err(cause) => warnings.push(tools::warning(
+                &Outcome::new(ActingctlCode::InstallBuildManifestUnreadable)
+                    .path(&manifest)
+                    .caused_by(cause),
+            )),
         }
     }
     Value::Object(install)
@@ -262,27 +268,24 @@ pub(super) fn material(context: &ToolContext<'_>, arguments: &Map<String, Value>
             material_text(context, &connected, &material, offset, max_bytes)
         }
         "export" => {
-            if arguments.has("offset") || arguments.has("max_bytes") {
-                return Err(invalid_argument(
-                    "offset",
-                    "and max_bytes belong to mode text; export writes the whole material",
-                ));
+            // offset and max_bytes belong to mode text; export writes the whole material.
+            for argument in ["offset", "max_bytes"] {
+                if arguments.has(argument) {
+                    return Err(invalid_argument(argument, ArgumentProblem::Conflicting));
+                }
             }
             let connected = context.runtime.connect()?;
             let material = resolve_material(context, &connected, position, artifact_id)?;
             material_export(context, &connected, &material)
         }
-        _ => Err(invalid_argument("mode", "must be text or export")),
+        _ => Err(invalid_argument("mode", ArgumentProblem::NotRecognised)),
     }
 }
 
+/// `<seq>:<event_id>:<artifact_id>`, a materials[].ref of ac_events; anything else is
+/// `material_ref_invalid`.
 fn parse_material_ref(reference: &str) -> Result<(LedgerEventPosition, ArtifactId), ToolError> {
-    let invalid = || {
-        ToolError::usage(
-            ActingctlCode::MaterialRefInvalid,
-            "ref must be a materials[].ref from ac_events (<seq>:<event_id>:<artifact_id>)",
-        )
-    };
+    let invalid = || ToolError::usage(ActingctlCode::MaterialRefInvalid);
     let mut parts = reference.split(':');
     let (Some(sequence), Some(event_id), Some(artifact_id), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
@@ -308,11 +311,8 @@ fn resolve_material(
         ..EventQuery::default()
     };
     let request = RuntimeEventQueryPageRequest::new(1, None).map_err(|error| {
-        ToolError::new(
-            "runtime",
-            ActingctlCode::MaterialQueryInvalid,
-            format!("cannot form the event query: {error}"),
-        )
+        ToolError::new("runtime", ActingctlCode::MaterialQueryInvalid)
+            .caused_by(Outcome::new(error.code()))
     })?;
     let page = connected
         .client
@@ -330,10 +330,12 @@ fn resolve_material(
         })
         .cloned()
         .ok_or_else(|| {
-            ToolError::usage(
-                ActingctlCode::MaterialRefUnknown,
-                "the ledger holds no such event and material at this sequence",
-            )
+            // The ledger holds no such event and material at this sequence.
+            ToolError::usage(ActingctlCode::MaterialRefUnknown).with(|outcome| {
+                outcome
+                    .event_id(text_of(json!(position.event_id)))
+                    .artifact_id(text_of(json!(artifact_id)))
+            })
         })?;
     Ok(Material {
         position,
@@ -354,20 +356,18 @@ fn material_text(
         artifact.media_type,
         ArtifactMediaType::ApplicationJson | ArtifactMediaType::TextPlain
     ) {
-        return Err(ToolError::usage(
-            ActingctlCode::MaterialNotText,
-            format!(
-                "this material is {}; read it with mode export",
-                text_of(json!(artifact.media_type))
-            ),
-        )
-        .blocked_by("ac_material mode export"));
+        // Read it with mode export; its media type travels as `media_type`.
+        return Err(ToolError::usage(ActingctlCode::MaterialNotText)
+            .with(|outcome| outcome.media_type(text_of(json!(artifact.media_type))))
+            .blocked_by(McpBlocker::MaterialMode));
     }
     if offset >= artifact.byte_count {
-        return Err(
-            invalid_argument("offset", "is at or past the end of the material")
-                .with_detail("total_bytes", json!(artifact.byte_count)),
-        );
+        // At or past the end: the offsets this material has.
+        return Err(out_of_range(
+            "offset",
+            0,
+            artifact.byte_count.saturating_sub(1),
+        ));
     }
     let length = max_bytes.min(artifact.byte_count - offset);
     let request = RuntimeMaterialReadRequest {
@@ -382,7 +382,7 @@ fn material_text(
         expected_correlation_id: None,
         offset,
         requested_length: u32::try_from(length)
-            .map_err(|_| invalid_argument("max_bytes", "is too large"))?,
+            .map_err(|_| out_of_range("max_bytes", 1, MAX_TEXT_BYTES))?,
         max_reply_bytes: MAX_RUNTIME_MATERIAL_REPLY_BYTES,
     };
     let read = connected
@@ -399,11 +399,10 @@ fn material_text(
             ));
         }
     };
+    // The bytes at this offset are not UTF-8 text: start at 0 or at a next_offset, or use
+    // mode export.
     let text = utf8_prefix(&bytes).ok_or_else(|| {
-        ToolError::usage(
-            ActingctlCode::MaterialNotText,
-            "the bytes at this offset are not UTF-8 text; start at 0 or at a next_offset, or use mode export",
-        )
+        ToolError::usage(ActingctlCode::MaterialNotText).with(|outcome| outcome.offset(offset))
     })?;
     let mut end = text.len();
     loop {
@@ -452,13 +451,13 @@ pub(super) fn material_export(
 ) -> ToolOutcome {
     let artifact = &material.artifact;
     if artifact.byte_count > MAX_EXPORT_BYTES as u64 {
-        return Err(ToolError::usage(
-            ActingctlCode::MaterialTooLarge,
-            format!(
-                "the material has {} bytes; ac_material exports at most {MAX_EXPORT_BYTES}",
-                artifact.byte_count
-            ),
-        ));
+        return Err(
+            ToolError::usage(ActingctlCode::MaterialTooLarge).with(|outcome| {
+                outcome
+                    .actual_bytes(artifact.byte_count)
+                    .limit_bytes(MAX_EXPORT_BYTES)
+            }),
+        );
     }
     let selection = RuntimeMaterialSelection {
         event: material.position,
@@ -483,17 +482,24 @@ pub(super) fn material_export(
         &keep_reading,
     ) {
         RuntimeMaterialCompleteResult::Verified { bytes, .. } => write_export(artifact, &bytes),
+        // A client failure during the read keeps the client's outcome on top; what the read
+        // reached is its `note` link `material_unavailable`.
         RuntimeMaterialCompleteResult::NotProvided {
             limit,
             failure,
             error,
             ..
         } => Err(match error {
-            Some(error) => context
-                .runtime
-                .failure(connected, &error)
-                .with_detail("material_limit", json!(limit))
-                .with_detail("material_failure", json!(failure)),
+            Some(error) => context.runtime.failure(connected, &error).with(|outcome| {
+                outcome.link(
+                    CauseRelation::Note,
+                    unavailable_outcome(
+                        RuntimeMaterialReadState::NotProvided,
+                        Some(limit),
+                        failure.as_ref(),
+                    ),
+                )
+            }),
             None => material_unavailable(
                 RuntimeMaterialReadState::NotProvided,
                 Some(limit),
@@ -505,35 +511,43 @@ pub(super) fn material_export(
             failure,
             error,
             ..
-        } => Err(context
-            .runtime
-            .failure(connected, &error)
-            .with_detail("material_state", json!(state))
-            .with_detail("material_failure", json!(failure))),
+        } => Err(context.runtime.failure(connected, &error).with(|outcome| {
+            outcome.link(
+                CauseRelation::Note,
+                unavailable_outcome(state, None, failure.as_ref()),
+            )
+        })),
     }
 }
 
-/// The Runtime answered the read without the material: its state, limit and typed failure
-/// are passed on as they are. Without a failure the code is `material_<state>`, actingctl's own
-/// dynamic family, which A5 splits into one fixed code with a `material_state` value.
+/// The Runtime answered the read without the material: `material_unavailable`, class runtime
+/// (see [`unavailable_outcome`]).
 fn material_unavailable(
     state: RuntimeMaterialReadState,
     limit: Option<RuntimeMaterialReadLimit>,
     failure: Option<&RuntimeMaterialReadFailure>,
 ) -> ToolError {
-    let state_text = text_of(json!(state));
-    let relayed_code = failure.map_or_else(
-        || format!("material_{state_text}"),
-        |failure| failure.code.clone(),
-    );
-    ToolError::coded(
-        "runtime",
-        ToolCode::Relayed { relayed_code },
-        format!("the Runtime did not provide the material (state {state_text})"),
-    )
-    .with_detail("material_state", json!(state))
-    .with_detail("material_limit", json!(limit))
-    .with_detail("material_failure", json!(failure))
+    ToolError::outcome("runtime", unavailable_outcome(state, limit, failure))
+}
+
+/// `material_unavailable` (Workflow #378 A5): the read's state (`material_state`) and, when
+/// the read stopped short, its limit (`material_limit`), caused by the Runtime's typed failure
+/// code when it gave one (relayed as the Runtime spelled it).
+fn unavailable_outcome(
+    state: RuntimeMaterialReadState,
+    limit: Option<RuntimeMaterialReadLimit>,
+    failure: Option<&RuntimeMaterialReadFailure>,
+) -> Outcome {
+    let outcome =
+        Outcome::new(ActingctlCode::MaterialUnavailable).material_state(MaterialState::of(state));
+    let outcome = match limit {
+        Some(limit) => outcome.material_limit(MaterialLimit::of(limit)),
+        None => outcome,
+    };
+    match failure {
+        Some(failure) => outcome.caused_by(Outcome::relayed(&failure.code)),
+        None => outcome,
+    }
 }
 
 /// Writes the verified bytes to `%TEMP%\actingcommand-mcp\materials\<sha256>.<ext>`
@@ -550,24 +564,13 @@ pub(super) fn export_directory() -> PathBuf {
 /// The export writer (`crate::material_export::write`, which `actingctl observe --export`
 /// shares) on the export directory: `bytes`, whose `sha256` (`sha256:<hex>`) the caller knows, to
 /// `<export directory>\<hex>.<extension>` through a partial file moved into place;
-/// `{path, sha256, size}`.
+/// `{path, sha256, size}`. A failed write is the writer's `material_export_failed`, class
+/// runtime.
 pub(super) fn export_bytes(
     sha256: &str,
     extension: &str,
     bytes: &[u8],
 ) -> Result<Value, ToolError> {
-    crate::material_export::write(&export_directory(), sha256, extension, bytes).map_err(
-        |failure| {
-            let error = ToolError::new(
-                "runtime",
-                ActingctlCode::MaterialExportFailed,
-                failure.message(),
-            )
-            .with_detail("path", json!(failure.path().display().to_string()));
-            match failure.partial() {
-                Some(partial) => error.with_detail("partial", json!(partial.display().to_string())),
-                None => error,
-            }
-        },
-    )
+    crate::material_export::write(&export_directory(), sha256, extension, bytes)
+        .map_err(|failure| ToolError::outcome("runtime", failure.outcome()))
 }

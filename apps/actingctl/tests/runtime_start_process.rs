@@ -4,6 +4,9 @@
 //! temporary roots. The live Runtime is the sealed C4 Runtime child on the root's state root;
 //! the fixed entry is a stand-in (actingctl itself) that exits at once, so a start through it
 //! ends before readiness. No real actingd starts.
+//!
+//! Workflow #378 A5: a failed command prints one stdout line `{outcome}` and the developer line
+//! `ERROR actingctl: <code> …` on stderr, and exits 1.
 
 #![cfg(windows)]
 
@@ -14,7 +17,7 @@ mod support;
 use actingcommand_contract::{EventActor, EventSource};
 use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -163,18 +166,29 @@ impl Root {
     }
 }
 
-/// The developer line of a failed command: `FATAL actingctl: <code>: <detail>`, exit 1.
-fn fatal_line(result: &(i32, String, String)) -> &str {
+/// The outcome of a failed command: exit 1, the one stdout line `{outcome}` whose top is
+/// `code`, and the developer line `ERROR actingctl: <code> …` on stderr.
+fn failure(result: &(i32, String, String), code: &str) -> Value {
     let (exit, stdout, stderr) = result;
     assert_eq!(*exit, 1, "stdout: {stdout}; stderr: {stderr}");
-    assert!(
-        stdout.is_empty(),
-        "a failure prints nothing on stdout: {stdout}"
+    let line: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|error| panic!("no JSON line ({error}): {stdout}; stderr: {stderr}"));
+    let members = line.as_object().expect("the result line is an object");
+    assert_eq!(
+        members.keys().collect::<Vec<_>>(),
+        ["outcome"],
+        "a failure prints only its outcome: {stdout}"
     );
-    stderr
-        .lines()
-        .find(|line| line.starts_with("FATAL actingctl: "))
-        .unwrap_or_else(|| panic!("no FATAL line: {stderr}"))
+    let outcome = line["outcome"].clone();
+    assert_eq!(outcome["code"], code, "{stdout}");
+    assert_eq!(outcome["category"], "error", "{stdout}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with(&format!("ERROR actingctl: {code}"))),
+        "no developer line for {code}: {stderr}"
+    );
+    outcome
 }
 
 /// §4.11 `start` step 1: a state root whose owner lock a live process holds is refused with
@@ -190,14 +204,11 @@ fn start_refuses_a_live_state_root_and_otherwise_starts_through_the_watchdog_sta
     let root = Root::text(&fixture.root);
 
     let refused = fixture.actingctl("start-live", &["start", "--root", root]);
-    let line = fatal_line(&refused);
-    assert!(
-        line.starts_with("FATAL actingctl: start_runtime_already_running: "),
-        "{line}"
-    );
-    assert!(
-        line.contains(&format!("path={}", fixture.state.display())),
-        "{line}"
+    let outcome = failure(&refused, "start_runtime_already_running");
+    assert_eq!(
+        outcome["values"]["path"],
+        Root::text(&fixture.state),
+        "{outcome}"
     );
     assert!(
         !fixture.root.join("watchdog").exists(),
@@ -208,11 +219,7 @@ fn start_refuses_a_live_state_root_and_otherwise_starts_through_the_watchdog_sta
 
     runtime.stop_clean();
     let started = fixture.actingctl("start-closed", &["start", "--root", root]);
-    let line = fatal_line(&started);
-    assert!(
-        line.starts_with("FATAL actingctl: exited_during_startup: "),
-        "{line}"
-    );
+    failure(&started, "exited_during_startup");
     assert!(
         fixture.root.join("watchdog").join("run.lock").is_file(),
         "the watchdog's run lock was not used"
@@ -250,13 +257,9 @@ fn restart_refuses_while_an_instance_is_busy_and_stops_nothing() {
             "1",
         ],
     );
-    let line = fatal_line(&refused);
-    assert!(
-        line.starts_with("FATAL actingctl: start_wait_idle_expired: "),
-        "{line}"
-    );
-    assert!(line.contains("timeout_ms=1000"), "{line}");
-    assert!(line.contains("aliases=node.a"), "{line}");
+    let outcome = failure(&refused, "start_wait_idle_expired");
+    assert_eq!(outcome["values"]["timeout_ms"], 1000, "{outcome}");
+    assert_eq!(outcome["values"]["aliases"], json!(["node.a"]), "{outcome}");
     runtime.assert_alive();
     assert_eq!(
         holder.health().expect("the Runtime still answers"),
@@ -271,9 +274,10 @@ fn restart_refuses_while_an_instance_is_busy_and_stops_nothing() {
 }
 
 /// Coordinator ruling on MCP-10 (review of deviation 6): `start` refuses while acsetup holds
-/// `install\writer.lock`, exactly as the watchdog refuses a start (row 7a), with its
-/// `watchdog_installer_busy`. Nothing under the root changes: no run lock, and no start log,
-/// which every launch of the fixed entry creates first, so no Runtime was launched.
+/// `install\writer.lock`, exactly as the watchdog refuses a start (row 7a): Workflow #378 A5
+/// `start_runtime_refused` (error) caused by the watchdog's `watchdog_installer_busy`. Nothing
+/// under the root changes: no run lock, and no start log, which every launch of the fixed
+/// entry creates first, so no Runtime was launched.
 #[test]
 fn start_refuses_while_the_installer_holds_its_writer_lock_and_touches_nothing() {
     let fixture = Root::installation();
@@ -289,10 +293,10 @@ fn start_refuses_while_the_installer_holds_its_writer_lock_and_touches_nothing()
         "start-installer-busy",
         &["start", "--root", Root::text(&fixture.root)],
     );
-    let line = fatal_line(&refused);
-    assert!(
-        line.starts_with("FATAL actingctl: watchdog_installer_busy: "),
-        "{line}"
+    let outcome = failure(&refused, "start_runtime_refused");
+    assert_eq!(
+        outcome["causes"][0]["code"], "watchdog_installer_busy",
+        "{outcome}"
     );
     assert_eq!(fixture.tree(), before, "the refused start changed the root");
     assert!(
@@ -305,8 +309,9 @@ fn start_refuses_while_the_installer_holds_its_writer_lock_and_touches_nothing()
 
 /// Train 4 review ruling on MCP-10: `restart` takes the installer check before it stops
 /// anything (coordinator ruling, row 7a). While acsetup holds `install\writer.lock`, restart is
-/// refused with `watchdog_installer_busy` and the live Runtime is not stopped: it still answers
-/// with the same owner epoch, no run lock was taken and no Runtime was launched.
+/// refused with `start_runtime_refused` caused by `watchdog_installer_busy` (Workflow #378 A5)
+/// and the live Runtime is not stopped: it still answers with the same owner epoch, no run lock
+/// was taken and no Runtime was launched.
 #[test]
 fn restart_refuses_while_the_installer_holds_its_writer_lock_and_stops_nothing() {
     let fixture = Root::installation();
@@ -323,10 +328,10 @@ fn restart_refuses_while_the_installer_holds_its_writer_lock_and_stops_nothing()
         "restart-installer-busy",
         &["restart", "--root", Root::text(&fixture.root)],
     );
-    let line = fatal_line(&refused);
-    assert!(
-        line.starts_with("FATAL actingctl: watchdog_installer_busy: "),
-        "{line}"
+    let outcome = failure(&refused, "start_runtime_refused");
+    assert_eq!(
+        outcome["causes"][0]["code"], "watchdog_installer_busy",
+        "{outcome}"
     );
     runtime.assert_alive();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
@@ -366,11 +371,7 @@ fn restart_refuses_a_stopped_runtime_and_starts_nothing() {
         "restart-stopped",
         &["restart", "--root", Root::text(&fixture.root)],
     );
-    let line = fatal_line(&refused);
-    assert!(
-        line.starts_with("FATAL actingctl: runtime_info_unavailable: "),
-        "{line}"
-    );
+    failure(&refused, "runtime_info_unavailable");
     assert!(
         !fixture.root.join("watchdog").exists(),
         "a run lock was taken"

@@ -4,8 +4,13 @@
 //! request is read from its shape alone, never from a client name: a request whose
 //! `_meta` carries `io.modelcontextprotocol/protocolVersion` is a stateless 2026-07-28
 //! request; any other request needs a legacy `initialize` first.
+//!
+//! A JSON-RPC error (Workflow #378 A5, model v2.2 §7.3) carries one outcome: `error.message` is
+//! the outcome code's spelling, never a sentence, and `error.data` is `{outcome}`.
 
 use super::tools;
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_contract::outcome::Outcome;
 use serde_json::{Map, Value, json};
 
 pub(super) const MODERN_VERSION: &str = "2026-07-28";
@@ -22,10 +27,6 @@ pub(super) const INVALID_REQUEST: i64 = -32600;
 pub(super) const METHOD_NOT_FOUND: i64 = -32601;
 pub(super) const INVALID_PARAMS: i64 = -32602;
 const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
-
-/// The -32602 answer to a request that neither follows a legacy `initialize` nor carries a
-/// `_meta` protocol version.
-pub(super) const DUAL_ERA_MESSAGE: &str = "actingctl-mcp is a dual-era MCP server: send initialize first (protocol 2025-11-25, 2025-06-18 or 2025-03-26), or carry params._meta[\"io.modelcontextprotocol/protocolVersion\"] = \"2026-07-28\" and params._meta[\"io.modelcontextprotocol/clientCapabilities\"] on every request";
 
 /// The legacy versions reachable through `initialize`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -76,8 +77,8 @@ pub(super) enum MetaVersion {
     Modern,
     /// A version string this server does not take through `_meta` (-32022).
     Unsupported(String),
-    /// `_meta` or one of its required keys is malformed (-32602).
-    Malformed(&'static str),
+    /// `_meta` or one of its required keys is malformed (-32602): `mcp_params_invalid`.
+    Malformed(Outcome),
 }
 
 pub(super) fn meta_version(params: Option<&Value>) -> MetaVersion {
@@ -88,28 +89,40 @@ pub(super) fn meta_version(params: Option<&Value>) -> MetaVersion {
         return MetaVersion::Absent;
     };
     let Some(meta) = meta.as_object() else {
-        return MetaVersion::Malformed("params._meta must be an object");
+        return MetaVersion::Malformed(params_invalid("_meta", ArgumentProblem::WrongType));
     };
     let Some(version) = meta.get(META_PROTOCOL_VERSION) else {
         return MetaVersion::Absent;
     };
     let Some(version) = version.as_str() else {
-        return MetaVersion::Malformed(
-            "params._meta io.modelcontextprotocol/protocolVersion must be a string",
-        );
+        return MetaVersion::Malformed(params_invalid(
+            META_PROTOCOL_VERSION,
+            ArgumentProblem::WrongType,
+        ));
     };
     if version != MODERN_VERSION {
         return MetaVersion::Unsupported(version.to_owned());
     }
-    if !meta
-        .get(META_CLIENT_CAPABILITIES)
-        .is_some_and(Value::is_object)
-    {
-        return MetaVersion::Malformed(
-            "request _meta is missing or has a malformed io.modelcontextprotocol/clientCapabilities",
-        );
+    match meta.get(META_CLIENT_CAPABILITIES) {
+        Some(capabilities) if capabilities.is_object() => MetaVersion::Modern,
+        Some(_) => MetaVersion::Malformed(params_invalid(
+            META_CLIENT_CAPABILITIES,
+            ArgumentProblem::WrongType,
+        )),
+        None => MetaVersion::Malformed(params_invalid(
+            META_CLIENT_CAPABILITIES,
+            ArgumentProblem::Required,
+        )),
     }
-    MetaVersion::Modern
+}
+
+/// `mcp_params_invalid` (-32602) for one member of a request's `params` (or of its `_meta`):
+/// its name as the protocol spells it (`argument`) and what is wrong with it
+/// (`argument_problem`).
+pub(super) fn params_invalid(member: &str, problem: ArgumentProblem) -> Outcome {
+    Outcome::new(ActingctlCode::McpParamsInvalid)
+        .argument(member)
+        .argument_problem(problem)
 }
 
 /// One parsed JSON-RPC message.
@@ -174,21 +187,41 @@ pub(super) fn response(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-pub(super) fn error_response(id: &Value, code: i64, message: &str, data: Option<Value>) -> Value {
-    let mut error = json!({"code": code, "message": message});
-    if let Some(data) = data {
-        error["data"] = data;
-    }
-    json!({"jsonrpc": "2.0", "id": id, "error": error})
+/// A JSON-RPC error answer (model v2.2 §7.3): the integer `rpc_code` JSON-RPC requires, the
+/// outcome code's spelling as `message` and `{outcome}` as `data`, beside the members the
+/// protocol itself requires in `data` (`required`; empty for every error but -32022). The one
+/// standing exception to the rule that no `json!` key is named `code` (G3).
+pub(super) fn error_response(
+    id: &Value,
+    rpc_code: i64,
+    outcome: &Outcome,
+    required: Map<String, Value>,
+) -> Value {
+    let mut data = required;
+    data.insert("outcome".to_owned(), tools::envelope(outcome));
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {"code": rpc_code, "message": outcome.code().as_str(), "data": data},
+    })
 }
 
-/// -32022 with every supported version, the modern one first.
+/// [`error_response`] with `data` `{outcome}` alone.
+pub(super) fn error(id: &Value, rpc_code: i64, outcome: &Outcome) -> Value {
+    error_response(id, rpc_code, outcome, Map::new())
+}
+
+/// -32022 `mcp_protocol_version_unsupported`, with the members MCP requires in `data`: every
+/// supported version, the modern one first, and the version requested.
 pub(super) fn unsupported_version(id: &Value, requested: &str) -> Value {
+    let mut required = Map::new();
+    required.insert("supported".to_owned(), json!(SUPPORTED_VERSIONS));
+    required.insert("requested".to_owned(), json!(requested));
     error_response(
         id,
         UNSUPPORTED_PROTOCOL_VERSION,
-        "Unsupported protocol version",
-        Some(json!({"supported": SUPPORTED_VERSIONS, "requested": requested})),
+        &Outcome::new(ActingctlCode::McpProtocolVersionUnsupported),
+        required,
     )
 }
 

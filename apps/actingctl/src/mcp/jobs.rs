@@ -3,13 +3,16 @@
 //! Background jobs (#338 §四 线程 / 预算, R2): at most eight run at a time. A run job's handle
 //! is the Runtime request_id; the other jobs use the correlation of their write, and a Lab
 //! call's job a `lab_job_` handle of this process. Only the job
-//! phase and its outcome live here, in memory: the authoritative state of a run always comes
+//! phase and its result live here, in memory: the authoritative state of a run always comes
 //! from R1 (`ac_get_run`). A job runs to its end even after the call that started it returned;
-//! at stdin EOF the server stops waiting for jobs and exits.
+//! at stdin EOF the server stops waiting for jobs and exits. Workflow #378 A5 (L6): a job's
+//! result is `job_result` (the answer, or `{error {class, outcome}}`); `outcome` names only the
+//! envelope.
 
 use super::lock;
 use super::tools::ToolError;
 use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +25,7 @@ const MAX_RUNNING: usize = 8;
 /// Finished jobs kept for `ac_get_run`; the oldest go first.
 const MAX_KEPT: usize = 64;
 
-/// How a noted job's body ends: its outcome and the warnings it found on the way.
+/// How a noted job's body ends: its result and the warnings it found on the way.
 pub(super) type JobEnd = (Result<Value, ToolError>, Vec<Value>);
 
 pub(super) struct Jobs {
@@ -41,7 +44,8 @@ pub(super) struct Job {
 struct JobState {
     phase: &'static str,
     finished: bool,
-    outcome: Option<Value>,
+    /// The body's result once the job ended.
+    result: Option<Result<Value, ToolError>>,
     warnings: Vec<Value>,
 }
 
@@ -59,18 +63,18 @@ impl Jobs {
             .cloned()
     }
 
-    /// Whether another job may start now.
+    /// Whether another job may start now: `job_capacity_exhausted` (`limit_count`) while
+    /// eight run; wait for one with ac_get_run.
     pub(super) fn has_capacity(&self) -> Result<(), ToolError> {
         let running = lock(&self.table)
             .iter()
             .filter(|job| !lock(&job.state).finished)
             .count();
         if running >= MAX_RUNNING {
-            return Err(ToolError::new(
-                "safety",
-                ActingctlCode::JobCapacityExhausted,
-                format!("{MAX_RUNNING} background jobs are running; wait for one with ac_get_run"),
-            ));
+            return Err(
+                ToolError::new("safety", ActingctlCode::JobCapacityExhausted)
+                    .with(|outcome| outcome.limit_count(MAX_RUNNING)),
+            );
         }
         Ok(())
     }
@@ -92,7 +96,8 @@ impl Jobs {
     }
 
     /// As `start`, for a body that also reports warnings found while it ran (a Lab call's
-    /// client.action); they join the job's warnings before it ends.
+    /// client.action); they join the job's warnings before it ends. A thread the OS refuses is
+    /// `job_start_failed`, caused by the OS error.
     pub(super) fn start_noted(
         &self,
         handle: String,
@@ -110,7 +115,7 @@ impl Jobs {
             state: Mutex::new(JobState {
                 phase,
                 finished: false,
-                outcome: None,
+                result: None,
                 warnings,
             }),
             changed: Condvar::new(),
@@ -129,28 +134,17 @@ impl Jobs {
         thread::Builder::new()
             .name(format!("mcp-job-{kind}"))
             .spawn(move || {
-                let (outcome, notes) = body();
+                let (result, notes) = body();
                 let mut state = lock(&running.state);
                 state.warnings.extend(notes);
-                match outcome {
-                    Ok(value) => {
-                        state.phase = "done";
-                        state.outcome = Some(value);
-                    }
-                    Err(error) => {
-                        state.phase = "failed";
-                        state.outcome = Some(json!({"error": error.into_value()}));
-                    }
-                }
+                state.phase = if result.is_ok() { "done" } else { "failed" };
+                state.result = Some(result);
                 state.finished = true;
                 running.changed.notify_all();
             })
             .map_err(|error| {
-                ToolError::new(
-                    "runtime",
-                    ActingctlCode::JobStartFailed,
-                    format!("cannot start the background job: {error}"),
-                )
+                ToolError::new("runtime", ActingctlCode::JobStartFailed)
+                    .caused_by(Outcome::from_io_error(&error, IoOp::Spawn))
             })?;
         Ok(job)
     }
@@ -183,16 +177,18 @@ impl Job {
         true
     }
 
-    /// The job's outcome once it ended.
-    pub(super) fn outcome(&self) -> Option<Value> {
-        lock(&self.state).outcome.clone()
+    /// The job's result once it ended (Workflow #378 A5 L6, formerly `outcome`): the body's
+    /// answer, or its error as the body returned it.
+    pub(super) fn job_result(&self) -> Option<Result<Value, ToolError>> {
+        lock(&self.state).result.clone()
     }
 
     pub(super) fn warnings(&self) -> Vec<Value> {
         lock(&self.state).warnings.clone()
     }
 
-    /// `{phase, warnings}`, and the outcome once the job ended.
+    /// `{kind, phase, warnings}`, and once the job ended its `job_result`: the answer, or
+    /// `{error {class, outcome}}`.
     pub(super) fn snapshot(&self) -> Value {
         let state = lock(&self.state);
         let mut snapshot = json!({
@@ -200,8 +196,11 @@ impl Job {
             "phase": state.phase,
             "warnings": state.warnings,
         });
-        if let Some(outcome) = &state.outcome {
-            snapshot["outcome"] = outcome.clone();
+        if let Some(result) = &state.result {
+            snapshot["job_result"] = match result {
+                Ok(answer) => answer.clone(),
+                Err(error) => json!({"error": error.to_value()}),
+            };
         }
         snapshot
     }

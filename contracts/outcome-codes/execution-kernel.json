@@ -10,7 +10,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -28,7 +30,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -46,7 +50,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -64,7 +70,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -82,7 +90,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -100,7 +110,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -118,7 +130,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -136,7 +150,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -154,7 +170,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -172,7 +190,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -190,7 +210,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -208,7 +230,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -226,7 +250,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -244,7 +270,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -262,7 +290,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -280,7 +310,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -298,7 +330,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -316,7 +350,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -334,7 +370,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -352,7 +390,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -370,7 +410,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -388,7 +430,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -406,7 +450,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -424,7 +470,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -442,7 +490,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -460,7 +510,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -478,7 +530,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -496,7 +550,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -514,7 +570,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -532,7 +590,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -550,7 +610,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -568,7 +630,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -586,7 +650,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -604,7 +670,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -622,7 +690,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -640,7 +710,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -658,7 +730,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -676,7 +750,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -694,7 +770,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -712,7 +790,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -730,7 +810,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -748,7 +830,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -766,7 +850,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -784,7 +870,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -802,7 +890,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -820,7 +910,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -838,7 +930,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -856,7 +950,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -874,7 +970,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -892,7 +990,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -910,7 +1010,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -928,7 +1030,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -946,7 +1050,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -964,7 +1070,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -982,7 +1090,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1000,7 +1110,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1018,7 +1130,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1036,7 +1150,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1054,7 +1170,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1072,7 +1190,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1090,7 +1210,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1108,7 +1230,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1126,7 +1250,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1144,7 +1270,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1162,7 +1290,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1180,7 +1310,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1198,7 +1330,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1216,7 +1350,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1234,7 +1370,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1252,7 +1390,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1270,7 +1410,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1288,7 +1430,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1306,7 +1450,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1324,7 +1470,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1342,7 +1490,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1360,7 +1510,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1378,7 +1530,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1396,7 +1550,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1414,7 +1570,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1433,7 +1591,9 @@
         "entry_problem": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1451,7 +1611,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1469,7 +1631,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1487,7 +1651,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1505,7 +1671,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1523,7 +1691,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1541,7 +1711,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1559,7 +1731,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1577,7 +1751,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1595,7 +1771,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1613,7 +1791,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1631,7 +1811,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1649,7 +1831,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1667,7 +1851,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1685,7 +1871,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1703,7 +1891,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1721,7 +1911,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1739,7 +1931,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1757,7 +1951,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1775,7 +1971,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1793,7 +1991,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1811,7 +2011,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1829,7 +2031,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1847,7 +2051,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1865,7 +2071,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1883,7 +2091,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1901,7 +2111,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1921,7 +2133,9 @@
         "remaining_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1942,7 +2156,9 @@
         "stage": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1960,7 +2176,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1978,7 +2196,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1996,7 +2216,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2016,7 +2238,9 @@
         "remaining_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2036,7 +2260,9 @@
         "timeout_ms": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2054,7 +2280,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2072,7 +2300,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2090,7 +2320,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2108,7 +2340,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2126,7 +2360,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2144,7 +2380,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2162,7 +2400,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2180,7 +2420,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2198,7 +2440,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2216,7 +2460,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2234,7 +2480,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2252,7 +2500,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2270,7 +2520,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2288,7 +2540,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2306,7 +2560,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2324,7 +2580,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2342,7 +2600,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2360,7 +2620,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2378,7 +2640,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2396,7 +2660,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2414,7 +2680,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2432,7 +2700,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2450,7 +2720,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2468,7 +2740,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2486,7 +2760,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2504,7 +2780,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2522,7 +2800,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2540,7 +2820,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2558,7 +2840,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2576,7 +2860,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2594,7 +2880,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2612,7 +2900,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2630,7 +2920,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2648,7 +2940,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2666,7 +2960,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2684,7 +2980,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2702,7 +3000,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2720,7 +3020,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2738,7 +3040,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2756,7 +3060,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2774,7 +3080,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2792,7 +3100,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2810,7 +3120,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2828,7 +3140,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2846,7 +3160,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2864,7 +3180,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2882,7 +3200,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2900,7 +3220,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2918,7 +3240,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2936,7 +3260,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2954,7 +3280,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2972,7 +3300,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2990,7 +3320,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3008,7 +3340,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3026,7 +3360,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3044,7 +3380,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3062,7 +3400,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3080,7 +3420,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3098,7 +3440,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3119,7 +3463,9 @@
         "pack_operation_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3139,7 +3485,9 @@
         "page_id": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3160,7 +3508,9 @@
         "step_id": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3180,7 +3530,9 @@
         "field": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3198,7 +3550,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3216,7 +3570,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3234,7 +3590,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3252,7 +3610,9 @@
       "values": {
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",

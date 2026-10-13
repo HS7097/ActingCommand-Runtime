@@ -269,3 +269,20 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_session",
 ]
 incident = ["#387"]
+
+# actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchdog report v2 and state.json v2 (Workflow #378 A5)
+[[gate]]
+key = "43"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope",
+    "actingcommand-actingctl::bin:actingctl::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero",
+    "actingcommand-actingctl::bin:actingctl::tests::every_command_has_its_success_code_and_every_failure_its_code",
+    "actingcommand-actingctl::bin:actingctl::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::every_decision_has_its_code_category_and_exit",
+    "actingcommand-actingctl::bin:actingctl::watchdog::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention",
+    "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside",
+]
+incident = ["#378 A5"]

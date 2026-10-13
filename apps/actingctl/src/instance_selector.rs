@@ -8,7 +8,7 @@
 use crate::codes::ActingctlCode;
 use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_contract::RuntimeInstanceStatus;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use serde_json::json;
 
 /// Why a selector names no single instance.
@@ -29,15 +29,10 @@ impl SelectorMiss {
         }
     }
 
-    pub(crate) fn message(self, selector: &str) -> String {
-        match self {
-            Self::Unknown => {
-                format!("no configured instance has the alias, instance_id or ADB port {selector}")
-            }
-            Self::Ambiguous => {
-                format!("{selector} names more than one instance; pass its alias or instance_id")
-            }
-        }
+    /// The miss as an outcome (Workflow #378 A5): its code with the selector as given
+    /// (`instance_selector`).
+    pub(crate) fn outcome(self, selector: &str) -> Outcome {
+        Outcome::new(self.code()).instance_selector(selector)
     }
 }
 

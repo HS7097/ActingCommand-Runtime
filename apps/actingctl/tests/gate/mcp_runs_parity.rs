@@ -11,7 +11,8 @@
 //! object: nothing is cut to the output budget, so §2.2 leaves them no presentation difference.
 //! That object is the one §4.3 gives for this ledger, with the coordinator's ruling on it: a
 //! scheduled run's row carries its policy task id as `catalog_task_id`, a manual run's has none,
-//! and `task_prefix` matches `catalog_task_id`.
+//! and `task_prefix` matches `catalog_task_id`. Workflow #378 A5: the CLI line carries the
+//! outcome `run_list_reported` beside the run list; the run list is the rest of the line.
 
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::codes::SharedCode;
@@ -181,7 +182,8 @@ fn parity(mcp: &mut McpServer, id: &mut u64, root: &Path, arguments: Value) -> V
     cli
 }
 
-/// `actingctl runs --state-root <root>` with `arguments` as flags; its stdout JSON.
+/// `actingctl runs --state-root <root>` with `arguments` as flags; its stdout JSON without the
+/// line's `outcome`, which is `run_list_reported`.
 #[track_caller]
 fn cli_runs(root: &Path, arguments: &Value) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_actingctl"));
@@ -199,12 +201,24 @@ fn cli_runs(root: &Path, arguments: &Value) -> Value {
         "actingctl runs with {arguments} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let mut line: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "actingctl runs with {arguments} printed no JSON ({error}): {}",
             String::from_utf8_lossy(&output.stdout)
         )
-    })
+    });
+    let outcome = line
+        .as_object_mut()
+        .and_then(|members| members.remove("outcome"));
+    let Some(outcome) = outcome else {
+        panic!("actingctl runs with {arguments} printed no outcome: {line}")
+    };
+    assert_eq!(
+        outcome["code"],
+        json!("run_list_reported"),
+        "actingctl runs with {arguments}: {outcome}"
+    );
+    line
 }
 
 /// The scripted Runtime's ledger and status, and the two rows §4.3 gives for its runs.

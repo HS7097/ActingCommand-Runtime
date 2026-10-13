@@ -16,20 +16,25 @@ use super::observer;
 use super::tools::{
     self, Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
-use crate::codes::ActingctlCode;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::packs::{self as reader, Answer, PacksError, Query, Role};
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{Outcome, RawSource};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path), prerequisite (prerequisite_packages) and return_home (return_home_packages, with the path of the prerequisite package it names). Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
+pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path), prerequisite (prerequisite_packages) and return_home (return_home_packages, with the path of the prerequisite package it names). Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported, whose count is the number of warnings the file holds; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
 
 pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "role"])?;
     let instance = arguments.string("instance")?;
     let role = arguments
         .string("role")?
-        .map(|text| Role::parse(text).ok_or_else(|| invalid_argument("role", "is not a role")))
+        .map(|text| {
+            Role::parse(text)
+                .ok_or_else(|| invalid_argument("role", ArgumentProblem::NotRecognised))
+        })
         .transpose()?;
     let (installation, config) =
         reader::selected_config(context.runtime.requested_root()).map_err(refused)?;
@@ -39,36 +44,34 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 }
 
 /// The answer as it is when it fits the output budget; otherwise the whole document (the CLI's
-/// stdout, warnings included) exported, answered as `{source, export}` with `answer_exported`.
+/// stdout without its `outcome`, warnings included) exported, answered as `{source, export}`
+/// with `answer_exported` naming the file (`path`) and counting the warnings it holds (`count`).
 fn within_budget(answer: &Answer) -> ToolOutcome {
     let result = encode(answer.packs())?;
     let warnings = answer
         .warnings()
         .iter()
-        .map(encode)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(tools::warning)
+        .collect::<Vec<_>>();
     // The envelope is `{ok, result, warnings}`; this wrapper is a little larger, so an answer
     // it lets through always fits.
     if tools::fits_success(&json!({"result": result, "warnings": warnings})) {
         return Ok(ToolSuccess { result, warnings });
     }
-    let bytes = serde_json::to_vec(&answer.document()).map_err(encode_failed)?;
+    let document = answer.document(tools::warning).map_err(encode_failed)?;
+    let bytes = serde_json::to_vec(&Value::Object(document)).map_err(encode_failed)?;
     let export = observer::export_bytes(
         &format!("sha256:{:x}", Sha256::digest(&bytes)),
         "json",
         &bytes,
     )?;
-    let note = ToolError::new(
-        "runtime",
-        ActingctlCode::AnswerExported,
-        "the answer is larger than the output budget and is whole, its warnings included, in the exported file; narrow it with role or instance",
-    )
-    .with_detail("export", export.clone())
-    .with_detail("warnings_exported", json!(warnings.len()))
-    .into_warning();
+    let mut note = Outcome::new(ActingctlCode::AnswerExported).count(warnings.len());
+    if let Some(path) = export["path"].as_str() {
+        note = note.path(path);
+    }
     Ok(ToolSuccess {
         result: json!({"source": encode(answer.packs().source())?, "export": export}),
-        warnings: vec![note],
+        warnings: vec![tools::warning(&note)],
     })
 }
 
@@ -76,25 +79,19 @@ fn encode<T: Serialize>(value: &T) -> Result<Value, ToolError> {
     serde_json::to_value(value).map_err(encode_failed)
 }
 
+/// An answer that does not encode: `actingctl_output_failed`, caused by the encoder's failure.
 fn encode_failed(error: serde_json::Error) -> ToolError {
-    ToolError::new(
-        "runtime",
-        ActingctlCode::ActingctlOutputFailed,
-        format!("cannot encode the answer: {error}"),
+    ToolError::new("runtime", ActingctlCode::ActingctlOutputFailed).caused_by(
+        Outcome::new(ContractCode::ForeignDataError)
+            .raw_source(RawSource::Json)
+            .raw_text(error.to_string()),
     )
 }
 
-/// A refusal of the reader with the same code as the CLI's; the configuration's path and the
-/// install selection's own code, when there are, go into the details.
+/// A refusal of the reader with the CLI's outcome: its code, its values (the configuration's
+/// path, the selector) and the failure beneath it.
 fn refused(error: PacksError) -> ToolError {
-    let mut tool_error = ToolError::usage(error.code(), error.message());
-    if let Some(path) = error.path() {
-        tool_error = tool_error.with_detail("path", json!(path));
-    }
-    if let Some(cause) = error.cause() {
-        tool_error = tool_error.with_detail("caused_by", json!(cause.as_str()));
-    }
-    tool_error
+    ToolError::outcome("usage", error.outcome())
 }
 
 pub(super) fn input_schema() -> Value {
@@ -202,10 +199,15 @@ mod tests {
         fs::write(&config, document.to_string()).expect("write configuration");
         let answer = reader::read(None, &config, &Query::default())
             .unwrap_or_else(|error| panic!("packs refused the configuration: {error}"));
-        let whole = serde_json::to_vec(&answer.document()).expect("encode the document");
+        let whole = serde_json::to_vec(&Value::Object(
+            answer
+                .document(tools::warning)
+                .expect("encode the document"),
+        ))
+        .expect("encode the document");
 
         let success = within_budget(&answer)
-            .unwrap_or_else(|error| panic!("ac_packs refused: {}", error.message()));
+            .unwrap_or_else(|error| panic!("ac_packs refused: {}", error.to_value()));
 
         let members = success
             .result
@@ -232,10 +234,11 @@ mod tests {
             export["sha256"],
             json!(format!("sha256:{:x}", Sha256::digest(&whole)))
         );
+        // Workflow #378 A5: each warning is `{outcome}`.
         let codes = success
             .warnings
             .iter()
-            .map(|warning| warning["code"].clone())
+            .map(|warning| warning["outcome"]["code"].clone())
             .collect::<Vec<_>>();
         assert_eq!(codes, vec![json!(ActingctlCode::AnswerExported.as_str())]);
     }

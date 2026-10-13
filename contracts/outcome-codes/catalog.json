@@ -135,8 +135,8 @@
       "description": "Processes involved, one record each."
     },
     "owner_epoch": {
-      "type": "integer",
-      "description": "The owner epoch of a Runtime start."
+      "type": "id",
+      "description": "The owner epoch of a Runtime start (an opaque id, epoch_...)."
     },
     "raw_source": {
       "type": "vocab:raw_source",
@@ -1584,6 +1584,54 @@
     "resource_target_id": {
       "type": "token",
       "description": "The id of a resource target in an instance's resource-targets document."
+    },
+    "argument": {
+      "type": "name",
+      "description": "The name of a command-line flag or of an MCP tool or request argument, as given."
+    },
+    "argument_problem": {
+      "type": "vocab:argument_problem",
+      "description": "What is wrong with one flag or argument."
+    },
+    "instance_selector": {
+      "type": "name",
+      "description": "An instance selector as given: an alias, an instance_id or an ADB port."
+    },
+    "mcp_tool": {
+      "type": "name",
+      "description": "The name of an MCP tool."
+    },
+    "material_state": {
+      "type": "vocab:material_state",
+      "description": "The state of a Runtime material read."
+    },
+    "material_limit": {
+      "type": "vocab:material_limit",
+      "description": "Why a Runtime material read stopped short."
+    },
+    "req_id": {
+      "type": "id",
+      "description": "The request id actinglab gave a Lab request."
+    },
+    "owner_closed": {
+      "type": "boolean",
+      "description": "Whether the owner journal's last record of the epoch says the owner closed."
+    },
+    "process_alive": {
+      "type": "boolean",
+      "description": "Whether the process was alive at the last probe."
+    },
+    "run_state": {
+      "type": "vocab:run_state",
+      "description": "The state of a contained run as its ledger events show it."
+    },
+    "resource_targets_rejection_reason": {
+      "type": "vocab:resource_targets_rejection_reason",
+      "description": "Why the Runtime refused a resource-targets document."
+    },
+    "media_type": {
+      "type": "name",
+      "description": "The media type of a material, for example image/png."
     }
   },
   "vocabularies": {
@@ -3737,6 +3785,15 @@
         },
         "person_action": {
           "description": "A person must act."
+        },
+        "state_root": {
+          "description": "The Runtime state root must be known (--state-root, or the configuration's state_root)."
+        },
+        "scheduling_pause": {
+          "description": "Scheduling must be paused first (ac_pause)."
+        },
+        "runtime_upgrade": {
+          "description": "actingd must be a release that serves the request."
         }
       }
     },
@@ -4588,6 +4645,178 @@
         },
         "claim_ttl_out_of_range": {
           "description": "A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or below the hold margin."
+        }
+      }
+    },
+    "argument_problem": {
+      "description": "What is wrong with one command-line flag or MCP tool argument.",
+      "tokens": {
+        "unknown": {
+          "description": "Not a flag of the command or an argument of the tool."
+        },
+        "required": {
+          "description": "A required flag or argument is absent."
+        },
+        "repeated": {
+          "description": "Given more than once."
+        },
+        "value_missing": {
+          "description": "A flag without its value."
+        },
+        "not_utf8": {
+          "description": "A command-line word that is not UTF-8."
+        },
+        "wrong_type": {
+          "description": "Not of the type it must have."
+        },
+        "out_of_range": {
+          "description": "A number or a length outside its range (range_min, range_max)."
+        },
+        "not_recognised": {
+          "description": "Text that is none of the spellings or forms it may take."
+        },
+        "conflicting": {
+          "description": "Excludes, or needs, another flag or argument."
+        },
+        "unusable": {
+          "description": "Names something that cannot be used: unreadable, not of its kind, or refused."
+        }
+      }
+    },
+    "material_state": {
+      "description": "The state of a Runtime material read (RuntimeMaterialReadState).",
+      "tokens": {
+        "verified": {
+          "description": "The material was read and verified."
+        },
+        "not_provided": {
+          "description": "The Runtime did not provide the material."
+        },
+        "missing": {
+          "description": "The material is missing from the store."
+        },
+        "integrity_failed": {
+          "description": "The material failed its integrity check."
+        },
+        "source_incomplete": {
+          "description": "The material's source record is incomplete."
+        },
+        "request_denied": {
+          "description": "The read request was denied."
+        },
+        "read_failed": {
+          "description": "Reading the material failed."
+        }
+      }
+    },
+    "material_limit": {
+      "description": "Why a Runtime material read stopped short (RuntimeMaterialReadLimit).",
+      "tokens": {
+        "pending_eviction": {
+          "description": "The material is about to be evicted."
+        },
+        "evicted": {
+          "description": "The material was evicted."
+        },
+        "eviction_failed": {
+          "description": "Evicting the material failed."
+        },
+        "budget_exceeded": {
+          "description": "The read would exceed its byte budget."
+        },
+        "reply_bytes": {
+          "description": "The reply would exceed its byte bound."
+        }
+      }
+    },
+    "run_state": {
+      "description": "The state of a contained run as its ledger events show it (the runtime client's ContainedRunState).",
+      "tokens": {
+        "not_found": {
+          "description": "The ledger has no event of the run."
+        },
+        "admitted": {
+          "description": "The run was admitted and has not started."
+        },
+        "running": {
+          "description": "The run is running."
+        },
+        "succeeded": {
+          "description": "The run ended successfully."
+        },
+        "failed": {
+          "description": "The run ended in failure."
+        },
+        "cancelled": {
+          "description": "The run was cancelled."
+        },
+        "interrupted_unterminated": {
+          "description": "A Runtime start or takeover came after the run's facts without a terminal; uncertain."
+        }
+      }
+    },
+    "resource_targets_rejection_reason": {
+      "description": "Why the Runtime refused a resource-targets document (the contract's ResourceTargetsRejectionReason).",
+      "tokens": {
+        "invalid_json": {
+          "description": "The document is not valid JSON."
+        },
+        "duplicate_key": {
+          "description": "An object names a key twice."
+        },
+        "unknown_field": {
+          "description": "A field the schema does not have."
+        },
+        "missing_field": {
+          "description": "A required field is absent."
+        },
+        "invalid_type": {
+          "description": "A field of the wrong type."
+        },
+        "invalid_value": {
+          "description": "A field value the schema does not allow."
+        },
+        "out_of_range": {
+          "description": "A number outside its range."
+        },
+        "unsupported_schema_version": {
+          "description": "A schema version the Runtime does not read."
+        },
+        "duplicate_id": {
+          "description": "A target id, or a target resource in v2, named twice in the document."
+        },
+        "unknown_instance": {
+          "description": "The document names an instance the Runtime's projection does not have."
+        },
+        "validity_out_of_range": {
+          "description": "valid_until_unix_ms is not after now, or is more than a year ahead, or has passed."
+        },
+        "catalog_unavailable": {
+          "description": "No active resource catalog to check against."
+        },
+        "unknown_resource": {
+          "description": "A pool the active catalog does not list."
+        },
+        "resource_not_observable": {
+          "description": "A pool that is not observed through a resource or inventory fact."
+        },
+        "resource_out_of_scope": {
+          "description": "A pool whose scope does not cover the instance."
+        },
+        "unknown_task": {
+          "description": "A task the catalog does not list."
+        },
+        "task_out_of_scope": {
+          "description": "A task whose scope does not cover the instance."
+        },
+        "task_disabled": {
+          "description": "A task an instance override of the instance disables."
+        },
+        "unmapped_task": {
+          "description": "No run of the task produces the target's resource."
+        },
+        "duplicate_task": {
+          "description": "A task named more than once in the document."
         }
       }
     }
@@ -7421,6 +7650,9 @@
     ],
     "recognition_pack_": [
       "recognition-pack"
+    ],
+    "instances_": [
+      "actingctl"
     ]
   },
   "fragments": {

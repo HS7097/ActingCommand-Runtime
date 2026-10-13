@@ -294,6 +294,28 @@ The new codes, locations, keys and vocabulary tokens are catalog entries, not ro
 | Q26 | resource-tooling `package validate` `recognition_pack_diagnostics[].unsupported_targets[]` | changed members (wire) | A2-P | A2-P | `{id, method?, mask}` (`method` the pack spelling `rgb_count` / `hsv_count`, absent for `ncc`; `mask` boolean); was `{id, reason}` English. The Lab's `recognition_unsupported_targets[].reason` keeps its member (B4) and reads `method=rgb_count, mask` |
 | Q27 | selection-policy document `gates[].gate_id`, `scoring[].term_id` | tightened rule (resource file format, not a ledger shape) | A2-P (coordinator ruling 5) | resource side | a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`; at most 128 bytes as before), the form of the `rule_id` value its reasons carry (Q7); the declaration gate and contained task admission refuse another id with `resource_declaration_invalid`, reason `invalid_value`, at `/gates/<j>/gate_id` or `/scoring/<k>/term_id` of the policy document ([selection-graph.md](selection-graph.md), Select step) |
 
+### 1.16 A5: actingctl, MCP and the watchdog speak outcomes (#378 A5, M378 §7.1, §7.3, §7.5, §7.6)
+
+Workflow #378 slice A5 writes the types, the readers and the writers in one PR, so it is the code
+slice and the first writer of every row below. None of them is a ledger record; they are the
+`runtime-outcomes` interface (M378 §10, declared by A8) and the watchdog's own files. No
+old-version reader: a v1 report, a v1 `state.json` or the v1 MCP error shape is not read. The new
+codes, keys (`argument`, `argument_problem`, `instance_selector`, `mcp_tool`, `material_state`,
+`material_limit`, `req_id`, `owner_closed`, `process_alive`, `run_state`,
+`resource_targets_rejection_reason`, `media_type`; `owner_epoch` retyped from integer to `id`),
+vocabularies (`argument_problem`, `material_state`, `material_limit`, `run_state`,
+`resource_targets_rejection_reason`; `mcp_blocker` gains `state_root`, `scheduling_pause`,
+`runtime_upgrade`) and the domain `instances_` are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| O1 | actingctl stdout: exactly one JSON line per exit, `{…result, "outcome": <envelope>}` on success, `{"outcome": …}` on failure; `status --config` prints its records under `records`; a refused receipt keeps `{receipt, outcome}` | CLI interface | A5 | A5 | every subcommand but `mcp-serve` / `mcp-config`; one success code per subcommand; stderr carries only the developer line `<LEVEL> actingctl: <code> …` of a warning, error or fatal outcome (and `DIAG actingctl:` lines of the diagnostic sink); warnings beside a result are `warnings: [{outcome}]` (D3); `ACTINGCOMMAND_DETAIL=codes` keeps only registered names |
+| O2 | actingctl and `actingwatch` exit codes: 0 success/info/warning, 1 error, 2 fatal; a denied or failed receipt exits at least 1 | process interface | A5 | A5 | replaces the watchdog's 10–17 and the launcher's 20–23 (their conditions are codes now); actingd's own exits stay A6a's |
+| O3 | MCP tool error `{class, outcome}`; warning `{outcome}`; JSON-RPC transport error `{code, message: <code spelling>, data: {outcome}}` (-32022 keeps `data.supported`, `data.requested`) | MCP interface | A5 | A5 | no `code`, `message`, `blocked_by`, `details` or `explain` member; what must change is the value `mcp_blocker`; a relayed actinglab or Runtime code is a link; a Runtime refusal keeps the receipt's outcome on top with the receipt's `receipt_state` and `request_id`; an actinglab error's details are a `foreign_other_error` link (`raw_source` `process`, their JSON as `raw_text`); `mcp-serve --detail` (`codes` or `full`) |
+| O4 | MCP job snapshot `job.outcome` → `job.job_result` (the answer, or `{error {class, outcome}}`) | renamed member (M378 L6) | A5 | A5 | `ac_get_run` of a job handle |
+| O5 | `actingcommand.watchdog.report.v2`: `{schema_version, outcome, attention: [envelope…], …data}` for `status`, `run-once`, `install`, `uninstall` and the usage exit | report (stdout) | A5 | A5 | v1's `decision`, `code`, `exit_code`, `detail` are gone; members that held prose or a code spelling are outcomes or tokens; `live_owner.started_by_watchdog` |
+| O6 | `<root>\watchdog\state.json` `actingcommand.runtime-watchdog-state.v2`: `last_decision {code, values}`; `starts[].start_result {code, values}` (was `starts[].outcome`, M378 L6) | watchdog file | A5 | A5 | a file of another schema is set aside (`state.json.other-schema-<ms>`, `watchdog_state_reset`) and the budget restarts; start results `watchdog_start_pending`, `watchdog_started_runtime`, `start_timeout` or the failure's code |
+
 ### 1.17 Wave 4 slice D1c (#387 M387 §3, §4, §6, §7)
 
 D1c brings its own shapes (rows R1–R4 of §1.5, written here as built, and M398 §6.4's two
@@ -446,7 +468,7 @@ from D1b on, and each section fact holds at most 256 rows.
 table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15);
 `runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3; A2-P's wire
 spellings §1.15); `actingd-config` 5
-(§5); `runtime-outcomes` [1, 1]; `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
+(§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
 [0, 1] until U-4. AO-0 changes no declaration.
 
 ## 7 What AO-0 does not register, and why

@@ -6,6 +6,8 @@
 //! protocol messages only; diagnostics go to stderr. Startup reads no file and opens no
 //! connection, so `initialize` and `server/discover` answer at once. At stdin EOF the
 //! server takes no new request, gives answers in flight up to 2 s and exits with 0.
+//! Every JSON-RPC error carries its outcome (`protocol::error_response`); a server that ends
+//! on a failure returns that failure's outcome, which `mcp-serve` reports on stderr.
 
 use super::jobs::Jobs;
 use super::lock;
@@ -15,7 +17,9 @@ use super::protocol::{
 };
 use super::runtime::RuntimeAccess;
 use super::tools::{self, TierSet, ToolContext, ToolDef, ToolError};
-use crate::codes::ActingctlCode;
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
@@ -56,6 +60,8 @@ struct Shared {
     calls: Mutex<HashMap<String, Arc<Call>>>,
     out: Sender<Outgoing>,
     output_failed: Arc<AtomicBool>,
+    /// The stdout writer's failure, once it failed.
+    output_error: Arc<Mutex<Option<Outcome>>>,
 }
 
 enum Outgoing {
@@ -110,7 +116,7 @@ enum Inbound {
     Line(Vec<u8>),
     TooLong,
     End,
-    Failed(String),
+    Failed(io::Error),
 }
 
 impl Shared {
@@ -163,12 +169,16 @@ impl Batch {
     }
 }
 
-pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, String> {
+/// Serves until stdin ends: `Ok` at a clean end; otherwise the outcome that ended the server
+/// (`mcp_server_start_failed`, `mcp_input_failed` or `actingctl_output_failed`).
+pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, Outcome> {
     let output_failed = Arc::new(AtomicBool::new(false));
+    let output_error = Arc::new(Mutex::new(None));
     let (out_sender, out_receiver) = mpsc::channel::<Outgoing>();
     let writer_failed = Arc::clone(&output_failed);
+    let writer_error = Arc::clone(&output_error);
     let writer = spawn("mcp-stdout", move || {
-        write_loop(&out_receiver, &writer_failed)
+        write_loop(&out_receiver, &writer_failed, &writer_error);
     })?;
     let shared = Arc::new(Shared {
         tiers: config.tiers,
@@ -179,6 +189,7 @@ pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, String> {
         calls: Mutex::new(HashMap::new()),
         out: out_sender,
         output_failed,
+        output_error,
     });
     let (job_sender, job_receiver) = mpsc::channel::<Job>();
     let job_receiver = Arc::new(Mutex::new(job_receiver));
@@ -205,11 +216,10 @@ pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, String> {
     for inbound in in_receiver {
         match inbound {
             Inbound::Line(line) => handle_line(&shared, &job_sender, &line),
-            Inbound::TooLong => shared.emit(&protocol::error_response(
+            Inbound::TooLong => shared.emit(&protocol::error(
                 &Value::Null,
                 PARSE_ERROR,
-                "message exceeds 4 MiB",
-                None,
+                &Outcome::new(ActingctlCode::McpMessageTooLarge).limit_bytes(MAX_LINE_BYTES),
             )),
             Inbound::End => break,
             Inbound::Failed(error) => {
@@ -232,22 +242,33 @@ pub(super) fn serve(config: ServerConfig) -> Result<ExitCode, String> {
         }
     }
     if let Some(error) = input_error {
-        return Err(format!("stdin read failed: {error}"));
+        return Err(Outcome::new(ActingctlCode::McpInputFailed)
+            .caused_by(Outcome::from_io_error(&error, IoOp::Read)));
     }
     if shared.output_failed.load(Ordering::SeqCst) {
-        return Err("stdout write failed; the client no longer reads".to_owned());
+        let failed = Outcome::new(ActingctlCode::ActingctlOutputFailed);
+        return Err(match lock(&shared.output_error).take() {
+            Some(cause) => failed.caused_by(cause),
+            None => failed,
+        });
     }
     Ok(ExitCode::SUCCESS)
 }
 
+/// One named thread of the server; a thread the OS refuses is `mcp_server_start_failed` with
+/// its name (`thread`).
 fn spawn(
     name: &str,
     body: impl FnOnce() + Send + 'static,
-) -> Result<thread::JoinHandle<()>, String> {
+) -> Result<thread::JoinHandle<()>, Outcome> {
     thread::Builder::new()
         .name(name.to_owned())
         .spawn(body)
-        .map_err(|error| format!("cannot start thread {name}: {error}"))
+        .map_err(|error| {
+            Outcome::new(ActingctlCode::McpServerStartFailed)
+                .thread(name)
+                .caused_by(Outcome::from_io_error(&error, IoOp::Spawn))
+        })
 }
 
 /// Distinct per process, so a cursor from an earlier server answers `cursor_invalid`.
@@ -258,15 +279,17 @@ fn session_identity() -> u64 {
     RandomState::new().hash_one((std::process::id(), started))
 }
 
-fn write_loop(messages: &Receiver<Outgoing>, failed: &AtomicBool) {
+/// Writes every message in order; a failed write keeps its `foreign_os_error` for the end of
+/// the server and stops writing.
+fn write_loop(messages: &Receiver<Outgoing>, failed: &AtomicBool, error: &Mutex<Option<Outcome>>) {
     let stdout = io::stdout();
     let mut output = stdout.lock();
     for message in messages {
         let Outgoing::Line(line) = message else {
             return;
         };
-        if let Err(error) = write_line(&mut output, &line) {
-            eprintln!("actingctl mcp-serve: stdout write failed: {error}");
+        if let Err(write_error) = write_line(&mut output, &line) {
+            *lock(error) = Some(Outcome::from_io_error(&write_error, IoOp::Write));
             failed.store(true, Ordering::SeqCst);
             return;
         }
@@ -283,8 +306,7 @@ fn read_loop(sender: &Sender<Inbound>) {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     loop {
-        let inbound =
-            read_line(&mut input).unwrap_or_else(|error| Inbound::Failed(error.to_string()));
+        let inbound = read_line(&mut input).unwrap_or_else(Inbound::Failed);
         let last = matches!(inbound, Inbound::End | Inbound::Failed(_));
         if sender.send(inbound).is_err() || last {
             return;
@@ -337,11 +359,15 @@ fn handle_line(shared: &Shared, jobs: &Sender<Job>, line: &[u8]) {
         return;
     }
     match serde_json::from_slice::<Value>(line) {
-        Err(_) => shared.emit(&protocol::error_response(
+        // The parser's text is foreign: it travels as `raw_text` of a `foreign_data_error`.
+        Err(error) => shared.emit(&protocol::error(
             &Value::Null,
             PARSE_ERROR,
-            "Parse error",
-            None,
+            &Outcome::new(ActingctlCode::McpMessageMalformed).caused_by(
+                Outcome::new(ContractCode::ForeignDataError)
+                    .raw_source(RawSource::Json)
+                    .raw_text(error.to_string()),
+            ),
         )),
         Ok(Value::Array(items)) => handle_batch(shared, jobs, items),
         Ok(message) => handle_message(shared, jobs, message, &Sink::Direct),
@@ -349,20 +375,20 @@ fn handle_line(shared: &Shared, jobs: &Sender<Job>, line: &[u8]) {
 }
 
 /// 2025-03-26 takes JSON-RPC batches and answers them with one array; every later version
-/// and the modern era refuse a batch array with -32600.
+/// and the modern era refuse a batch array with -32600 (`mcp_batch_unsupported`), and an empty
+/// batch is refused in every version (`mcp_batch_empty`).
 fn handle_batch(shared: &Shared, jobs: &Sender<Job>, items: Vec<Value>) {
     let batching = *lock(&shared.legacy) == Some(LegacyVersion::V20250326);
     if items.is_empty() || !batching {
-        let message = if items.is_empty() {
-            "empty batch"
+        let refusal = if items.is_empty() {
+            ActingctlCode::McpBatchEmpty
         } else {
-            "batch arrays are accepted only after initialize with protocol 2025-03-26"
+            ActingctlCode::McpBatchUnsupported
         };
-        shared.emit(&protocol::error_response(
+        shared.emit(&protocol::error(
             &Value::Null,
             INVALID_REQUEST,
-            message,
-            None,
+            &Outcome::new(refusal),
         ));
         return;
     }
@@ -379,11 +405,10 @@ fn handle_message(shared: &Shared, jobs: &Sender<Job>, message: Value, sink: &Si
     match protocol::classify(message) {
         Incoming::Invalid { id } => sink.respond(
             shared,
-            Some(protocol::error_response(
+            Some(protocol::error(
                 &id,
                 INVALID_REQUEST,
-                "Invalid Request",
-                None,
+                &Outcome::new(ActingctlCode::McpRequestInvalid),
             )),
         ),
         Incoming::Response => sink.respond(shared, None),
@@ -431,11 +456,8 @@ fn handle_request(
         MetaVersion::Unsupported(requested) => {
             return sink.respond(shared, Some(protocol::unsupported_version(&id, &requested)));
         }
-        MetaVersion::Malformed(reason) => {
-            return sink.respond(
-                shared,
-                Some(protocol::error_response(&id, INVALID_PARAMS, reason, None)),
-            );
+        MetaVersion::Malformed(refusal) => {
+            return sink.respond(shared, Some(protocol::error(&id, INVALID_PARAMS, &refusal)));
         }
         // A legacy ping is answered with or without a session.
         MetaVersion::Absent if method == "ping" => {
@@ -445,14 +467,15 @@ fn handle_request(
             let legacy = *lock(&shared.legacy);
             match legacy {
                 Some(version) if method != "server/discover" => Era::Legacy(version),
+                // Neither a legacy session nor a `_meta` protocol version: the dual-era
+                // server cannot tell the request's protocol.
                 _ => {
                     return sink.respond(
                         shared,
-                        Some(protocol::error_response(
+                        Some(protocol::error(
                             &id,
                             INVALID_PARAMS,
-                            protocol::DUAL_ERA_MESSAGE,
-                            None,
+                            &Outcome::new(ActingctlCode::McpProtocolVersionMissing),
                         )),
                     );
                 }
@@ -465,28 +488,35 @@ fn handle_request(
         "tools/call" => call_tool(shared, jobs, id, era, params, sink),
         _ => sink.respond(
             shared,
-            Some(protocol::error_response(
+            Some(protocol::error(
                 &id,
                 METHOD_NOT_FOUND,
-                "Method not found",
-                None,
+                &Outcome::new(ActingctlCode::McpMethodUnknown),
             )),
         ),
     }
 }
 
 fn initialize(shared: &Shared, id: &Value, params: Option<&Value>) -> Value {
-    let Some(requested) = params
+    let requested = params
         .and_then(Value::as_object)
-        .and_then(|params| params.get("protocolVersion"))
-        .and_then(Value::as_str)
-    else {
-        return protocol::error_response(
-            id,
-            INVALID_PARAMS,
-            "initialize requires params.protocolVersion",
-            None,
-        );
+        .and_then(|params| params.get("protocolVersion"));
+    let requested = match requested {
+        Some(Value::String(requested)) => requested,
+        Some(_) => {
+            return protocol::error(
+                id,
+                INVALID_PARAMS,
+                &protocol::params_invalid("protocolVersion", ArgumentProblem::WrongType),
+            );
+        }
+        None => {
+            return protocol::error(
+                id,
+                INVALID_PARAMS,
+                &protocol::params_invalid("protocolVersion", ArgumentProblem::Required),
+            );
+        }
     };
     let version = LegacyVersion::negotiate(requested);
     *lock(&shared.legacy) = Some(version);
@@ -499,11 +529,11 @@ fn list_tools(shared: &Shared, id: &Value, era: Era, params: Option<&Value>) -> 
         .and_then(|params| params.get("cursor"))
         .is_some_and(|cursor| !cursor.is_null())
     {
-        return protocol::error_response(
+        // tools/list has one page: this server issues no cursor.
+        return protocol::error(
             id,
             INVALID_PARAMS,
-            "tools/list has one page; this server issued no cursor",
-            None,
+            &protocol::params_invalid("cursor", ArgumentProblem::Unusable),
         );
     }
     let listed = tools::TOOLS
@@ -527,19 +557,39 @@ struct CallRequest {
     progress_token: Option<Value>,
 }
 
-fn parse_call(params: Option<Value>) -> Result<CallRequest, String> {
-    let Some(Value::Object(mut params)) = params else {
-        return Err("tools/call requires params {name, arguments}".to_owned());
+/// The tool and arguments a `tools/call` names; a refusal is `mcp_params_invalid` with the
+/// member at fault.
+fn parse_call(params: Option<Value>) -> Result<CallRequest, Outcome> {
+    let mut params = match params {
+        Some(Value::Object(params)) => params,
+        Some(_) => {
+            return Err(protocol::params_invalid(
+                "params",
+                ArgumentProblem::WrongType,
+            ));
+        }
+        None => {
+            return Err(protocol::params_invalid(
+                "params",
+                ArgumentProblem::Required,
+            ));
+        }
     };
-    let name = match params.get("name") {
-        Some(Value::String(name)) => name.clone(),
-        _ => return Err("tools/call params.name must be a tool name".to_owned()),
+    let tool = match params.get("name") {
+        Some(Value::String(name)) => tools::find(name)
+            .ok_or_else(|| protocol::params_invalid("name", ArgumentProblem::NotRecognised))?,
+        Some(_) => return Err(protocol::params_invalid("name", ArgumentProblem::WrongType)),
+        None => return Err(protocol::params_invalid("name", ArgumentProblem::Required)),
     };
-    let tool = tools::find(&name).ok_or_else(|| format!("unknown tool: {name}"))?;
     let arguments = match params.remove("arguments") {
         None | Some(Value::Null) => Map::new(),
         Some(Value::Object(arguments)) => arguments,
-        Some(_) => return Err("tools/call params.arguments must be an object".to_owned()),
+        Some(_) => {
+            return Err(protocol::params_invalid(
+                "arguments",
+                ArgumentProblem::WrongType,
+            ));
+        }
     };
     let progress_token = params
         .get("_meta")
@@ -568,16 +618,8 @@ fn call_tool(
         progress_token,
     } = match parse_call(params) {
         Ok(request) => request,
-        Err(message) => {
-            return sink.respond(
-                shared,
-                Some(protocol::error_response(
-                    &id,
-                    INVALID_PARAMS,
-                    &message,
-                    None,
-                )),
-            );
+        Err(refusal) => {
+            return sink.respond(shared, Some(protocol::error(&id, INVALID_PARAMS, &refusal)));
         }
     };
     if !shared.tiers.contains(tool.tier) {
@@ -604,13 +646,13 @@ fn call_tool(
         }
     };
     if duplicate {
+        // A request with this id is still in flight.
         return sink.respond(
             shared,
-            Some(protocol::error_response(
+            Some(protocol::error(
                 &id,
                 INVALID_REQUEST,
-                "a request with this id is still in flight",
-                None,
+                &Outcome::new(ActingctlCode::McpRequestIdInUse),
             )),
         );
     }
@@ -625,11 +667,8 @@ fn call_tool(
     };
     if let Err(mpsc::SendError(job)) = jobs.send(job) {
         lock(&shared.calls).remove(&job.key);
-        let failure = ToolError::new(
-            "runtime",
-            ActingctlCode::McpWorkersUnavailable,
-            "no tools/call worker is running; see stderr",
-        );
+        // No tools/call worker is running.
+        let failure = ToolError::new("runtime", ActingctlCode::McpWorkersUnavailable);
         let result = tools::call_result(Err(failure), job.era);
         job.sink.respond(
             shared,
@@ -669,13 +708,7 @@ fn run_job(shared: &Shared, job: Job) {
         jobs: &shared.jobs,
     };
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| (tool.run)(&context, &arguments)))
-        .unwrap_or_else(|_| {
-            Err(ToolError::new(
-                "runtime",
-                ActingctlCode::McpToolPanicked,
-                format!("{} stopped on an internal panic; see stderr", tool.name),
-            ))
-        });
+        .unwrap_or_else(|_| Err(tool_panicked(tool)));
     let response = protocol::response(
         &id,
         protocol::complete(era, tools::call_result(outcome, era)),
@@ -688,8 +721,20 @@ fn run_job(shared: &Shared, job: Job) {
     sink.respond(shared, response);
 }
 
+/// A panic caught at the tool call boundary: the call fails with `mcp_tool_panicked`
+/// (`mcp_tool`) and the server goes on. The default panic hook has already written the panic to
+/// stderr. Its `panic_caught` link (spec §7, with a registered `boundary`) belongs to the panic
+/// boundaries of Workflow #378 A6b.
+fn tool_panicked(tool: &ToolDef) -> ToolError {
+    ToolError::outcome(
+        "runtime",
+        Outcome::new(ActingctlCode::McpToolPanicked).mcp_tool(tool.name),
+    )
+}
+
 /// From 5 s on, a call whose request carried a progressToken gets a progress notification
-/// at most every 5 s until its answer.
+/// at most every 5 s until its answer. It carries no `message`: that optional MCP member is
+/// text, and the server writes none (Workflow #378 A5).
 fn progress_loop(shared: &Shared, stop: &Receiver<()>) {
     while let Err(RecvTimeoutError::Timeout) = stop.recv_timeout(PROGRESS_TICK) {
         let watched = lock(&shared.calls)
@@ -714,15 +759,10 @@ fn progress_loop(shared: &Shared, stop: &Receiver<()>) {
                 continue;
             }
             phase.progress_sent = next;
-            let elapsed = call.started.elapsed().as_secs();
             shared.emit(&json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/progress",
-                "params": {
-                    "progressToken": token,
-                    "progress": next,
-                    "message": format!("still running after {elapsed} s"),
-                },
+                "params": {"progressToken": token, "progress": next},
             }));
         }
     }

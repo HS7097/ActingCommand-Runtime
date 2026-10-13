@@ -6,6 +6,8 @@
 //! fixed export directory; `actingctl observe --export <dir>` writes to the directory it is
 //! given.
 
+use crate::codes::ActingctlCode;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{ProjectedArtifactReference, ProjectedEvent};
 use serde_json::{Value, json};
 use std::fs;
@@ -40,10 +42,10 @@ fn text_of(value: Value) -> String {
     }
 }
 
-/// An export that was not written: the step that failed, on which path.
+/// An export that was not written: the file-system step that failed, on which path.
 #[derive(Debug)]
 pub(crate) struct WriteFailure {
-    action: &'static str,
+    op: IoOp,
     path: PathBuf,
     /// The partial file left behind when moving it into place failed.
     partial: Option<PathBuf>,
@@ -51,16 +53,16 @@ pub(crate) struct WriteFailure {
 }
 
 impl WriteFailure {
-    pub(crate) fn message(&self) -> String {
-        format!("{} {}: {}", self.action, self.path.display(), self.error)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn partial(&self) -> Option<&Path> {
-        self.partial.as_deref()
+    /// `material_export_failed` with the path the step failed on (`path`; for the move into
+    /// place, the export's own path, with the partial file left behind as `from_path`), caused by
+    /// the OS failure (Workflow #378 A5).
+    pub(crate) fn outcome(&self) -> Outcome {
+        let outcome = Outcome::new(ActingctlCode::MaterialExportFailed).path(&self.path);
+        let outcome = match &self.partial {
+            Some(partial) => outcome.from_path(partial),
+            None => outcome,
+        };
+        outcome.caused_by(Outcome::from_io_error(&self.error, self.op))
     }
 }
 
@@ -73,25 +75,25 @@ pub(crate) fn write(
     extension: &str,
     bytes: &[u8],
 ) -> Result<Value, WriteFailure> {
-    let failed = |action: &'static str, path: &Path, error: io::Error| WriteFailure {
-        action,
+    let failed = |op: IoOp, path: &Path, error: io::Error| WriteFailure {
+        op,
         path: path.to_path_buf(),
         partial: None,
         error,
     };
     let digest = sha256.strip_prefix("sha256:").unwrap_or(sha256);
-    fs::create_dir_all(directory).map_err(|error| failed("cannot create", directory, error))?;
+    fs::create_dir_all(directory).map_err(|error| failed(IoOp::CreateDir, directory, error))?;
     let path = directory.join(format!("{digest}.{extension}"));
     let partial = directory.join(format!(
         "{digest}.{extension}.{}-{}.partial",
         process::id(),
         EXPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::write(&partial, bytes).map_err(|error| failed("cannot write", &partial, error))?;
+    fs::write(&partial, bytes).map_err(|error| failed(IoOp::Write, &partial, error))?;
     if let Err(error) = fs::rename(&partial, &path) {
         return Err(WriteFailure {
             partial: Some(partial),
-            ..failed("cannot move into place", &path, error)
+            ..failed(IoOp::Rename, &path, error)
         });
     }
     Ok(json!({

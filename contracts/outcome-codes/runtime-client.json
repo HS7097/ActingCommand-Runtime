@@ -568,7 +568,8 @@
       "layer": "client",
       "uncertain": false,
       "values": {
-        "operation": "optional"
+        "operation": "optional",
+        "mcp_blocker": "optional"
       },
       "review": "pending",
       "status": "active",

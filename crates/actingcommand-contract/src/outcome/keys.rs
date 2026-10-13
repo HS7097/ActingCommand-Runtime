@@ -39,7 +39,7 @@ outcome_keys! {
     thread: name,
     source_location: name,
     processes: records(pid, program),
-    owner_epoch: integer,
+    owner_epoch: id,
     raw_source: vocab(raw_source),
     raw_code: token,
     raw_text: evidence,
@@ -396,4 +396,18 @@ outcome_keys! {
     event_type: vocab(event_type),
     // Workflow #378 A2-P: a resource target of an instance's resource-targets document.
     resource_target_id: token,
+    // ---- Workflow #378 A5 (actingctl, MCP and watchdog outcomes): begin ----
+    argument: name,
+    argument_problem: vocab(argument_problem),
+    instance_selector: name,
+    mcp_tool: name,
+    material_state: vocab(material_state),
+    material_limit: vocab(material_limit),
+    req_id: id,
+    owner_closed: boolean,
+    process_alive: boolean,
+    run_state: vocab(run_state),
+    resource_targets_rejection_reason: vocab(resource_targets_rejection_reason),
+    media_type: name,
+    // ---- Workflow #378 A5: end ----
 }

@@ -5,13 +5,15 @@
 //! (runtime-client `list_contained_runs`, on the listing of MCP-391c). Both sides parse their
 //! arguments into one `RunsRequest`, read it with `read` and answer with `RunsAnswer::render`.
 //! stdout is one line, the same JSON as the ac_runs result, with the warnings as a top-level
-//! `warnings` member when there are any (D3). Only MCP cuts rows to its output budget
-//! (`truncated`, §2.2). At most one status read per call names the instance and the rows'
-//! aliases (§2.5); the run reads are event queries, which record nothing.
+//! `warnings` member when there are any (D3) and the outcome `run_list_reported` (Workflow #378
+//! A5). Only MCP cuts rows to its output budget (`truncated`, §2.2). At most one status read per
+//! call names the instance and the rows' aliases (§2.5); the run reads are event queries, which
+//! record nothing.
 
-use crate::codes::ActingctlCode;
+use crate::cli_line;
+use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::{self, SelectorMiss};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{EventActor, EventSource, InstanceId, RuntimeControlPlaneStatus};
 use actingcommand_runtime_client::{
     ContainedRunState, ListedContainedRun, RunDispatch, RunListFilter, RunListPosition,
@@ -19,9 +21,7 @@ use actingcommand_runtime_client::{
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
-use std::fmt;
-use std::io::{self, Write};
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -116,12 +116,12 @@ pub(crate) struct RunsRequest {
 
 /// Why a run list was refused or failed.
 pub(crate) enum Failure {
-    /// A CLI flag is unknown, repeated, missing its value or malformed.
-    Usage,
-    /// An argument both sides take is out of range; `field` is its MCP name.
+    /// A flag or argument is unknown, repeated, missing its value, malformed, out of its range
+    /// (`range`) or at odds with another: the CLI flag as given, or the MCP argument's name.
     Argument {
-        field: &'static str,
-        detail: &'static str,
+        argument: String,
+        problem: ArgumentProblem,
+        range: Option<(u64, u64)>,
     },
     SinceOutOfRange {
         oldest_unix_ms: u64,
@@ -132,55 +132,45 @@ pub(crate) enum Failure {
         selector: String,
     },
     Clock,
-    Output,
     Runtime(RuntimeClientError),
 }
 
 impl Failure {
-    /// The registered code. A CLI argument failure is `actingctl_usage_invalid`; MCP answers
-    /// `arguments_invalid` for the same one.
-    pub(crate) fn code(&self) -> Code {
-        match self {
-            Self::Usage | Self::Argument { .. } => ActingctlCode::ActingctlUsageInvalid.code(),
-            Self::SinceOutOfRange { .. } => ActingctlCode::SinceOutOfRange.code(),
-            Self::CursorInvalid => ActingctlCode::CursorInvalid.code(),
-            Self::Selector { miss, .. } => miss.code(),
-            Self::Clock => ActingctlCode::ClockUnavailable.code(),
-            Self::Output => ActingctlCode::ActingctlOutputFailed.code(),
-            Self::Runtime(error) => error.code(),
+    fn argument(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
+        Self::Argument {
+            argument: argument.as_ref().to_string_lossy().into_owned(),
+            problem,
+            range: None,
         }
     }
 
-    pub(crate) fn message(&self) -> String {
+    /// The failure as an outcome (Workflow #378 A5). An argument failure is the CLI's
+    /// `actingctl_usage_invalid` with `argument`, `argument_problem` and, for a range,
+    /// `range_min` and `range_max`; MCP answers `arguments_invalid` with the same values. A
+    /// window start too far back is `since_out_of_range` with the oldest start allowed
+    /// (`range_min`).
+    pub(crate) fn outcome(&self) -> Outcome {
         match self {
-            Self::Usage => USAGE.to_owned(),
-            Self::Argument { field, detail } => format!("argument {field} {detail}"),
+            Self::Argument {
+                argument,
+                problem,
+                range,
+            } => {
+                let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid)
+                    .argument(argument.as_str())
+                    .argument_problem(*problem);
+                match range {
+                    Some((minimum, maximum)) => outcome.range_min(*minimum).range_max(*maximum),
+                    None => outcome,
+                }
+            }
             Self::SinceOutOfRange { oldest_unix_ms } => {
-                format!("since_unix_ms reaches back at most 7 days, to {oldest_unix_ms}")
+                Outcome::new(ActingctlCode::SinceOutOfRange).range_min(*oldest_unix_ms)
             }
-            Self::CursorInvalid => "this cursor belongs to another run list (other filters or another window), or is not a next_cursor of one; read again from the first page without a cursor".to_owned(),
-            Self::Selector { miss, selector } => miss.message(selector),
-            Self::Clock => {
-                "the system clock is before the Unix epoch or out of range".to_owned()
-            }
-            Self::Output => "failed to write JSON output".to_owned(),
-            Self::Runtime(error) => error.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for Failure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Usage => write!(formatter, "{}: {USAGE}", self.code()),
-            Self::Argument { field, detail } => write!(
-                formatter,
-                "{}: --{} {detail}\n{USAGE}",
-                self.code(),
-                field.replace('_', "-")
-            ),
-            Self::Runtime(error) => fmt::Display::fmt(error, formatter),
-            _ => write!(formatter, "{}: {}", self.code(), self.message()),
+            Self::CursorInvalid => Outcome::new(ActingctlCode::CursorInvalid),
+            Self::Selector { miss, selector } => miss.outcome(selector),
+            Self::Clock => Outcome::new(ActingctlCode::ClockUnavailable),
+            Self::Runtime(error) => error.outcome(),
         }
     }
 }
@@ -336,26 +326,15 @@ impl RunsAnswer {
         Value::Object(result)
     }
 
-    /// `call_budget_exhausted` when the read budget ended the page early, in the members
-    /// `ToolError::into_warning` gives an MCP warning until A5 replaces both (D3).
-    pub(crate) fn warnings(&self) -> Vec<Value> {
-        if !self.incomplete {
-            return Vec::new();
+    /// `call_budget_exhausted` when the read budget ended the page before every listed run of
+    /// it was read (next_cursor continues after the last one read). Each side renders it as its
+    /// warning `{outcome}` (Workflow #378 A5, D3).
+    pub(crate) fn warnings(&self) -> Vec<Outcome> {
+        if self.incomplete {
+            vec![Outcome::new(ActingctlCode::CallBudgetExhausted)]
+        } else {
+            Vec::new()
         }
-        let mut warning = Map::new();
-        warning.insert(
-            "code".to_owned(),
-            json!(ActingctlCode::CallBudgetExhausted.as_str()),
-        );
-        warning.insert(
-            "message".to_owned(),
-            json!(
-                "the read budget ended before every listed run of this page was read; next_cursor continues after the last one read"
-            ),
-        );
-        warning.insert("blocked_by".to_owned(), Value::Null);
-        warning.insert("details".to_owned(), Value::Object(Map::new()));
-        vec![Value::Object(warning)]
     }
 }
 
@@ -379,15 +358,17 @@ pub(crate) fn read(
     if since_unix_ms < oldest_unix_ms {
         return Err(Failure::SinceOutOfRange { oldest_unix_ms });
     }
+    // The window's end before its start.
     if until_unix_ms.is_some_and(|until| until < since_unix_ms) {
-        return Err(Failure::Argument {
-            field: "until_unix_ms",
-            detail: "is before since_unix_ms",
-        });
+        return Err(Failure::argument(
+            "until_unix_ms",
+            ArgumentProblem::Conflicting,
+        ));
     }
     let limit = usize::try_from(request.limit).map_err(|_| Failure::Argument {
-        field: "limit",
-        detail: "is out of range",
+        argument: "limit".to_owned(),
+        problem: ArgumentProblem::OutOfRange,
+        range: Some((1, MAX_LIMIT)),
     })?;
     let mut status = None;
     let instance_id = match &request.instance {
@@ -513,21 +494,23 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
     Value::Object(row)
 }
 
-/// Runs `runs`; `None` leaves every other command to the CLI, unchanged.
+/// Runs `runs`; `None` leaves every other command to the CLI, unchanged. One result line on
+/// stdout (Workflow #378 A5): the run list with `run_list_reported`, or `{outcome}` with the
+/// failure (an argument failure's developer line adds the usage) and exit 1.
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "runs" {
         return None;
     }
-    Some(match run(arguments).and_then(|output| print(&output)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failure) => {
-            eprintln!("FATAL actingctl: {failure}");
-            ExitCode::FAILURE
+    Some(match run(arguments) {
+        Ok(result) => cli_line::success(result, &Outcome::new(ActingctlCode::RunListReported)),
+        Err(failure @ Failure::Argument { .. }) => {
+            cli_line::failure(&failure.outcome(), Some(USAGE))
         }
+        Err(failure) => cli_line::failure(&failure.outcome(), None),
     })
 }
 
-fn run(arguments: &[OsString]) -> Result<Value, Failure> {
+fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
     let now_unix_ms = now_unix_ms()?;
     let deadline = Instant::now() + CLI_READ_BUDGET;
@@ -538,16 +521,20 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
     ))
     .map_err(Failure::Runtime)?;
     let answer = read(&client, &request, now_unix_ms, deadline)?;
-    let mut output = answer.render(answer.row_count());
+    let mut result = cli_line::members(answer.render(answer.row_count()), "runs");
     let warnings = answer.warnings();
     if !warnings.is_empty() {
-        output["warnings"] = Value::Array(warnings);
+        result.insert(
+            "warnings".to_owned(),
+            Value::Array(warnings.iter().map(cli_line::warning).collect()),
+        );
     }
-    Ok(output)
+    Ok(result)
 }
 
 /// `--state-root` and the flags of §4.3, each at most once and with a value; any other flag, a
-/// repeated one or a malformed value is `actingctl_usage_invalid`.
+/// repeated one or a malformed value is `actingctl_usage_invalid` with the flag (`argument`) and
+/// what is wrong with it (`argument_problem`).
 fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
     let mut state_root = None;
     let mut instance = None;
@@ -560,57 +547,71 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, RunsRequest), Failure> {
     let mut cursor = None;
     let mut rest = arguments[1..].iter();
     while let Some(flag) = rest.next() {
-        let slot = match flag.to_str() {
-            Some("--state-root") => &mut state_root,
-            Some("--instance") => &mut instance,
-            Some("--since-unix-ms") => &mut since,
-            Some("--until-unix-ms") => &mut until,
-            Some("--task-prefix") => &mut task_prefix,
-            Some("--dispatch") => &mut dispatch,
-            Some("--state") => &mut state,
-            Some("--limit") => &mut limit,
-            Some("--cursor") => &mut cursor,
-            _ => return Err(Failure::Usage),
+        let (name, slot) = match flag.to_str() {
+            Some(name @ "--state-root") => (name, &mut state_root),
+            Some(name @ "--instance") => (name, &mut instance),
+            Some(name @ "--since-unix-ms") => (name, &mut since),
+            Some(name @ "--until-unix-ms") => (name, &mut until),
+            Some(name @ "--task-prefix") => (name, &mut task_prefix),
+            Some(name @ "--dispatch") => (name, &mut dispatch),
+            Some(name @ "--state") => (name, &mut state),
+            Some(name @ "--limit") => (name, &mut limit),
+            Some(name @ "--cursor") => (name, &mut cursor),
+            Some(_) => return Err(Failure::argument(flag, ArgumentProblem::Unknown)),
+            None => return Err(Failure::argument(flag, ArgumentProblem::NotUtf8)),
         };
         let value = rest
             .next()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.trim().is_empty())
-            .ok_or(Failure::Usage)?;
-        if slot.replace(value.to_owned()).is_some() {
-            return Err(Failure::Usage);
+            .ok_or_else(|| Failure::argument(name, ArgumentProblem::ValueMissing))?
+            .to_str()
+            .ok_or_else(|| Failure::argument(name, ArgumentProblem::NotUtf8))?;
+        if value.trim().is_empty() {
+            return Err(Failure::argument(name, ArgumentProblem::ValueMissing));
+        }
+        if slot.replace((name, value.to_owned())).is_some() {
+            return Err(Failure::argument(name, ArgumentProblem::Repeated));
         }
     }
-    let number = |text: Option<String>| {
-        text.map(|text| text.parse::<u64>().map_err(|_| Failure::Usage))
+    let number = |given: Option<(&str, String)>| {
+        given
+            .map(|(name, text)| {
+                text.parse::<u64>()
+                    .map_err(|_| Failure::argument(name, ArgumentProblem::WrongType))
+            })
             .transpose()
     };
     let limit = match number(limit)? {
         None => DEFAULT_LIMIT,
         Some(limit) if (1..=MAX_LIMIT).contains(&limit) => limit,
-        Some(_) => return Err(Failure::Usage),
+        Some(_) => {
+            return Err(Failure::Argument {
+                argument: "--limit".to_owned(),
+                problem: ArgumentProblem::OutOfRange,
+                range: Some((1, MAX_LIMIT)),
+            });
+        }
     };
     let request = RunsRequest {
-        instance,
+        instance: instance.map(|(_, text)| text),
         since_unix_ms: number(since)?,
         until_unix_ms: number(until)?,
-        task_prefix,
+        task_prefix: task_prefix.map(|(_, text)| text),
         dispatch: dispatch
-            .map(|text| parse_dispatch(&text).ok_or(Failure::Usage))
+            .map(|(name, text)| {
+                parse_dispatch(&text)
+                    .ok_or_else(|| Failure::argument(name, ArgumentProblem::NotRecognised))
+            })
             .transpose()?,
         state: state
-            .map(|text| StateFilter::parse(&text).ok_or(Failure::Usage))
+            .map(|(name, text)| {
+                StateFilter::parse(&text)
+                    .ok_or_else(|| Failure::argument(name, ArgumentProblem::NotRecognised))
+            })
             .transpose()?,
         limit,
-        cursor,
+        cursor: cursor.map(|(_, text)| text),
     };
-    Ok((PathBuf::from(state_root.ok_or(Failure::Usage)?), request))
-}
-
-fn print(output: &Value) -> Result<(), Failure> {
-    let stdout = io::stdout();
-    let mut writer = stdout.lock();
-    serde_json::to_writer(&mut writer, output).map_err(|_| Failure::Output)?;
-    writer.write_all(b"\n").map_err(|_| Failure::Output)?;
-    writer.flush().map_err(|_| Failure::Output)
+    let (_, state_root) =
+        state_root.ok_or_else(|| Failure::argument("--state-root", ArgumentProblem::Required))?;
+    Ok((PathBuf::from(state_root), request))
 }

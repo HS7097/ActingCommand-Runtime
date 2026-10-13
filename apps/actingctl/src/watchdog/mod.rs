@@ -3,9 +3,16 @@
 //! `actingctl watchdog` (Workflow #374): the Runtime watchdog of an A/B installation.
 //! `run-once` is one supervision tick, run every minute by Task Scheduler through
 //! `<root>\tools\actingwatch.exe`; it starts the Runtime only when it is gone without a formal
-//! close. `status` computes the same decision read-only and adds attention states, the task's
+//! close. `status` computes the same decision read-only and adds attention outcomes, the task's
 //! among them. `install` and `uninstall` register and remove that task.
 //! Contract: `contracts/runtime-watchdog.md`. Nothing here touches the ledger.
+//!
+//! Workflow #378 A5 (model v2.2 §7.5, §7.6): every subcommand, and the usage exit, prints one
+//! stdout line, the report `actingcommand.watchdog.report.v2`: `{schema_version, outcome,
+//! attention, …data}`. The top outcome is the decision (`run-once`, `status`) or the result of
+//! `install` and `uninstall`; `attention` lists status's attention outcomes (empty for the other
+//! subcommands) and never changes the exit. The process exits by the top's category: 0
+//! success, info or warning; 1 error (usage included); 2 fatal.
 
 // Workflow #389 MCP-10: `decide`, `observe` and `start` are crate-visible, because `actingctl
 // start` and `restart` (`crate::runtime_start`) reuse the manual start, the owner observation
@@ -21,43 +28,118 @@ pub(crate) mod start;
 mod state;
 mod task;
 
+use crate::cli_line;
 use crate::codes::ActingctlCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{Category, CauseRelation, Detail, IoOp, Outcome, RawSource};
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
 use observe::{Installation, WriterProbe};
-use serde_json::{Value, json};
-use state::{Loaded, StartRecord, WatchdogState};
+use serde_json::{Map, Value, json};
+use state::{Loaded, Recorded, StartRecord, WatchdogState};
 use std::ffi::OsString;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, ExitStatus};
 use std::time::{Duration, SystemTime};
 
 pub(crate) const USAGE: &str = "usage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+/// The report's schema (model §7.5).
+pub(crate) const REPORT_SCHEMA: &str = "actingcommand.watchdog.report.v2";
 const RUN_LOCK: &str = "run.lock";
 
-/// A misconfiguration (exit 13): the code names it, the detail says where.
-#[derive(Debug)]
-pub(crate) struct Failure {
-    pub(crate) code: Code,
-    pub(crate) detail: String,
+/// `code` for `path`, caused by the error the OS raised for `op` (`foreign_os_error`).
+pub(crate) fn io_failure(
+    code: ActingctlCode,
+    path: impl AsRef<Path>,
+    error: &io::Error,
+    op: IoOp,
+) -> Outcome {
+    Outcome::new(code)
+        .path(path)
+        .caused_by(Outcome::from_io_error(error, op))
 }
 
-impl Failure {
-    pub(crate) fn misconfigured(code: impl Into<Code>, detail: impl Into<String>) -> Self {
+/// A JSON parser's refusal: `foreign_data_error` with `raw_source` json and its message.
+pub(crate) fn json_failure(error: &serde_json::Error) -> Outcome {
+    Outcome::new(ContractCode::ForeignDataError)
+        .raw_source(RawSource::Json)
+        .raw_text(error.to_string())
+}
+
+/// A child process that failed: what it printed as the raw text of `foreign_other_error`
+/// (`raw_source` process), with its exit code when it exited.
+pub(crate) fn process_failure(status: ExitStatus, printed: &[u8]) -> Outcome {
+    let failure = Outcome::new(ContractCode::ForeignOtherError).raw_source(RawSource::Process);
+    let failure = match status.code() {
+        Some(exit_code) => failure.exit_code(exit_code),
+        None => failure,
+    };
+    failure.raw_text(printed)
+}
+
+/// An outcome inside a report member (a journal, a live owner, the task): its envelope in the
+/// process's detail, which `dispatch` checked before anything ran.
+fn envelope(outcome: &Outcome) -> Value {
+    cli_line::outcome_value(outcome, cli_line::detail().unwrap_or(Detail::Full))
+}
+
+/// One report (`actingcommand.watchdog.report.v2`): the top outcome, status's attention
+/// outcomes and the data members.
+struct Report {
+    outcome: Outcome,
+    attention: Vec<Outcome>,
+    data: Map<String, Value>,
+}
+
+impl Report {
+    fn new(outcome: Outcome) -> Self {
         Self {
-            code: code.into(),
-            detail: detail.into(),
+            outcome,
+            attention: Vec::new(),
+            data: Map::new(),
         }
     }
 
-    fn decision(self) -> Decision {
-        Decision::Misconfigured {
-            code: self.code,
-            detail: self.detail,
-        }
+    fn with(mut self, member: &str, value: Value) -> Self {
+        self.insert(member, value);
+        self
+    }
+
+    fn insert(&mut self, member: &str, value: Value) {
+        debug_assert!(
+            !matches!(member, "schema_version" | "outcome" | "attention"),
+            "a data member may not take a name of the report's own"
+        );
+        self.data.insert(member.to_owned(), value);
+    }
+
+    /// The exit code by the top outcome's category (model §7.6); attention never changes it.
+    fn exit_code(&self) -> u8 {
+        cli_line::exit_code(self.outcome.category(), false)
+    }
+
+    /// The stdout line: `schema_version`, `outcome`, `attention`, then the data members.
+    fn line(&self, detail: Detail) -> Result<Value, serde_json::Error> {
+        let mut line = Map::new();
+        line.insert("schema_version".to_owned(), Value::from(REPORT_SCHEMA));
+        line.insert(
+            "outcome".to_owned(),
+            serde_json::to_value(self.outcome.envelope(detail))?,
+        );
+        line.insert(
+            "attention".to_owned(),
+            Value::Array(
+                self.attention
+                    .iter()
+                    .map(|outcome| cli_line::outcome_value(outcome, detail))
+                    .collect(),
+            ),
+        );
+        line.extend(self.data.clone());
+        Ok(Value::Object(line))
     }
 }
 
@@ -74,36 +156,56 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "watchdog" {
         return None;
     }
-    let Some((subcommand, root)) = parse(&arguments[1..]) else {
-        eprintln!("FATAL actingctl watchdog: {USAGE}");
-        return Some(ExitCode::FAILURE);
+    let usage = || Report::new(Outcome::new(ActingctlCode::ActingctlUsageInvalid));
+    let detail = match cli_line::detail() {
+        Ok(detail) => detail,
+        Err(invalid) => return Some(print(&Report::new(invalid), Detail::Full, false, None)),
     };
-    // Under the task, stderr goes into watchdog.log: the summary line is for a person only.
-    let summary = !matches!(subcommand, Subcommand::RunOnce { from_task: true });
-    let (report, exit) = match subcommand {
+    let Some((subcommand, root)) = parse(&arguments[1..]) else {
+        return Some(print(&usage(), detail, false, Some(USAGE)));
+    };
+    // Under the task, stderr goes into watchdog.log: the developer line is for a person only.
+    let quiet = matches!(subcommand, Subcommand::RunOnce { from_task: true });
+    let report = match subcommand {
         Subcommand::Status => status(&root),
         Subcommand::RunOnce { from_task } => run_once(&root, from_task),
         Subcommand::Install => install(&root),
         Subcommand::Uninstall => uninstall(&root),
     };
-    let written = serde_json::to_writer(std::io::stdout().lock(), &report)
-        .map_err(|error| error.to_string())
-        .and_then(|()| {
-            std::io::stdout()
-                .lock()
-                .write_all(b"\n")
-                .map_err(|error| error.to_string())
-        });
+    Some(print(&report, detail, quiet, None))
+}
+
+/// Prints the report's one stdout line, then, unless `quiet`, the developer line of a warning,
+/// error or fatal top (`text` is developer English, such as the usage); returns the exit code.
+/// A stdout that refuses the line leaves the developer line `actingctl_output_failed`, exit 1.
+fn print(report: &Report, detail: Detail, quiet: bool, text: Option<&str>) -> ExitCode {
+    let written = report
+        .line(detail)
+        .map_err(io::Error::from)
+        .and_then(|line| write_line(&line));
     if let Err(error) = written {
-        eprintln!("ERROR actingctl watchdog: cannot write the report: {error}");
+        return output_failed(&error);
     }
-    if exit != 0 && summary {
-        eprintln!(
-            "actingctl watchdog: {} exit {exit}",
-            report["code"].as_str().unwrap_or("unknown")
-        );
+    if !quiet && report.outcome.category() > Category::Info {
+        cli_line::developer_line(&report.outcome, text);
     }
-    Some(ExitCode::from(exit))
+    ExitCode::from(report.exit_code())
+}
+
+fn write_line(line: &Value) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    serde_json::to_writer(&mut writer, line).map_err(io::Error::from)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+fn output_failed(error: &dyn fmt::Display) -> ExitCode {
+    cli_line::developer_line(
+        &Outcome::new(ActingctlCode::ActingctlOutputFailed),
+        Some(&error.to_string()),
+    );
+    ExitCode::FAILURE
 }
 
 fn parse(arguments: &[OsString]) -> Option<(Subcommand, PathBuf)> {
@@ -139,7 +241,7 @@ struct Tick {
     installation: Installation,
     lock: OwnerLock,
     journal: Journal,
-    live: Option<Result<decide::LiveOwner, String>>,
+    live: Option<Result<decide::LiveOwner, Outcome>>,
     fatal: Option<decide::Fatal>,
     earlier_fatal: Option<decide::Fatal>,
     runtime_info: Option<Value>,
@@ -148,7 +250,7 @@ struct Tick {
 }
 
 impl Tick {
-    fn observe(root: &Path, watchdog_dir: &Path) -> Result<Self, Failure> {
+    fn observe(root: &Path, watchdog_dir: &Path) -> Result<Self, Outcome> {
         let installation = Installation::resolve(root)?;
         // F matters only for an unlocked journal with a record: a FATAL newer than it.
         let observed = observe::observe_owner(
@@ -190,7 +292,7 @@ impl Tick {
     /// Rows 7a-7b. A free writer lock stays held shared in the returned guard (review L4).
     fn probe_start(&mut self) -> Result<(StartProbes, Option<File>), Decision> {
         let guard =
-            match observe::writer_lock(&self.installation.root).map_err(Failure::decision)? {
+            match observe::writer_lock(&self.installation.root).map_err(Decision::Misconfigured)? {
                 WriterProbe::Busy => {
                     self.writer = Some("busy");
                     return Ok((
@@ -211,7 +313,7 @@ impl Tick {
         if !self
             .installation
             .selection_unchanged()
-            .map_err(Failure::decision)?
+            .map_err(Decision::Misconfigured)?
         {
             return Ok((
                 StartProbes {
@@ -223,12 +325,8 @@ impl Tick {
                 guard,
             ));
         }
-        let probe = observe::host_probe(&self.installation.root_plain).map_err(|detail| {
-            Decision::StartFailed {
-                code: ActingctlCode::ProcessProbeFailed.code(),
-                detail,
-            }
-        })?;
+        let probe =
+            observe::host_probe(&self.installation.root_plain).map_err(Decision::StartFailed)?;
         self.processes = Some(probe.processes.clone());
         Ok((
             StartProbes {
@@ -249,20 +347,31 @@ fn log_directories(root: &Path, watchdog_dir: &Path) -> Vec<PathBuf> {
     directories
 }
 
-fn watchdog_dir(root: &Path) -> Result<(PathBuf, PathBuf), Failure> {
+fn watchdog_dir(root: &Path) -> Result<(PathBuf, PathBuf), Outcome> {
     let root = fs::canonicalize(root).map_err(|error| {
-        Failure::misconfigured(
+        io_failure(
             ActingctlCode::WatchdogRootUnavailable,
-            format!("{}: {error}", root.display()),
+            root,
+            &error,
+            IoOp::Canonicalize,
         )
     })?;
     let directory = root.join("watchdog");
     Ok((root, directory))
 }
 
+fn watchdog_log(directory: &Path) -> Value {
+    Value::from(
+        observe::plain_path(&directory.join(log::LOG_FILE))
+            .display()
+            .to_string(),
+    )
+}
+
 /// `status`: read-only. It writes nothing and takes no lock but the momentary writer-lock
-/// probe, and only when a start would be considered.
-fn status(root: &Path) -> (Value, u8) {
+/// probe, and only when a start would be considered. Its top is the decision; its attention
+/// outcomes (warnings, and the failures that kept something unread) leave the exit alone.
+fn status(root: &Path) -> Report {
     let now = now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
@@ -302,22 +411,24 @@ fn status(root: &Path) -> (Value, u8) {
         state.formal_start_at_unix_ms = Some(owner.started_at_unix_ms);
     }
     let mut attention = Vec::new();
-    if decision.exit_code() != 0 {
-        attention.push((decision.key(), decision.exit_code()));
-    }
     // An owner lock that nothing answering holds for 10 minutes (an error-report dialog, a
-    // start that never publishes runtime-info) is attention like row 7b'; run-once stays 0.
+    // start that never publishes runtime-info) needs attention like row 7b'; run-once stays 0.
     if matches!(decision, Decision::OwnerLockHeld { .. })
-        && state.last_decision.as_deref() == Some("owner_lock_held")
         && state
-            .decision_since_unix_ms
-            .is_some_and(|since| now.saturating_sub(since) >= decide::PROCESS_WITHOUT_OWNER_MS)
+            .last_decision
+            .as_ref()
+            .is_some_and(|last| last.is(ActingctlCode::WatchdogOwnerLockHeld))
+        && let Some(since) = state.decision_since_unix_ms
+        && now.saturating_sub(since) >= decide::PROCESS_WITHOUT_OWNER_MS
     {
-        attention.push(("owner_lock_held_without_answer".to_owned(), 15));
+        attention.push(
+            Outcome::new(ActingctlCode::WatchdogOwnerLockUnanswered)
+                .elapsed_ms(now.saturating_sub(since)),
+        );
     }
     // Review M2 (ii): a close no log covers may hide a FATAL of an unlogged start.
     let mut close_evidence = None;
-    if let (Decision::FormalClose { .. }, Some(record)) = (&decision, tick.record()) {
+    if let (Decision::FormalClose { owner_epoch }, Some(record)) = (&decision, tick.record()) {
         let evidence = match record.closed_at_unix_ms {
             Some(closed_at) => observe::close_logged(
                 &log_directories(&root, &directory),
@@ -327,52 +438,54 @@ fn status(root: &Path) -> (Value, u8) {
             None => Ok(false),
         };
         close_evidence = Some(match evidence {
-            Ok(true) => "logged".to_owned(),
+            Ok(true) => "logged",
             Ok(false) => {
-                attention.push(("formal_close_unlogged".to_owned(), 17));
-                "unlogged".to_owned()
+                attention.push(
+                    Outcome::new(ActingctlCode::WatchdogFormalCloseUnlogged)
+                        .owner_epoch(owner_epoch.clone()),
+                );
+                "unlogged"
             }
             Err(failure) => {
-                attention.push((format!("misconfigured:{}", failure.code), 13));
-                format!("unreadable:{}: {}", failure.code, failure.detail)
+                attention.push(Decision::Misconfigured(failure).outcome());
+                "unreadable"
             }
         });
     }
     if !matches!(decision, Decision::Alive { .. })
         && let Some(last) = state.last_start()
-        && !matches!(last.outcome.as_str(), "started" | "pending")
+        && !last.start_result.is(ActingctlCode::WatchdogStartedRuntime)
+        && !last.start_result.is(ActingctlCode::WatchdogStartPending)
     {
-        attention.push((format!("last_start_failed:{}", last.outcome), 12));
+        attention.push(
+            Outcome::new(ActingctlCode::WatchdogLastStartFailed)
+                .at_unix_ms(last.at_unix_ms)
+                .caused_by(last.start_result.outcome()),
+        );
     }
     let starts_24h = decide::starts_in_day(&state, now);
     if starts_24h >= decide::REPEATED_RESTARTS {
-        attention.push(("repeated_restarts".to_owned(), 16));
+        attention.push(Outcome::new(ActingctlCode::WatchdogRestartsRepeated).count(starts_24h));
     }
     let task_section = task_report(&tick.installation.root_plain, &mut attention);
-    let exit = [13, 10, 11, 15, 12, 14, 16, 17]
-        .into_iter()
-        .find(|code| attention.iter().any(|(_, exit)| exit == code))
-        .unwrap_or(0);
-    let mut report = report(&tick, &decision, &state, &directory, exit);
-    report["attention"] = Value::Array(
-        attention
-            .iter()
-            .map(|(code, exit)| json!({ "code": code, "exit_code": exit }))
-            .collect(),
-    );
-    report["close_evidence"] = json!(close_evidence);
-    report["watchdog_starts_24h"] = json!(starts_24h);
-    report["task"] = task_section;
-    report["state"] = json!(match loaded {
-        Loaded::Fresh => "absent".to_owned(),
-        Loaded::Existing => "present".to_owned(),
-        Loaded::OtherSchema(schema) => format!("other_schema:{schema}"),
-    });
-    (report, exit)
+    let mut report = report(&tick, &decision, &state, &directory);
+    report.attention = attention;
+    report.insert("close_evidence", json!(close_evidence));
+    report.insert("watchdog_starts_24h", json!(starts_24h));
+    report.insert("task", task_section);
+    match loaded {
+        Loaded::Fresh => report.insert("state", json!("absent")),
+        Loaded::Existing => report.insert("state", json!("present")),
+        Loaded::OtherSchema(schema) => {
+            report.insert("state", json!("other_schema"));
+            report.insert("state_schema", json!(schema));
+        }
+    }
+    report
 }
 
 /// `run-once`: one supervision tick (`contracts/runtime-watchdog.md`, "Decision").
-fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
+fn run_once(root: &Path, from_task: bool) -> Report {
     let now = now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
@@ -380,47 +493,44 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
     };
     // Review M6: the directory is created on demand; `install` is not a precondition.
     if let Err(error) = fs::create_dir_all(&directory) {
-        let failure = Failure::misconfigured(
+        let failure = io_failure(
             ActingctlCode::WatchdogDirectoryUnavailable,
-            format!("{}: {error}", directory.display()),
+            &directory,
+            &error,
+            IoOp::CreateDir,
         );
         return misconfigured_report(None, failure, true, from_task);
     }
+    let lock_path = directory.join(RUN_LOCK);
+    let lock_failed = |error: &io::Error, op: IoOp| {
+        io_failure(ActingctlCode::WatchdogRunLockFailed, &lock_path, error, op)
+    };
     let run_lock = match OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(directory.join(RUN_LOCK))
+        .open(&lock_path)
     {
         Ok(file) => file,
         Err(error) => {
-            let failure = Failure::misconfigured(
-                ActingctlCode::WatchdogRunLockFailed,
-                format!("{}: {error}", directory.join(RUN_LOCK).display()),
-            );
+            let failure = lock_failed(&error, IoOp::Open);
             return misconfigured_report(Some(&directory), failure, true, from_task);
         }
     };
     match run_lock.try_lock() {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
-            let decision = Decision::RunInProgress;
-            return (
-                json!({ "decision": decision.name(), "code": decision.key(), "exit_code": 0 }),
-                0,
-            );
+            return Report::new(Decision::RunInProgress.outcome());
         }
         Err(std::fs::TryLockError::Error(error)) => {
-            let failure = Failure::misconfigured(
-                ActingctlCode::WatchdogRunLockFailed,
-                format!("{}: {error}", directory.join(RUN_LOCK).display()),
-            );
+            let failure = lock_failed(&error, IoOp::Lock);
             return misconfigured_report(Some(&directory), failure, true, from_task);
         }
     }
     let plain_root = observe::plain_path(&root).display().to_string();
     let mut state = match state::load(&directory, &plain_root) {
+        // Another schema version (the version 1 included) is set aside; the budget restarts.
         Ok((state, Loaded::OtherSchema(schema))) => {
             if let Err(failure) = state::set_aside(&directory, now).and_then(|aside| {
                 log::append(
@@ -441,12 +551,11 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
         Ok((state, _)) => state,
         Err(failure) => return misconfigured_report(Some(&directory), failure, true, from_task),
     };
-    let previous_key = state.last_decision.clone();
+    let previous = state.last_decision.clone();
     state.root = plain_root;
     state.last_tick_unix_ms = Some(now);
     let (decision, tick, logged) = tick_once(&root, &directory, &mut state, now, from_task);
-    if let Err(failure) =
-        record_decision(&directory, &mut state, &decision, previous_key, logged, now)
+    if let Err(failure) = record_decision(&directory, &mut state, &decision, previous, logged, now)
     {
         return misconfigured_report(Some(&directory), failure, true, from_task);
     }
@@ -457,18 +566,10 @@ fn run_once(root: &Path, from_task: bool) -> (Value, u8) {
         return misconfigured_report(Some(&directory), failure, true, from_task);
     }
     drop(run_lock);
-    let exit = decision.exit_code();
-    let report = match &tick {
-        Some(tick) => report(tick, &decision, &state, &directory, exit),
-        None => json!({
-            "decision": decision.name(),
-            "code": decision.key(),
-            "exit_code": exit,
-            "detail": detail(&decision),
-            "log": observe::plain_path(&directory.join(log::LOG_FILE)).display().to_string(),
-        }),
-    };
-    (report, exit)
+    match &tick {
+        Some(tick) => report(tick, &decision, &state, &directory),
+        None => Report::new(decision.outcome()).with("log", watchdog_log(&directory)),
+    }
 }
 
 /// The decision of one tick, the start included. The bool says whether the start already
@@ -482,7 +583,7 @@ fn tick_once(
 ) -> (Decision, Option<Tick>, bool) {
     let mut tick = match Tick::observe(root, directory) {
         Ok(tick) => tick,
-        Err(failure) => return (failure.decision(), None, false),
+        Err(failure) => return (Decision::Misconfigured(failure), None, false),
     };
     let decision = match decide::decide_observed(&tick.observed(), state) {
         Stage::Decided(decision) => decision,
@@ -515,7 +616,7 @@ fn tick_once(
                 drop(guard);
                 return match started {
                     Ok(decision) => (decision, Some(tick), true),
-                    Err(failure) => (failure.decision(), Some(tick), false),
+                    Err(failure) => (Decision::Misconfigured(failure), Some(tick), false),
                 };
             }
             drop(guard);
@@ -550,179 +651,152 @@ fn tick_once(
     (decision, Some(tick), false)
 }
 
-/// Row 7f: the start record is saved before the spawn, so a crash mid-start still counts.
+/// Row 7f: the start record is saved before the spawn, so a crash mid-start still counts. Its
+/// result replaces `watchdog_start_pending`: `watchdog_started_runtime` or the start's failure,
+/// each with its values (state.json v2).
 fn start_runtime(
     tick: &Tick,
     directory: &Path,
     state: &mut WatchdogState,
     now: u64,
     from_task: bool,
-) -> Result<Decision, Failure> {
+) -> Result<Decision, Outcome> {
     let installation = &tick.installation;
-    let log_path = directory.join(format!("actingd-{now}.log"));
-    let log_plain = observe::plain_path(&log_path).display().to_string();
+    let start_log = directory.join(format!("actingd-{now}.log"));
+    let log_plain = observe::plain_path(&start_log).display().to_string();
     state.push_start(StartRecord {
         at_unix_ms: now,
         method: if from_task { "breakaway" } else { "wmi" }.to_owned(),
         log: log_plain.clone(),
-        outcome: "pending".to_owned(),
         generation: Some(installation.generation),
         ..StartRecord::default()
     });
     state::save(directory, state)?;
-    let outcome = start::start(installation, &log_path, now, from_task);
+    let attempt = start::start(installation, &start_log, now, from_task);
     let finished = now_unix_ms();
+    // The record saved above; were it gone, the state is not what this tick wrote.
     let record = state
         .starts
         .last_mut()
         .filter(|record| record.at_unix_ms == now)
         .ok_or_else(|| {
-            Failure::misconfigured(
-                ActingctlCode::WatchdogStateUnwritable,
-                "the start record vanished",
-            )
+            Outcome::new(ActingctlCode::WatchdogStateUnwritable)
+                .path(directory.join(state::STATE_FILE))
         })?;
-    record.method = outcome.method.to_owned();
+    record.method = attempt.method.to_owned();
     let previous = tick.record();
     let previous_epoch = previous.map_or_else(String::new, |record| record.owner_epoch.clone());
     let previous_pid = previous.map_or_else(String::new, |record| record.pid.to_string());
-    match outcome.result {
+    let (level, code, decision, last_line) = match attempt.result {
         Ok(owner) => {
-            record.outcome = "started".to_owned();
             record.actingd_pid = Some(owner.pid);
             record.owner_epoch = Some(owner.owner_epoch.clone());
-            log::append(
-                directory,
-                finished,
-                Level::Warn,
-                ActingctlCode::WatchdogStartedRuntime,
-                &[
-                    ("generation", installation.generation.to_string()),
-                    ("method", outcome.method.to_owned()),
-                    ("pid", owner.pid.to_string()),
-                    ("owner_epoch", owner.owner_epoch.clone()),
-                    ("log", log_plain.clone()),
-                    ("previous_epoch", previous_epoch),
-                    ("previous_pid", previous_pid),
-                    ("ready_ms", finished.saturating_sub(now).to_string()),
-                ],
-            )?;
-            Ok(Decision::Started {
-                method: outcome.method.to_owned(),
+            let decision = Decision::Started {
+                method: attempt.method.to_owned(),
                 owner,
                 log: log_plain,
-            })
+            };
+            record.start_result = Recorded::of(&decision.outcome());
+            (
+                Level::Warn,
+                ActingctlCode::WatchdogStartedRuntime,
+                decision,
+                None,
+            )
         }
-        Err(error) => {
-            record.outcome = error.code.as_str().to_owned();
-            log::append(
-                directory,
-                finished,
+        Err(failure) => {
+            record.start_result = Recorded::of(&failure);
+            (
                 Level::Error,
                 ActingctlCode::WatchdogStartFailed,
-                &[
-                    ("code", error.code.to_string()),
-                    ("generation", installation.generation.to_string()),
-                    ("method", outcome.method.to_owned()),
-                    ("log", log_plain),
-                    ("previous_epoch", previous_epoch),
-                    ("previous_pid", previous_pid),
-                    ("detail", error.detail.clone()),
-                ],
-            )?;
-            Ok(Decision::StartFailed {
-                code: error.code,
-                detail: error.detail,
-            })
+                Decision::StartFailed(failure),
+                Some(start::last_log_line(&start_log)),
+            )
         }
+    };
+    let outcome = decision.outcome();
+    let mut fields = vec![
+        ("generation", installation.generation.to_string()),
+        ("method", attempt.method.to_owned()),
+    ];
+    fields.extend(log::outcome_fields(&outcome));
+    fields.push(("previous_epoch", previous_epoch));
+    fields.push(("previous_pid", previous_pid));
+    match last_line {
+        Some(line) => fields.push(("last_line", line)),
+        None => fields.push(("ready_ms", finished.saturating_sub(now).to_string())),
     }
+    log::append(directory, finished, level, code, &fields)?;
+    Ok(decision)
 }
 
-/// Log on change: one line when the decision's key differs from the last tick's.
+/// Log on change: one line when the decision's code or values differ from the last tick's.
 fn record_decision(
     directory: &Path,
     state: &mut WatchdogState,
     decision: &Decision,
-    previous_key: Option<String>,
+    previous: Option<Recorded>,
     logged: bool,
     now: u64,
-) -> Result<(), Failure> {
-    let key = decision.key();
-    if previous_key.as_deref() == Some(key.as_str()) && !logged {
+) -> Result<(), Outcome> {
+    let outcome = decision.outcome();
+    let current = Recorded::of(&outcome);
+    if previous.as_ref() == Some(&current) && !logged {
         return Ok(());
     }
-    state.last_decision = Some(key);
+    state.last_decision = Some(current);
     state.decision_since_unix_ms = Some(now);
     if logged {
         return Ok(());
     }
-    let (level, code, fields): (Level, ActingctlCode, Vec<(&str, String)>) = match decision {
+    let after_start = previous
+        .as_ref()
+        .is_some_and(|previous| previous.is(ActingctlCode::WatchdogStartedRuntime));
+    let (level, code, text): (Level, ActingctlCode, Vec<(&str, String)>) = match decision {
         Decision::RunInProgress | Decision::Start | Decision::Started { .. } => return Ok(()),
-        Decision::StartFailed { code, detail } => (
-            Level::Error,
-            ActingctlCode::WatchdogStartFailed,
-            vec![("code", code.to_string()), ("detail", detail.clone())],
-        ),
-        Decision::Misconfigured { code, detail } => (
+        Decision::StartFailed(_) => (Level::Error, ActingctlCode::WatchdogStartFailed, Vec::new()),
+        Decision::Misconfigured(_) => (
             Level::Error,
             ActingctlCode::WatchdogMisconfigured,
-            vec![("code", code.to_string()), ("detail", detail.clone())],
+            Vec::new(),
         ),
         Decision::Alive {
-            owner,
-            started_by_watchdog,
-        } => {
-            if !started_by_watchdog {
-                (
-                    Level::Info,
-                    ActingctlCode::WatchdogFormalStartObserved,
-                    vec![
-                        ("pid", owner.pid.to_string()),
-                        ("owner_epoch", owner.owner_epoch.clone()),
-                    ],
-                )
-            } else if previous_key.as_deref() == Some("started") {
-                return Ok(());
-            } else {
-                (
-                    Level::Info,
-                    ActingctlCode::WatchdogAlive,
-                    vec![
-                        ("pid", owner.pid.to_string()),
-                        ("owner_epoch", owner.owner_epoch.clone()),
-                        ("started_by_watchdog", "true".to_owned()),
-                    ],
-                )
-            }
-        }
-        Decision::OwnerLockHeld { detail } => (
+            started_by_watchdog: false,
+            ..
+        } => (
+            Level::Info,
+            ActingctlCode::WatchdogFormalStartObserved,
+            Vec::new(),
+        ),
+        Decision::Alive { .. } if after_start => return Ok(()),
+        Decision::Alive { .. } => (
+            Level::Info,
+            ActingctlCode::WatchdogAlive,
+            vec![("started_by_watchdog", "true".to_owned())],
+        ),
+        Decision::OwnerLockHeld { .. } => (
             Level::Info,
             ActingctlCode::WatchdogOwnerLockHeld,
-            vec![("detail", detail.clone())],
+            Vec::new(),
         ),
         Decision::NeverStarted => (Level::Info, ActingctlCode::WatchdogNeverStarted, Vec::new()),
-        Decision::OwnerRetainedUnconfirmed { owner_epoch } => (
+        Decision::OwnerRetainedUnconfirmed { .. } => (
             Level::Error,
             ActingctlCode::WatchdogOwnerRetainedUnconfirmed,
-            vec![
-                ("owner_epoch", owner_epoch.clone()),
-                (
-                    "next",
-                    "start formally; startup releases a retained owner whose process has exited"
-                        .to_owned(),
-                ),
-            ],
+            vec![(
+                "next",
+                "start formally; startup releases a retained owner whose process has exited"
+                    .to_owned(),
+            )],
         ),
         Decision::FatalHold(fatal) => (
             Level::Error,
             ActingctlCode::WatchdogFatalHold,
-            vec![("log", fatal.log.clone()), ("line", fatal.line.clone())],
+            vec![("line", fatal.line.clone())],
         ),
-        Decision::FormalClose { owner_epoch } => (
-            Level::Info,
-            ActingctlCode::WatchdogFormalClose,
-            vec![("owner_epoch", owner_epoch.clone())],
-        ),
+        Decision::FormalClose { .. } => {
+            (Level::Info, ActingctlCode::WatchdogFormalClose, Vec::new())
+        }
         Decision::InstallerBusy => (
             Level::Info,
             ActingctlCode::WatchdogInstallerBusy,
@@ -743,20 +817,15 @@ fn record_decision(
             ActingctlCode::WatchdogRuntimeProcessWithoutOwner,
             vec![("pids", pids(processes))],
         ),
-        Decision::BudgetExhausted { since_unix_ms } => (
+        Decision::BudgetExhausted { .. } => (
             Level::Error,
             ActingctlCode::WatchdogBudgetExhausted,
-            vec![
-                ("since_unix_ms", since_unix_ms.to_string()),
-                ("starts", state.starts.len().to_string()),
-            ],
+            vec![("starts", state.starts.len().to_string())],
         ),
-        Decision::Grace { until_unix_ms } => (
-            Level::Info,
-            ActingctlCode::WatchdogGrace,
-            vec![("until_unix_ms", until_unix_ms.to_string())],
-        ),
+        Decision::Grace { .. } => (Level::Info, ActingctlCode::WatchdogGrace, Vec::new()),
     };
+    let mut fields = log::outcome_fields(&outcome);
+    fields.extend(text);
     log::append(directory, now, level, code, &fields)
 }
 
@@ -768,40 +837,6 @@ fn pids(processes: &[decide::RuntimeProcess]) -> String {
         .join(",")
 }
 
-fn detail(decision: &Decision) -> Value {
-    match decision {
-        Decision::Misconfigured { code, detail } | Decision::StartFailed { code, detail } => {
-            json!({ "code": code.as_str(), "detail": detail })
-        }
-        Decision::OwnerLockHeld { detail } => json!({ "detail": detail }),
-        Decision::FatalHold(fatal) => json!({ "log": fatal.log, "line": fatal.line }),
-        Decision::FormalClose { owner_epoch }
-        | Decision::OwnerRetainedUnconfirmed { owner_epoch } => {
-            json!({ "owner_epoch": owner_epoch })
-        }
-        Decision::Alive {
-            owner,
-            started_by_watchdog,
-        } => json!({
-            "pid": owner.pid,
-            "owner_epoch": owner.owner_epoch,
-            "started_at_unix_ms": owner.started_at_unix_ms,
-            "started_by_watchdog": started_by_watchdog,
-        }),
-        Decision::Started { method, owner, log } => json!({
-            "method": method,
-            "pid": owner.pid,
-            "owner_epoch": owner.owner_epoch,
-            "log": log,
-        }),
-        Decision::RuntimeProcessPresent { processes }
-        | Decision::RuntimeProcessWithoutOwner { processes } => processes_json(processes),
-        Decision::BudgetExhausted { since_unix_ms } => json!({ "since_unix_ms": since_unix_ms }),
-        Decision::Grace { until_unix_ms } => json!({ "until_unix_ms": until_unix_ms }),
-        _ => Value::Null,
-    }
-}
-
 fn processes_json(processes: &[decide::RuntimeProcess]) -> Value {
     Value::Array(
         processes
@@ -811,13 +846,8 @@ fn processes_json(processes: &[decide::RuntimeProcess]) -> Value {
     )
 }
 
-fn report(
-    tick: &Tick,
-    decision: &Decision,
-    state: &WatchdogState,
-    directory: &Path,
-    exit: u8,
-) -> Value {
+/// The report of a tick: the decision on top and what the tick observed as data.
+fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &Path) -> Report {
     let installation = &tick.installation;
     let journal = match &tick.journal {
         Journal::Record {
@@ -833,15 +863,26 @@ fn report(
             "resource_disposition": record.resource_disposition,
             "modified_unix_ms": modified_unix_ms,
         }),
-        Journal::Unrecognised { detail } => json!({ "unrecognised": detail }),
+        Journal::Unrecognised { failure } => json!({ "unrecognised": envelope(failure) }),
         Journal::Absent => Value::Null,
     };
+    let live_owner = match &tick.live {
+        Some(Ok(owner)) => json!({
+            "pid": owner.pid,
+            "owner_epoch": owner.owner_epoch,
+            "started_at_unix_ms": owner.started_at_unix_ms,
+            "started_by_watchdog": decide::started_by_watchdog(owner, &state.starts),
+        }),
+        Some(Err(failure)) => json!({ "error": envelope(failure) }),
+        None => Value::Null,
+    };
+    // A FATAL hold names its log: the newest FATAL, or (R5b) an earlier owner's.
+    let fatal = match decision {
+        Decision::FatalHold(fatal) => Some(fatal),
+        _ => tick.fatal.as_ref(),
+    };
     let now = now_unix_ms();
-    json!({
-        "decision": decision.name(),
-        "code": decision.key(),
-        "exit_code": exit,
-        "detail": detail(decision),
+    let data = json!({
         "root": installation.root_plain.display().to_string(),
         "generation": installation.generation,
         "slot": installation.slot,
@@ -849,12 +890,8 @@ fn report(
         "owner_lock": tick.lock.as_str(),
         "journal": journal,
         "runtime_info": tick.runtime_info,
-        "live_owner": match &tick.live {
-            Some(Ok(owner)) => json!({ "pid": owner.pid, "owner_epoch": owner.owner_epoch }),
-            Some(Err(error)) => json!({ "error": error }),
-            None => Value::Null,
-        },
-        "fatal": tick.fatal.as_ref().map(|fatal| json!({ "log": fatal.log, "line": fatal.line })),
+        "live_owner": live_owner,
+        "fatal": fatal.map(|fatal| json!({ "log": fatal.log, "line": fatal.line })),
         "writer_lock": tick.writer,
         "processes": tick.processes.as_deref().map(processes_json),
         "budget": {
@@ -867,94 +904,88 @@ fn report(
         "grace_until_unix_ms": state.grace_until_unix_ms,
         "last_tick_unix_ms": state.last_tick_unix_ms,
         "decision_since_unix_ms": state.decision_since_unix_ms,
-        "log": observe::plain_path(&directory.join(log::LOG_FILE)).display().to_string(),
-    })
+    });
+    let mut report = Report::new(decision.outcome());
+    report.data = cli_line::members(data, "data");
+    report.insert("log", watchdog_log(directory));
+    report
 }
 
-/// A misconfiguration found before the state could be read or written. `run-once` writes the
-/// line unless the log's last line already says the same; `status` writes nothing.
+/// A misconfiguration found before the state could be read or written: the decision
+/// `watchdog_misconfigured` with the failure as its link. `run-once` writes the line unless the
+/// log's last line already names the same failure; `status` writes nothing.
 fn misconfigured_report(
     directory: Option<&Path>,
-    failure: Failure,
+    failure: Outcome,
     write: bool,
     quiet: bool,
-) -> (Value, u8) {
-    let mut logged = Value::Null;
+) -> Report {
+    let failure_code = decide::registered_code(&failure);
+    let outcome = Decision::Misconfigured(failure).outcome();
     // Under the task (`quiet`) stderr also lands in watchdog.log: it repeats nothing the log
     // already holds.
     let mut in_log = false;
-    if let Some(directory) = directory {
-        let fields = [
-            ("code", failure.code.to_string()),
-            ("detail", failure.detail.clone()),
-        ];
-        if write {
-            if log::last_line_matches(
-                directory,
-                ActingctlCode::WatchdogMisconfigured.code(),
-                failure.code,
-            ) {
-                in_log = true;
-            } else {
-                match log::append(
-                    directory,
-                    now_unix_ms(),
-                    Level::Error,
-                    ActingctlCode::WatchdogMisconfigured,
-                    &fields,
-                ) {
-                    Ok(()) => in_log = true,
-                    Err(error) => {
-                        eprintln!("ERROR actingctl watchdog: {}: {}", error.code, error.detail);
+    let log = match directory {
+        Some(directory) => {
+            if write {
+                if failure_code.is_some_and(|failure_code| {
+                    log::last_line_matches(
+                        directory,
+                        ActingctlCode::WatchdogMisconfigured.code(),
+                        failure_code,
+                    )
+                }) {
+                    in_log = true;
+                } else {
+                    match log::append(
+                        directory,
+                        now_unix_ms(),
+                        Level::Error,
+                        ActingctlCode::WatchdogMisconfigured,
+                        &log::outcome_fields(&outcome),
+                    ) {
+                        Ok(()) => in_log = true,
+                        Err(error) => cli_line::developer_line(&error, None),
                     }
                 }
             }
+            watchdog_log(directory)
         }
-        logged = json!(
-            observe::plain_path(&directory.join(log::LOG_FILE))
-                .display()
-                .to_string()
-        );
+        None => Value::Null,
+    };
+    if quiet && !in_log {
+        cli_line::developer_line(&outcome, None);
     }
-    if !(quiet && in_log) {
-        eprintln!(
-            "ERROR actingctl watchdog: {}: {}",
-            failure.code, failure.detail
-        );
-    }
-    let decision = failure.decision();
-    (
-        json!({
-            "decision": decision.name(),
-            "code": decision.key(),
-            "exit_code": 13,
-            "detail": detail(&decision),
-            "log": logged,
-        }),
-        13,
-    )
+    Report::new(outcome).with("log", log)
 }
 
-/// `status`'s task section (read-only, through the ScheduledTasks module): a missing,
-/// disabled or different definition is attention 14.
-fn task_report(root_plain: &Path, attention: &mut Vec<(String, u8)>) -> Value {
+/// `status`'s task section (read-only, through the ScheduledTasks module). A missing task is
+/// the attention `watchdog_task_missing`; a disabled or different definition is
+/// `watchdog_task_mismatch` with the `names` of what differs; a query that failed is
+/// `watchdog_misconfigured` with the failure, which the section also carries as `error`.
+fn task_report(root_plain: &Path, attention: &mut Vec<Outcome>) -> Value {
     let name = task::task_name(root_plain);
     let registration = match task::query(&name) {
         Ok((registration, _)) => registration,
         Err(failure) => {
-            attention.push((format!("misconfigured:{}", failure.code), 13));
-            return json!({ "task_name": name, "error": failure.detail });
+            let section = json!({ "task_name": name, "error": envelope(&failure) });
+            attention.push(Decision::Misconfigured(failure).outcome());
+            return section;
         }
     };
     match registration {
         task::Registration::Absent => {
-            attention.push(("task_missing".to_owned(), 14));
+            attention.push(Outcome::new(ActingctlCode::WatchdogTaskMissing).name(&name));
             json!({ "task_name": name, "registered": false })
         }
         task::Registration::Present(definition, run) => {
             let mismatches = task::mismatches(&definition, root_plain);
             if !mismatches.is_empty() {
-                attention.push(("task_mismatch".to_owned(), 14));
+                attention.push(
+                    Outcome::new(ActingctlCode::WatchdogTaskMismatch)
+                        .name(&name)
+                        .names(mismatches.iter().copied()),
+                );
             }
             json!({
                 "task_name": name,
@@ -975,199 +1006,202 @@ fn task_report(root_plain: &Path, attention: &mut Vec<(String, u8)>) -> Value {
 }
 
 /// `install`: registers or refreshes the task (`schtasks /Create /XML /F`), then checks what
-/// Task Scheduler holds. Every refusal is exit 13 with a named code; a different definition
-/// afterwards is 14.
-fn install(root: &Path) -> (Value, u8) {
+/// Task Scheduler holds. Its top is `watchdog_installed` (`name`) or the failure.
+fn install(root: &Path) -> Report {
     let now = now_unix_ms();
     let installation = match Installation::resolve(root) {
         Ok(installation) => installation,
-        Err(failure) => return misconfigured_report(None, failure, false, false),
+        Err(failure) => return install_failed(None, failure),
     };
     let root_plain = installation.root_plain.clone();
     let launcher = task::launcher(&root_plain);
     let entry = root_plain.join("runtime").join("actingctl.exe");
     for program in [&entry, &launcher] {
+        // Deploy the Runtime and Tools that carry the watchdog first.
         if !program.is_file() {
-            let failure = Failure::misconfigured(
-                ActingctlCode::WatchdogLauncherMissing,
-                format!(
-                    "{} is not a file; deploy the Runtime and Tools that carry the watchdog first",
-                    program.display()
-                ),
-            );
-            return misconfigured_report(None, failure, false, false);
+            let failure = Outcome::new(ActingctlCode::WatchdogLauncherMissing).path(program);
+            return install_failed(None, failure);
         }
     }
     match observe::writer_lock(&installation.root) {
         Ok(WriterProbe::Free(guard)) => drop(guard),
-        Ok(WriterProbe::Busy) => {
-            let failure = Failure::misconfigured(
-                ActingctlCode::WatchdogInstallerBusy,
-                "acsetup holds install\\writer.lock; install the watchdog after it finishes",
-            );
-            return misconfigured_report(None, failure, false, false);
-        }
-        Err(failure) => return misconfigured_report(None, failure, false, false),
+        // acsetup holds install\writer.lock: install the watchdog after it finishes.
+        Ok(WriterProbe::Busy) => return install_failed(None, Decision::InstallerBusy.outcome()),
+        Err(failure) => return install_failed(None, failure),
     }
     let directory = installation.root.join("watchdog");
     if let Err(error) = fs::create_dir_all(&directory) {
-        let failure = Failure::misconfigured(
+        let failure = io_failure(
             ActingctlCode::WatchdogDirectoryUnavailable,
-            format!("{}: {error}", directory.display()),
+            &directory,
+            &error,
+            IoOp::CreateDir,
         );
-        return misconfigured_report(None, failure, false, false);
+        return install_failed(None, failure);
     }
     // A tick in flight would write state.json behind this rewrite: wait for it, briefly.
     let run_lock = match hold_run_lock(&directory, Duration::from_secs(30)) {
         Ok(run_lock) => run_lock,
-        Err(failure) => return misconfigured_report(Some(&directory), failure, true, false),
+        Err(failure) => return install_failed(Some(&directory), failure),
     };
-    let installed = (|| -> Result<Value, (Failure, u8)> {
-        let plain = root_plain.display().to_string();
-        let mut state = match state::load(&directory, &plain) {
-            Ok((state, Loaded::Existing | Loaded::Fresh)) => state,
-            Ok((state, Loaded::OtherSchema(schema))) => {
-                let aside =
-                    state::set_aside(&directory, now).map_err(|failure| (failure, 13_u8))?;
-                log::append(
-                    &directory,
-                    now,
-                    Level::Warn,
-                    ActingctlCode::WatchdogStateReset,
-                    &[
-                        ("schema_version", schema),
-                        ("set_aside", aside.display().to_string()),
-                    ],
-                )
-                .map_err(|failure| (failure, 13_u8))?;
-                state
-            }
-            // An unreadable state is moved aside: install is an operator's fresh start.
-            Err(unreadable) => {
-                let from = directory.join(state::STATE_FILE);
-                let to = directory.join(format!("{}.unreadable-{now}", state::STATE_FILE));
-                fs::rename(&from, &to).map_err(|error| {
-                    (
-                        Failure::misconfigured(
-                            ActingctlCode::WatchdogStateUnwritable,
-                            format!("cannot move {} aside: {error}", from.display()),
-                        ),
-                        13_u8,
-                    )
-                })?;
-                log::append(
-                    &directory,
-                    now,
-                    Level::Warn,
-                    ActingctlCode::WatchdogStateReset,
-                    &[
-                        ("code", unreadable.code.to_string()),
-                        ("set_aside", to.display().to_string()),
-                    ],
-                )
-                .map_err(|failure| (failure, 13_u8))?;
-                WatchdogState::fresh(&plain)
-            }
-        };
-        // Review L5: the first task tick after an install opens no gap grace.
-        state.last_task_tick_end_unix_ms = Some(now);
-        state::save(&directory, &state).map_err(|failure| (failure, 13_u8))?;
-        let user = task::current_user_sid().map_err(|failure| (failure, 13_u8))?;
-        let name = task::task_name(&root_plain);
-        let xml = directory.join(task::TASK_XML);
-        let start_boundary = format!("{}Z", &log::rfc3339_utc(now)[..19]);
-        fs::write(
-            &xml,
-            task::utf16le_with_bom(&task::definition_xml(&root_plain, &user, &start_boundary)),
-        )
-        .map_err(|error| {
-            (
-                Failure::misconfigured(
-                    ActingctlCode::WatchdogTaskRegisterFailed,
-                    format!("{}: {error}", xml.display()),
-                ),
-                13_u8,
-            )
-        })?;
-        task::register(&name, &observe::plain_path(&xml)).map_err(|failure| (failure, 13_u8))?;
-        let definition = match task::query(&name).map_err(|failure| (failure, 13_u8))?.0 {
-            task::Registration::Present(definition, _) => definition,
-            task::Registration::Absent => {
-                return Err((
-                    Failure::misconfigured(
-                        ActingctlCode::WatchdogTaskMismatch,
-                        format!("Task Scheduler holds no task {name} after schtasks /Create"),
-                    ),
-                    14,
-                ));
-            }
-        };
-        let mismatches = task::mismatches(&definition, &root_plain);
-        if !mismatches.is_empty() {
-            return Err((
-                Failure::misconfigured(ActingctlCode::WatchdogTaskMismatch, mismatches.join("; ")),
-                14,
-            ));
-        }
-        log::append(
-            &directory,
-            now_unix_ms(),
-            Level::Info,
-            ActingctlCode::WatchdogInstalled,
-            &[("task", name.clone()), ("user", user.clone())],
-        )
-        .map_err(|failure| (failure, 13_u8))?;
-        Ok(json!({
-            "decision": "installed",
-            "exit_code": 0,
-            "task_name": name,
-            "command": definition.command,
-            "interval": definition.interval,
-            "logon_type": definition.logon_type,
-            "run_level": definition.run_level.clone().unwrap_or_else(|| task::RUN_LEVEL.to_owned()),
-            "enabled": definition.enabled,
-            "user": user,
-            "xml": observe::plain_path(&xml).display().to_string(),
-            "log": observe::plain_path(&directory.join(log::LOG_FILE)).display().to_string(),
-        }))
-    })();
+    let installed = install_task(&directory, &root_plain, now);
     drop(run_lock);
     match installed {
-        Ok(report) => (report, 0),
-        Err((failure, exit)) => {
-            let (mut report, _) = misconfigured_report(Some(&directory), failure, true, false);
-            report["exit_code"] = json!(exit);
-            (report, exit)
-        }
+        Ok(report) => report,
+        Err(failure) => install_failed(Some(&directory), failure),
     }
 }
 
+/// `install` under the run lock: a fresh or kept state, the definition, its registration and
+/// the check of what Task Scheduler holds.
+fn install_task(directory: &Path, root_plain: &Path, now: u64) -> Result<Report, Outcome> {
+    let plain = root_plain.display().to_string();
+    let mut state = match state::load(directory, &plain) {
+        Ok((state, Loaded::Existing | Loaded::Fresh)) => state,
+        Ok((state, Loaded::OtherSchema(schema))) => {
+            let aside = state::set_aside(directory, now)?;
+            log::append(
+                directory,
+                now,
+                Level::Warn,
+                ActingctlCode::WatchdogStateReset,
+                &[
+                    ("schema_version", schema),
+                    ("set_aside", aside.display().to_string()),
+                ],
+            )?;
+            state
+        }
+        // An unreadable state is moved aside: install is an operator's fresh start.
+        Err(unreadable) => {
+            let from = directory.join(state::STATE_FILE);
+            let to = directory.join(format!("{}.unreadable-{now}", state::STATE_FILE));
+            state::move_aside(&from, &to)?;
+            log::append(
+                directory,
+                now,
+                Level::Warn,
+                ActingctlCode::WatchdogStateReset,
+                &[
+                    ("failure_code", unreadable.code().to_string()),
+                    ("set_aside", to.display().to_string()),
+                ],
+            )?;
+            WatchdogState::fresh(&plain)
+        }
+    };
+    // Review L5: the first task tick after an install opens no gap grace.
+    state.last_task_tick_end_unix_ms = Some(now);
+    state::save(directory, &state)?;
+    let user = task::current_user_sid()?;
+    let name = task::task_name(root_plain);
+    let xml = directory.join(task::TASK_XML);
+    let start_boundary = format!("{}Z", &log::rfc3339_utc(now)[..19]);
+    fs::write(
+        &xml,
+        task::utf16le_with_bom(&task::definition_xml(root_plain, &user, &start_boundary)),
+    )
+    .map_err(|error| {
+        io_failure(
+            ActingctlCode::WatchdogTaskRegisterFailed,
+            &xml,
+            &error,
+            IoOp::Write,
+        )
+        .name(&name)
+    })?;
+    task::register(&name, &observe::plain_path(&xml))?;
+    let definition = match task::query(&name)?.0 {
+        task::Registration::Present(definition, _) => definition,
+        // Task Scheduler holds no task of that name after schtasks /Create.
+        task::Registration::Absent => {
+            return Err(Outcome::new(ActingctlCode::WatchdogTaskMismatch).name(&name));
+        }
+    };
+    let mismatches = task::mismatches(&definition, root_plain);
+    if !mismatches.is_empty() {
+        return Err(Outcome::new(ActingctlCode::WatchdogTaskMismatch)
+            .name(&name)
+            .names(mismatches));
+    }
+    log::append(
+        directory,
+        now_unix_ms(),
+        Level::Info,
+        ActingctlCode::WatchdogInstalled,
+        &[("task", name.clone()), ("user", user.clone())],
+    )?;
+    let data = json!({
+        "task_name": name,
+        "command": definition.command,
+        "interval": definition.interval,
+        "logon_type": definition.logon_type,
+        "run_level": definition.run_level.clone().unwrap_or_else(|| task::RUN_LEVEL.to_owned()),
+        "enabled": definition.enabled,
+        "user": user,
+        "xml": observe::plain_path(&xml).display().to_string(),
+        "log": watchdog_log(directory),
+    });
+    let mut report = Report::new(Outcome::new(ActingctlCode::WatchdogInstalled).name(&name));
+    report.data = cli_line::members(data, "data");
+    Ok(report)
+}
+
+/// A failed install: the failure on top, or, when it is an info decision (the installer holds
+/// its writer lock, a tick holds the run lock), `watchdog_install_refused` caused by it, so the
+/// refusal exits 1. Once the watchdog directory exists the failure is also logged.
+fn install_failed(directory: Option<&Path>, failure: Outcome) -> Report {
+    let outcome = if failure.category() < Category::Error {
+        Outcome::new(ActingctlCode::WatchdogInstallRefused).caused_by(failure)
+    } else {
+        failure
+    };
+    let log = match directory {
+        Some(directory) => {
+            if let Err(error) =
+                log::append_outcome(directory, now_unix_ms(), Level::Error, &outcome)
+            {
+                cli_line::developer_line(&error, None);
+            }
+            watchdog_log(directory)
+        }
+        None => Value::Null,
+    };
+    Report::new(outcome).with("log", log)
+}
+
 /// `uninstall`: `schtasks /Delete /F`. Every file under `<root>\watchdog\` stays. The root
-/// need not be a working installation any more.
-fn uninstall(root: &Path) -> (Value, u8) {
+/// need not be a working installation any more. Its top is `watchdog_uninstalled` (`name`), with
+/// a `schtasks /End` that did not run as a `secondary` link; otherwise the failure.
+fn uninstall(root: &Path) -> Report {
     let resolved = fs::canonicalize(root).or_else(|_| std::path::absolute(root));
     let root_plain = match resolved {
         Ok(path) => observe::plain_path(&path),
         Err(error) => {
-            let failure = Failure::misconfigured(
+            return Report::new(io_failure(
                 ActingctlCode::WatchdogRootUnavailable,
-                format!("{}: {error}", root.display()),
-            );
-            return misconfigured_report(None, failure, false, false);
+                root,
+                &error,
+                IoOp::Absolute,
+            ));
         }
     };
     let name = task::task_name(&root_plain);
     let (registration, other_tasks) = match task::query(&name) {
         Ok(found) => found,
-        Err(failure) => return misconfigured_report(None, failure, false, false),
+        Err(failure) => return Report::new(failure),
     };
     let was_registered = matches!(registration, task::Registration::Present(..));
     let mut ended = None;
+    let mut end_failure = None;
     if was_registered {
         // A tick in flight is ended first; a start it already issued keeps running.
-        ended = Some(task::end(&name));
+        match task::end(&name) {
+            Ok(exit_status) => ended = exit_status,
+            Err(failure) => end_failure = Some(failure),
+        }
         if let Err(failure) = task::delete(&name) {
-            return misconfigured_report(None, failure, false, false);
+            return Report::new(failure);
         }
     }
     let directory = root_plain.join("watchdog");
@@ -1178,8 +1212,8 @@ fn uninstall(root: &Path) -> (Value, u8) {
             Duration::from_millis(decide::READY_TIMEOUT_MS + 20_000),
         ) {
             Ok(_) => false,
-            Err(failure) if failure.code == ActingctlCode::WatchdogRunInProgress.code() => true,
-            Err(failure) => return misconfigured_report(None, failure, false, false),
+            Err(failure) if failure.is(ActingctlCode::WatchdogRunInProgress) => true,
+            Err(failure) => return Report::new(failure),
         }
     } else {
         false
@@ -1194,31 +1228,29 @@ fn uninstall(root: &Path) -> (Value, u8) {
             &[("task", name.clone())],
         )
     {
-        return misconfigured_report(None, failure, false, false);
+        return Report::new(failure);
     }
-    (
-        json!({
-            "decision": "uninstalled",
-            "exit_code": 0,
-            "task_name": name,
-            "registered": false,
-            "was_registered": was_registered,
-            "end": ended,
-            "tick_in_progress": tick_in_progress,
-            "other_watchdog_tasks": other_tasks,
-        }),
-        0,
-    )
+    let outcome = Outcome::new(ActingctlCode::WatchdogUninstalled).name(&name);
+    let outcome = match end_failure {
+        Some(failure) => outcome.link(CauseRelation::Secondary, failure),
+        None => outcome,
+    };
+    Report::new(outcome)
+        .with("task_name", json!(name))
+        .with("registered", json!(false))
+        .with("was_registered", json!(was_registered))
+        .with("end", json!(ended))
+        .with("tick_in_progress", json!(tick_in_progress))
+        .with("other_watchdog_tasks", json!(other_tasks))
 }
 
-/// `<root>\watchdog\run.lock`, held exclusively, retried until `wait` has passed.
-pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
+/// `<root>\watchdog\run.lock`, held exclusively, retried until `wait` has passed. A tick that
+/// still holds it then is `watchdog_run_in_progress` (info: `path`, `timeout_ms`); a lock that
+/// cannot be opened or taken is `watchdog_run_lock_failed` (`path`).
+pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Outcome> {
     let path = directory.join(RUN_LOCK);
-    let failed = |detail: String| {
-        Failure::misconfigured(
-            ActingctlCode::WatchdogRunLockFailed,
-            format!("{}: {detail}", path.display()),
-        )
+    let failed = |error: &io::Error, op: IoOp| {
+        io_failure(ActingctlCode::WatchdogRunLockFailed, &path, error, op)
     };
     let file = OpenOptions::new()
         .read(true)
@@ -1226,7 +1258,7 @@ pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Fa
         .create(true)
         .truncate(false)
         .open(&path)
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| failed(&error, IoOp::Open))?;
     let deadline = std::time::Instant::now() + wait;
     loop {
         match file.try_lock() {
@@ -1234,17 +1266,120 @@ pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Fa
             Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(500));
             }
+            // Run the command again once the tick has ended.
             Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(Failure::misconfigured(
-                    ActingctlCode::WatchdogRunInProgress,
-                    format!(
-                        "a tick still holds {} after {} s; run the command again",
-                        path.display(),
-                        wait.as_secs()
-                    ),
-                ));
+                return Err(Outcome::new(ActingctlCode::WatchdogRunInProgress)
+                    .path(&path)
+                    .timeout_ms(wait));
             }
-            Err(std::fs::TryLockError::Error(error)) => return Err(failed(error.to_string())),
+            Err(std::fs::TryLockError::Error(error)) => return Err(failed(&error, IoOp::Lock)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// An A/B root with slot A and generation 1 whose zero-instance config names
+    /// `<root>\state` (the process tests' fixture layout).
+    fn installation(base: &Path) -> Installation {
+        let root = base.join("install");
+        let generation = root.join("install").join("generations").join("1");
+        for directory in [root.join("A"), generation.clone(), root.join("state")] {
+            fs::create_dir_all(directory).expect("create fixture directory");
+        }
+        let members = br#"{"fixture":"watchdog-report"}"#;
+        fs::write(root.join("A").join("MEMBERS.json"), members).expect("write members");
+        let config = serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.actingd.config.v1",
+            "state_root": root.join("state"),
+            "bind_host": "127.0.0.1",
+            "bind_port": 0,
+            "secret_fingerprint_salt": "watchdog-report-test-salt",
+            "instances": []
+        }))
+        .expect("config JSON");
+        fs::write(generation.join("actingd.config.json"), &config).expect("write config");
+        fs::write(root.join("install").join("slot-A.lock"), b"").expect("write slot lock");
+        let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let selection = json!({
+            "schema_version": "actingcommand.install-selection.v1",
+            "slot": "A",
+            "generation": 1,
+            "members": { "path": "A/MEMBERS.json", "sha256": digest(members) },
+            "config": {
+                "path": "install/generations/1/actingd.config.json",
+                "sha256": digest(&config)
+            }
+        });
+        fs::write(
+            root.join("install").join("active.json"),
+            serde_json::to_vec(&selection).expect("selection JSON"),
+        )
+        .expect("write selection");
+        Installation::resolve(&root).expect("the fixture installation")
+    }
+
+    /// Workflow #378 A5 (model v2.2 §7.5; design item 1): the report of a status of a live owner
+    /// is `actingcommand.watchdog.report.v2`: the decision's envelope as `outcome`, the
+    /// attention list of envelopes, the data members (the live owner with
+    /// `started_by_watchdog`), and no `decision`, `code`, `exit_code` or `detail` member. The
+    /// task section itself comes from Task Scheduler and is not built here.
+    #[test]
+    fn report_v2_of_a_live_owner_has_its_schema_outcome_and_attention() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let owner = decide::LiveOwner {
+            pid: 4242,
+            owner_epoch: "epoch_live".to_owned(),
+            started_at_unix_ms: 1_800_000_000_000,
+        };
+        let tick = Tick {
+            installation: installation(base.path()),
+            lock: OwnerLock::Locked,
+            journal: Journal::Absent,
+            live: Some(Ok(owner.clone())),
+            fatal: None,
+            earlier_fatal: None,
+            runtime_info: None,
+            writer: None,
+            processes: None,
+        };
+        let decision = Decision::Alive {
+            owner,
+            started_by_watchdog: false,
+        };
+        let state = WatchdogState::fresh("R");
+        let directory = base.path().join("install").join("watchdog");
+        let mut report = report(&tick, &decision, &state, &directory);
+        report.attention.push(
+            Outcome::new(ActingctlCode::WatchdogTaskMissing)
+                .name("ActingCommand Runtime watchdog 000000000000"),
+        );
+        assert_eq!(report.exit_code(), 0);
+        let line = report.line(Detail::Full).expect("the report line");
+
+        assert_eq!(line["schema_version"], "actingcommand.watchdog.report.v2");
+        assert_eq!(
+            line["outcome"]["schema_version"],
+            "actingcommand.outcome.v1"
+        );
+        assert_eq!(line["outcome"]["code"], "watchdog_alive");
+        assert_eq!(line["outcome"]["category"], "info");
+        assert_eq!(line["outcome"]["values"]["owner_epoch"], "epoch_live");
+        assert_eq!(line["outcome"]["values"]["pid"], 4242);
+        let attention = line["attention"].as_array().expect("the attention list");
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0]["code"], "watchdog_task_missing");
+        assert_eq!(attention[0]["category"], "warning");
+        for removed in ["decision", "code", "exit_code", "detail"] {
+            assert!(line.get(removed).is_none(), "{removed}: {line}");
+        }
+        assert_eq!(line["live_owner"]["owner_epoch"], "epoch_live");
+        assert_eq!(line["live_owner"]["started_by_watchdog"], false);
+        assert_eq!(line["owner_lock"], "locked");
+        assert_eq!(line["generation"], 1);
+        assert_eq!(line["slot"], "A");
     }
 }
