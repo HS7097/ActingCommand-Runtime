@@ -65,7 +65,7 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: "goal.fixture.missed".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS + 1,
         detection_budget: None,
     })
@@ -471,7 +471,7 @@ fn policy_evaluation_consumes_runtime_owned_fact_projection() {
         instance_id: POLICY_INSTANCE_ALIAS.into(),
         task_id: None,
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: "goal.fixture.missed".into(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS + 3_001,
         detection_budget: None,
     })

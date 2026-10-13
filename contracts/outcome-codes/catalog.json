@@ -1544,6 +1544,10 @@
     "event_type": {
       "type": "vocab:event_type",
       "description": "A ledger event type, for example the type of a performance event the contract rejected."
+    },
+    "resource_target_id": {
+      "type": "token",
+      "description": "The id of a resource target in an instance's resource-targets document."
     }
   },
   "vocabularies": {
@@ -2440,6 +2444,18 @@
         },
         "lookup_miss": {
           "description": "No lookup entry covers the value and the transform declares no default."
+        },
+        "dependency_state_missing": {
+          "description": "No terminal state is recorded for the task a predicate depends on."
+        },
+        "outcome_missing": {
+          "description": "No result is recorded under the task's outcome key."
+        },
+        "outcome_expired": {
+          "description": "The result recorded under the task's outcome key has expired."
+        },
+        "resource_outcome_missing": {
+          "description": "No result is recorded for the resource a pool reads from a task's outcome."
         }
       }
     },

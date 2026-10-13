@@ -400,7 +400,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose fact_code is this code followed by key=value tokens and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
+      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose outcome is this code with these values and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
       "common_causes": "A daily or window budget already used that day, often by an owed run that served the previous day's slot; the activity window closed before the slot could run; the task is paused after repeated failures; the task is disabled for the instance, or the instance lacks the operation or a matching activity profile.",
       "handling": "Compare next_eligible_unix_ms with next_occurrence_unix_ms: below it, the slot runs later in the same or the next window; at or above it, the slot is lost to the next occurrence. Change the catalog (budget, slot times, activity window) or the instance configuration if the slot must run."
     },
@@ -6249,7 +6249,7 @@
       "handling": "TBD"
     },
     "maintenance_recheck_suggested": {
-      "category": "error",
+      "category": "info",
       "ladder_class": "none",
       "owner": "runtime-host",
       "layer": "host",
@@ -6258,7 +6258,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports maintenance recheck suggested.",
+      "description": "A predictive maintenance assessment of a task on an instance suggests a recheck: the outcome of a drift_predicted planning signal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14068,6 +14068,97 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host could not build the runtime receipt of a request; the host latches the failure (was the runtime client's runtime_receipt_invalid, which names a receipt the client cannot read).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "planning_fact_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy candidate's predicate read a fact (fact_key) that is unknown (unknown_reason), and the policy reserves a detection for it: the outcome of a detection_reserved or detection_quota_exhausted planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "strategic_feasibility_red": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal infeasible on an instance at best effort: the outcome of a feasibility_red planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "strategic_timeline_reached": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal's deadline reached on an instance with a shortfall left: the outcome of a timeline_reached planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_instance_fact_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation found no usable instance fact (fact_key) for an instance and projected the instance unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "priority_offset_unknown_task": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A priority offset names a task (task_id) the active catalog does not declare; the offset is ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_detection_reason_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation's detection suggestion carries a reason that the unknown_reason vocabulary does not list, so its planning signal cannot be recorded.",
       "common_causes": "TBD",
       "handling": "TBD"
     }

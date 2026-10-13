@@ -58,7 +58,9 @@ impl HostShared {
                     instance_id: query.instance_id().to_owned(),
                     task_id: Some(query.task_id().to_owned()),
                     kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
-                    fact_code: HostCode::MaintenanceRecheckSuggested.as_str().to_owned(),
+                    outcome: actingcommand_contract::outcome::Outcome::new(
+                        HostCode::MaintenanceRecheckSuggested,
+                    ),
                     observed_at_unix_ms,
                     detection_budget: None,
                 })?;

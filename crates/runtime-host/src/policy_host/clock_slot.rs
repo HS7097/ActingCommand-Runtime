@@ -11,22 +11,25 @@
 use super::{CatalogStore, matching_activity_profile};
 use crate::RuntimeHostResult;
 use crate::codes::HostCode;
+use actingcommand_contract::outcome::{Code, Outcome, VocabularyToken};
 use actingcommand_contract::{
     PolicyBudgetDimension, PolicyDispatchRejection, PolicyPlanningSignalEventData,
     PolicyPlanningSignalKind,
 };
 use actingcommand_policy::{
     ActivityWindowOccurrence, CandidateEligibility, CompiledCatalog, DispatchIntent,
-    EligibilityState, EvaluationTime, InstanceSnapshot, PolicyEvaluation, SchedulingDecisionState,
-    TaskRuntimeSnapshot, activity_window_at, clock_slot_view,
+    EligibilityState, EvaluationTime, InstanceSnapshot, PolicyCode, PolicyEvaluation,
+    SchedulingDecisionState, TaskRuntimeSnapshot, activity_window_at, clock_slot_view,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The closure's deferral of one (task, instance) pair in this evaluation.
+/// The closure's deferral of one (task, instance) pair in this evaluation: the gate's code and
+/// class.
 struct Deferral {
-    code: String,
+    code: Code,
+    class: GateClass,
     next_wake_unix_ms: Option<u64>,
     budget_dimension: Option<PolicyBudgetDimension>,
 }
@@ -40,8 +43,9 @@ pub(super) struct Deferrals {
 }
 
 impl Deferrals {
-    /// Wraps the eligibility closure: every deferral it returns is recorded for its pair, and
-    /// what it returns is passed on unchanged.
+    /// Wraps the eligibility closure: every deferral it returns under a host code is recorded
+    /// for its pair (the closure defers only under host codes), and what it returns is passed on
+    /// unchanged.
     pub(super) fn capture<E>(
         &self,
         mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
@@ -53,11 +57,13 @@ impl Deferrals {
                 reason,
                 next_wake_unix_ms,
             }) = &result
+                && let Some((code, class)) = closure_gate(&reason.outcome)
             {
                 self.captured.borrow_mut().insert(
                     (intent.task_id.clone(), intent.instance_id.clone()),
                     Deferral {
-                        code: reason.code.clone(),
+                        code,
+                        class,
                         next_wake_unix_ms: *next_wake_unix_ms,
                         budget_dimension: self.budget_dimension.take(),
                     },
@@ -101,10 +107,10 @@ impl SlotRecord {
     }
 }
 
-/// The values of one record. Absent values are left out of the token.
+/// The values of one record. Absent values are left out of its outcome.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SlotValues {
-    pub(crate) gate_code: Option<String>,
+    pub(crate) gate_code: Option<Code>,
     pub(crate) budget_dimension: Option<PolicyBudgetDimension>,
     pub(crate) occurrence_unix_ms: u64,
     pub(crate) window_start_unix_ms: Option<u64>,
@@ -131,39 +137,40 @@ pub(crate) fn signal_id(
     format!("signal:clock_slot:{}:{:x}", kind.word(), digest.finalize())
 }
 
-/// The `fact_code` token: the record's code followed by `:<key>=<value>` for each present value,
-/// in this order. The task and the alias travel in their own payload fields.
-pub(crate) fn fact_token(kind: SlotRecord, values: &SlotValues) -> String {
-    let times = [
-        ("window_start_unix_ms", values.window_start_unix_ms),
-        ("window_end_unix_ms", values.window_end_unix_ms),
-        ("next_eligible_unix_ms", values.next_eligible_unix_ms),
-        ("next_occurrence_unix_ms", values.next_occurrence_unix_ms),
-    ];
-    let mut token = kind.code().as_str().to_owned();
-    let mut push = |key: &str, value: &str| {
-        token.push(':');
-        token.push_str(key);
-        token.push('=');
-        token.push_str(value);
-    };
-    if let Some(gate_code) = &values.gate_code {
-        push("gate_code", gate_code);
+/// The record's outcome: its code with the task, the alias and each present value (Workflow
+/// #378 A2-P); an absent value is left out, and `first_run` is written only when true.
+pub(crate) fn slot_outcome(
+    kind: SlotRecord,
+    task_id: &str,
+    alias: &str,
+    values: &SlotValues,
+) -> Outcome {
+    let mut outcome = Outcome::new(kind.code())
+        .task_id(task_id)
+        .alias(alias)
+        .occurrence_unix_ms(values.occurrence_unix_ms);
+    if let Some(gate_code) = values.gate_code {
+        outcome = outcome.gate_code(gate_code);
     }
     if let Some(dimension) = values.budget_dimension {
-        push("budget_dimension", dimension_token(dimension));
+        outcome = outcome.budget_dimension(BudgetDimensionToken(dimension));
     }
-    push("occurrence_unix_ms", &values.occurrence_unix_ms.to_string());
-    for (key, value) in times
-        .into_iter()
-        .filter_map(|(key, value)| value.map(|value| (key, value)))
-    {
-        push(key, &value.to_string());
+    if let Some(time) = values.window_start_unix_ms {
+        outcome = outcome.window_start_unix_ms(time);
+    }
+    if let Some(time) = values.window_end_unix_ms {
+        outcome = outcome.window_end_unix_ms(time);
+    }
+    if let Some(time) = values.next_eligible_unix_ms {
+        outcome = outcome.next_eligible_unix_ms(time);
+    }
+    if let Some(time) = values.next_occurrence_unix_ms {
+        outcome = outcome.next_occurrence_unix_ms(time);
     }
     if values.first_run {
-        push("first_run", "true");
+        outcome = outcome.first_run(true);
     }
-    token
+    outcome
 }
 
 /// The `goal_missed` planning signal of one record, observed at the evaluation time.
@@ -179,9 +186,21 @@ pub(crate) fn clock_slot_signal(
         instance_id: alias.to_owned(),
         task_id: Some(task_id.to_owned()),
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: fact_token(kind, values),
+        outcome: slot_outcome(kind, task_id, alias, values),
         observed_at_unix_ms,
         detection_budget: None,
+    }
+}
+
+/// A budget dimension as a token of the catalog vocabulary `budget_dimension`.
+#[derive(Clone, Copy)]
+struct BudgetDimensionToken(PolicyBudgetDimension);
+
+impl VocabularyToken for BudgetDimensionToken {
+    const VOCABULARY: &'static str = "budget_dimension";
+
+    fn token(self) -> &'static str {
+        dimension_token(self.0)
     }
 }
 
@@ -208,37 +227,44 @@ enum GateClass {
     QueueWait,
 }
 
-/// A closure deferral's class. Any code not named here is a queue wait (the default rule).
-fn closure_gate(code: &str) -> GateClass {
-    match code {
-        "policy_budget_exhausted" | "policy_activity_window_closed" | "policy_task_paused" => {
-            GateClass::Persistent
+/// A closure deferral's gate: its host code and class. Any host code not named here is a
+/// queue wait (the default rule); `None` for a reason that is not a host code.
+fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
+    let code = HostCode::ALL
+        .iter()
+        .copied()
+        .find(|code| reason.is(*code))?;
+    let class = match code {
+        HostCode::PolicyBudgetExhausted
+        | HostCode::PolicyActivityWindowClosed
+        | HostCode::PolicyTaskPaused => GateClass::Persistent,
+        HostCode::DispatchPausedGlobal | HostCode::DispatchPausedInstance => {
+            GateClass::OperatorPause
         }
-        "dispatch_paused_global" | "dispatch_paused_instance" => GateClass::OperatorPause,
         _ => GateClass::QueueWait,
-    }
+    };
+    Some((code.code(), class))
 }
 
-/// A placement block's class; other blocks are not traced.
-fn placement_gate(code: &str) -> Option<GateClass> {
-    if [
-        actingcommand_policy::PolicyCode::InstanceOverrideDisabled.as_str(),
-        actingcommand_policy::PolicyCode::CapabilityMissing.as_str(),
-        actingcommand_policy::PolicyCode::ActivityProfileMissing.as_str(),
-    ]
-    .contains(&code)
-    {
-        Some(GateClass::Persistent)
-    } else if code == actingcommand_policy::PolicyCode::InstanceUnavailable.as_str() {
-        Some(GateClass::QueueWait)
-    } else {
-        None
-    }
+/// The placement blocks that are traced, with their class; other blocks are not.
+const PLACEMENT_GATES: [(PolicyCode, GateClass); 4] = [
+    (PolicyCode::InstanceOverrideDisabled, GateClass::Persistent),
+    (PolicyCode::CapabilityMissing, GateClass::Persistent),
+    (PolicyCode::ActivityProfileMissing, GateClass::Persistent),
+    (PolicyCode::InstanceUnavailable, GateClass::QueueWait),
+];
+
+/// A placement block's gate: its code and class; `None` for a block that is not traced.
+fn placement_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
+    PLACEMENT_GATES
+        .iter()
+        .find(|(code, _)| reason.is(*code))
+        .map(|(code, class)| (code.code(), *class))
 }
 
 /// The gate that stopped a candidate, as received.
 struct Gate {
-    code: String,
+    code: Code,
     class: GateClass,
     budget_dimension: Option<PolicyBudgetDimension>,
     next_eligible_unix_ms: Option<u64>,
@@ -282,8 +308,8 @@ pub(super) fn preview(
     };
     for ((task_id, alias), deferral) in deferrals.captured.into_inner() {
         let gate = Gate {
-            class: closure_gate(&deferral.code),
             code: deferral.code,
+            class: deferral.class,
             budget_dimension: deferral.budget_dimension,
             next_eligible_unix_ms: deferral.next_wake_unix_ms,
         };
@@ -300,11 +326,11 @@ pub(super) fn preview(
         else {
             continue;
         };
-        let Some(class) = placement_gate(&reason.code) else {
+        let Some((code, class)) = placement_gate(&reason.outcome) else {
             continue;
         };
         let gate = Gate {
-            code: reason.code.clone(),
+            code,
             class,
             budget_dimension: None,
             next_eligible_unix_ms: None,
@@ -405,7 +431,7 @@ impl Preview<'_> {
         // refusal because the window closed, which is its consequence.
         let blocking = match kind {
             SlotRecord::Deferred => Some(SlotRecord::Refused),
-            SlotRecord::Refused if gate.code == HostCode::PolicyActivityWindowClosed.as_str() => {
+            SlotRecord::Refused if gate.code == HostCode::PolicyActivityWindowClosed.code() => {
                 Some(SlotRecord::Deferred)
             }
             SlotRecord::Refused | SlotRecord::Owed => None,

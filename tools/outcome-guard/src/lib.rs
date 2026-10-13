@@ -188,12 +188,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
-        "crates/runtime-state/src/store/planning.rs",
-        "StoredPlanningSignal.fact_code",
-        &[Check::G2],
-        "A2-P: carries the runtime host's planning-signal fact code, a dynamic family A2-P splits into a fixed code and values",
-    ),
-    bridge(
         "crates/runtime-database/src/maintenance.rs",
         "MaintenanceWarning.code",
         &[Check::G2],
@@ -335,39 +329,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalEventData.fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalPayload.fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyReasonRecord.code",
-        &[Check::G2],
-        "A2-P: a policy reason code is the evaluator's text, including the dynamic family `score_unknown:<rule>` that A2-P splits; ledger revision 3 already persists no reason text",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload.policy_signal_fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
         "SchedulingOutcomeDeclaration.designated_operation",
         &[Check::G2],
         "B4: a package's operation id from its scheduling declaration (pack vocabulary, model section 8.1), not a Runtime location; B4 decides its typing with the package interface",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PolicyPlanningSignalPayload::fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -386,12 +350,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "DiagnosticDetailRecord::operation",
         &[Check::G2],
         "B5 (with the A2b/A2c merge follow-up): a stored diagnostic detail's operation; the record keeps it as a string until a received-location type exists, and the draft's operation channel relays other crates' strings until the host and ledger channels take Location together",
-    ),
-    bridge(
-        "crates/actingcommand-contract/src/event/payload.rs",
-        "PublicPayload::policy_signal_fact_code",
-        &[Check::G2],
-        "A2-P: the planning signal's fact_code is a dynamic family (`{fact_key}.{reason}`) A2-P splits into fixed signal codes with fact_key",
     ),
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
@@ -1130,36 +1088,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
     ),
     bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "Deferral.code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "Gate.code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "SlotValues.gate_code",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "closure_gate",
-        &[Check::G2, Check::G5],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/runtime-host/src/policy_host/clock_slot.rs",
-        "placement_gate",
-        &[Check::G2],
-        "A2-P: carries or compares the policy crate's deferral reason code (CandidateEligibility::Deferred.reason.code, a DecisionReason code), which also carries spellings that cannot be registered as they are (the policy's DecisionReason.code bridge); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
         "crates/runtime-host/src/provider_startup.rs",
         "ProviderStartup::failed",
         &[Check::G2],
@@ -1338,27 +1266,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/policy/src/evaluator.rs",
-        "DecisionReason.code",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
         "DetectionSuggestion.reason",
         &[Check::G2],
         "B4: carries detection-suggestion reasons, unknown_reason vocabulary tokens next to registered codes; B4 types the channel as a vocabulary or a code",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
-        "last_reason_code",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
-    ),
-    bridge(
-        "crates/policy/src/evaluator.rs",
-        "reason",
-        &[Check::G2],
-        "A2-P: a scheduling decision reason also carries spellings that cannot be registered as they are (eligible, ranked, scored, score_unknown:<term>, candidate_not_selected:<task>, resource_target_unmapped:<id>, resource_target_override:<id>); A2-P renames and splits them, then types the channel",
     ),
     bridge(
         "crates/policy/src/forward.rs",
@@ -1575,18 +1485,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "Assessment::Aborted.reason",
         &[Check::G2],
         "B4: not an outcome code: the String is the detail text beside the typed UnknownReason",
-    ),
-    bridge(
-        "crates/selection-policy/src/evaluator.rs",
-        "DecisionReason.code",
-        &[Check::G2],
-        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
-    ),
-    bridge(
-        "crates/selection-policy/src/evaluator.rs",
-        "DecisionReason::new",
-        &[Check::G2],
-        "A2-P: selection-policy decision reasons are dotted spellings (candidate.ranked, gate.rejected, selection.unknown, ...) that cannot be registered as they are; A2-P renames them, then types the channel",
     ),
     bridge(
         "crates/selection-policy/src/evaluator.rs",

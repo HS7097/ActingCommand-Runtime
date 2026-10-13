@@ -3862,7 +3862,9 @@ fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
         instance_id: INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::TimelineReached,
-        fact_code: "timeline.review.due".to_owned(),
+        outcome: actingcommand_contract::outcome::Outcome::new(
+            actingcommand_runtime_host::HostCode::StrategicTimelineReached,
+        ),
         observed_at_unix_ms: unix_ms_now(),
         detection_budget: None,
     })

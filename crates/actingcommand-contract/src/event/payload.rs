@@ -2596,14 +2596,12 @@ pub struct ResourceAuthoringPayload {
     audit: SanitizedAudit,
 }
 
-/// One reason of a dispatch's ranking chain. Ledger revision 3 persists no reason text (the
-/// policy's English detail goes only to the developer log); the code stays text until A2-P
-/// splits the policy's dynamic reason codes (`score_unknown:<rule>`) into fixed codes.
+/// One reason of a dispatch's ranking chain or of a task selection's explanation: the reason's
+/// outcome, a registered code with its values (ledger revision 3, Workflow #378 A2-P; model
+/// section 8.1). The evaluators' English detail goes only to the developer log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyReasonRecord {
-    pub code: String,
-}
+#[serde(transparent)]
+pub struct PolicyReasonRecord(pub Outcome);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyDispatchEventData {
@@ -3089,7 +3087,8 @@ pub struct PolicyPlanningSignalEventData {
     pub instance_id: String,
     pub task_id: Option<String>,
     pub kind: PolicyPlanningSignalKind,
-    pub fact_code: String,
+    /// The signal's outcome: one registered code with its values (Workflow #378 A2-P).
+    pub outcome: Outcome,
     pub observed_at_unix_ms: u64,
     pub detection_budget: Option<PolicyDetectionBudgetRecord>,
 }
@@ -3116,7 +3115,7 @@ pub struct PolicyPlanningSignalPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     task_id: Option<String>,
     kind: PolicyPlanningSignalKind,
-    fact_code: String,
+    outcome: Outcome,
     observed_at_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detection_budget: Option<PolicyDetectionBudgetRecord>,
@@ -3140,8 +3139,9 @@ impl PolicyPlanningSignalPayload {
         self.kind
     }
 
-    pub fn fact_code(&self) -> &str {
-        &self.fact_code
+    /// The signal's outcome (Workflow #378 A2-P); the record's severity is its category.
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 
     pub const fn observed_at_unix_ms(&self) -> u64 {
@@ -5742,6 +5742,10 @@ impl PayloadDetail for PolicyExecutionPayload {
 }
 
 impl PayloadDetail for PolicyPlanningSignalPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        Some(&self.outcome)
+    }
+
     fn action(&self) -> EventAction {
         self.action
     }
@@ -6547,7 +6551,7 @@ impl PolicyPlanningSignalDraft {
             instance_id: self.data.instance_id,
             task_id: self.data.task_id,
             kind: self.data.kind,
-            fact_code: self.data.fact_code,
+            outcome: self.data.outcome,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
             detection_budget: self.data.detection_budget,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -6773,7 +6777,7 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
         ));
     }
     for reason in &data.reasons {
-        validate_policy_token(&reason.code, "reason_code")?;
+        validate_policy_token(reason.0.code().as_str(), "reason_code")?;
     }
     if data.approval_fact_ids.len() > 64 {
         return Err(SanitizationError::new(
@@ -6888,7 +6892,7 @@ fn validate_policy_planning_signal_data(
     if let Some(task_id) = &data.task_id {
         validate_policy_token(task_id, "task_id")?;
     }
-    validate_policy_token(&data.fact_code, "fact_code")?;
+    validate_policy_token(data.outcome.code().as_str(), "outcome")?;
     if data.observed_at_unix_ms == 0 {
         return Err(SanitizationError::new(
             SanitizationCode::InvalidPolicyPlanningSignalTime,
@@ -7247,7 +7251,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 instance_id: value.instance_id.clone(),
                 task_id: value.task_id.clone(),
                 kind: value.kind,
-                fact_code: value.fact_code.clone(),
+                outcome: value.outcome.clone(),
                 observed_at_unix_ms: value.observed_at_unix_ms,
                 detection_budget: value.detection_budget.clone(),
             })?;
@@ -11654,8 +11658,6 @@ impl EventPayload {
                 .map(|value| Box::new(value.policy_result.codes_only())),
             policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
             policy_signal_kind: policy_signal.map(|value| value.kind),
-            policy_signal_fact_code: policy_signal
-                .map(|value| value.fact_code.clone().into_boxed_str()),
             performance_pressure: performance_pressure
                 .map(|value| Box::new(value.pressure.clone())),
             performance_context: performance_summary.map(|value| Box::new(value.context.clone())),
@@ -12099,8 +12101,6 @@ pub struct PublicPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_signal_kind: Option<PolicyPlanningSignalKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    policy_signal_fact_code: Option<Box<str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     performance_pressure: Option<Box<PerformancePressureRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_context: Option<Box<PerformanceContext>>,
@@ -12356,10 +12356,6 @@ impl PublicPayload {
 
     pub const fn policy_signal_kind(&self) -> Option<PolicyPlanningSignalKind> {
         self.policy_signal_kind
-    }
-
-    pub fn policy_signal_fact_code(&self) -> Option<&str> {
-        self.policy_signal_fact_code.as_deref()
     }
 
     pub fn performance_pressure(&self) -> Option<&PerformancePressureRecord> {

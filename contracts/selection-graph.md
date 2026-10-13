@@ -477,7 +477,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `input_sha256` | The evaluator's canonical identity of candidates, facts and instant, `sha256:<hex>`. |
 | `outcome`, `outcome_key`, `selected[]` | The decision, its resource-declared key and the chosen candidate IDs. |
 | `verdicts[]` | One breakdown per evaluated candidate: status, score, rank, gates, terms, reasons. |
-| `reasons[]` | The decision's reason chain, `{code, detail}`. |
+| `reasons[]` | The decision's reason chain, each reason's outcome (`code`, `category`, `values`; Workflow #378 A2-P). |
 | `confirmation` | How the confirmation frame compared, below. |
 
 `confirmation` is one of
@@ -511,7 +511,7 @@ and the evaluator is unchanged.
 | `TaskSelectionGateOutcome` | `GateOutcome` | tagged by `kind`: `passed`, `failed`, `unknown_substituted{reason, passes}`, `unknown_dropped{reason}` |
 | `TaskSelectionTermResult` | `TermResult` | `term_id`, `outcome`, `weight_milli`, `contribution_milli` |
 | `TaskSelectionTermOutcome` | `TermOutcome` | tagged by `kind`: `scored{transformed_milli}`, `unknown_substituted{reason, transformed_milli}`, `unknown_dropped{reason}` |
-| `PolicyReasonRecord` | `DecisionReason` | `code`, `detail` |
+| `PolicyReasonRecord` | `DecisionReason` | the reason's `outcome` (`code`, `category`, `values`); the `detail` is not recorded |
 
 The record takes the remaining decision fields under its own names: `policy_id` and
 `policy_sha256` into `policy`, `candidate_layout_id` as `layout_id`, `evaluated_at_unix_ms` as

@@ -485,7 +485,7 @@ fn information_planning_signals_are_queryable_and_subscription_pages_are_lossles
             instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
             task_id: None,
             kind: PolicyPlanningSignalKind::GoalMissed,
-            fact_code: format!("goal.fixture.projection-{index}"),
+            outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
             observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
             detection_budget: None,
         })
@@ -551,7 +551,7 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: "goal.bounded-history.0".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
         detection_budget: None,
     };
@@ -563,7 +563,7 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
             instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
             task_id: None,
             kind: PolicyPlanningSignalKind::GoalMissed,
-            fact_code: format!("goal.bounded-history.{index}"),
+            outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
             observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
             detection_budget: None,
         })
@@ -611,7 +611,7 @@ fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoi
         instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         task_id: None,
         kind: PolicyPlanningSignalKind::GoalMissed,
-        fact_code: "goal.bounded-history.late".to_owned(),
+        outcome: planning_signal_outcome(PolicyPlanningSignalKind::GoalMissed),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS + SIGNAL_COUNT,
         detection_budget: None,
     };

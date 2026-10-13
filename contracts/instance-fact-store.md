@@ -247,9 +247,9 @@ configuration and the ledger position.
 
 **Explanation.** For a cycle evaluated by `evaluate_policy_cycle`, every
 `TaskDecision` made for such an instance carries, after the evaluator's own
-reasons (`instance_unavailable`, …), one `DecisionReason` per missing key with
-`code` `policy_instance_fact_missing:<key>` and a detail naming the instance
-and the ledger position. No decision on such an instance can be selected, so no
+reasons (`instance_unavailable`, …), one `DecisionReason` per missing key whose
+outcome is `policy_instance_fact_missing` (warning) with the key as `fact_key`, and
+a detail naming the instance and the ledger position. No decision on such an instance can be selected, so no
 dispatch intent, reason chain or `policy.dispatch_intent` event carries the
 reason; the other projections use the same instance set without it.
 
@@ -345,7 +345,7 @@ observe them as facts. The forward projection receives no store offsets.
 still passed (the evaluator ignores it). A cycle evaluated by
 `evaluate_policy_cycle` reports each such task once: one extra `TaskDecision`
 of that task with no instance, eligibility `unknown`, state `blocked`, no rank
-and the single reason `priority_offset_unknown_task:<task>`. It is not an error,
+and the single reason `priority_offset_unknown_task` (warning; value `task_id`). It is not an error,
 selects nothing and reaches no dispatch intent or ledger event.
 
 **Identity.** `combined_policy_snapshot_id` hashes, next to its previous

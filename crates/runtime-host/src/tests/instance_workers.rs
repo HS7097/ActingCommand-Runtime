@@ -3302,10 +3302,13 @@ fn a_run_over_its_runtime_budget_is_settled_with_the_policy_rewrite() {
         .expect("the next evaluation");
     let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
     assert!(
-        evaluation.decisions.iter().any(|decision| decision
-            .reasons
+        evaluation
+            .decisions
             .iter()
-            .any(|reason| reason.code == "policy_task_paused")),
+            .any(|decision| decision
+                .reasons
+                .iter()
+                .any(|reason| reason.outcome.code().as_str() == "policy_task_paused")),
         "{evaluation:#?}"
     );
     assert!(host.fatal_error().expect("runtime health").is_none());

@@ -382,4 +382,6 @@ outcome_keys! {
     mumu_manager_version: version,
     // Workflow #378 A2-P: a ledger event type (the rejected performance event's).
     event_type: vocab(event_type),
+    // Workflow #378 A2-P: a resource target of an instance's resource-targets document.
+    resource_target_id: token,
 }
