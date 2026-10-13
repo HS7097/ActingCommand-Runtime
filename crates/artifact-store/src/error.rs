@@ -306,7 +306,8 @@ impl RetainedCause {
     /// A3): its registered code and location. A relayed code spelling the catalog does not list
     /// stays visible as `outcome_relay_unregistered` with the spelling as `raw_code`, as every
     /// relay does (acceptance CL-M2); an unlisted operation spelling falls back to the store's
-    /// `store_artifact` location. Nothing is substituted and no text is made up.
+    /// `store_artifact` location (every operation the store raises is registered). The code is
+    /// never substituted and no text is made up.
     fn recorded(&self) -> ArtifactFailureCause {
         let step = match Code::relayed(self.code) {
             Some(code) => Outcome::new(code),

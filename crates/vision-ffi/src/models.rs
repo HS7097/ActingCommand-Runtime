@@ -638,33 +638,43 @@ fn read_description(
 
 /// True for a regular file, false when nothing is there; anything else is an error.
 fn regular_file(path: &Path) -> Result<bool, String> {
-    regular_file_entry(path).map_err(|(message, _)| message)
+    regular_file_entry(path).map_err(|refusal| refusal.message)
+}
+
+/// Why an entry is not a usable regular file, with the OS error behind an entry whose metadata
+/// cannot be read.
+struct RegularFileRefusal {
+    message: String,
+    os_error: Option<std::io::Error>,
 }
 
 /// [`regular_file`], keeping the OS error behind an entry whose metadata cannot be read.
-fn regular_file_entry(path: &Path) -> Result<bool, (String, Option<std::io::Error>)> {
+fn regular_file_entry(path: &Path) -> Result<bool, RegularFileRefusal> {
+    let refused = |message: String, os_error| Err(RegularFileRefusal { message, os_error });
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err((format!("{} is a symbolic link", path.display()), None))
+            refused(format!("{} is a symbolic link", path.display()), None)
         }
         Ok(metadata) if metadata.is_file() => Ok(true),
-        Ok(_) => Err((format!("{} is not a regular file", path.display()), None)),
+        Ok(_) => refused(format!("{} is not a regular file", path.display()), None),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err((
+        Err(error) => refused(
             format!("{} is unavailable: {error}", path.display()),
             Some(error),
-        )),
+        ),
     }
 }
 
 /// A runtime library as [`regular_file`] reads it; a refusal keeps the OS error behind it as
 /// its `os_cause` (ledger revision 3).
 fn runtime_file(path: &Path) -> VisionFfiResult<bool> {
-    regular_file_entry(path).map_err(|(message, error)| {
-        let refusal = runtime_unavailable(message);
-        match error {
-            Some(error) => refusal.with_os_cause(Outcome::from_io_error(&error, IoOp::Metadata)),
-            None => refusal,
+    regular_file_entry(path).map_err(|refusal| {
+        let error = runtime_unavailable(refusal.message);
+        match refusal.os_error {
+            Some(os_error) => {
+                error.with_os_cause(Outcome::from_io_error(&os_error, IoOp::Metadata))
+            }
+            None => error,
         }
     })
 }
