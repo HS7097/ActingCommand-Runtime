@@ -32,8 +32,8 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
         .transpose()?;
     let (installation, config) =
         reader::selected_config(context.runtime.requested_root()).map_err(refused)?;
-    let answer = reader::read(installation.as_ref(), &config, &Query { instance, role })
-        .map_err(refused)?;
+    let answer =
+        reader::read(installation.as_ref(), &config, &Query { instance, role }).map_err(refused)?;
     within_budget(&answer)
 }
 
