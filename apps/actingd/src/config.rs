@@ -9,18 +9,15 @@ use actingcommand_contract::resource_declaration::{
 };
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
-    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
-    digest_named,
+    ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
+    PackageRef, RuntimeConfigManifest,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceSerial,
-    DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
+    DeviceSerial, DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
     TouchBackendChoice, TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{
-    ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
-};
+use actingcommand_execution_kernel::{PreparedContainedTask, prerequisite_package_id_valid};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -37,7 +34,6 @@ use actingcommand_vision_ffi::{
     VisionModelListing, VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -746,9 +742,9 @@ struct InstanceConfig {
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
 /// locator (relative paths resolve against the configuration file's directory) and the
-/// bare lowercase hex digest. A locator whose last segment is that same digest names a
-/// content directory (Workflow #288) and yields its `ContentDirectory` reference; any other
-/// locator keeps the ZIP digest. Nothing is opened or hashed at assembly.
+/// bare lowercase hex digest. Workflow #336 PKG-S1: the locator's path chooses the loader and
+/// no name is read as an identity; the digest is only recorded, as the request's reference,
+/// until PKG-S4 removes the key. Nothing is opened or hashed at assembly.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
@@ -766,14 +762,7 @@ impl StartupPackageConfigFile {
         if !path.is_absolute() {
             return Err(ActingdCode::StartupPackagePathInvalid.code());
         }
-        let digest = if digest_named(&path) == Some(self.expected_sha256.as_str()) {
-            PackageRef::ContentDirectory(ContentDirectory {
-                schema_version: ContentDirectoryVersion::V1,
-                sha256: self.expected_sha256,
-            })
-        } else {
-            PackageRef::from(self.expected_sha256)
-        };
+        let digest = PackageRef::from(self.expected_sha256);
         if digest.validate().is_err() {
             return Err(ActingdCode::StartupPackageDigestInvalid.code());
         }
@@ -852,12 +841,11 @@ impl std::fmt::Display for ResourcePackageRejection {
 }
 
 /// Admits every configured `resource_package`, identically for `check-config` and daemon
-/// startup: the path must exist (`resource_package_missing`); a file must be read by the
-/// contained-task package loader exactly as `task-run` admits one, with the file's own
-/// digest as the expected one (`resource_package_invalid`). A directory whose name is a
-/// content digest (Workflow #288) is admitted the same way against the `ContentDirectory`
-/// reference of that name; any other directory is confirmed to exist only, since the field
-/// carries no reference for it, so `check-config` lists it as not checked.
+/// startup: the path must exist (`resource_package_missing`); a directory or a file must be
+/// admitted by the contained-task package loader exactly as `task-run` admits one, by its path
+/// and structurally (`resource_package_invalid`). Workflow #336 PKG-S1: no digest is computed
+/// or compared and no name is read as an identity; the field carries no reference, so none is
+/// recorded.
 pub(super) fn validate_resource_packages(
     configured: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, InstanceResourcePackage>, ResourcePackageRejection> {
@@ -894,34 +882,8 @@ pub(super) fn validate_resource_packages(
             )
         };
         let kind = if metadata.is_dir() {
-            if let Some(digest) = digest_named(&path) {
-                let expected = PackageRef::ContentDirectory(ContentDirectory {
-                    schema_version: ContentDirectoryVersion::V1,
-                    sha256: digest.to_owned(),
-                });
-                PreparedContainedTask::load_path(
-                    alias,
-                    &path,
-                    &expected,
-                    None,
-                    Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
-                )
-                .map_err(loader_refused)?;
-            }
             InstanceResourcePackageKind::Directory
         } else if metadata.is_file() {
-            let bytes = fs::read(&path).map_err(|error| {
-                invalid(SharedCode::PackageReadFailed.as_str(), error.to_string())
-            })?;
-            let expected =
-                ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
-                    .map_err(|error| {
-                        invalid(
-                            SharedCode::PackageReferenceInvalid.as_str(),
-                            error.to_string(),
-                        )
-                    })?;
-            PreparedContainedTask::load(alias, &bytes, expected).map_err(loader_refused)?;
             InstanceResourcePackageKind::File
         } else {
             return Err(rejected(
@@ -930,6 +892,14 @@ pub(super) fn validate_resource_packages(
                 None,
             ));
         };
+        PreparedContainedTask::load_path(
+            alias,
+            &path,
+            &PackageRef::default(),
+            None,
+            Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
+        )
+        .map_err(loader_refused)?;
         admitted.insert(
             alias.clone(),
             InstanceResourcePackage {
@@ -1051,10 +1021,10 @@ pub(super) fn load_for(
     }
     let bytes = match installation {
         Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
-        None => fs::read(path).map_err(|_| ActingdCode::ConfigReadFailed.code())?,
+        None => fs::read(path).map_err(|_| SharedCode::ConfigReadFailed.code())?,
     };
     let mut config = serde_json::from_slice::<ActingdConfigFile>(&bytes)
-        .map_err(|_| ActingdCode::ConfigDecodeFailed.code())?;
+        .map_err(|_| SharedCode::ConfigDecodeFailed.code())?;
     config.source_root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1838,7 +1808,17 @@ impl InstanceConfig {
         ) {
             return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
+        // #398 R1 §5.1 (RD-3i): scrcpy is selectable on a real device only.
+        if !capture_requested.allowed_on(self.device_kind()) {
+            return Err(ActingdCode::DeviceConfigInvalid.code());
+        }
         Ok((requested, capture_requested))
+    }
+
+    /// #398 R1 §3.1: the instance's device kind. RD-1b adds the key `device.kind`; until then
+    /// every configured instance is an emulator.
+    fn device_kind(&self) -> DeviceKind {
+        DeviceKind::Emulator
     }
 
     fn device_backend(self) -> Result<InstanceSpec, Code> {
@@ -2744,6 +2724,36 @@ mod tests {
         assert_eq!(
             config.assemble().err().map(Code::as_str),
             Some("capture_backend_must_be_explicit")
+        );
+    }
+
+    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance is refused as
+    /// `device_config_invalid` (every configured instance is an emulator until RD-1b adds
+    /// `device.kind`).
+    #[test]
+    fn scrcpy_capture_on_an_emulator_instance_is_refused() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "node.a",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "touch_backend": "maatouch",
+                "capture_backend": "scrcpy"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err().map(Code::as_str),
+            Some(ActingdCode::DeviceConfigInvalid.as_str())
         );
     }
 

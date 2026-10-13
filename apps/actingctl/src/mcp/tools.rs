@@ -475,6 +475,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: targets_get_result,
         run: operator::targets_get,
     },
+    // ---- Workflow #389 MCP-11 (begin): `ac_packs` ↔ `actingctl packs`; observer before U-3,
+    // a general read after it (command table §4.12). ----
+    ToolDef {
+        name: "ac_packs",
+        title: "Bound packages",
+        tier: Tier::Observer,
+        description: super::packs::DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::packs::input_schema,
+        result_schema: super::packs::result_schema,
+        run: super::packs::run,
+    },
+    // ---- Workflow #389 MCP-11 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",

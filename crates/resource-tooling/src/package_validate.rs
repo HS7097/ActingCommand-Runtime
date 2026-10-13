@@ -9,7 +9,7 @@ use crate::{
     RecognitionPackDiagnosticsResponse, UnsupportedRecognitionTargetResponse,
     open_published_package,
 };
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{LabError, LabResult, PackageRef};
 
 pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageValidationResponse> {
     let bytes = open_published_package(&request.zip_path)?.read_all()?;
@@ -18,9 +18,15 @@ pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageVal
     let expected = request
         .expected_input_sha256
         .unwrap_or_else(|| Sha256Hash::digest(&bytes));
+    // Workflow #336 PKG-S1: the package is admitted structurally; the hash given (or computed
+    // here for provenance) is reported and compared with nothing.
     let mut containment = Containment::for_metadata_validation();
     let bundle = containment
-        .load(&instance, &bytes, &expected)
+        .load(
+            &instance,
+            &bytes,
+            &PackageRef::LegacyZipSha256(expected.to_string()),
+        )
         .map_err(containment_package_error)?;
     Ok(PackageValidationResponse {
         status: "valid".to_string(),
@@ -126,33 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn package_validate_rejects_external_hash_mismatch() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                ("module/manifest.json", br#"{"schema_version":"0.2"}"#),
-                ("module/operations/task/task.json", br#"{"id":"task"}"#),
-            ],
-        );
-        let wrong = Sha256Hash::parse_hex(
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .unwrap();
-
-        let error = validate_package(PackageValidateRequest {
-            zip_path: zip,
-            include_entries: false,
-            expected_input_sha256: Some(wrong),
-        })
-        .expect_err("external mismatch must fail");
-
-        assert_eq!(error.code, "package_invalid");
-        assert!(error.message.contains("hash mismatch"));
-    }
-
-    #[test]
     fn package_validate_reports_unsupported_recognition_targets() {
         let temp = TempDir::new().unwrap();
         let zip = temp.path().join("bundle.zip");
@@ -214,33 +193,6 @@ mod tests {
             ("module/tools/run.ps1", b"Write-Host no"),
         ]);
         assert!(error.message.contains("executable"));
-    }
-
-    #[test]
-    fn package_validate_rejects_hash_mismatch() {
-        let error = validate_fixture(&[
-            (
-                "module/manifest.json",
-                br#"{"hashes":{"operations/resources.json":"sha256:0000"}}"#,
-            ),
-            ("module/operations/task/task.json", br#"{}"#),
-            ("module/operations/resources.json", br#"{}"#),
-        ]);
-        assert!(error.message.contains("hash mismatch"));
-    }
-
-    #[test]
-    fn package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal() {
-        let error = validate_fixture(&[
-            (
-                "module/manifest.json",
-                br#"{"hashes":{"../outside.json":"sha256:0000"}}"#,
-            ),
-            ("module/operations/task/task.json", br#"{}"#),
-            ("module/operations/resources.json", br#"{}"#),
-        ]);
-        assert!(error.message.contains("manifest hash path is unsafe"));
-        assert!(!error.message.contains(".."));
     }
 
     #[test]

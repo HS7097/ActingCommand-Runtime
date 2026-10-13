@@ -890,6 +890,13 @@ pub(super) struct RuntimeContainedTask<'a> {
     geometry_rechecked: bool,
     input_step_action_id: Option<ActionId>,
     post_input_action_id: Option<ActionId>,
+    /// #398 R1 §5.2 (RD-3i): when the last input completed; the next capture's floor. Unlike
+    /// `post_input_action_id` it outlives the step, because the first frame after an input may
+    /// be the next step's.
+    pending_input_floor: Option<Instant>,
+    /// #398 R1 §5.2 (RD-3i): the stream sequence of the frame delivered last (none for a
+    /// snapshot backend); a capture without a new input must deliver a newer frame.
+    last_frame_sequence: Option<u64>,
     last_capture_input_action_id: Option<ActionId>,
     /// Backend acquisition span of the last successful capture, consumed by its `CaptureCompleted` trace.
     last_capture_acquire_us: Option<u64>,
@@ -2875,6 +2882,15 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     RequestFailure::poison_without_terminal(runtime_identifier_error())
                 })?;
             let input_action_id = self.post_input_action_id.take();
+            // #398 R1 §5.2 (RD-3i): after an input the frame must be newer than its completion;
+            // otherwise newer than the frame delivered last.
+            let floor = match (self.pending_input_floor.take(), self.last_frame_sequence) {
+                (None, None) => None,
+                (after, after_sequence) => Some(actingcommand_device::CaptureFloor {
+                    after,
+                    after_sequence,
+                }),
+            };
             let links = RuntimeRunLinks::new(self.task_id, self.run_id)
                 .apply(self.host.events.request_links(
                     self.request,
@@ -2930,6 +2946,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 .capture_frame_retained_with_geometry_session_and_registration_guard(
                     self.instance_alias,
                     Some(*frame_id.transport()),
+                    floor,
                     registration,
                     memory,
                 );
@@ -3070,6 +3087,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         self.last_frame_captured_at = Some(frame.captured_at);
                         self.last_capture_input_action_id = input_action_id;
                         self.last_capture_acquire_us = frame.capture_acquire_us();
+                        self.last_frame_sequence = frame.stream.map(|stamp| stamp.sequence);
                         if self.configuration_records > 0 && !self.configuration_capture_recorded {
                             let selection = frame.selection.as_ref().map(|selection| {
                                 EffectiveCaptureSelection {
@@ -3355,6 +3373,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             self.ensure_active()?;
             if let RuntimeResult::InputCommitted { action_id } = success.result {
                 self.post_input_action_id = Some(action_id);
+                self.pending_input_floor = Some(Instant::now());
                 self.diagnostic_physical = Some(action_id);
                 if self.configuration_records > 0 && !self.configuration_input_recorded {
                     self.record_configuration(
@@ -4158,42 +4177,15 @@ pub(super) fn prepare_contained_task(
             HostCode::ContainedTaskPathNotAbsolute,
         ));
     }
-    if request.expected_sha256().is_directory_source() {
-        return PreparedContainedTask::load_path(
-            instance_alias,
-            path,
-            request.expected_sha256(),
-            vision_provider,
-            deadline,
-        )
-        .map_err(|error| contained_task_declaration_failure(request, error));
-    }
-    let path = fs::canonicalize(path)
-        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageOpenFailed))?;
-    let metadata = fs::metadata(&path).map_err(|_| {
-        contained_task_package_failure(HostCode::ContainedTaskPackageMetadataFailed)
-    })?;
-    if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
-        return Err(contained_task_package_failure(
-            HostCode::ContainedTaskPackageSizeInvalid,
-        ));
-    }
-    let bytes = fs::read(&path)
-        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageReadFailed))?;
-    let expected =
-        ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256().ok_or_else(
-            || contained_task_package_failure(HostCode::ContainedTaskPackageHashInvalid),
-        )?)
-        .map_err(|_| contained_task_package_failure(HostCode::ContainedTaskPackageHashInvalid))?;
-    match vision_provider {
-        Some(provider) => PreparedContainedTask::load_with_vision_provider(
-            instance_alias,
-            &bytes,
-            expected,
-            provider,
-        ),
-        None => PreparedContainedTask::load(instance_alias, &bytes, expected),
-    }
+    // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
+    // recorded as the caller gave it and compared with nothing.
+    PreparedContainedTask::load_path(
+        instance_alias,
+        path,
+        request.expected_sha256(),
+        vision_provider,
+        deadline,
+    )
     .map_err(|error| contained_task_declaration_failure(request, error))
 }
 
@@ -4215,7 +4207,8 @@ fn contained_task_declaration_failure(
         failure.error = Box::new(refused.with_native_detail(detail));
     }
     if let Some(issue) = error.declaration_issue() {
-        // Declaration parsing happens only after the source snapshot or ZIP identity was verified.
+        // Declaration parsing happens only after the package was read. Workflow #336 PKG-S1:
+        // both references are the request's, as the caller gave it; nothing verified it.
         failure.error.lifecycle.resource_declaration = Some(Box::new(
             actingcommand_contract::ResourceDeclarationRejection {
                 declared_package: request.expected_sha256().clone(),
@@ -4252,15 +4245,18 @@ fn startup_package_request_invalid() -> RequestFailure {
     ))
 }
 
-/// Types a startup package admission refusal (slice #316-B3): a locator that does not open
+/// Types a startup package admission refusal (slice #316-B3): a locator that does not exist
 /// is `startup_package_missing`, every other refusal `startup_package_admission_failed`; the
 /// underlying admission code stays attached as the related failure. The resource declaration
-/// rejection, when there is one, travels with it.
+/// rejection, when there is one, travels with it. Workflow #336 PKG-S1: every locator is read
+/// by its path, so a missing one is containment's `content_directory_missing`.
 fn startup_package_admission_failure(mut failure: RequestFailure) -> RequestFailure {
     if failure.poison_runtime || failure.error.is_fatal() {
         return failure;
     }
-    let code = if failure.error.code() == HostCode::ContainedTaskPackageOpenFailed.as_str() {
+    let code = if failure.error.code()
+        == actingcommand_pack_containment::PackContainmentCode::ContentDirectoryMissing.as_str()
+    {
         HostCode::StartupPackageMissing
     } else {
         HostCode::StartupPackageAdmissionFailed
@@ -5372,18 +5368,14 @@ impl HostShared {
             Some(token.lease_id()),
             None,
         ))?;
-        let source_deadline = task_request
-            .expected_sha256()
-            .is_directory_source()
-            .then(|| self.contained_task_deadline(task_request, token))
-            .transpose()?;
-        let material_deadline = source_deadline
-            .map(|deadline| self.package_material_deadline(deadline))
-            .transpose()?
-            .unwrap_or_else(Instant::now);
-        // Workflow #336 L2b: a prerequisite package's admission deadline is the run's own, not
-        // `material_deadline`, which is the present instant for a main package that is no
-        // directory source.
+        // Workflow #336 PKG-S1: every package is read by its path, under the run's deadline. That
+        // deadline is bounded by the lease, so the lease is fenced first: a run whose lease has
+        // expired is `lease_mismatch`, never a deadline that has passed (host gate key 29).
+        self.validated_instance(&validated, token, connection_id)?;
+        let source_deadline = self.contained_task_deadline(task_request, token)?;
+        let material_deadline = self.package_material_deadline(source_deadline)?;
+        // Workflow #336 L2b: a prerequisite package's admission deadline is the run's own,
+        // derived when its layer is admitted.
         let prerequisite_deadline = || {
             self.contained_task_deadline(task_request, token)
                 .and_then(|deadline| self.package_material_deadline(deadline))
@@ -5442,12 +5434,10 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
-        if let Some(deadline) = source_deadline {
-            active_run
-                .control
-                .set_deadline(deadline)
-                .map_err(RequestFailure::poison_without_terminal)?;
-        }
+        active_run
+            .control
+            .set_deadline(source_deadline)
+            .map_err(RequestFailure::poison_without_terminal)?;
         let (prepared, prerequisites) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
@@ -5589,6 +5579,8 @@ impl HostShared {
             geometry_rechecked: false,
             input_step_action_id: None,
             post_input_action_id: None,
+            pending_input_floor: None,
+            last_frame_sequence: None,
             last_capture_input_action_id: None,
             last_capture_acquire_us: None,
             expected_stability_declaration,

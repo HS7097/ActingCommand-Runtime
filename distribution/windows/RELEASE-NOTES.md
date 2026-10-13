@@ -52,6 +52,40 @@ the open-source licenses in `NOTICE.txt`. Installed, they are in
 `<install root>\tools\platform-tools\adb.exe` is the adb that an instance without
 `adb_path` (key omitted) uses.
 
+Real-device screen stream (#402 RD-3): `actingcommand-actingd.exe` carries the
+official scrcpy server 5.0.1 (`scrcpy-server-v5.0.1`, 733930 bytes, SHA-256
+`764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`), which the
+build takes only from the scrcpy GitHub release and checks against its pin, and
+OpenH264 compiled from source (Cisco's OpenH264 bundled by the `openh264-sys2`
+0.9.8 crate). The capture backend `scrcpy` pushes that server to a real device's
+`/data/local/tmp`, starts it without its control and audio channels and without
+any option that changes a device setting, and decodes its H.264 stream; it is never
+chosen automatically and is refused on emulator instances
+(`device_config_invalid`).
+
+The scrcpy server: Copyright (C) 2018 Genymobile, Copyright (C) 2018-2026 Romain
+Vimont, licensed under the Apache License, Version 2.0
+(http://www.apache.org/licenses/LICENSE-2.0); distributed on an "AS IS" basis,
+without warranties or conditions of any kind. OpenH264: Copyright (c) 2013, Cisco
+Systems, all rights reserved; the `openh264` and `openh264-sys2` crates: Ralf
+Biedert and contributors. Both are distributed under this BSD-2-Clause licence:
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met: redistributions of
+source code must retain the above copyright notice, this list of conditions and
+the following disclaimer; redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution. THIS SOFTWARE
+IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT
+SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+
 The daemon recognises an install root from its own path: any directory named
 `runtime` that holds this artifact with its `BUILD-MANIFEST.json` makes its
 parent one (an acsetup install, acsetup's upgrade staging, or a hand layout). There an instance without `adb_path`, explicit or discovery-bound,

@@ -19,5 +19,8 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 trybuild = "1"

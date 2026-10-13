@@ -4,6 +4,9 @@ mod codes;
 // Workflow #396 REC-1.
 #[cfg(test)]
 mod text_read_tests;
+// Workflow #396 REC-2.
+#[cfg(test)]
+mod unique_tests;
 
 pub use codes::PageDetectorCode;
 
@@ -1275,6 +1278,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Ocr(OcrTarget {
                     id: "fixture/unselected_ocr".to_string(),
@@ -1289,6 +1293,7 @@ mod tests {
                     model_sha256: "a".repeat(64),
                     click: None,
                     locate: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Nn(NnTarget {
                     id: "fixture/unselected_nn".to_string(),
@@ -1911,6 +1916,7 @@ mod tests {
                 rect_move: None,
                 color_check: None,
                 click: None,
+                unique: None,
             }));
         let evaluator = RecognitionEvaluator::new(root.clone(), pack).expect("evaluator");
         let detector = PageDetector::new(PageSet {

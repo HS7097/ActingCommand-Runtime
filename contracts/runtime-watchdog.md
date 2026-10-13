@@ -273,7 +273,7 @@ Without the product, a registered task fails every minute (the launcher is gone,
 | `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error. The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one. A quiet day writes nothing. |
 | `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v1`: `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `outcome`, `generation`, `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. A document of another schema version is renamed `state.json.other-schema-<ms>` with a WARN line and replaced by a fresh state; a corrupt document is `watchdog_state_unreadable` (13). |
 | `actingd-<unix_ms>.log` | stdout and stderr of each start. |
-| `run.lock` | Held exclusively by a tick; a second concurrent tick answers `run_in_progress` (exit 0). |
+| `run.lock` | Held exclusively by a tick; a second concurrent tick answers `run_in_progress` (exit 0). `actingctl start` and `restart` hold it through their start (Workflow #389 MCP-10). |
 | `task.xml` | The definition `install` registered last. |
 
 `state.json` is not a ledger structure and no Runtime component reads it (Workflow
@@ -310,6 +310,7 @@ write stdout and stderr to such a log (X3):
 | the console | `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` |
 | a logon script | `<root>\actingd-autostart-<stamp>.out.log` and `.err.log` |
 | an operator's WMI restart script | `<root>\actingd-wmi-<stamp>.log` |
+| `actingctl start`, `actingctl restart` (Workflow #389 MCP-10: the manual start above, holding `run.lock`; while acsetup holds `install\writer.lock` both refuse as row 7a does, with `watchdog_installer_busy`, `restart` before it stops anything; `restart --wait-idle` reads Status every 10 s while it waits for idle, since each Status records a ledger observation) | `<root>\actingd-<ms>.log` |
 | the watchdog | `<root>\watchdog\actingd-<ms>.log` |
 | acsetup's Startup-folder launcher, a hand start in a terminal | none: a FATAL shows only as `formal_close_unlogged` in `status` |
 

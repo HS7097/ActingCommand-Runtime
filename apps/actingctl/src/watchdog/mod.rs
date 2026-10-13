@@ -7,14 +7,17 @@
 //! among them. `install` and `uninstall` register and remove that task.
 //! Contract: `contracts/runtime-watchdog.md`. Nothing here touches the ledger.
 
-mod decide;
+// Workflow #389 MCP-10: `decide`, `observe` and `start` are crate-visible, because `actingctl
+// start` and `restart` (`crate::runtime_start`) reuse the manual start, the owner observation
+// and `hold_run_lock`.
+pub(crate) mod decide;
 // Test-only: Workflow #381 A, test plan A-2 G3a-G3d and H-1 G2.
 #[cfg(test)]
 mod gate_381a;
 mod log;
-mod observe;
+pub(crate) mod observe;
 mod powershell;
-mod start;
+pub(crate) mod start;
 mod state;
 mod task;
 
@@ -1209,7 +1212,7 @@ fn uninstall(root: &Path) -> (Value, u8) {
 }
 
 /// `<root>\watchdog\run.lock`, held exclusively, retried until `wait` has passed.
-fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
+pub(crate) fn hold_run_lock(directory: &Path, wait: Duration) -> Result<File, Failure> {
     let path = directory.join(RUN_LOCK);
     let failed = |detail: String| {
         Failure::misconfigured(

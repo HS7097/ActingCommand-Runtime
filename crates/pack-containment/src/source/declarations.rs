@@ -808,6 +808,20 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Workflow #396 REC-2: `unique` of an `anchors[]`, `verify_templates[]` or `ocr_targets[]`
+    /// entry of task schema `0.9`. Its shape is checked here; its value with the derived
+    /// recognition pack.
+    fn unique(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["margin_milli"])?;
+        self.unsigned(
+            self.required(object, pointer, "margin_milli")?,
+            &child(pointer, "margin_milli"),
+        )
+    }
+
     fn method(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if value.is_string() || value.as_i64().is_some() {
             super::normalize_maa_method(value)
@@ -921,6 +935,7 @@ impl Declaration<'_> {
                 "maa_task",
                 "maa_task_id",
                 "provenance",
+                "unique",
             ],
             "verify_templates" => &[
                 "id",
@@ -934,6 +949,7 @@ impl Declaration<'_> {
                 "maa_task",
                 "maa_task_id",
                 "provenance",
+                "unique",
             ],
             "color_probes" => &[
                 "id",
@@ -956,6 +972,7 @@ impl Declaration<'_> {
                 "model_sha256",
                 "click",
                 "locate",
+                "unique",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -990,6 +1007,7 @@ impl Declaration<'_> {
                 "max_distance" => self.max_distance(value, &pointer)?,
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
+                "unique" => self.unique(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 "mask" | "maskRange" => {
@@ -2020,8 +2038,9 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// (`contracts/selection-graph.md`, section Select step). It is read as the selection-policy
 /// crate reads a document: decoded, refused when its canonical form would be ambiguous
 /// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
-/// must seal its bytes with `policy.sha256` and name a candidate layout its own task declares
-/// on the step's `from` page; the document must apply to that layout, read only features the
+/// must name a candidate layout its own task declares on the step's `from` page (its
+/// `policy.sha256` is format-checked by the declaration grammar and compared with nothing,
+/// Workflow #336 PKG-S1); the document must apply to that layout, read only features the
 /// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
 /// require exactly one candidate. A document that declares a record list, which `keyed_fact`
 /// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
@@ -2067,7 +2086,6 @@ fn select_policy(
     policy
         .validate()
         .map_err(|error| refuse("", format!("invalid selection policy: {error}")))?;
-    let digest = crate::Sha256Hash::digest(bytes).to_string();
     let game = bundle
         .data
         .get("game")
@@ -2088,13 +2106,6 @@ fn select_policy(
             continue;
         }
         let pointer = format!("/operations/{index}/select");
-        if select.pointer("/policy/sha256").and_then(Value::as_str) != Some(digest.as_str()) {
-            return Err(task.refuse(
-                &format!("{pointer}/policy/sha256"),
-                ResourceDeclarationReason::InvalidValue,
-                &format!("the policy document's bytes hash to {digest}"),
-            ));
-        }
         let layout_id = select
             .get("layout_id")
             .and_then(Value::as_str)
@@ -3071,8 +3082,12 @@ mod tests {
         .expect("policy bytes")
     }
 
+    /// Workflow #336 PKG-S1: a select step's pin is still required and format-checked, but never
+    /// compared with the document, so a fixed well-formed pin stands in for it.
+    const POLICY_PIN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     /// A task whose one select step names the document, on a layout with `unknown_identity`.
-    fn task_bundle(unknown_identity: &str, policy: &[u8]) -> Bundle {
+    fn task_bundle(unknown_identity: &str) -> Bundle {
         Bundle {
             task_id: "list-task".to_owned(),
             dir: PathBuf::from("tasks/list-task"),
@@ -3081,7 +3096,7 @@ mod tests {
                 "operations": [{"id": "choose", "from": "list", "select": {
                     "layout_id": "layout-list",
                     "policy": {"path": "policies/list.json",
-                               "sha256": crate::Sha256Hash::digest(policy).to_string()}}}],
+                               "sha256": POLICY_PIN}}}],
                 "candidate_layouts": [{"id": "layout-list", "page_id": "list",
                     "unknown_identity": unknown_identity,
                     "features": [{"name": "member", "value": "identity", "identity": {
@@ -3103,7 +3118,7 @@ mod tests {
         let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
         select_policy(
             &task,
-            &task_bundle("reject", &bytes),
+            &task_bundle("reject"),
             &requested,
             &requested,
             &bytes,
@@ -3112,7 +3127,7 @@ mod tests {
 
         let error = select_policy(
             &task,
-            &task_bundle("readable_attributes", &bytes),
+            &task_bundle("readable_attributes"),
             &requested,
             &requested,
             &bytes,

@@ -136,6 +136,15 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info / none,
+        // INST-1 (Workflow #390) begin
+        /// Warning. An install start went on although this instance's daemon-start
+        /// preparation self-check failed, because another instance passed (INST-1, FCM D-01).
+        /// The instance stays unavailable until a later self-check passes. One lifecycle
+        /// record per instance at stage `install_release` (keys `instance_id`); until A2 makes
+        /// it a `caused_by` link, the self-check's failure travels as the token
+        /// `cause=<code>`.
+        InstallPreparationInstanceUnavailable => "install_preparation_instance_unavailable": warning / none,
+        // INST-1 (Workflow #390) end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -322,11 +331,6 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskOutcomeProgressMissing => "contained_task_outcome_progress_missing": error / none,
         ContainedTaskOutcomeRequiresSuccess => "contained_task_outcome_requires_success": error / none,
         ContainedTaskOutcomeTerminalPageMissing => "contained_task_outcome_terminal_page_missing": error / none,
-        ContainedTaskPackageHashInvalid => "contained_task_package_hash_invalid": error / none,
-        ContainedTaskPackageMetadataFailed => "contained_task_package_metadata_failed": error / declaration_error,
-        ContainedTaskPackageOpenFailed => "contained_task_package_open_failed": error / declaration_error,
-        ContainedTaskPackageReadFailed => "contained_task_package_read_failed": error / declaration_error,
-        ContainedTaskPackageSizeInvalid => "contained_task_package_size_invalid": error / declaration_error,
         ContainedTaskPackageStateInvalid => "contained_task_package_state_invalid": error / none,
         ContainedTaskPathNotAbsolute => "contained_task_path_not_absolute": error / none,
         ContainedTaskPostAdmissionOcrComparisonInvalid => "contained_task_post_admission_ocr_comparison_invalid": error / none,
@@ -389,15 +393,9 @@ actingcommand_contract::outcome_codes! {
         DebugPackageContainmentFailed => "debug_package_containment_failed": error / none,
         DebugPackageDeadlineOverflow => "debug_package_deadline_overflow": error / none,
         DebugPackageEntryCountOverflow => "debug_package_entry_count_overflow": error / none,
-        DebugPackageFileInvalid => "debug_package_file_invalid": error / none,
-        DebugPackageFileTooLarge => "debug_package_file_too_large": error / none,
-        DebugPackageHashInvalid => "debug_package_hash_invalid": error / none,
         DebugPackageInstanceInvalid => "debug_package_instance_invalid": error / none,
-        DebugPackageMetadataFailed => "debug_package_metadata_failed": error / none,
         DebugPackageNameInvalid => "debug_package_name_invalid": error / none,
-        DebugPackageOpenFailed => "debug_package_open_failed": error / none,
         DebugPackagePathNotAbsolute => "debug_package_path_not_absolute": error / none,
-        DebugPackageReadFailed => "debug_package_read_failed": error / none,
         DebugPackageSummaryInvalid => "debug_package_summary_invalid": error / none,
         DebugPackageTaskCountOverflow => "debug_package_task_count_overflow": error / none,
         DispatchPausedGlobal => "dispatch_paused_global": info / none,
@@ -491,6 +489,9 @@ actingcommand_contract::outcome_codes! {
         InstallOwnerStopping => "install_owner_stopping": error / none,
         InstallPauseScopeMismatch => "install_pause_scope_mismatch": error / none,
         InstallPreparationNotAuthorized => "install_preparation_not_authorized": error / none,
+        /// Error. An install start whose daemon-start preparation self-checks all failed (at
+        /// least one ran and none passed) ends under this code during `install_transition`
+        /// (INST-1, Workflow #390); a start where some instance passed goes on.
         InstallPreparationSelfcheckFailed => "install_preparation_selfcheck_failed": error / none,
         InstallPreviousDrainUnverified => "install_previous_drain_unverified": error / none,
         InstallPreviousOwnerInvalid => "install_previous_owner_invalid": error / none,
@@ -604,11 +605,7 @@ actingcommand_contract::outcome_codes! {
         ObservationFrameContextMissing => "observation_frame_context_missing": error / none,
         ObservationFrameHashInvalid => "observation_frame_hash_invalid": error / none,
         ObservationFrameIdentityMissing => "observation_frame_identity_missing": error / none,
-        ObservationHashInvalid => "observation_hash_invalid": error / none,
         ObservationPackageDeadlineOverflow => "observation_package_deadline_overflow": error / none,
-        ObservationPackageLimitExceeded => "observation_package_limit_exceeded": error / none,
-        ObservationPackageOpenFailed => "observation_package_open_failed": error / none,
-        ObservationPackageReadFailed => "observation_package_read_failed": error / none,
         ObservationPathNotAbsolute => "observation_path_not_absolute": error / none,
         ObservationRecognitionIdIssueFailed => "observation_recognition_id_issue_failed": error / none,
         ObservationResultInvalid => "observation_result_invalid": error / none,
@@ -1001,11 +998,7 @@ actingcommand_contract::outcome_codes! {
         SavedOcrDeadlineExceeded => "saved_ocr_deadline_exceeded": error / none,
         SavedOcrDeadlineOverflow => "saved_ocr_deadline_overflow": error / none,
         SavedOcrEvaluationFailed => "saved_ocr_evaluation_failed": error / none,
-        SavedOcrPackageHashInvalid => "saved_ocr_package_hash_invalid": error / none,
         SavedOcrPackageInvalid => "saved_ocr_package_invalid": error / none,
-        SavedOcrPackageLimit => "saved_ocr_package_limit": error / none,
-        SavedOcrPackageOpenFailed => "saved_ocr_package_open_failed": error / none,
-        SavedOcrPackageReadFailed => "saved_ocr_package_read_failed": error / none,
         SavedOcrProviderUnavailable => "saved_ocr_provider_unavailable": error / none,
         SavedOcrSerializationFailed => "saved_ocr_serialization_failed": error / none,
         SavedOcrVerifiedEventMissing => "saved_ocr_verified_event_missing": error / none,
@@ -1574,7 +1567,6 @@ actingcommand_contract::outcome_locations! {
         ReadInstanceRegistry => "read_instance_registry",
         ReadInstanceStringFact => "read_instance_string_fact",
         ReadLabOperationCleanupLease => "read_lab_operation_cleanup_lease",
-        ReadLabOperationPackage => "read_lab_operation_package",
         ReadLabOperationRun => "read_lab_operation_run",
         ReadLatestApprovalDecisions => "read_latest_approval_decisions",
         ReadLeaseConnection => "read_lease_connection",
@@ -1582,7 +1574,6 @@ actingcommand_contract::outcome_locations! {
         ReadLifecycleDraining => "read_lifecycle_draining",
         ReadMonitorRegistry => "read_monitor_registry",
         ReadMonitorStatus => "read_monitor_status",
-        ReadObservationPackage => "read_observation_package",
         ReadObservedBinding => "read_observed_binding",
         ReadOldInstallTransition => "read_old_install_transition",
         ReadPausedInstanceRuns => "read_paused_instance_runs",

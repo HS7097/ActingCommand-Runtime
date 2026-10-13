@@ -105,9 +105,7 @@ impl Installation {
         })
     }
 
-    pub(crate) fn entry(&self, image: &str) -> PathBuf {
-        self.root_plain.join("runtime").join(image)
-    }
+    // Workflow #389 MCP-10: the fixed entry is `start::Target::entry`, shared with `actingctl start`.
 
     /// Review M3: `install\active.json` read again under the shared writer lock, so it cannot
     /// change before the fixed entry reads it once more.

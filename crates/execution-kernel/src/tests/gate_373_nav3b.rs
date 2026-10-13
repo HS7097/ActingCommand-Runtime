@@ -7,7 +7,8 @@
 //! reachable from every such start. The packages are synthetic `neutral` packages admitted
 //! through `PreparedContainedTask::load`.
 
-use crate::{ContainedTaskCode, ContainedTaskError, ExternalExpectedSha256, PreparedContainedTask};
+use crate::{ContainedTaskCode, ContainedTaskError, PreparedContainedTask};
+use actingcommand_contract::PackageRef;
 use actingcommand_contract::outcome::Category;
 use actingcommand_pack_containment::Sha256Hash;
 use serde_json::{Value, json};
@@ -185,7 +186,7 @@ fn admit(task: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
     PreparedContainedTask::load(
         "neutral.instance",
         &bytes,
-        ExternalExpectedSha256::parse_hex(&expected).expect("hash"),
+        &PackageRef::LegacyZipSha256(expected),
     )
 }
 

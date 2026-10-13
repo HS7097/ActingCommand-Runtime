@@ -13,6 +13,9 @@
 //! The installation selection travels once: the fixed entry gets no inherited selection and
 //! `--config` names the selected generation's config, read again under the shared writer lock
 //! (review M3). Both methods run the Runtime at normal priority (review M5).
+//!
+//! Workflow #389 MCP-10: `actingctl start` and `restart` start through the same manual method,
+//! for an A/B root's selection or for a verification root's explicit config ([`Target`]).
 
 use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock, READY_TIMEOUT_MS};
 use super::observe::{self, Installation, RUNTIME_IMAGE};
@@ -25,7 +28,7 @@ use serde_json::Value;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::windows::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,13 +66,76 @@ fn failed(method: &'static str, code: Code, detail: String) -> Outcome {
     }
 }
 
+// --- Workflow #389 MCP-10 (begin): the start's inputs, shared with `actingctl start`. ---
+/// What one start needs: the root (working directory, fixed entry), the config handed to the
+/// fixed entry, the state root whose owner answers, and how long readiness may take.
+pub(crate) struct Target<'a> {
+    pub(crate) root_plain: &'a Path,
+    pub(crate) config_plain: &'a Path,
+    pub(crate) state_root: &'a Path,
+    pub(crate) ready_timeout: Duration,
+}
+
+impl<'a> Target<'a> {
+    /// The tick's target: the installation's selection and the fixed readiness window.
+    pub(crate) fn of(installation: &'a Installation) -> Self {
+        Self {
+            root_plain: &installation.root_plain,
+            config_plain: &installation.config_plain,
+            state_root: &installation.state_root,
+            ready_timeout: Duration::from_millis(READY_TIMEOUT_MS),
+        }
+    }
+
+    pub(crate) fn entry(&self) -> PathBuf {
+        self.root_plain.join("runtime").join(RUNTIME_IMAGE)
+    }
+}
+
+/// The checks of a manual start that need no spawn, so `restart` refuses before it stops
+/// anything: the fixed entry is a file, and no path the WMI start carries holds a cmd
+/// metacharacter.
+pub(crate) fn preflight(target: &Target<'_>) -> Result<(), StartError> {
+    let entry = target.entry();
+    if !entry.is_file() {
+        return Err(StartError {
+            code: ActingctlCode::EntryMissing.code(),
+            detail: format!("{} is not a file", entry.display()),
+        });
+    }
+    match [entry.as_path(), target.config_plain, target.root_plain]
+        .into_iter()
+        .find(|path| path.to_string_lossy().contains(CMD_UNSAFE))
+    {
+        Some(unsafe_path) => Err(StartError {
+            code: ActingctlCode::WatchdogWmiPathUnsafe.code(),
+            detail: format!(
+                "{} holds a cmd metacharacter ({}); start the Runtime formally",
+                unsafe_path.display(),
+                CMD_UNSAFE.iter().collect::<String>()
+            ),
+        }),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn start(
     installation: &Installation,
     log: &Path,
     spawn_at_unix_ms: u64,
     from_task: bool,
 ) -> Outcome {
-    let entry = installation.entry(RUNTIME_IMAGE);
+    start_target(&Target::of(installation), log, spawn_at_unix_ms, from_task)
+}
+// --- Workflow #389 MCP-10 (end). ---
+
+pub(crate) fn start_target(
+    installation: &Target<'_>,
+    log: &Path,
+    spawn_at_unix_ms: u64,
+    from_task: bool,
+) -> Outcome {
+    let entry = installation.entry();
     if !entry.is_file() {
         let method = if from_task { "breakaway" } else { "wmi" };
         return failed(
@@ -118,12 +184,12 @@ pub(crate) fn start(
     }
 }
 
-fn spawn_breakaway(installation: &Installation, entry: &Path, log: File) -> std::io::Result<Child> {
+fn spawn_breakaway(installation: &Target<'_>, entry: &Path, log: File) -> std::io::Result<Child> {
     let stderr = log.try_clone()?;
     Command::new(entry)
         .arg("--config")
-        .arg(&installation.config_plain)
-        .current_dir(&installation.root_plain)
+        .arg(installation.config_plain)
+        .current_dir(installation.root_plain)
         .env_remove(INSTALL_ROOT_ENV)
         .env_remove(INSTALL_SELECTION_ENV)
         .stdin(Stdio::null())
@@ -140,7 +206,7 @@ fn spawn_breakaway(installation: &Installation, entry: &Path, log: File) -> std:
 
 /// X3 literally: `Win32_Process.Create` with `ShowWindow = 0` and normal priority, through
 /// `cmd /d /s /c` so stdout and stderr are appended to the log.
-fn spawn_wmi(installation: &Installation, entry: &Path, log: &Path) -> Result<u32, StartError> {
+fn spawn_wmi(installation: &Target<'_>, entry: &Path, log: &Path) -> Result<u32, StartError> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $shell = if ($env:ComSpec) { $env:ComSpec } else { Join-Path $env:SystemRoot 'System32\\cmd.exe' }\n\
@@ -152,9 +218,9 @@ fn spawn_wmi(installation: &Installation, entry: &Path, log: &Path) -> Result<u3
     let log = observe::plain_path(log);
     let paths = [
         ("AC_WD_ENTRY", entry),
-        ("AC_WD_CONFIG", installation.config_plain.as_path()),
+        ("AC_WD_CONFIG", installation.config_plain),
         ("AC_WD_LOG", log.as_path()),
-        ("AC_WD_ROOT", installation.root_plain.as_path()),
+        ("AC_WD_ROOT", installation.root_plain),
     ];
     if let Some((_, unsafe_path)) = paths
         .iter()
@@ -199,15 +265,15 @@ fn spawn_wmi(installation: &Installation, entry: &Path, log: &Path) -> Result<u3
 /// Ready when the owner lock is held and runtime-info names an owner that started after the
 /// spawn and answers. The process is never terminated here, like acsetup's own start.
 fn wait_ready(
-    installation: &Installation,
+    installation: &Target<'_>,
     mut started: Started,
     log: &Path,
     spawn_at_unix_ms: u64,
 ) -> Result<LiveOwner, StartError> {
-    let deadline = Instant::now() + Duration::from_millis(READY_TIMEOUT_MS);
+    let deadline = Instant::now() + installation.ready_timeout;
     loop {
-        if let Ok((OwnerLock::Locked, _)) = observe::owner_journal(&installation.state_root)
-            && let Ok(owner) = observe::live_owner(&installation.state_root, Some(HEALTH_TIMEOUT))
+        if let Ok((OwnerLock::Locked, _)) = observe::owner_journal(installation.state_root)
+            && let Ok(owner) = observe::live_owner(installation.state_root, Some(HEALTH_TIMEOUT))
             && owner.started_at_unix_ms >= spawn_at_unix_ms.saturating_sub(CLOCK_SLACK_MS)
         {
             return Ok(owner);
@@ -240,7 +306,7 @@ fn wait_ready(
                 code: ActingctlCode::StartTimeout.code(),
                 detail: format!(
                     "no answering owner within {} s; the process was left running; {}",
-                    READY_TIMEOUT_MS / 1000,
+                    installation.ready_timeout.as_secs(),
                     last_log_line(log)
                 ),
             });

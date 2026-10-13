@@ -76,6 +76,7 @@ fn runtime_capture_backend(
         CaptureBackendName::AdbScreencapRawGzip => Ok(RuntimeCaptureBackend::AdbScreencapRawGzip),
         CaptureBackendName::DroidcastRaw => Ok(RuntimeCaptureBackend::DroidcastRaw),
         CaptureBackendName::NemuIpc => Ok(RuntimeCaptureBackend::NemuIpc),
+        CaptureBackendName::Scrcpy => Ok(RuntimeCaptureBackend::Scrcpy),
     }
 }
 

@@ -8,13 +8,8 @@
 actingcommand_contract::outcome_codes! {
     /// Why a package, a content directory or container, or a source tree is not admitted.
     pub enum PackContainmentCode {
-        // A legacy package file.
-        PackageOpenFailed => "package_open_failed": error / declaration_error,
-        PackageMetadataFailed => "package_metadata_failed": error / declaration_error,
-        PackageSizeInvalid => "package_size_invalid": error / declaration_error,
-        PackageDeadline => "package_deadline": error / budget_or_permission,
-        // A content directory and its content containers (Workflow #288, #336).
-        ContentDirectoryNameMismatch => "content_directory_name_mismatch": error / declaration_error,
+        // A package read by its path: a content directory, its content containers and an
+        // assembled package ZIP (Workflow #288, #336).
         ContentDirectoryLocatorNotAbsolute => "content_directory_locator_not_absolute": error / declaration_error,
         ContentDirectoryMissing => "content_directory_missing": error / declaration_error,
         ContentDirectoryLinkOrType => "content_directory_link_or_type": error / declaration_error,
@@ -29,6 +24,8 @@ actingcommand_contract::outcome_codes! {
         ContentDirectorySizeLimit => "content_directory_size_limit": error / declaration_error,
         ContentDirectoryLfsPointer => "content_directory_lfs_pointer": error / declaration_error,
         ContentDirectoryDeadline => "content_directory_deadline": error / budget_or_permission,
+        // Workflow #336 PKG-S1 (D16): the directory was replaced while it was read.
+        ContentDirectoryChangedDuringRead => "content_directory_changed_during_read": error / declaration_error,
         ContentContainerUnsupported => "content_container_unsupported": error / declaration_error,
         ContentContainerSizeLimit => "content_container_size_limit": error / declaration_error,
         ContentZipInvalid => "content_zip_invalid": error / declaration_error,

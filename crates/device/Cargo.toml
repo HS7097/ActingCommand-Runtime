@@ -12,8 +12,17 @@ publish = false
 actingcommand-contract = { path = "../actingcommand-contract" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 libloading = "0.8"
+# #402 RD-3: H.264 decoding for the scrcpy stream. The default `source` feature builds Cisco's
+# OpenH264 from the source the crate bundles (BSD-2-Clause); no prebuilt binary is loaded.
+openh264 = "0.9.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[build-dependencies]
+# #402 RD-3: build.rs reads the scrcpy server pin and checks the file it embeds.
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_Security", "Win32_System_RestartManager"] }

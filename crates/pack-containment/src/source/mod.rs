@@ -16,7 +16,6 @@ use actingcommand_contract::{
 };
 use actingcommand_recognition_pack::{AssetResolver, RecognitionPackError, RecognitionPackResult};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -890,15 +889,18 @@ impl OperationParser {
                 let target_id = anchor_target_id(&anchor_id);
                 let source = self.enrich_template_source(anchor, &anchor_id)?;
                 let template = required_string(&source, "template")?;
-                let target = pack_target(
+                let target = with_unique(
                     &source,
-                    &target_id,
-                    &template_resource_path(&self.root, &bundle.dir, &template)?,
-                    region_to_pack(required_field(&source, "region")?)?,
-                    template_threshold(&source)?,
-                    color_check_to_pack(source.get("color_check"), &target_id)?,
-                    None,
-                )?;
+                    pack_target(
+                        &source,
+                        &target_id,
+                        &template_resource_path(&self.root, &bundle.dir, &template)?,
+                        region_to_pack(required_field(&source, "region")?)?,
+                        template_threshold(&source)?,
+                        color_check_to_pack(source.get("color_check"), &target_id)?,
+                        None,
+                    )?,
+                );
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for color_probe in array_field(&bundle.data, "color_probes") {
@@ -922,15 +924,18 @@ impl OperationParser {
                 let target_id = required_string(verify_template, "id")?;
                 let source = self.enrich_template_source(verify_template, &target_id)?;
                 let template = required_string(&source, "template")?;
-                let target = pack_target(
+                let target = with_unique(
                     &source,
-                    &target_id,
-                    &template_resource_path(&self.root, &bundle.dir, &template)?,
-                    region_to_pack(required_field(&source, "region")?)?,
-                    template_threshold(&source)?,
-                    None,
-                    None,
-                )?;
+                    pack_target(
+                        &source,
+                        &target_id,
+                        &template_resource_path(&self.root, &bundle.dir, &template)?,
+                        region_to_pack(required_field(&source, "region")?)?,
+                        template_threshold(&source)?,
+                        None,
+                        None,
+                    )?,
+                );
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for operation in array_field(&bundle.data, "operations") {
@@ -2384,6 +2389,14 @@ fn pack_target(
     Ok(Value::Object(target))
 }
 
+/// Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
+fn with_unique(source: &Value, mut target: Value) -> Value {
+    if let (Some(unique), Some(object)) = (source.get("unique"), target.as_object_mut()) {
+        object.insert("unique".to_string(), unique.clone());
+    }
+    target
+}
+
 fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) -> Value {
     let mut target = ordered_map([
         ("type", Value::String("color".to_string())),
@@ -2782,6 +2795,7 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
             ) || target.get("max_distance").is_some()
                 || target.pointer("/color_check/max_distance").is_some()
                 || target.get("locate").is_some()
+                || target.get("unique").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
@@ -2827,6 +2841,7 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
             "model_sha256",
             "click",
             "locate",
+            "unique",
         ],
         "ocr_targets entry",
     )?;
@@ -2880,6 +2895,10 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
     // Workflow #396 REC-1: `locate` passes to the pack as declared (pack schema `0.7`).
     if let Some(locate) = source.get("locate") {
         target.insert("locate".to_string(), locate.clone());
+    }
+    // Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
+    if let Some(unique) = source.get("unique") {
+        target.insert("unique".to_string(), unique.clone());
     }
     Ok(Value::Object(target))
 }
@@ -3400,9 +3419,9 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                     ));
                 }
                 let bytes = files.read(&path).map_err(CliError::package_invalid)?;
-                if bytes.len() as u64 != size
-                    || format!("{:x}", Sha256::digest(bytes)) != dictionary.sha256
-                {
+                // Workflow #336 PKG-S1: the declared `sha256` is not compared; the bytes read
+                // must still be the length the file had when it was measured.
+                if bytes.len() as u64 != size {
                     return Err(CliError::package_invalid(
                         PackContainmentCode::OcrFieldsDictionaryHashMismatch.as_str(),
                     ));
@@ -3484,7 +3503,7 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         .and_then(Value::as_str)
         .filter(|path| safe_task_local_resource_path(path))
         .ok_or_else(|| CliError::package_invalid("post_admission_ocr.truth_set.path is unsafe"))?;
-    let truth_sha256 = truth
+    truth
         .get("sha256")
         .and_then(Value::as_str)
         .filter(|value| {
@@ -3565,11 +3584,11 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
             bundle.dir.join(truth_path).display()
         ))
     })?;
-    if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes)
-        || format!("{:x}", Sha256::digest(truth_bytes)) != truth_sha256
-    {
+    // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
+    // nothing; only the size bound applies to the bytes.
+    if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes) {
         return Err(CliError::package_invalid(
-            "post_admission_ocr truth set size or SHA-256 does not match",
+            "post_admission_ocr truth set exceeds max_total_bytes",
         ));
     }
     let truth_json: Value = serde_json::from_slice(truth_bytes).map_err(|error| {

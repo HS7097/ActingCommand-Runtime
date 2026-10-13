@@ -44,8 +44,7 @@ use actingcommand_device::{
 };
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
-    ExecutionKernel, ExternalExpectedSha256, InputFrameContext, ObservedFrame,
-    PreparedContainedTask,
+    ExecutionKernel, InputFrameContext, ObservedFrame, PreparedContainedTask,
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
@@ -100,6 +99,7 @@ include!("tests/support/vision.rs");
 mod agent_sessions;
 mod approvals;
 mod capture_failure;
+mod capture_floor;
 mod capture_sequence;
 mod client_events;
 mod clock_slot_report;
@@ -136,6 +136,7 @@ mod monitor;
 mod ocr_diagnostics;
 mod ocr_fields;
 mod online_observation;
+mod package_pins;
 mod planning;
 mod policy_admission;
 mod policy_budget;

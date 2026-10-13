@@ -63,12 +63,14 @@ fn validate_lab_package_zip_with_expected(
 }
 
 /// Deep-validates the exact package bytes that will be passed to the execution kernel.
+/// Workflow #336 PKG-S1: `recorded` is the caller's ZIP reference, reported back and compared
+/// with nothing.
 pub fn validate_lab_package_bytes(
     input_label: &str,
     bytes: &[u8],
-    expected_input_sha256: ExternalExpectedSha256,
+    recorded: &PackageRef,
 ) -> CliOutcome<LabContainedPackageValidationResponse> {
-    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, expected_input_sha256)
+    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, recorded)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let sha256 = admitted
         .loaded_bundle()
@@ -93,11 +95,7 @@ pub fn validate_lab_package_bytes(
         Some("0.8" | "0.9")
     ) {
         // These contracts use Runtime admission for offline validation.
-        actingcommand_execution_kernel::PreparedContainedTask::load(
-            input_label,
-            bytes,
-            expected_input_sha256,
-        )
+        actingcommand_execution_kernel::PreparedContainedTask::load(input_label, bytes, recorded)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
         let evaluator = bundle.evaluator().ok_or_else(|| {
             CliError::package_invalid("missing recognition evaluator for Lab package")
@@ -207,7 +205,11 @@ fn load_lab_package_for_validation(
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
     let mut containment = Containment::new();
     containment
-        .load(&instance, &bytes, &expected)
+        .load(
+            &instance,
+            &bytes,
+            &PackageRef::LegacyZipSha256(expected.to_string()),
+        )
         .map_err(containment_error)?;
     let bundle = containment
         .take_loaded(&instance)

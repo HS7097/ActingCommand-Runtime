@@ -2035,7 +2035,8 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 
-    let (_, failure) = run_actinglab_failure_json(
+    let unrelated = "0".repeat(64);
+    let recorded = run_actinglab_json(
         &config_path,
         &runtime_root,
         &local_app_data,
@@ -2046,10 +2047,11 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "--zip",
             package.to_str().expect("package path"),
             "--expected-sha256",
-            &"0".repeat(64),
+            &unrelated,
         ],
     );
-    assert_eq!(failure["ok"], false);
+    assert_eq!(recorded["data"]["summary"]["task_id"], "task");
+    assert_eq!(recorded["data"]["summary"]["verified_sha256"], unrelated);
     assert_eq!(host.runtime_info().pid(), std::process::id());
     host.close().expect("close host");
 }

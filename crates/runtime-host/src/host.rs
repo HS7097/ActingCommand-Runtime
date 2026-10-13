@@ -98,10 +98,10 @@ use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, DiscoveredInstanceBinding, ExecutionBackendProvenance,
-    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
-    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint,
-    ResolvedInstanceEndpoint, StabilityComparisonResult, StabilityTerminalReason,
-    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    ExecutionBackendProvider, ExecutionKernel, PostAdmissionOcrObservation, PreparedContainedTask,
+    PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
+    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
+    decide_monitor, page_anchor_matches,
 };
 use actingcommand_execution_kernel::{InputFrameContext, ObservedFrame};
 use actingcommand_ledger::critical::{
@@ -111,8 +111,7 @@ use actingcommand_ledger::critical::{
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent, project_subscription_event};
 use actingcommand_pack_containment::{
-    Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
-    Sha256Hash,
+    Containment, InstanceId as ContainmentInstanceId, PackageLayout,
 };
 use actingcommand_policy::{
     CatalogSources, DecisionReason, DecisionReasonChain, DispatchIntent, EvaluationFacts,
@@ -133,7 +132,7 @@ use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
