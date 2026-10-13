@@ -531,10 +531,19 @@ reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, op
 `request_id`, `instance_id`; Workflow #389 U-3, [`runtime-interface.md`](../runtime-interface.md),
 "Unloading a package in use"). It is not a deferral, so it has no place in the order above.
 
-**Status.** Written ahead of its code (documentation slice SR-0); until SR-6a lands, `why` still
-prints `none` for a decision without a reason. A reason counts as registered when its spelling
-is an active code of the outcome catalog; the evaluator's existing reason spellings are
-registered by the outcome-code typing of the policy crate (Workflow #378 A2d).
+**Status.** Written ahead of its code (documentation slice SR-0) and in force since SR-6a
+(v0.12.0). A reason counts as registered when its spelling is an active code of the outcome
+catalog; the evaluator's existing reason spellings are registered by the outcome-code typing of
+the policy crate (Workflow #378 A2d).
+
+The evaluator gives `decision_reason_missing` as it closes the round, before it writes any
+dispatch decision record. A decision left eligible becomes deferred. So `why`, and the codes
+`omitted_why` counts, never name `none`; `omitted_why=none` still means that no candidate was
+omitted. `why` is always the last reason the evaluator wrote. The host can add reasons to a
+cycle's decisions after the evaluation: `eligible_since_unknown` ("Settlement Feedback And
+Eligibility Age" below) and `policy_instance_fact_missing:<key>`
+([`instance-fact-store.md`](../instance-fact-store.md), "Explanation"). These follow the
+evaluator's reasons and do not replace the reason that settled the decision.
 
 ## Settlement Feedback And Eligibility Age
 
