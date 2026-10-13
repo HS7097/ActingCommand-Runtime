@@ -28,14 +28,17 @@ catalog through `--catalog-through`, computes the result, and appends
 watch calls do not append signature events.
 
 ```text
-actinglab lab signatures register --signature-id close_session_unconfirmed --signature-version 1 --origin-module runtime --diagnostic-code runtime_diagnostic --event-type runtime.failed --minimum-severity error --lifecycle-stage runtime.lifecycle.session_close --lifecycle-operation close_execution_session --lifecycle-code capture_backend_close_failed --cause-phase resource_close --cause-source nemu_ipc --resource-kind provider_connection --resource-phase disconnect_call --quiescence unconfirmed
-actinglab lab signatures register --signature-id close_kernel_unconfirmed --signature-version 1 --origin-module runtime --diagnostic-code runtime_diagnostic --event-type runtime.failed --minimum-severity error --lifecycle-stage runtime.lifecycle.session_close --lifecycle-operation close_execution_kernel --lifecycle-code capture_backend_close_failed --cause-phase resource_close --cause-source nemu_ipc --resource-kind provider_connection --resource-phase disconnect_call --quiescence unconfirmed
+actinglab lab signatures register --signature-id close_session_unconfirmed --signature-version 1 --origin-module runtime --diagnostic-code runtime_diagnostic --event-type runtime.failed --minimum-severity error --lifecycle-stage runtime_lifecycle_session_close --lifecycle-operation close_execution_session --lifecycle-code capture_backend_close_failed --cause-phase resource_close --cause-source nemu_ipc --resource-kind provider_connection --resource-phase disconnect_call --quiescence unconfirmed
+actinglab lab signatures register --signature-id close_kernel_unconfirmed --signature-version 1 --origin-module runtime --diagnostic-code runtime_diagnostic --event-type runtime.failed --minimum-severity error --lifecycle-stage runtime_lifecycle_session_close --lifecycle-operation close_execution_kernel --lifecycle-code capture_backend_close_failed --cause-phase resource_close --cause-source nemu_ipc --resource-kind provider_connection --resource-phase disconnect_call --quiescence unconfirmed
 actinglab lab signatures match --input-state-root <historical-root> --input-through <sequence> --catalog-through <registration-ledger-sequence> --limit 64
 actinglab lab signatures retire --signature-id <id> --signature-version <version> --registration-event-id <event-id> --registration-sequence <sequence>
 ```
 
 All options take one value; unknown, duplicate and missing options fail before
-connection. The two example definitions describe session and kernel closing
+connection. `--lifecycle-stage`, `--lifecycle-operation` and `--lifecycle-code` match the
+failure outcome's `stage` and `operation` values and its code (ledger revision 3), so a stage
+is a registered location such as `runtime_lifecycle_session_close`, never the earlier dotted
+`runtime.lifecycle.session_close`. The two example definitions describe session and kernel closing
 contexts with an unconfirmed provider disconnect. Registration is an explicit
 operation on the current catalog ledger. Existing historical inputs are not
 modified to contain definitions.

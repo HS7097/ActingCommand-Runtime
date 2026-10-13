@@ -418,7 +418,8 @@ that belongs to emulator control:
 ## Stuck-recovery ladder (slice #316-B4)
 
 A scheduled (policy) contained task run on a physical instance whose
-`task.failed` terminal carries `failure_code` `contained_task_page_unknown`, any
+`task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`
+for `outcome_relay_unregistered`, `scheduled_failure_code`) is `contained_task_page_unknown`, any
 `contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
 return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
 recovery ladder for the instance, unless the
@@ -526,8 +527,8 @@ its own run links, hands the key back to that continuation. Rung 2's entry and s
   completes the existing ADB baseline. Then (Workflow #369-1) the rung waits for readiness
   within 120 s of Start: Android must report a resumed activity (the read-only foreground
   query of the ADB baseline; no session is opened) and a fresh input/capture preparation
-  (stage `recovery_preparation`) must pass. Only `capture.ok && touch.ok && failure_code ==
-  null` records `recovery_environment_ready`, naming the passing preparation. A failed
+  (stage `recovery_preparation`) must pass. Only `capture.ok && touch.ok` without a failure
+  `outcome` records `recovery_environment_ready`, naming the passing preparation. A failed
   preparation is retried only when the existing preparation rule calls it recoverable (an
   ordinary acquisition failure with confirmed disposal and successful cleanup) or the ADB
   baseline does not answer; any other failure ends the rung `recovery_environment_not_ready`
@@ -587,13 +588,17 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 
 | phase | fields | severity |
 | --- | --- | --- |
-| `instance_preparation_finished` | `stage`, `capture`, `input` (typed backend observation statuses), `failure_code?`; linked to the instance and real self-check request | failure warning; otherwise info |
+| `instance_preparation_finished` | `stage`, `capture`, `input` (typed backend observation statuses), `outcome?` (the preparation's failure); linked to the instance and real self-check request | a failure: its outcome's category; otherwise info |
 | `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (all three rungs, in order; `reason` exactly when skipped) | info |
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
-| `recovery_rung_finished` | `rung`, `outcome: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `reason?`, `environment?` | info; `failed` warning |
-| `recovery_ladder_finished` | `outcome: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped) | success info; `exhausted` error |
+| `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption) | success info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied"`, `until_unix_ms` | admission denial warning; otherwise info |
+
+Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
+the event type's (`info`); `outcome` is the record envelope (`contracts/v012-register.md`
+§1.9, E3, E6).
 
 Task triggers use `stage: task` (the deserialization default), require task/run IDs and omit
 `preparation`. Preparation triggers require `preparation` and omit task/run IDs.

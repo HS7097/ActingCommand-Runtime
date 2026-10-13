@@ -746,9 +746,9 @@ persisted structure.
   lowest-sequence point whose window contains it; its leaf is
   `<instance alias>-<sequence>-<code>`, dated at that point's t, where the alias is the
   one bound at the point (for an epoch-end point, at the run's last frame) and the code
-  is the point's own `failure_code`, else its own code (a `rejection.code`, as in a
-  `policy.dispatch_rejected`, before any other `code`), else the failure code of its
-  run's failure terminal when that terminal precedes it, else its event type with `.` as
+  is the code of the point's own `outcome` (ledger revision 3; a `policy.dispatch_rejected`
+  names its rejection's outcome), else its own `code` member, else the code of its run's
+  failure terminal's outcome when that terminal precedes it, else its event type with `.` as
   `_` (an epoch-end point: `runtime_takeover` or `runtime_started`); characters outside
   `[A-Za-z0-9_-]` become `_`, and the code keeps at most 64 of them. A Lab frame's leaf
   is `lab-<instance alias>`, dated at its capture.
