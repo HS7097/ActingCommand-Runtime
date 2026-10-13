@@ -455,7 +455,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     let prepared = PreparedContainedTask::load(
         "fixture01.instance",
         &incompatible,
-        &actingcommand_contract::PackageRef::LegacyZipSha256(hash),
+        &actingcommand_contract::PackageRef::LegacyZipSha256(hash.clone()),
     )
     .unwrap();
     assert!(!prepared.is_entry_recovery_compatible());
