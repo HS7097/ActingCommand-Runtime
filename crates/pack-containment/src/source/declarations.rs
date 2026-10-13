@@ -3082,8 +3082,12 @@ mod tests {
         .expect("policy bytes")
     }
 
+    /// Workflow #336 PKG-S1: a select step's pin is still required and format-checked, but never
+    /// compared with the document, so a fixed well-formed pin stands in for it.
+    const POLICY_PIN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     /// A task whose one select step names the document, on a layout with `unknown_identity`.
-    fn task_bundle(unknown_identity: &str, policy: &[u8]) -> Bundle {
+    fn task_bundle(unknown_identity: &str) -> Bundle {
         Bundle {
             task_id: "list-task".to_owned(),
             dir: PathBuf::from("tasks/list-task"),
@@ -3092,7 +3096,7 @@ mod tests {
                 "operations": [{"id": "choose", "from": "list", "select": {
                     "layout_id": "layout-list",
                     "policy": {"path": "policies/list.json",
-                               "sha256": crate::Sha256Hash::digest(policy).to_string()}}}],
+                               "sha256": POLICY_PIN}}}],
                 "candidate_layouts": [{"id": "layout-list", "page_id": "list",
                     "unknown_identity": unknown_identity,
                     "features": [{"name": "member", "value": "identity", "identity": {
@@ -3114,7 +3118,7 @@ mod tests {
         let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
         select_policy(
             &task,
-            &task_bundle("reject", &bytes),
+            &task_bundle("reject"),
             &requested,
             &requested,
             &bytes,
@@ -3123,7 +3127,7 @@ mod tests {
 
         let error = select_policy(
             &task,
-            &task_bundle("readable_attributes", &bytes),
+            &task_bundle("readable_attributes"),
             &requested,
             &requested,
             &bytes,
