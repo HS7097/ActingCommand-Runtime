@@ -128,7 +128,7 @@ Each slice brings its own shape, written by the slice that brings it.
 | V4 | `TaskGeometryAspectMismatch::FrameNotSixteenByNine` (`frame_not_sixteen_by_nine`) of `task.geometry_observed` | removed persisted value | DA-A (#392, model 392 §8.3, §12.1; model 398 §8) | — | the frame's own aspect ratio is recorded, never refused; `frame_and_logical_display_differ` is the one value left; a record that carries the removed value is not read (no old-version compatibility) |
 | V5 | `AdbCommandEvidence.raw_text_redacted` in the ADB target recovery report (`adb_recovery` of the runtime lifecycle and recovery records) | new optional member, omitted when false | RD-1a (#398, model 398 v1.1 §3.5 rule 4) | RD-1a | `true` when a device serial the Runtime holds a binding for was replaced by `[device:<label>]` in the command's `stdout` or `stderr`; outcomes carry the same fact as the boolean key `raw_text_redacted` (on `foreign_adb_error`); [adb-target-recovery.md](adb-target-recovery.md) |
 
-### 1.9 Real-device capture (#398 R1 §5.1, §5.3; #402 RD-3)
+### 1.10 Real-device capture (#398 R1 §5.1, §5.3; #402 RD-3)
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -140,7 +140,7 @@ time) stays in the device layer's memory and is not recorded. The model's values
 `fresh_wait_ms`, `frame_sequence` and `stream_end` are outcome values (registry entries, LEDG §11),
 attached when B5 types the device layer.
 
-### 1.9 Wave 2 slices (REC-2)
+### 1.11 Wave 2 slices (REC-2)
 
 Each slice brings its own shape, written by the slice that brings it.
 
