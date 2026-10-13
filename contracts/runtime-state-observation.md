@@ -98,7 +98,10 @@ other list (Workflow #372 K3, `policy-suspension.md`).
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
 first by their first listing fact, each read in brief mode and kept by its dispatch and
-state, at most 100 a page. A scheduled run also carries its policy task id as
+state, at most 100 a page. As in `recent_runs`, a run is not listed until it writes its
+first listing fact, which for a run with an entry check is when that check ends, at most
+`min(step_timeout, task_timeout)`; meanwhile its instance shows `lease_active: true`.
+A scheduled run also carries its policy task id as
 `catalog_task_id`: the `task_id` of its `policy.dispatch_intent`. That event is linked to
 the run but recorded under the admission request, not the run's own request, so it is
 read with one query by run. A manual run has none. `task_prefix` matches
