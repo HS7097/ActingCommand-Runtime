@@ -581,6 +581,12 @@ fn queued_timeout_is_a_visible_terminal_denial() {
         expired.error_projection().expect("queue expiry").code,
         RuntimeErrorCode::QueueExpired
     );
+    // Workflow #378 A4 (part B L4): the refusal names the QueueLease's cap as `timeout_ms`.
+    assert_eq!(expired.outcome().code().as_str(), "lease_queue_expired");
+    assert_eq!(
+        expired.outcome().value("timeout_ms"),
+        Some(&serde_json::json!(50))
+    );
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -689,6 +695,19 @@ fn run_queue_expiry_context_case(
     let repeated_poll = waiter.request(RuntimeOperation::PollQueuedLease { queued_request_id });
     let repeated = waiter.send(&repeated_poll);
     assert_eq!(assert_queue_expired(&repeated), terminal);
+    // Workflow #378 A4 (part B L4): a poll refused at the cap names the QueueLease's cap as
+    // `timeout_ms`, on the poll path and on the terminal record's.
+    let mut polls = vec![&repeated];
+    if operation == QueueOperationTestKind::Poll {
+        polls.push(&expired);
+    }
+    for poll in polls {
+        assert_eq!(poll.outcome().code().as_str(), "lease_queue_expired");
+        assert_eq!(
+            poll.outcome().value("timeout_ms"),
+            Some(&serde_json::json!(50))
+        );
+    }
     assert_eq!(
         event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
         vec![

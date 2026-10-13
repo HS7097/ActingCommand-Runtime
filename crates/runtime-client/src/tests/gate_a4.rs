@@ -3,14 +3,17 @@
 //! Workflow #378 A4 (model section 7.2): `RuntimeClientError::outcome()` puts a denied or failed
 //! receipt's outcome on top, else the client's own code, and the client's relations become links.
 
-use crate::{ClientCode, ClientLocation, RuntimeClientError};
+use super::{scripted_runtime, write_scripted_result};
+use crate::{ClientCode, ClientLocation, RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{CauseRelation, Code};
+use actingcommand_contract::outcome::{CauseRelation, Code, Detail};
 use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, RuntimeErrorCode, RuntimeErrorProjection,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
-use serde_json::json;
+use serde_json::{Value, json};
+use std::io::Read;
+use tempfile::TempDir;
 
 fn health_request(ids: &IdentifierIssuer) -> RuntimeRequest {
     RuntimeRequest::new(
@@ -162,4 +165,33 @@ fn a4_related_failures_become_related_or_after_commit_links() {
     };
     assert_eq!(link.relation(), &CauseRelation::AfterCommit);
     assert!(link.outcome().is(ClientCode::RuntimeReceiptTimeout));
+}
+
+/// A console session (`source: ui`) asks for the receipt detail it was configured with on its
+/// requests (A4 review A-L1): with `with_detail(Full)` the request frame carries
+/// `"detail": "full"`; without it the member is absent, and the class default applies.
+#[test]
+fn a4_a_session_detail_travels_on_its_request_frames() {
+    for (detail, expected) in [(Some(Detail::Full), Some(json!("full"))), (None, None)] {
+        let root = TempDir::new().expect("tempdir");
+        let server = scripted_runtime(&root, move |listener, owner_epoch| {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            let mut header = [0_u8; 4];
+            stream.read_exact(&mut header).expect("request header");
+            let mut body = vec![0_u8; u32::from_be_bytes(header) as usize];
+            stream.read_exact(&mut body).expect("request body");
+            let frame: Value = serde_json::from_slice(&body).expect("request frame JSON");
+            assert_eq!(frame.get("detail"), expected.as_ref(), "{frame}");
+            let request: RuntimeRequest = serde_json::from_value(frame).expect("request v4");
+            assert!(matches!(request.operation(), RuntimeOperation::Health));
+            write_scripted_result(&mut stream, &request, RuntimeResult::Health { owner_epoch });
+        });
+        let config = RuntimeClientConfig::new(root.path(), EventActor::Ui, EventSource::Ui);
+        let config = match detail {
+            Some(detail) => config.with_detail(detail),
+            None => config,
+        };
+        RuntimeClient::connect(config).expect("runtime client");
+        server.join().expect("scripted runtime");
+    }
 }

@@ -3269,6 +3269,76 @@ fn a4_codes_mode_keeps_the_registered_names_and_withholds_the_data() {
     assert_eq!(full.error_projection(), Some(refusal));
 }
 
+/// The outcome must match the receipt's state (A4 review A-L2): an admitted receipt carries
+/// `request_admitted`, not another state's info code; a completed receipt carries a success
+/// code, not an info code; and a denied receipt names its Runtime error code, so a top that is
+/// not one needs `runtime_code`.
+#[test]
+fn a4_a_receipt_outcome_that_does_not_match_its_state_is_refused() {
+    use crate::codes::ContractLocation;
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let health = request(RuntimeOperation::Health);
+    let info_envelope = |code: &str| {
+        serde_json::json!({
+            "schema_version": "actingcommand.outcome.v1",
+            "code": code,
+            "category": "info",
+            "values": {}
+        })
+    };
+    let admitted = RuntimeReceipt::success(
+        &health,
+        RuntimeReceiptState::Admitted,
+        None,
+        RuntimeResult::Health { owner_epoch },
+    )
+    .expect("admitted receipt");
+    let completed = RuntimeReceipt::success(
+        &health,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::Health { owner_epoch },
+    )
+    .expect("completed receipt");
+    let cancel = request(RuntimeOperation::CancelContainedTask {
+        task_request_id: *ids.mint_request_id().expect("task request").transport(),
+    });
+    let denied = RuntimeReceipt::failure(
+        &cancel,
+        RuntimeReceiptState::Denied,
+        None,
+        RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false).receipt_outcome(
+            Some(SharedCode::ScheduledContainedTaskNotClientCancellable.code()),
+            Some(ContractLocation::CancelContainedTask.location()),
+        ),
+    )
+    .expect("denied receipt");
+
+    let mut admitted_as_queued = serde_json::to_value(&admitted).expect("admitted JSON");
+    admitted_as_queued["outcome"] = info_envelope("request_queued");
+    let mut completed_as_info = serde_json::to_value(&completed).expect("completed JSON");
+    completed_as_info["outcome"] = info_envelope("request_admitted");
+    let mut denied_unnamed = serde_json::to_value(&denied).expect("denied JSON");
+    denied_unnamed["outcome"]["values"]
+        .as_object_mut()
+        .expect("denied values")
+        .remove("runtime_code")
+        .expect("denied runtime_code");
+    for (case, wire) in [
+        ("admitted with request_queued", admitted_as_queued),
+        ("completed with an info code", completed_as_info),
+        ("denied without a Runtime error code", denied_unnamed),
+    ] {
+        let receipt: RuntimeReceipt = serde_json::from_value(wire).expect("wire receipt");
+        assert_eq!(
+            receipt.validate().expect_err(case).code().as_str(),
+            "invalid_receipt_outcome",
+            "{case}"
+        );
+    }
+}
+
 /// Receipt v2 reserves `outcome` for the envelope: the contained run's result and the
 /// cancellation status name how the run ended `task_result` (model section 8.1).
 #[test]
