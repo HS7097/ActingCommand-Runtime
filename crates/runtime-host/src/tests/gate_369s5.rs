@@ -123,9 +123,6 @@ fn assert_queue_expired(receipt: &RuntimeReceipt) {
     assert_eq!(error.host_code(), Some("lease_queue_expired"));
 }
 
-/// The one record of the expiry: `scheduler.denied` `lease.queue_expired` under the request's
-/// links, naming the instance. Ledger revision 3 (#378 A3): its severity is its outcome's
-/// category, `lease_queue_expired`'s `error`.
 /// A queue expiry's outcome: `lease_queue_expired` with the wait, the holder's kind and the
 /// queue position as values (ledger revision 3).
 fn assert_queue_expiry_values(outcome: &actingcommand_contract::outcome::Outcome, timeout_ms: u64) {
@@ -141,6 +138,9 @@ fn assert_queue_expiry_values(outcome: &actingcommand_contract::outcome::Outcome
     assert_eq!(outcome.value("queue_position"), Some(&serde_json::json!(1)));
 }
 
+/// The one record of the expiry: `scheduler.denied` `lease.queue_expired` under the request's
+/// links, naming the instance. Ledger revision 3 (#378 A3): its severity is its outcome's
+/// category, `lease_queue_expired`'s `error`.
 fn assert_one_expiry_record(host: &RuntimeHost, request: &RuntimeRequest, instance: InstanceId) {
     let recorded = of_request(host, request.request_id());
     let denied = only(&recorded, EventType::SchedulerDenied);
