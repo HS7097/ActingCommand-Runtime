@@ -837,6 +837,62 @@ fn a_unique_anchor_anchors_its_ocr_region_only_while_it_is_unique() {
     assert!(regions.is_empty(), "no OCR call");
 }
 
+/// Workflow #308 SEL-L1 merge: a candidate layout feature read at an offset and a
+/// `repeated_anchor` anchor check no second place, so a template that declares `unique` is
+/// refused in either role when the evaluator is built, at its pointer.
+#[test]
+fn a_unique_template_is_refused_as_an_offset_feature_or_a_repeated_anchor() {
+    let icon = Noise(0x0396_0112).pattern(ICON_WIDTH, ICON_HEIGHT);
+    let build = |anchor_unique: Option<u32>, feature_unique: Option<u32>| {
+        let pack = json!({
+            "schema_version": "0.7",
+            "coordinate_space": {"width": 320, "height": 240},
+            "defaults": {"match_metric": "ccoeff_normed"},
+            "targets": [
+                template_target("icon/row", json!("full_frame"), anchor_unique),
+                template_target(
+                    "icon/row_state",
+                    json!({"x": 0, "y": 0, "width": 30, "height": 20}),
+                    feature_unique,
+                ),
+            ],
+            "candidate_layouts": [{
+                "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                "anchor": "icon/row", "max_instances": 4, "order": "top_to_bottom",
+                "instance_rect": {"x": -2, "y": -2, "width": 80, "height": 24},
+                "click": {"x": 0, "y": 0, "width": 20, "height": 18},
+                "features": [{"name": "state", "value": "passed", "target": "icon/row_state",
+                              "offset": {"x": 30, "y": 0}}]
+            }]
+        });
+        RecognitionEvaluator::with_asset_resolver(
+            load_pack_from_json_str(&pack.to_string()).expect("pack loads"),
+            assets(&[("icon.png", ICON_WIDTH, ICON_HEIGHT, icon.as_slice())]),
+        )
+    };
+
+    build(None, None).expect("the layout without unique is admitted");
+    for (anchor_unique, feature_unique, pointer) in [
+        (
+            Some(50),
+            None,
+            "/candidate_layouts/0/anchor: template 'icon/row' declares unique",
+        ),
+        (
+            None,
+            Some(50),
+            "/candidate_layouts/0/features/0/target: template 'icon/row_state' declares unique",
+        ),
+    ] {
+        let error = build(anchor_unique, feature_unique).expect_err(pointer);
+        assert!(
+            error.message().contains(pointer),
+            "expected '{pointer}' in '{}'",
+            error.message()
+        );
+    }
+}
+
 /// An uncompressed RGB PNG.
 fn encode_png(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
     let mut scanlines = Vec::new();

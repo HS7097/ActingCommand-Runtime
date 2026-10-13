@@ -268,8 +268,9 @@ pub(crate) fn validate_unique_wire(
 }
 
 /// The declaration rules of `unique` on a parsed pack: schema 0.7, a template target or an OCR
-/// target that declares `locate`, and `margin_milli` in 1..=1000 (the wire shape is checked by
-/// [`validate_unique_wire`] when the pack is loaded from JSON).
+/// target that declares `locate`, `margin_milli` in 1..=1000 (the wire shape is checked by
+/// [`validate_unique_wire`] when the pack is loaded from JSON), and no such template as a
+/// candidate layout feature read at an offset or as a `repeated_anchor` anchor.
 pub(crate) fn validate_unique_declarations(pack: &RecognitionPack, errors: &mut Vec<String>) {
     for (index, target) in pack.targets.iter().enumerate() {
         let (unique, ocr_without_locate) = match target {
@@ -294,6 +295,33 @@ pub(crate) fn validate_unique_declarations(pack: &RecognitionPack, errors: &mut 
             errors.push(format!(
                 "target[{index}].unique.margin_milli must be in 1..=1000"
             ));
+        }
+    }
+    // Workflow #308 SEL-L1 merge: a feature read at an offset is evaluated over one moved
+    // region and a `repeated_anchor` anchor takes every accepted match; neither checks a second
+    // place, so neither may name a template that declares `unique`.
+    let declares_unique = |target_id: &str| {
+        pack.targets.iter().any(|target| {
+            matches!(target, RecognitionTarget::Template(template)
+                if template.id == target_id && template.unique.is_some())
+        })
+    };
+    for (layout_index, layout) in pack.candidate_layouts.iter().enumerate() {
+        if let Some(anchor) = layout.anchor.as_deref()
+            && declares_unique(anchor)
+        {
+            errors.push(format!(
+                "/candidate_layouts/{layout_index}/anchor: template '{anchor}' declares unique, which a repeated_anchor anchor does not check"
+            ));
+        }
+        for (feature_index, feature) in layout.features.iter().enumerate() {
+            if let (Some(target_id), Some(_)) = (&feature.target, feature.offset)
+                && declares_unique(target_id.as_str())
+            {
+                errors.push(format!(
+                    "/candidate_layouts/{layout_index}/features/{feature_index}/target: template '{target_id}' declares unique, which a feature read at an offset does not check"
+                ));
+            }
         }
     }
 }

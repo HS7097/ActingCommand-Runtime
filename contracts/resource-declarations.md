@@ -193,7 +193,10 @@ refuses it with `UnconsumedField`. `margin_milli` is required (`MissingField`), 
 (`InvalidType`) from 1 to 1000 (`InvalidValue`); there is no default.
 
 The declaration holds wherever the target is evaluated: page rules, guards, clicks, OCR
-anchors, checks and candidate layout slots. A target that would pass fails when a second place
+anchors, checks and candidate layout slots. A candidate layout feature read at an offset and a
+`repeated_anchor` anchor (`candidate-projection.md`) check no second place, so a template that
+declares `unique` is refused in either role when the evaluator is built, at the feature's
+`target` or the layout's `anchor`. A target that would pass fails when a second place
 scores at least the best match's score minus `margin_milli`. Scores are compared in milli,
 rounded down: a template's normalized match score under its own metric, a text block's
 confidence (0 when absent).
