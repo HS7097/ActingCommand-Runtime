@@ -371,4 +371,6 @@ outcome_keys! {
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
     ladder_class: vocab(ladder_class),
+    // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
+    mumu_manager_version: version,
 }

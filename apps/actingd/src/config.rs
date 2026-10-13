@@ -520,7 +520,7 @@ impl ConfiguredVision {
         let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
             code: VisionListingCode::VisionRootUnavailable.code(),
             message: error.message().to_owned(),
-            cause: None,
+            cause: error.os_cause().cloned(),
         })?;
         let runtime = VisionRuntimeSpec::from_vision_root(
             &root,
@@ -530,7 +530,7 @@ impl ConfiguredVision {
         .map_err(|error| VisionRefusal {
             code: ActingdCode::VisionRuntimeUnavailable.code(),
             message: error.message().to_owned(),
-            cause: None,
+            cause: error.os_cause().cloned(),
         })?;
         if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
             return Err(VisionRefusal {
@@ -2861,20 +2861,38 @@ mod tests {
             b"",
         )
         .expect("runtime placeholder");
+        // Ledger revision 3 (acceptance CA-M1): a `models` entry that is a file, so listing it
+        // fails with an OS error.
+        fs::create_dir_all(root.path().join("models-file")).expect("vision root fixture");
+        fs::write(root.path().join("models-file").join("models"), b"").expect("models file");
         let vision = |root: &str| json!({"execution_provider": "cpu", "root": root});
-        for (index, vision, expected) in [
+        // Each refusal with the `io_op` of the `foreign_os_error` link it carries, if any.
+        for (index, vision, expected, os_link) in [
             (
                 0,
                 Some(vision("missing-root")),
                 Some("vision_root_unavailable"),
+                Some("canonicalize"),
             ),
             (
                 1,
                 Some(vision("no-runtime")),
                 Some("vision_runtime_unavailable"),
+                None,
             ),
-            (2, Some(vision("no-models")), Some("vision_models_empty")),
-            (3, None, None),
+            (
+                2,
+                Some(vision("no-models")),
+                Some("vision_models_empty"),
+                None,
+            ),
+            (
+                4,
+                Some(vision("models-file")),
+                Some("vision_root_unavailable"),
+                Some("read_dir"),
+            ),
+            (3, None, None, None),
         ] {
             let state_root = root.path().join(format!("state-{index}"));
             let mut config = serde_json::from_value::<ActingdConfigFile>(json!({
@@ -2941,6 +2959,20 @@ mod tests {
                 // Ledger revision 3: the native failure is the refusal's outcome; the OS text
                 // of an unavailable root is its foreign link, never public.
                 assert_eq!(Some(failure.outcome.code().as_str()), expected);
+                // The OS error behind a refusal is its `caused_by` link, as `foreign_os_error`
+                // with the failed I/O verb.
+                let os_links = failure
+                    .outcome
+                    .causes()
+                    .iter()
+                    .filter(|link| link.outcome().code().as_str() == "foreign_os_error")
+                    .map(|link| {
+                        link.outcome()
+                            .value("io_op")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(os_links, os_link.map(Some).into_iter().collect::<Vec<_>>());
                 let public =
                     serde_json::to_string(&provider_terminal.0.payload().public_projection())
                         .expect("public projection");

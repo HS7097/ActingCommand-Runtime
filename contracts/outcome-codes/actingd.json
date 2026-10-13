@@ -1143,11 +1143,14 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_manager_version": "optional",
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup refused the emulator capability profile from discovery.",
+      "description": "Provider startup refused the emulator capability profile from discovery. mumu_manager_version is the version discovery reported, mumu_root the configured MuMu folder when one is configured, and the host's refusal is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1157,11 +1160,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found no discovered emulator instance for a binding key.",
+      "description": "Provider startup found no discovered emulator instance for a binding key. alias names the configured instance and instance_index or instance_name its declared binding key.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1171,11 +1178,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found more than one discovered emulator instance for a binding key.",
+      "description": "Provider startup found more than one discovered emulator instance for a binding key. alias names the configured instance, instance_name its declared binding key, and instances the discovered candidates.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1203,7 +1215,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup could not build the vision provider from the listed models.",
+      "description": "Provider startup could not build the vision provider from the listed models. The kernel error's code is the caused_by link, relayed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1227,11 +1239,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared adb_path is not the discovered adb.",
+      "description": "A provider native failure: the declared adb_path is not the discovered adb. alias names the configured instance, adb_path the declared adb, other_path the discovered one, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1241,11 +1258,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_host": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared host differs from the discovered one.",
+      "description": "A provider native failure: the declared host differs from the discovered one. alias names the configured instance, adb_host the declared host, and instances the discovered instance with the host it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1255,11 +1276,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port differs from the discovered one.",
+      "description": "A provider native failure: the declared port differs from the discovered one. alias names the configured instance, adb_port the declared port, and instances the discovered instance with the port it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1269,11 +1294,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance.",
+      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance. alias names the configured instance, adb_port the declared port, and instances the discovered instance, which reported no port.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1283,11 +1312,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the discovered adb path is not UTF-8.",
+      "description": "A provider native failure: the discovered adb path is not UTF-8. alias names the configured instance, other_path the discovered adb (lossy), adb_path the declared adb when one is declared, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1941,12 +1975,13 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "device_category": "optional"
+        "device_category": "optional",
+        "mumu_root": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text.",
+      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text. mumu_root names the configured MuMu folder of a failed discovery when one is configured.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

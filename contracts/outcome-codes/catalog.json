@@ -1516,6 +1516,10 @@
     "ladder_class": {
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
+    "mumu_manager_version": {
+      "type": "version",
+      "description": "The version MuMuManager reported in a discovery."
     }
   },
   "vocabularies": {
