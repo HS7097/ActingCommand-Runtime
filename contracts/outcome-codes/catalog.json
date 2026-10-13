@@ -37,9 +37,9 @@
       "type": "integer",
       "description": "An emulator instance index."
     },
-    "adb_serial": {
+    "device_label": {
       "type": "name",
-      "description": "An adb device serial (host:port or a device name)."
+      "description": "The label of an adb target: HOST:PORT for an emulator, handset:<alias> for a device addressed by its serial. Never the serial itself (Workflow #398)."
     },
     "path": {
       "type": "path",
@@ -157,6 +157,10 @@
     "raw_text_sensitivity": {
       "type": "vocab:sensitivity",
       "description": "How sensitive raw_text is; readers redact by it."
+    },
+    "raw_text_redacted": {
+      "type": "boolean",
+      "description": "Every device serial the Runtime holds a binding for was replaced in raw_text by its token [device:<label>] (Workflow #398); the only edit of foreign text."
     },
     "os_error": {
       "type": "integer",
@@ -554,6 +558,14 @@
       "type": "vocab:budget_dimension",
       "description": "The policy budget dimension that is exhausted."
     },
+    "target_id": {
+      "type": "id",
+      "description": "A recognition target's ID in its recognition pack."
+    },
+    "text_read_budget": {
+      "type": "vocab:text_read_budget",
+      "description": "Which per-consumer text read budget ran out."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -569,6 +581,10 @@
     "reader_problem": {
       "type": "vocab:reader_problem",
       "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
+    },
+    "entry_problem": {
+      "type": "vocab:entry_problem",
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
     },
     "pause_reason": {
       "type": "name",
@@ -2451,6 +2467,32 @@
         }
       }
     },
+    "entry_problem": {
+      "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b).",
+      "tokens": {
+        "empty": {
+          "description": "The entry page set names no page."
+        },
+        "too_many": {
+          "description": "The entry page set names more than 16 pages."
+        },
+        "duplicate": {
+          "description": "The entry page set names one page twice."
+        },
+        "any_in_set": {
+          "description": "The entry page set names any, which only a single entry page may be."
+        },
+        "unresolved": {
+          "description": "A page of the entry page set is blank or is not exactly one page of the package's page set."
+        },
+        "phase_start_missing": {
+          "description": "No stage of the phased route lists an operation from a page of the entry page set."
+        },
+        "phase_start_ambiguous": {
+          "description": "More than one stage of the phased route lists an operation from a page of the entry page set."
+        }
+      }
+    },
     "evidence_completeness": {
       "description": "How complete evidence is.",
       "source": {
@@ -3182,6 +3224,21 @@
         },
         "activity_runtime": {
           "description": "Activity runtime."
+        }
+      }
+    },
+    "text_read_budget": {
+      "description": "Which per-consumer text read budget of located OCR text ran out (Workflow #396 REC-1).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "TextReadBudget"
+      },
+      "tokens": {
+        "calls": {
+          "description": "The provider calls of one consumer."
+        },
+        "area": {
+          "description": "The summed region area of one consumer, in pixels."
         }
       }
     },
@@ -6770,6 +6827,12 @@
     ],
     "text_": [
       "pack-containment"
+    ],
+    "text_locate_": [
+      "recognition-pack"
+    ],
+    "text_read_": [
+      "recognition-pack"
     ],
     "third_": [
       "contract"

@@ -233,6 +233,10 @@ pub struct TaskDiagnosticRecognitionError {
     pub timing: Option<super::TemplateMatchTimingObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<Box<TaskDiagnosticSampleData>>,
+    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude
+    /// (`text_read_budget_exceeded`, `text_read_blocks_truncated`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<crate::outcome::Outcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +251,10 @@ pub struct TaskDiagnosticTargetData {
     pub source: TaskDiagnosticTargetSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<TaskDiagnosticSamplingData>,
+    /// Workflow #396 REC-1: why a target did not pass, when a registered reason exists
+    /// (`text_locate_not_found`, `text_locate_outside_cells`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::outcome::Outcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,6 +355,9 @@ pub enum TaskDiagnosticOcrData {
         matched_expected: Option<String>,
         match_mode: String,
         block_count: usize,
+        /// Workflow #396 REC-1: where a locate target found its text; absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        located: Option<TaskDiagnosticOcrLocatedData>,
     },
     Observed {
         phase: String,
@@ -358,6 +369,22 @@ pub enum TaskDiagnosticOcrData {
         block_count: usize,
         execution: Box<TaskDiagnosticOcrExecution>,
     },
+}
+
+/// Workflow #396 REC-1: the block a locate OCR target found, and the declared cell holding its
+/// center when the target declares cells. `block_index` is the block's `derived_rank` among
+/// the OCR row's block rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticOcrLocatedData {
+    pub block_index: usize,
+    pub rect: crate::OcrRegionRect,
+    pub confidence_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_rect: Option<crate::OcrRegionRect>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

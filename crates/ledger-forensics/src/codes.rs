@@ -83,5 +83,13 @@ actingcommand_contract::outcome_locations! {
         ValidateSignatureReplay => "validate_signature_replay",
         ValidateStabilityPage => "validate_stability_page",
         ValidateViewRequest => "validate_view_request",
+        // Workflow #395 (LEDG-395): the phases of the offline material and runtime fact reads;
+        // a phase's deadline that runs out names the phase as the failure's location.
+        ResolveMaterialReference => "resolve_material_reference",
+        ResolveCurrentMaterialReference => "resolve_current_material_reference",
+        ReadVerifiedMaterial => "read_verified_material",
+        ReadRuntimeFactsPosition => "read_runtime_facts_position",
+        ReadRuntimeFactSnapshotSet => "read_runtime_fact_snapshot_set",
+        ReadRuntimeFactChanges => "read_runtime_fact_changes",
     }
 }

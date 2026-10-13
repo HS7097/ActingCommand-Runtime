@@ -61,10 +61,20 @@ cache. There is no material session, token, new pin or persistent reader, and no
 file handle or lock outlives a request. The original generic receipt cache is
 not populated or reused for material reads.
 
-One monotonic four-second cooperative budget covers reference resolution, the
-reader's chunk loop/EOF/finish and reply serialization. Offline metadata opening
-uses the same deadline through `GlobalLedgerEvidenceConfig::with_deadline` and
-preserves stricter source limits. The deadline is not reset for the second lookup.
+In the resident Runtime one monotonic four-second cooperative budget covers
+reference resolution, the reader's chunk loop/EOF/finish and reply serialization;
+the deadline is not reset for the second lookup. The offline entry gives each of
+its three phases its own four-second deadline, taken when the phase starts
+(Workflow #395): `resolve_material_reference` (open authenticated metadata and
+resolve the reference and its retention), `resolve_current_material_reference`
+(under the reader's use guard, reopen metadata for the second lookup) and
+`read_verified_material` (the reader's chunk loop/EOF/finish and reply
+serialization). Each offline metadata opening uses its phase's deadline through
+`GlobalLedgerEvidenceConfig::with_deadline` and preserves stricter source limits.
+A deadline that runs out gives `not_provided` with `budget_exceeded`; the failure
+keeps the bound's own code (`ledger_read_budget_exceeded`,
+`artifact_read_budget_exceeded` or `material_read_budget_exceeded`) and its
+`operation` names the phase, in the report and in the tool's error.
 Synchronous file I/O and the original writer queue are not forcibly cancelled;
 checks observe budget expiry when control returns. Existing client I/O settings
 and every other operation's deadlines/profile are unchanged.

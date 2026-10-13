@@ -2145,8 +2145,8 @@ impl HostShared {
     /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
     /// instance admission guard it re-checks that nothing still uses the device: a queued entry
     /// the pause does not hold back fails at once (`TransferNotSafe`; Workflow #369 §5.1, review
-    /// M-2: an operator entry, and until #369 S6b the ungated startup claim; neither a gated
-    /// routine entry nor a holding ladder's continuation, whose ladder is the lease waited
+    /// M-2: an operator entry; neither a gated routine entry, the startup claim included since
+    /// #369 S6b, nor a holding ladder's continuation, whose ladder is the lease waited
     /// for below); a contained run that started after (b) (a
     /// policy dispatch admitted before the gate closed) is drained again under the pause's
     /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active

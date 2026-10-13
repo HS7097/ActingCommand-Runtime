@@ -177,6 +177,10 @@ impl HostShared {
         &self,
         request: &RuntimeSubscriptionRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
+        // Workflow #383 AO7-c: tests count the subscriptions served.
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.event_subscriptions_for_test
+            .fetch_add(1, Ordering::AcqRel);
         let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|_| {
             RequestFailure::poison(ledger_error(ContractLocation::SubscribeRuntimeEvents), None)
         })?;

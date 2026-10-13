@@ -3203,10 +3203,12 @@ pub enum TaskGeometryConclusion {
     FixtureNotApplicable,
 }
 
+/// Workflow #392 DA-A (model 392 v1.1, section 8.3): the frame's own aspect ratio is recorded,
+/// never refused, so the one remaining mismatch is a frame whose aspect ratio differs from the
+/// display's logical extent (capture correctness, not an aspect policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskGeometryAspectMismatch {
-    FrameNotSixteenByNine,
     FrameAndLogicalDisplayDiffer,
 }
 
@@ -3251,7 +3253,9 @@ pub struct TaskGeometryObservation {
 }
 
 impl TaskGeometryObservation {
-    /// Classifies ordered, already-delivered frame dimensions without transforming them.
+    /// Classifies ordered, already-delivered frame dimensions without transforming them. The
+    /// frame's aspect ratio is not checked (Workflow #392 DA-A): only its agreement with the
+    /// display it was captured from.
     pub fn assess(
         frame: &TaskGeometryFrame,
         observation: &crate::CaptureGeometryObservation,
@@ -3266,11 +3270,6 @@ impl TaskGeometryObservation {
                 TaskGeometryConclusion::Unknown {
                     reason: TaskGeometryUnknownReason::FixtureSourceMismatch,
                 }
-            };
-        }
-        if u64::from(frame.extent.width()) * 9 != u64::from(frame.extent.height()) * 16 {
-            return TaskGeometryConclusion::AspectMismatch {
-                reason: TaskGeometryAspectMismatch::FrameNotSixteenByNine,
             };
         }
         let geometry = match observation {
@@ -3487,9 +3486,13 @@ pub enum TaskSemanticFact {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<RecognizedTarget>,
     },
+    /// Workflow #373 NAV-3b: the entry's pages (one page, or the 1..=16 pages of an entry page
+    /// set) and the one page of them the frame matched.
     EntryRecognition {
         phase: TaskEntryRecognitionPhase,
-        required_page: String,
+        required_pages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matched_page: Option<String>,
         matched: bool,
     },
     EntryRecoveryDecision {
@@ -4234,8 +4237,37 @@ impl TaskSemanticFact {
                 }
                 validate_task_recognition_targets(targets, *frame_width, *frame_height)?;
             }
-            Self::EntryRecognition { required_page, .. } => {
-                validate_task_semantic_label(required_page, "required_page")?;
+            Self::EntryRecognition {
+                required_pages,
+                matched_page,
+                matched,
+                ..
+            } => {
+                if required_pages.is_empty() || required_pages.len() > crate::MAX_ENTRY_PAGES {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskCandidatePages,
+                        "required_pages",
+                    ));
+                }
+                for (index, page) in required_pages.iter().enumerate() {
+                    validate_task_semantic_label(page, "required_pages")?;
+                    if required_pages[..index].contains(page) {
+                        return Err(SanitizationError::new(
+                            SanitizationCode::InvalidTaskCandidatePages,
+                            "required_pages",
+                        ));
+                    }
+                }
+                if matched_page.is_some() != *matched
+                    || matched_page
+                        .as_ref()
+                        .is_some_and(|page| !required_pages.contains(page))
+                {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskRecognitionResult,
+                        "matched_page",
+                    ));
+                }
             }
             Self::EntryRecoveryDecision { .. } => {}
             Self::EntryRecoveryPackageAdmitted { package_sha256 } => {

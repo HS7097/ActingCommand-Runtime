@@ -403,6 +403,46 @@ capture time, the TTL is the declared `valid_for_ms` and `invalidate_on` is empt
 accepts or refuses it like any other observation. No write site is added: the host terminal
 calls the existing `publish_facts`.
 
+## Display facts
+
+Workflow #392 DA-A (model 392 v1.1, sections 8.1 and 12.1): a device instance's display is
+recorded, never checked. No frame is refused for its aspect ratio; a contained task's frame
+must still equal its package's resolution (`contained_task_frame_resolution_mismatch`), and its
+aspect ratio must still match the logical display it was captured from
+(`contained_task_geometry_frame_display_mismatch`).
+
+| Key | Value |
+| --- | --- |
+| `display.frame_extent` | `record_list`, one row `{ "width": <integer>, "height": <integer> }`: the device frame |
+| `display.rotation` | `string`: `r0`, `r90`, `r180`, `r270`, or `unknown` when the capture source does not provide the rotation |
+| `display.orientation` | `string`: `landscape` (width greater than height), `portrait` or `square` |
+| `display.aspect` | `record_list`, one row `{ "width": <integer>, "height": <integer> }`: the frame reduced by the greatest common divisor of its width and height (2340x1080 is 13:6) |
+
+**When.** The host writes the four keys when a contained task's first frame passes its task
+geometry (`task.geometry_observed` with conclusion `pass`), for an instance bound to a device:
+physical provenance and a device endpoint, the instances whose connection is self-checked
+("Backend self-check availability" above). A fixture simulation and a provider without a device
+endpoint record nothing.
+
+**Record.** Scope `instance { instance_id: <alias> }`; one observation of the four records
+through the internal publish path (`publish_facts`: system links, source and actor `runtime`,
+origin module `fact-store`); the host clock as `observed_at_unix_ms`; no expiry, no TTL policy,
+no `invalidate_on`; `confidence_milli` 1000; `source_detector` `runtime.display-adapter`;
+`schema_version` `fact.v1`; `source_snapshot_id` `display:<digest>` and `resource_bundle_hash`
+`<digest>`, the lowercase hex SHA-256 of the alias and the four values. The record carries
+dimensions and rotation only, never a device identifier.
+
+**Idempotency.** When the instance's active records of the four keys already hold these values,
+nothing is appended, so the same display at the next run or after a restart leaves the ledger
+unchanged; any changed value publishes all four again.
+
+**Failure.** A refusal of the publication (for example `fact_observation_not_newer` after a
+wall-clock step back) fails the run under its `task.geometry_observed` record, before any input;
+a fatal refusal marks the Runtime fatal as every `publish_facts` does.
+
+**No reader.** `display.aspect` is recorded only: no Runtime code reads it to decide anything
+(architecture guard `da_a_t3_display_aspect_has_no_reader`).
+
 ## Reading the seeds
 
 The per-instance read (`actingctl facts` without `--program`) is not built.
