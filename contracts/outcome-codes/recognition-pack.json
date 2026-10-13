@@ -119,7 +119,9 @@
         "stage": "required",
         "timeout_ms": "required",
         "count": "required",
-        "operation": "optional"
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -137,7 +139,10 @@
       "values": {
         "target_id": "required",
         "count": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -154,7 +159,10 @@
       "uncertain": false,
       "values": {
         "target_id": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -174,7 +182,10 @@
         "text_read_budget": "required",
         "count": "required",
         "limit_count": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -193,7 +204,10 @@
         "target_id": "required",
         "count": "required",
         "limit_count": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -214,7 +228,10 @@
         "score_milli": "required",
         "second_score_milli": "required",
         "margin_milli": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -232,7 +249,10 @@
       "values": {
         "target_id": "required",
         "timeout_ms": "required",
-        "stage": "required"
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",

@@ -1964,7 +1964,11 @@
       "owner": "ledger",
       "layer": "store",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",

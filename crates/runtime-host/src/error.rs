@@ -425,22 +425,14 @@ impl RuntimeHostError {
     }
 
     /// This error as the outcome of a denied or failed receipt (Workflow #378 A4, model section
-    /// 7.2): its code on top, its operation as the `operation` value, and its projection's
-    /// Runtime error code, halt, holder and retry as values
-    /// ([`RuntimeErrorProjection::receipt_outcome`]). A code or an operation this error relays as
-    /// a spelling is looked up in the registries it can come from
-    /// ([`crate::relayed_spelling`]); one that no registry knows (an operation spelled like a
-    /// code, which A2-P renames) leaves the Runtime error code on top, or the operation out.
-    /// When the error's producer attached the values its code declares
-    /// ([`Self::with_outcome_values`]), that outcome is the top
-    /// ([`RuntimeErrorProjection::with_receipt_values`]).
+    /// 7.2): the outcome its ledger record carries ([`Self::outcome`]: its code on top with the
+    /// values its producer attached, its operation, and the failure behind it as the `caused_by`
+    /// link), with its projection's Runtime error code, halt, holder and retry as values
+    /// ([`RuntimeErrorProjection::with_receipt_values`]). A receipt and the record of the same
+    /// failure carry one outcome; a relayed spelling the catalog does not list tops both as
+    /// `outcome_relay_unregistered` with its `raw_code`.
     pub(crate) fn receipt_outcome(&self) -> Outcome {
-        match &self.lifecycle.outcome_values {
-            Some(outcome) => self.projection.with_receipt_values(outcome.clone()),
-            None => self
-                .projection
-                .receipt_outcome(self.registered_code(), self.registered_operation()),
-        }
+        self.projection.with_receipt_values(self.outcome())
     }
 
     /// This refusal naming the lease it refused (Workflow #378 A4): the catalog entries of
@@ -458,26 +450,6 @@ impl RuntimeHostError {
         }
         let lease_id = crate::failure_identity::identifier_text(&lease_id);
         self.with_outcome_values(|outcome| outcome.lease_id(lease_id))
-    }
-
-    /// The error's code, a relayed spelling looked up in the registries it can come from.
-    fn registered_code(&self) -> Option<Code> {
-        match self.code {
-            HostErrorCode::Registered(code) => Some(code),
-            HostErrorCode::Relayed { relayed_code } => {
-                crate::relayed_spelling::registered_code(relayed_code)
-            }
-        }
-    }
-
-    /// The error's operation, a relayed spelling looked up in the registries it can come from.
-    fn registered_operation(&self) -> Option<Location> {
-        match self.operation {
-            HostErrorOperation::Registered(operation) => Some(operation),
-            HostErrorOperation::Relayed { relayed_operation } => {
-                crate::relayed_spelling::registered_location(relayed_operation)
-            }
-        }
     }
 
     pub fn resource_declaration(

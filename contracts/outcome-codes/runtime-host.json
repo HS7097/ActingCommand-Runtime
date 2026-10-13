@@ -538,7 +538,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "instance_id": "required"
+        "instance_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3255,7 +3258,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -3395,7 +3402,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17170,7 +17181,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17184,7 +17199,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17198,7 +17217,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17212,7 +17235,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17226,7 +17253,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17240,7 +17271,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17254,7 +17289,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17268,7 +17307,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17282,7 +17325,11 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",

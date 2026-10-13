@@ -251,7 +251,10 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "raw_code": "optional"
+        "raw_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -1720,7 +1723,11 @@
       "owner": "contract",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1734,7 +1741,11 @@
       "owner": "contract",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -2543,7 +2554,11 @@
       "owner": "contract",
       "layer": "contract",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",

@@ -1430,7 +1430,10 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
-        "entry_problem": "required"
+        "entry_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
       },
       "review": "pending",
       "status": "active",
