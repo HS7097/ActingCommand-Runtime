@@ -301,16 +301,17 @@ slice and the first writer of every row below. None of them is a ledger record; 
 `runtime-outcomes` interface (M378 §10, declared by A8) and the watchdog's own files. No
 old-version reader: a v1 report, a v1 `state.json` or the v1 MCP error shape is not read. The new
 codes, keys (`argument`, `argument_problem`, `instance_selector`, `mcp_tool`, `material_state`,
-`material_limit`, `req_id`, `owner_closed`, `process_alive`; `owner_epoch` retyped from integer to
-`id`), vocabularies (`argument_problem`, `material_state`, `material_limit`; `mcp_blocker` gains
-`state_root`, `scheduling_pause`, `runtime_upgrade`) and the domain `instances_` are catalog
-entries, not rows (§7).
+`material_limit`, `req_id`, `owner_closed`, `process_alive`, `run_state`,
+`resource_targets_rejection_reason`, `media_type`; `owner_epoch` retyped from integer to `id`),
+vocabularies (`argument_problem`, `material_state`, `material_limit`, `run_state`,
+`resource_targets_rejection_reason`; `mcp_blocker` gains `state_root`, `scheduling_pause`,
+`runtime_upgrade`) and the domain `instances_` are catalog entries, not rows (§7).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | O1 | actingctl stdout: exactly one JSON line per exit, `{…result, "outcome": <envelope>}` on success, `{"outcome": …}` on failure; `status --config` prints its records under `records`; a refused receipt keeps `{receipt, outcome}` | CLI interface | A5 | A5 | every subcommand but `mcp-serve` / `mcp-config`; one success code per subcommand; stderr carries only the developer line `<LEVEL> actingctl: <code> …` of a warning, error or fatal outcome (and `DIAG actingctl:` lines of the diagnostic sink); warnings beside a result are `warnings: [{outcome}]` (D3); `ACTINGCOMMAND_DETAIL=codes` keeps only registered names |
 | O2 | actingctl and `actingwatch` exit codes: 0 success/info/warning, 1 error, 2 fatal; a denied or failed receipt exits at least 1 | process interface | A5 | A5 | replaces the watchdog's 10–17 and the launcher's 20–23 (their conditions are codes now); actingd's own exits stay A6a's |
-| O3 | MCP tool error `{class, outcome}`; warning `{outcome}`; JSON-RPC transport error `{code, message: <code spelling>, data: {outcome}}` (-32022 keeps `data.supported`, `data.requested`) | MCP interface | A5 | A5 | no `code`, `message`, `blocked_by`, `details` or `explain` member; what must change is the value `mcp_blocker`; a relayed actinglab or Runtime code is a link; `mcp-serve --detail` (`codes` or `full`) |
+| O3 | MCP tool error `{class, outcome}`; warning `{outcome}`; JSON-RPC transport error `{code, message: <code spelling>, data: {outcome}}` (-32022 keeps `data.supported`, `data.requested`) | MCP interface | A5 | A5 | no `code`, `message`, `blocked_by`, `details` or `explain` member; what must change is the value `mcp_blocker`; a relayed actinglab or Runtime code is a link; an actinglab error's details are a `foreign_other_error` link (`raw_source` `process`, their JSON as `raw_text`); `mcp-serve --detail` (`codes` or `full`) |
 | O4 | MCP job snapshot `job.outcome` → `job.job_result` (the answer, or `{error {class, outcome}}`) | renamed member (M378 L6) | A5 | A5 | `ac_get_run` of a job handle |
 | O5 | `actingcommand.watchdog.report.v2`: `{schema_version, outcome, attention: [envelope…], …data}` for `status`, `run-once`, `install`, `uninstall` and the usage exit | report (stdout) | A5 | A5 | v1's `decision`, `code`, `exit_code`, `detail` are gone; members that held prose or a code spelling are outcomes or tokens; `live_owner.started_by_watchdog` |
 | O6 | `<root>\watchdog\state.json` `actingcommand.runtime-watchdog-state.v2`: `last_decision {code, values}`; `starts[].start_result {code, values}` (was `starts[].outcome`, M378 L6) | watchdog file | A5 | A5 | a file of another schema is set aside (`state.json.other-schema-<ms>`, `watchdog_state_reset`) and the budget restarts; start results `watchdog_start_pending`, `watchdog_started_runtime`, `start_timeout` or the failure's code |

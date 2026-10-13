@@ -40,7 +40,7 @@ macro_rules! check_job {
 /// How a Lab tool reports actinglab's failures.
 macro_rules! lab_errors {
     () => {
-        " Failures are {class, outcome}: an actinglab error envelope keeps its class by actinglab's exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage) with outcome lab_tool_failed (exit_code), caused by actinglab's code (not_implemented for exit 6); any other exit, or no JSON envelope, is runtime lab_process_failed caused by foreign_other_error with actinglab's stderr tail as raw_text. String arguments may not start with --. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported."
+        " Failures are {class, outcome}: an actinglab error envelope keeps its class by actinglab's exit code (2 usage, 3 safety, 4 device, 5 runtime, 6 usage) with outcome lab_tool_failed (exit_code, req_id), caused by actinglab's code (not_implemented for exit 6) and, when actinglab's error has details, by foreign_other_error whose raw_text is those details as JSON; any other exit, or no JSON envelope, is runtime lab_process_failed caused by foreign_other_error with actinglab's stderr tail as raw_text. String arguments may not start with --. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported."
     };
 }
 
@@ -622,7 +622,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_targets_set",
         title: "Set resource targets",
         tier: Tier::Operator,
-        description: "Sets one instance's resource targets: targets are actingcommand.resource-targets.v2 targets ([] withdraws the policy when the Runtime takes that), and the server writes the v2 document around them with the instance value ac_resources_list reports (policy_instance). valid_days (1-365) sets valid_until; without it none is written. The Runtime checks the document; a refusal is the Runtime's outcome, with the refused position as json_pointer, line and column. Use ac_resources_list for what may be targeted and ac_targets_get for what is active.",
+        description: "Sets one instance's resource targets: targets are actingcommand.resource-targets.v2 targets ([] withdraws the policy when the Runtime takes that), and the server writes the v2 document around them with the instance value ac_resources_list reports (policy_instance). valid_days (1-365) sets valid_until; without it none is written. The Runtime checks the document; a refusal is the Runtime's outcome, with the refused position as json_pointer, line and column and the reason as resource_targets_rejection_reason. Use ac_resources_list for what may be targeted and ac_targets_get for what is active.",
         read_only: false,
         destructive: false,
         idempotent: false,

@@ -356,10 +356,10 @@ fn material_text(
         artifact.media_type,
         ArtifactMediaType::ApplicationJson | ArtifactMediaType::TextPlain
     ) {
-        // Read it with mode export.
-        return Err(
-            ToolError::usage(ActingctlCode::MaterialNotText).blocked_by(McpBlocker::MaterialMode)
-        );
+        // Read it with mode export; its media type travels as `media_type`.
+        return Err(ToolError::usage(ActingctlCode::MaterialNotText)
+            .with(|outcome| outcome.media_type(text_of(json!(artifact.media_type))))
+            .blocked_by(McpBlocker::MaterialMode));
     }
     if offset >= artifact.byte_count {
         // At or past the end: the offsets this material has.

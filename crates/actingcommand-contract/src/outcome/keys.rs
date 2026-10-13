@@ -406,5 +406,8 @@ outcome_keys! {
     req_id: id,
     owner_closed: boolean,
     process_alive: boolean,
+    run_state: vocab(run_state),
+    resource_targets_rejection_reason: vocab(resource_targets_rejection_reason),
+    media_type: name,
     // ---- Workflow #378 A5: end ----
 }

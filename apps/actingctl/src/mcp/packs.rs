@@ -24,7 +24,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path), prerequisite (prerequisite_packages) and return_home (return_home_packages, with the path of the prerequisite package it names). Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
+pub(super) const DESCRIPTION: &str = "The packages the selected configuration generation binds, as actingctl packs answers them: read from that actingd.config.json on disk (source.kind selected_config: the generation install\\active.json selects, which a running actingd may not have loaded yet); no Runtime request and no ledger record. instances: one row per configured instance {alias, instance_id, packs}, with role startup (startup_package; package_id from the package folder's control.json) and resource_package (path only). installation: role procedure (policy.procedure_manifest: package_id from procedure_ref package.<id>, procedure_ref, operation_id, scheduled when it has scheduled_execution, path its package_path), prerequisite (prerequisite_packages) and return_home (return_home_packages, with the path of the prerequisite package it names). Rows carry no package digest. Paths are absolute: a relative one resolves against the configuration's folder. readable (present with path) says whether the path can be opened; each unreadable one adds the warning package_binding_unreadable. instance (alias, instance_id or ADB port, as the configuration names them) narrows instances only; role narrows both lists. An answer larger than the output budget is written whole, its warnings included, to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {source, export {path, sha256, size}} with the warning answer_exported, whose count is the number of warnings the file holds; narrow it with role or instance. A configuration that cannot be read answers config_read_failed, one that does not decode config_decode_failed.";
 
 pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["instance", "role"])?;
@@ -45,7 +45,7 @@ pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 
 /// The answer as it is when it fits the output budget; otherwise the whole document (the CLI's
 /// stdout without its `outcome`, warnings included) exported, answered as `{source, export}`
-/// with `answer_exported` naming the file (`path`).
+/// with `answer_exported` naming the file (`path`) and counting the warnings it holds (`count`).
 fn within_budget(answer: &Answer) -> ToolOutcome {
     let result = encode(answer.packs())?;
     let warnings = answer
@@ -65,7 +65,7 @@ fn within_budget(answer: &Answer) -> ToolOutcome {
         "json",
         &bytes,
     )?;
-    let mut note = Outcome::new(ActingctlCode::AnswerExported);
+    let mut note = Outcome::new(ActingctlCode::AnswerExported).count(warnings.len());
     if let Some(path) = export["path"].as_str() {
         note = note.path(path);
     }

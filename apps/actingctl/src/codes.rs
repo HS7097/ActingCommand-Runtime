@@ -248,6 +248,93 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 
+actingcommand_contract::outcome_vocabulary! {
+    /// The state of a contained run as its ledger events show it (vocabulary `run_state`; the
+    /// runtime client's `ContainedRunState`, Workflow #378 A5).
+    pub enum RunState: "run_state" {
+        NotFound => "not_found",
+        Admitted => "admitted",
+        Running => "running",
+        Succeeded => "succeeded",
+        Failed => "failed",
+        Cancelled => "cancelled",
+        InterruptedUnterminated => "interrupted_unterminated",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why the Runtime refused a resource-targets document (vocabulary
+    /// `resource_targets_rejection_reason`; the contract's `ResourceTargetsRejectionReason`,
+    /// Workflow #378 A5).
+    pub enum ResourceTargetsRejectionReason: "resource_targets_rejection_reason" {
+        InvalidJson => "invalid_json",
+        DuplicateKey => "duplicate_key",
+        UnknownField => "unknown_field",
+        MissingField => "missing_field",
+        InvalidType => "invalid_type",
+        InvalidValue => "invalid_value",
+        OutOfRange => "out_of_range",
+        UnsupportedSchemaVersion => "unsupported_schema_version",
+        DuplicateId => "duplicate_id",
+        UnknownInstance => "unknown_instance",
+        ValidityOutOfRange => "validity_out_of_range",
+        CatalogUnavailable => "catalog_unavailable",
+        UnknownResource => "unknown_resource",
+        ResourceNotObservable => "resource_not_observable",
+        ResourceOutOfScope => "resource_out_of_scope",
+        UnknownTask => "unknown_task",
+        TaskOutOfScope => "task_out_of_scope",
+        TaskDisabled => "task_disabled",
+        UnmappedTask => "unmapped_task",
+        DuplicateTask => "duplicate_task",
+    }
+}
+
+impl RunState {
+    /// The token of a contained run's state.
+    pub fn of(state: actingcommand_runtime_client::ContainedRunState) -> Self {
+        use actingcommand_runtime_client::ContainedRunState as State;
+        match state {
+            State::NotFound => Self::NotFound,
+            State::Admitted => Self::Admitted,
+            State::Running => Self::Running,
+            State::Succeeded => Self::Succeeded,
+            State::Failed => Self::Failed,
+            State::Cancelled => Self::Cancelled,
+            State::InterruptedUnterminated => Self::InterruptedUnterminated,
+        }
+    }
+}
+
+impl ResourceTargetsRejectionReason {
+    /// The token of a resource-targets document rejection reason.
+    pub fn of(reason: actingcommand_contract::ResourceTargetsRejectionReason) -> Self {
+        use actingcommand_contract::ResourceTargetsRejectionReason as Reason;
+        match reason {
+            Reason::InvalidJson => Self::InvalidJson,
+            Reason::DuplicateKey => Self::DuplicateKey,
+            Reason::UnknownField => Self::UnknownField,
+            Reason::MissingField => Self::MissingField,
+            Reason::InvalidType => Self::InvalidType,
+            Reason::InvalidValue => Self::InvalidValue,
+            Reason::OutOfRange => Self::OutOfRange,
+            Reason::UnsupportedSchemaVersion => Self::UnsupportedSchemaVersion,
+            Reason::DuplicateId => Self::DuplicateId,
+            Reason::UnknownInstance => Self::UnknownInstance,
+            Reason::ValidityOutOfRange => Self::ValidityOutOfRange,
+            Reason::CatalogUnavailable => Self::CatalogUnavailable,
+            Reason::UnknownResource => Self::UnknownResource,
+            Reason::ResourceNotObservable => Self::ResourceNotObservable,
+            Reason::ResourceOutOfScope => Self::ResourceOutOfScope,
+            Reason::UnknownTask => Self::UnknownTask,
+            Reason::TaskOutOfScope => Self::TaskOutOfScope,
+            Reason::TaskDisabled => Self::TaskDisabled,
+            Reason::UnmappedTask => Self::UnmappedTask,
+            Reason::DuplicateTask => Self::DuplicateTask,
+        }
+    }
+}
+
 impl MaterialState {
     /// The token of a material read state.
     pub fn of(state: actingcommand_contract::RuntimeMaterialReadState) -> Self {

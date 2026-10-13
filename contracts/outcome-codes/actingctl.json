@@ -492,7 +492,8 @@
       "uncertain": false,
       "values": {
         "mcp_blocker": "optional",
-        "offset": "optional"
+        "offset": "optional",
+        "media_type": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -542,7 +543,8 @@
       "layer": "process",
       "uncertain": false,
       "values": {
-        "request_id": "optional"
+        "request_id": "optional",
+        "run_state": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -625,7 +627,8 @@
       "values": {
         "path": "required",
         "actual_sha256": "optional",
-        "actual_bytes": "optional"
+        "actual_bytes": "optional",
+        "count": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -2257,7 +2260,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab answered an error envelope; exit_code is its exit code and its code is the caused_by link.",
+      "description": "actinglab answered an error envelope; exit_code is its exit code, its code is the first caused_by link and, when the error has details, a foreign_other_error link (raw_source process) holds those details' JSON as raw_text.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

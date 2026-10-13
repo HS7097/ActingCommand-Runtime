@@ -1584,7 +1584,7 @@
     "resource_target_id": {
       "type": "token",
       "description": "The id of a resource target in an instance's resource-targets document."
-      },
+    },
     "argument": {
       "type": "name",
       "description": "The name of a command-line flag or of an MCP tool or request argument, as given."
@@ -1620,6 +1620,18 @@
     "process_alive": {
       "type": "boolean",
       "description": "Whether the process was alive at the last probe."
+    },
+    "run_state": {
+      "type": "vocab:run_state",
+      "description": "The state of a contained run as its ledger events show it."
+    },
+    "resource_targets_rejection_reason": {
+      "type": "vocab:resource_targets_rejection_reason",
+      "description": "Why the Runtime refused a resource-targets document."
+    },
+    "media_type": {
+      "type": "name",
+      "description": "The media type of a material, for example image/png."
     }
   },
   "vocabularies": {
@@ -4681,6 +4693,97 @@
         },
         "reply_bytes": {
           "description": "The reply would exceed its byte bound."
+        }
+      }
+    },
+    "run_state": {
+      "description": "The state of a contained run as its ledger events show it (the runtime client's ContainedRunState).",
+      "tokens": {
+        "not_found": {
+          "description": "The ledger has no event of the run."
+        },
+        "admitted": {
+          "description": "The run was admitted and has not started."
+        },
+        "running": {
+          "description": "The run is running."
+        },
+        "succeeded": {
+          "description": "The run ended successfully."
+        },
+        "failed": {
+          "description": "The run ended in failure."
+        },
+        "cancelled": {
+          "description": "The run was cancelled."
+        },
+        "interrupted_unterminated": {
+          "description": "A Runtime start or takeover came after the run's facts without a terminal; uncertain."
+        }
+      }
+    },
+    "resource_targets_rejection_reason": {
+      "description": "Why the Runtime refused a resource-targets document (the contract's ResourceTargetsRejectionReason).",
+      "tokens": {
+        "invalid_json": {
+          "description": "The document is not valid JSON."
+        },
+        "duplicate_key": {
+          "description": "An object names a key twice."
+        },
+        "unknown_field": {
+          "description": "A field the schema does not have."
+        },
+        "missing_field": {
+          "description": "A required field is absent."
+        },
+        "invalid_type": {
+          "description": "A field of the wrong type."
+        },
+        "invalid_value": {
+          "description": "A field value the schema does not allow."
+        },
+        "out_of_range": {
+          "description": "A number outside its range."
+        },
+        "unsupported_schema_version": {
+          "description": "A schema version the Runtime does not read."
+        },
+        "duplicate_id": {
+          "description": "A target id, or a target resource in v2, named twice in the document."
+        },
+        "unknown_instance": {
+          "description": "The document names an instance the Runtime's projection does not have."
+        },
+        "validity_out_of_range": {
+          "description": "valid_until_unix_ms is not after now, or is more than a year ahead, or has passed."
+        },
+        "catalog_unavailable": {
+          "description": "No active resource catalog to check against."
+        },
+        "unknown_resource": {
+          "description": "A pool the active catalog does not list."
+        },
+        "resource_not_observable": {
+          "description": "A pool that is not observed through a resource or inventory fact."
+        },
+        "resource_out_of_scope": {
+          "description": "A pool whose scope does not cover the instance."
+        },
+        "unknown_task": {
+          "description": "A task the catalog does not list."
+        },
+        "task_out_of_scope": {
+          "description": "A task whose scope does not cover the instance."
+        },
+        "task_disabled": {
+          "description": "A task an instance override of the instance disables."
+        },
+        "unmapped_task": {
+          "description": "No run of the task produces the target's resource."
+        },
+        "duplicate_task": {
+          "description": "A task named more than once in the document."
         }
       }
     }

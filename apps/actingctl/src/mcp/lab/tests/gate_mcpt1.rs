@@ -284,8 +284,10 @@ fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code
     }
 
     // Exits 2..6 with an error envelope: lab_tool_failed {exit_code, req_id} in the class the
-    // exit code names, caused by actinglab's code (not_implemented for exit 6). actinglab's
-    // message and its other details are not carried.
+    // exit code names, caused by actinglab's code (not_implemented for exit 6) and by
+    // foreign_other_error {raw_source process, raw_text, exit_code} whose raw_text is the
+    // error's details as JSON (coordinator ruling 7 on A5: data a consumer reads is kept).
+    // actinglab's message is not carried.
     let rows = [
         (
             2,
@@ -357,8 +359,33 @@ fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code
         );
         assert_eq!(
             links(outcome),
-            vec![("caused_by".to_owned(), cause.to_owned())],
+            vec![
+                ("caused_by".to_owned(), cause.to_owned()),
+                (
+                    "caused_by".to_owned(),
+                    ContractCode::ForeignOtherError.as_str().to_owned()
+                ),
+            ],
             "exit {code}: {outcome:?}"
+        );
+        let details = outcome.causes()[1].outcome().values();
+        assert_eq!(
+            (
+                details.get("raw_source"),
+                details.get("exit_code"),
+                details.len()
+            ),
+            (Some(&json!("process")), Some(&json!(code)), 3),
+            "exit {code}: {details:?}"
+        );
+        let text = details
+            .get("raw_text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("exit {code}: details without raw_text: {details:?}"));
+        assert_eq!(
+            serde_json::from_str::<Value>(text).ok(),
+            Some(json!({"req_id": req_id, "step": 3})),
+            "exit {code}: the details are not actinglab's: {text}"
         );
         assert!(
             !error.to_value().to_string().contains("gate lab message"),

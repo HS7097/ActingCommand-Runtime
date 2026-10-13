@@ -16,7 +16,7 @@ use super::runtime::client_error;
 use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument,
 };
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::{ActingctlCode, ArgumentProblem, ResourceTargetsRejectionReason, RunState};
 use actingcommand_contract::codes::{GovernanceIdentityRefusal, SharedCode};
 use actingcommand_contract::outcome::{Code, IoOp, Outcome};
 use actingcommand_contract::{
@@ -368,9 +368,12 @@ pub(super) fn stop_run(context: &ToolContext<'_>, arguments: &Map<String, Value>
             .map(|instance| instance.instance_alias().to_owned())
     }) else {
         // The ledger names no configured instance for this handle: read it with ac_get_run.
-        return Err(
-            ToolError::usage(ActingctlCode::RunUnknown).with(|outcome| outcome.request_id(handle))
-        );
+        // The run's state as its ledger events show it travels as `run_state`.
+        return Err(ToolError::usage(ActingctlCode::RunUnknown).with(|outcome| {
+            outcome
+                .request_id(handle)
+                .run_state(RunState::of(run.state))
+        }));
     };
     let write = begin_write(context, "ac_stop_run", Some(alias.as_str()), CLI)?;
     let job_handle = text_of(json!(write.client.correlation_id()));
@@ -658,10 +661,10 @@ pub(super) fn targets_set(
             result: json!({"applied": applied}),
             warnings: write.warnings,
         }),
-        // The Runtime's refusal on top. Its document position travels in the receipt's typed
-        // `resource_targets_rejection`, not in its outcome: it is added to the outcome as the
-        // registered values `json_pointer` (within the key table's bound), `line` and `column`.
-        // The rejection's reason has no registered key and is not carried.
+        // The Runtime's refusal on top. Its document position and reason travel in the
+        // receipt's typed `resource_targets_rejection`, not in its outcome: they are added to the
+        // outcome as the registered values `json_pointer` (within the key table's bound), `line`,
+        // `column` and `resource_targets_rejection_reason`.
         Err(error) => {
             let mapped = client_error(&error);
             Err(
@@ -670,7 +673,12 @@ pub(super) fn targets_set(
                     .and_then(|receipt| receipt.resource_targets_rejection())
                 {
                     Some(rejection) => mapped.with(|outcome| {
-                        let outcome = outcome.line(rejection.line).column(rejection.column);
+                        let outcome = outcome
+                            .line(rejection.line)
+                            .column(rejection.column)
+                            .resource_targets_rejection_reason(ResourceTargetsRejectionReason::of(
+                                rejection.reason,
+                            ));
                         if rejection.field_path.len() <= MAX_POINTER_BYTES {
                             outcome.json_pointer(rejection.field_path.as_str())
                         } else {

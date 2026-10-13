@@ -17012,7 +17012,8 @@
         "host_halted": "optional",
         "json_pointer": "optional",
         "line": "optional",
-        "column": "optional"
+        "column": "optional",
+        "resource_targets_rejection_reason": "optional"
       },
       "review": "pending",
       "status": "active",

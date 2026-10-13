@@ -5,9 +5,11 @@
 //! error is `{class, outcome}` (Workflow #378 A5, model v2.2 §7.3). An error envelope (exit
 //! 2..6 with a code) keeps actinglab's class by its exit code (`cli_result.rs:93-100`: 2 usage,
 //! 3 safety, 4 device, 5 runtime, 6 usage) as `lab_tool_failed {exit_code, req_id?}`, caused
-//! by actinglab's code (`not_implemented` for exit 6); actinglab's message and details are its
-//! developer text and are not carried. Any other exit code, or no envelope, is runtime
-//! `lab_process_failed`, caused by a `foreign_other_error` holding the stderr tail.
+//! by actinglab's code (`not_implemented` for exit 6) and, when the error has details, by a
+//! `foreign_other_error` from the process holding those details' JSON as `raw_text` (actinglab's
+//! data, until its own outcomes carry them); actinglab's message is its developer text and is
+//! not carried. Any other exit code, or no envelope, is runtime `lab_process_failed`, caused by
+//! a `foreign_other_error` holding the stderr tail.
 //!
 //! Each call runs as a background job of this process: answered within the call budget, or
 //! a handle for `ac_get_run`. The child is never killed; the handle lives only in this
@@ -698,10 +700,17 @@ pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
         .and_then(Value::as_str);
     let result = match (captured.status.code(), ok, spelling) {
         (Some(0), Some(true), _) => Ok(data.cloned().unwrap_or(Value::Null)),
-        (Some(exit @ 2..=6), Some(false), Some(spelling)) => {
-            Err(command_failed(exit, spelling, req_id.as_deref()))
-        }
-        _ => Err(process_failed(captured, req_id.as_deref())),
+        (Some(exit @ 2..=6), Some(false), Some(spelling)) => Err(command_failed(
+            exit,
+            spelling,
+            req_id.as_deref(),
+            lab_error.and_then(|error| error.get("details")),
+        )),
+        _ => Err(process_failed(
+            captured,
+            req_id.as_deref(),
+            lab_error.and_then(|error| error.get("details")),
+        )),
     };
     Answer {
         result,
@@ -712,8 +721,14 @@ pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
 
 /// An actinglab error envelope: `lab_tool_failed` with actinglab's exit code (and its req_id),
 /// caused by actinglab's code (its `spelling`), in the class that exit code names; exit 6 is
-/// `not_implemented`.
-fn command_failed(exit: i32, spelling: &str, req_id: Option<&str>) -> ToolError {
+/// `not_implemented`. The error's `details`, when it has any, are a second cause (see
+/// [`details_text`]).
+fn command_failed(
+    exit: i32,
+    spelling: &str,
+    req_id: Option<&str>,
+    details: Option<&Value>,
+) -> ToolError {
     let (class, cause) = match exit {
         3 => ("safety", Outcome::relayed(spelling)),
         4 => ("device", Outcome::relayed(spelling)),
@@ -726,12 +741,37 @@ fn command_failed(exit: i32, spelling: &str, req_id: Option<&str>) -> ToolError 
         Some(req_id) => outcome.req_id(req_id),
         None => outcome,
     };
-    ToolError::outcome(class, outcome.caused_by(cause))
+    let outcome = outcome.caused_by(cause);
+    let outcome = match details_text(details, Some(exit)) {
+        Some(details) => outcome.caused_by(details),
+        None => outcome,
+    };
+    ToolError::outcome(class, outcome)
+}
+
+/// The details of an actinglab error envelope, actinglab's data about the failure: a
+/// `foreign_other_error` from the process with their JSON text as `raw_text` (cut at its bound,
+/// the whole text then going to the diagnostic sink) and actinglab's exit code when it exited.
+/// `None` when the error has no details or empty ones.
+fn details_text(details: Option<&Value>, exit: Option<i32>) -> Option<Outcome> {
+    let details = details.filter(|details| match details {
+        Value::Null => false,
+        Value::Object(members) => !members.is_empty(),
+        _ => true,
+    })?;
+    let link = Outcome::new(ContractCode::ForeignOtherError)
+        .raw_source(RawSource::Process)
+        .raw_text(details.to_string());
+    Some(match exit {
+        Some(exit) => link.exit_code(exit),
+        None => link,
+    })
 }
 
 /// actinglab answered no usable envelope (none, an unexpected exit code, or `ok` that does not
-/// match it): runtime `lab_process_failed`, caused by its stderr.
-fn process_failed(captured: &Captured, req_id: Option<&str>) -> ToolError {
+/// match it): runtime `lab_process_failed`, caused by its stderr and, when it printed an error
+/// with details, by those details (see [`details_text`]).
+fn process_failed(captured: &Captured, req_id: Option<&str>, details: Option<&Value>) -> ToolError {
     let outcome = Outcome::new(ActingctlCode::LabProcessFailed);
     let outcome = match captured.status.code() {
         Some(exit) => outcome.exit_code(exit),
@@ -741,7 +781,12 @@ fn process_failed(captured: &Captured, req_id: Option<&str>) -> ToolError {
         Some(req_id) => outcome.req_id(req_id),
         None => outcome,
     };
-    ToolError::outcome("runtime", outcome.caused_by(process_text(captured)))
+    let outcome = outcome.caused_by(process_text(captured));
+    let outcome = match details_text(details, captured.status.code()) {
+        Some(details) => outcome.caused_by(details),
+        None => outcome,
+    };
+    ToolError::outcome("runtime", outcome)
 }
 
 /// `bytes`, written whole by the export writer as `<sha256>.json`: `{path, sha256, size}`.
