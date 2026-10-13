@@ -5342,7 +5342,10 @@ impl HostShared {
             Some(token.lease_id()),
             None,
         ))?;
-        // Workflow #336 PKG-S1: every package is read by its path, under the run's deadline.
+        // Workflow #336 PKG-S1: every package is read by its path, under the run's deadline. That
+        // deadline is bounded by the lease, so the lease is fenced first: a run whose lease has
+        // expired is `lease_mismatch`, never a deadline that has passed (host gate key 29).
+        self.validated_instance(&validated, token, connection_id)?;
         let source_deadline = self.contained_task_deadline(task_request, token)?;
         let material_deadline = self.package_material_deadline(source_deadline)?;
         // Workflow #336 L2b: a prerequisite package's admission deadline is the run's own,
