@@ -31,7 +31,7 @@ mod gate_a2a;
 mod gate_383;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Detail, Location};
 use actingcommand_contract::{
     EventActor, EventSource, GovernanceIdentityCard, PolicyExecutionEventData, RunId,
     RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt, SchedulingOutcomeProjection,
