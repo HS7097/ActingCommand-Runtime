@@ -93,7 +93,18 @@ and the latest-run lookup consume this projection directly. Beside the runs, `ac
 carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` recorded in its
 window, refused and deferred rows before owed ones, newest first in each, with
 `clock_slots_total` when fewer are kept; to fit its output budget it cuts them before any
-other list (Workflow #372 K3, `policy-suspension.md`).
+other list but the two groups below (Workflow #372 K3, `policy-suspension.md`).
+
+`actingctl diagnose` and `ac_diagnose` (Workflow #389 MCP-7) take the instance as optional:
+without it they diagnose every instance, with the 10 most recent runs from the first page of
+`list_contained_runs`. Both add `runs_grouped`, the window's failed and open runs from
+`list_contained_runs` grouped by (policy task id `catalog_task_id`, failure code, final page),
+and `failures_grouped`, the window's `runtime.failed`, `command.rejected` and the
+`policy.execution_recorded` records of runs that paused their task, grouped by (type,
+`catalog_task_id`, code); a code is its record's outcome, with an unregistered relayed
+spelling read back (`scheduled_failure_code`). To fit its output budget `ac_diagnose` cuts
+`failures_grouped`, then `runs_grouped`, the fewest-count groups first, before any other
+list.
 
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
