@@ -363,8 +363,252 @@ pub(super) fn project(
         if bytes <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES {
             return Ok(projected);
         }
-        return Err(CliError::package_invalid(
-            "observation identity or its remaining resolvable element exceeds the Min byte limit",
-        ));
+        // #391 MCP-391b: the one resolvable element Min keeps does not fit either, so it is
+        // omitted too and the identity answers alone, marked truncated with its counts.
+        if observation.reduce_to_identity()? {
+            continue;
+        }
+        return Err(identity_limit_exceeded(bytes));
+    }
+}
+
+/// #391 MCP-391b: Min's identity alone exceeds the hard byte limit.
+fn identity_limit_exceeded(actual_bytes: usize) -> CliError {
+    CliError::new(
+        ErrorKind::UsageValidation,
+        crate::codes::ActinglabCode::ObserveIdentityLimitExceeded.as_str(),
+        "the Min output exceeds its byte limit with only its identity left; use --verbose",
+        &[],
+    )
+    .with_details(json!({
+        "actual_bytes": actual_bytes,
+        "limit_bytes": actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    //! #391 MCP-391b (MCP-0 command table v1.1 §4.23): `observe`'s Min output over its byte
+    //! limit answers the identity marked truncated with its omitted counts; an identity that
+    //! alone exceeds the limit gets actinglab's own code, never `package_invalid`.
+
+    use super::*;
+    use crate::codes::ActinglabCode;
+    use actingcommand_contract::outcome::Category;
+    use actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES;
+
+    const PAGE: &str = "reward_overview";
+
+    /// A recognised page with a swipe and a tap declared on it, projected by the shared owner.
+    /// The swipe comes first, so it is the resolvable element Min keeps longest.
+    fn recognised_page(kind: shared::FrameKind) -> PageProjection {
+        let catalog = shared::ProjectionCatalog::from_resources(
+            &json!({"coordinate_space": {"width": 1280, "height": 720}, "targets": [{"id": "title"}]}),
+            &json!({"pages": [{"id": PAGE}]}),
+            &json!({"navigation": [
+                {"id": "scroll_reward_list_down", "from_page": PAGE},
+                {"id": "open_reward_detail", "from_page": PAGE}
+            ]}),
+        )
+        .unwrap();
+        let element = |resource_id: &str, geometry: Geometry| ElementInput {
+            action: ActionKey {
+                role: ElementRole::Navigate,
+                task_id: String::new(),
+                resource_id: resource_id.to_string(),
+                page: Some(PAGE.to_string()),
+            },
+            purpose: resource_id.to_string(),
+            source: "navigation".to_string(),
+            resolution: ElementResolution::Declared(geometry),
+        };
+        let rect = |x, y, width, height| shared::Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let point = |x, y| shared::Point { x, y };
+        shared::project(
+            ProjectionInput {
+                frame: FrameIdentity {
+                    kind,
+                    sha256: "5f0c".repeat(16),
+                    width: 1280,
+                    height: 720,
+                },
+                matched_pages: vec![PAGE.to_string()],
+                elements: vec![
+                    element(
+                        "scroll_reward_list_down",
+                        Geometry::Drag {
+                            from_rect: rect(600, 520, 80, 80),
+                            to_rect: rect(600, 200, 80, 80),
+                            from: point(640, 560),
+                            to: point(640, 240),
+                            duration_ms: 400,
+                        },
+                    ),
+                    element(
+                        "open_reward_detail",
+                        Geometry::Tap {
+                            rect: rect(1040, 600, 200, 80),
+                            point: point(1140, 640),
+                        },
+                    ),
+                ],
+                missing: vec![],
+                fields: vec![],
+            },
+            &shared::VerifiedProjectionMetadata::unannotated(catalog),
+        )
+        .unwrap()
+    }
+
+    /// The members `observe --capture` sends with its projection (`run_runtime_observe`), with
+    /// `--with-frame`: three fact rows, the projection source and the terminal.
+    fn capture_payload(observation: &PageProjection) -> Value {
+        json!({
+            "req_id": "request_18dd54d1a2b3c4d50000000000000101",
+            "state": "recognized",
+            "instance": "node.a",
+            "page": PAGE,
+            "matched": true,
+            "standby": false,
+            "frame_source": {"artifact_id": "artifact_18dd54d1a2b3c4d50000000000000103"},
+            "facts": {
+                "rows": [
+                    {"kind": "page_evaluation", "page_id": PAGE, "matched": true, "target_evaluation_count": 2},
+                    {"kind": "target_evaluation", "page_id": PAGE, "target_id": "title", "passed": true},
+                    {"kind": "target_evaluation", "page_id": PAGE, "target_id": "badge", "passed": true}
+                ],
+                "item_count": 3,
+                "omitted_count": 0,
+                "target_evaluation_count": 2,
+                "omitted_target_evaluation_count": 0,
+                "truncated": false
+            },
+            "projection_source": {
+                "kind": "runtime_global_ledger",
+                "correlation_id": "correlation_18dd54d1a2b3c4d50000000000000100",
+                "artifact": {
+                    "artifact_id": "artifact_18dd54d1a2b3c4d50000000000000103",
+                    "sha256": "9a3e".repeat(16)
+                },
+                "projection_sequence": 4242,
+                "projection_event_id": "event_18dd54d1a2b3c4d50000000000000104",
+                "content_sha256": observation.content_sha256
+            },
+            "terminal": {"sequence": 4243, "event_id": "event_18dd54d1a2b3c4d50000000000000105"},
+            "arbitration": {"authority": "runtime_scheduler", "decision": "readonly", "local_arbitrator": false},
+            "frame_path": "C:/Users/tester/AppData/Local/Temp/actinglab-observe/reward_overview-0001.png"
+        })
+    }
+
+    /// The members offline `observe` sends for the same page when its package declares a
+    /// candidate layout of twelve rows (`run_observe`).
+    fn offline_payload_with_candidate_rows() -> Value {
+        let candidates = (1..=12u32)
+            .map(|index| {
+                let y = 96 + 44 * index;
+                json!({
+                    "id": format!("reward_rows#{index:02}"),
+                    "instance_index": index,
+                    "actionable": true,
+                    "privacy": "public",
+                    "rect": {"x": 96, "y": y, "width": 880, "height": 40},
+                    "click": {"x": 120, "y": y + 8, "width": 832, "height": 24}
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "req_id": "request_18dd54d1a2b3c4d50000000000000201",
+            "state": "observed",
+            "instance": "node.a",
+            "page": PAGE,
+            "matched": true,
+            "standby": false,
+            "frame_age_ms": 0,
+            "backend": "scene_file",
+            "frame_source": {"kind": "scene_file"},
+            "targets": [{"id": "title", "passed": true, "score": 1.0}],
+            "actions": [{"id": "scroll_reward_list_down"}, {"id": "open_reward_detail"}],
+            "arbitration": {"authority": "isolated_offline", "decision": "not_applicable", "persistent_state": false},
+            "candidate_sets": [{
+                "schema_version": "actingcommand.candidate-projection.v1",
+                "page_id": PAGE,
+                "layout_id": "reward_rows",
+                "layout_kind": "fixed_slots",
+                "frame": {"width": 1280, "height": 720},
+                "candidates": candidates,
+                "candidate_set_sha256": "7c21".repeat(16)
+            }],
+            "candidate_coverage": {"provided_frames": 1, "aggregation": "production_owner", "task_preparation": "not_requested"}
+        })
+    }
+
+    fn encoded_len(value: &Value) -> usize {
+        serde_json::to_vec(value).unwrap().len()
+    }
+
+    #[test]
+    fn min_output_over_its_byte_limit_answers_the_identity_marked_truncated() {
+        let observation = recognised_page(shared::FrameKind::Artifact);
+        let kept = observation.elements[0].clone();
+        let payload = capture_payload(&observation);
+
+        let output = project(payload, observation, &FlagArgs::default(), false)
+            .expect("Min answers the identity instead of failing");
+
+        // The scene: the swipe Min keeps longest does not fit beside the identity.
+        let mut with_kept = output.clone();
+        with_kept["observation"]["elements"] = json!([kept]);
+        assert!(encoded_len(&with_kept) > MIN_PROJECTION_HARD_LIMIT_BYTES);
+
+        assert!(encoded_len(&output) <= MIN_PROJECTION_HARD_LIMIT_BYTES);
+        let projected = &output["observation"];
+        assert_eq!(projected["page"], PAGE);
+        assert_eq!(projected["frame"]["sha256"], "5f0c".repeat(16));
+        assert_eq!(projected["elements"], json!([]));
+        assert_eq!(projected["truncated"], true);
+        assert_eq!(projected["output_truncated"], true);
+        assert_eq!(projected["omitted_count"], 2);
+        assert_eq!(projected["metrics"]["entry_count"], 2);
+        assert_eq!(projected["metrics"]["emitted_count"], 0);
+        let mut transported: PageProjection = serde_json::from_value(projected.clone()).unwrap();
+        transported
+            .verify_transport()
+            .expect("the truncation state is freshly hashed");
+        let facts = &output["facts"];
+        assert_eq!(facts["rows"], json!([]));
+        assert_eq!(facts["truncated"], true);
+        assert_eq!(facts["omitted_count"], 3);
+        assert_eq!(facts["item_count"], 3);
+        assert_eq!(facts["omitted_target_evaluation_count"], 2);
+        assert_eq!(facts["target_evaluation_count"], 2);
+    }
+
+    #[test]
+    fn min_identity_over_its_byte_limit_reports_its_own_code() {
+        let observation = recognised_page(shared::FrameKind::Rgb8);
+
+        let error = project(
+            offline_payload_with_candidate_rows(),
+            observation,
+            &FlagArgs::default(),
+            false,
+        )
+        .expect_err("an identity over the byte limit cannot be answered");
+
+        let code = ActinglabCode::ObserveIdentityLimitExceeded;
+        assert_eq!(error.code, code.as_str());
+        assert_eq!(code.category(), Category::Error);
+        let details = error.details.expect("the code's required values");
+        assert_eq!(details["limit_bytes"], MIN_PROJECTION_HARD_LIMIT_BYTES);
+        assert!(
+            details["actual_bytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > MIN_PROJECTION_HARD_LIMIT_BYTES as u64)
+        );
     }
 }
