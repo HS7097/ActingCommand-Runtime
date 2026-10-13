@@ -243,8 +243,9 @@ fn rd1a_t5_a_whole_fake_host_run_leaves_no_device_serial_behind() {
         .expect("self-check receipt");
     developer_log.push(format!("{receipt:?}"));
     developer_log.extend(
-        host.failure_detail_for_test(check.request_id())
-            .expect("failure detail"),
+        host.failure_outcome_for_test(check.request_id())
+            .expect("failure outcome")
+            .map(|outcome| outcome.to_string()),
     );
     host.close().expect("close host");
 

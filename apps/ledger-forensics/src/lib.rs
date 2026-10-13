@@ -4,6 +4,7 @@
 
 mod codes;
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::codes::{ActingledgerCode, ActingledgerLocation};
+use actingcommand_contract::DiagnosticCode;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_ledger_forensics::{
@@ -36,8 +38,8 @@ enum CliRequest {
 
 #[derive(Debug)]
 pub struct CliError {
-    code: &'static str,
-    operation: &'static str,
+    code: Cow<'static, str>,
+    operation: Cow<'static, str>,
     detail: String,
 }
 
@@ -48,17 +50,22 @@ impl CliError {
     }
 
     /// A failure that relays a forensic error's code and operation, which stay strings while
-    /// they carry the ledger's and the artifact store's (Workflow #378, slice A2b).
-    fn relayed(code: &'static str, operation: &'static str, detail: impl Into<String>) -> Self {
+    /// they carry the ledger's and the artifact store's (Workflow #378, slice A2b), or the code
+    /// and operation of a reported outcome (ledger revision 3, A3).
+    fn relayed(
+        code: impl Into<Cow<'static, str>>,
+        operation: impl Into<Cow<'static, str>>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
-            code,
-            operation,
+            code: code.into(),
+            operation: operation.into(),
             detail: detail.into(),
         }
     }
 
-    pub fn code(&self) -> &'static str {
-        self.code
+    pub fn code(&self) -> &str {
+        &self.code
     }
 }
 
@@ -112,12 +119,20 @@ where
         ForensicOutput::Machine(ForensicReport::Facts(result)) => match result.as_ref() {
             ForensicRuntimeFactsResult::Available { .. } => None,
             ForensicRuntimeFactsResult::NotAvailable { .. } => Some((
-                ForensicsCode::RuntimeFactsNotAvailable.as_str(),
-                ForensicsLocation::ReadRuntimeFactsAt.as_str(),
+                Cow::Borrowed(ForensicsCode::RuntimeFactsNotAvailable.as_str()),
+                Cow::Borrowed(ForensicsLocation::ReadRuntimeFactsAt.as_str()),
             )),
-            ForensicRuntimeFactsResult::Failed {
-                code, operation, ..
-            } => Some((*code, *operation)),
+            // Ledger revision 3 (Workflow #378 A3): the failure is the result's outcome.
+            ForensicRuntimeFactsResult::Failed { outcome, .. } => Some((
+                Cow::Owned(outcome.code().as_str().to_owned()),
+                Cow::Owned(
+                    outcome
+                        .value("operation")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(ForensicsLocation::ReadRuntimeFactsAt.as_str())
+                        .to_owned(),
+                ),
+            )),
         },
         _ => None,
     };
@@ -489,7 +504,9 @@ where
             }
             "--limit" if limit.is_none() => limit = Some(parse_usize(&value, "--limit")?),
             "--origin-module" if origin_module.is_none() => origin_module = Some(value),
-            "--diagnostic-code" if diagnostic_code.is_none() => diagnostic_code = Some(value),
+            "--diagnostic-code" if diagnostic_code.is_none() => {
+                diagnostic_code = Some(parse_diagnostic_code(&value)?)
+            }
             "--severity" if severity.is_none() => severity = Some(value),
             "--correlation-id" if correlation_id.is_none() => correlation_id = Some(value),
             "--exclude-event-type" => exclude_event_types.push(value),
@@ -540,6 +557,16 @@ where
         return Err(invalid_arguments(format!("value for {option} is empty")));
     }
     Ok(value)
+}
+
+/// The typed diagnostic code a `--diagnostic-code` token names (ledger revision 3, Workflow
+/// #378 A3); an unknown token is a usage error.
+fn parse_diagnostic_code(value: &str) -> Result<DiagnosticCode, CliError> {
+    DiagnosticCode::ALL
+        .iter()
+        .copied()
+        .find(|code| code.as_str() == value)
+        .ok_or_else(|| invalid_arguments("value for --diagnostic-code is not a diagnostic code"))
 }
 
 fn parse_u64(value: &str, option: &str) -> Result<u64, CliError> {

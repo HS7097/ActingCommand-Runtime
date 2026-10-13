@@ -116,7 +116,7 @@ impl LedgerArtifactReference {
             ArtifactAvailability::PendingEviction(proof) => {
                 proof.identity.artifact == reference
                     && proof.validate().is_ok()
-                    && proof.outcome.is_none()
+                    && proof.terminal_event.is_none()
             }
             // Workflow #375 R5a: a recorded failed eviction restores as ledger state; it no
             // longer stops an opening.

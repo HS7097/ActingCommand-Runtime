@@ -1020,7 +1020,9 @@ impl HostShared {
         // failures. Only typed ordinary acquisition failures with confirmed temporary-resource
         // disposal qualify; invalid parameter/configuration observations never qualify.
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
-            actingcommand_contract::is_preparation_recovery_trigger(error.code().as_str())
+            actingcommand_contract::is_preparation_recovery_trigger(
+                &actingcommand_contract::outcome::CodeStr::from(error.code()),
+            )
                 && error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
                 && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
                     "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))

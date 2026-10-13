@@ -360,10 +360,10 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
                         if matches!(
                             payload.fact(),
                             TaskSemanticFact::TerminalCommitted {
-                                outcome: TaskOutcome::Failure,
-                                failure_code: Some(code),
+                                task_result: TaskOutcome::Failure,
+                                outcome: Some(outcome),
                                 ..
-                            } if code == error.code()
+                            } if outcome.code().as_str() == error.code()
                         )
                 )
         )
@@ -376,7 +376,7 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
                     payload.as_ref(),
                     EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
                         if matches!(
-                            payload.outcome(),
+                            payload.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
                                 if failure.error_code == error.code()
                                     && failure.original_class
@@ -475,7 +475,9 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
             .iter()
             .find(|event| event.event_type == EventType::TaskFailed)
             .expect("task failure");
-        assert_eq!(task_failed.severity, EventSeverity::Warning, "{case}");
+        // Ledger revision 3 (#378 A3): the terminal's severity is its outcome's category; both
+        // codes are `error`.
+        assert_eq!(task_failed.severity, EventSeverity::Error, "{case}");
         assert!(matches!(
             &task_failed.payload,
             ProjectionPayload::Full(payload)
@@ -485,10 +487,10 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
                         if matches!(
                             payload.fact(),
                             TaskSemanticFact::TerminalCommitted {
-                                outcome: TaskOutcome::Failure,
-                                failure_code: Some(code),
+                                task_result: TaskOutcome::Failure,
+                                outcome: Some(outcome),
                                 ..
-                            } if code == expected_code
+                            } if outcome.code().as_str() == expected_code
                         )
                 )
         ));
@@ -503,7 +505,7 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
                     payload.as_ref(),
                     EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
                         if matches!(
-                            payload.outcome(),
+                            payload.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
                                 if failure.error_code == expected_code
                                     && failure.original_class
@@ -537,7 +539,11 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
         let bytes = read_projected_verified(root.path(), &diagnostic.artifacts[0]).unwrap();
         let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let records = document["records"].as_array().unwrap();
-        assert_eq!(records.last().unwrap()["data"]["code"], expected_code);
+        // Ledger revision 3 (#378 A3): the terminal's task error is its outcome (was `code`).
+        assert_eq!(
+            records.last().unwrap()["data"]["outcome"]["code"],
+            expected_code
+        );
         let pages = records
             .iter()
             .filter(|record| record["kind"] == "page")
@@ -674,7 +680,7 @@ fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() 
         .find_map(|event| match &event.payload {
             ProjectionPayload::Full(payload) => match payload.as_ref() {
                 EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
-                    Some(payload.outcome())
+                    Some(payload.policy_result())
                 }
                 _ => None,
             },

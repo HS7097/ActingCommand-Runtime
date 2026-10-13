@@ -757,6 +757,11 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
 #[test]
 fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() {
     let mut recovered_task_failure_code = None;
+    // Ledger revision 3 (#378 A3): a failed run's class comes from its terminal through
+    // `scheduled_failure_class` (the failure point's `failure_severe` verdict, or an
+    // always-severe code), never from the terminal's severity, which is now the code's
+    // category. Scheduling keeps today's classes (model section 8.1; coordinator ruling 9,
+    // 2026-10-13): a transient device failure is Recoverable, a fatal one Severe.
     for (case, expected_terminal, expected_class) in [
         ("success", Some(EventType::TaskCompleted), None),
         (
@@ -975,25 +980,13 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
             source.timestamp_unix_ms,
             "{case}: persisted recovery time"
         );
-        match (case, execution_payload.outcome()) {
+        match (case, execution_payload.policy_result()) {
             ("success", PolicyExecutionOutcome::Succeeded { .. }) => {}
             ("task-recoverable" | "task-severe", PolicyExecutionOutcome::Failed { failure }) => {
-                assert_eq!(
-                    failure.original_class,
-                    expected_class.expect("failure class")
-                );
                 let task_terminal = events
                     .iter()
                     .find(|event| event.event_type == EventType::TaskFailed)
                     .expect("task failure");
-                assert_eq!(
-                    task_terminal.severity,
-                    if case == "task-recoverable" {
-                        EventSeverity::Warning
-                    } else {
-                        EventSeverity::Fatal
-                    }
-                );
                 let ProjectionPayload::Full(payload) = &task_terminal.payload else {
                     panic!("{case}: full task failure payload")
                 };
@@ -1001,13 +994,24 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                     panic!("{case}: semantic task failure")
                 };
                 let TaskSemanticFact::TerminalCommitted {
-                    failure_code: Some(code),
+                    outcome: Some(outcome),
                     ..
                 } = payload.fact()
                 else {
-                    panic!("{case}: task failure code")
+                    panic!("{case}: task failure outcome")
                 };
-                assert_eq!(failure.error_code, *code);
+                let code = outcome.code();
+                assert_eq!(
+                    task_terminal.severity,
+                    EventSeverity::from_category(outcome.category()),
+                    "{case}: the terminal's severity is its outcome's category"
+                );
+                assert_eq!(
+                    failure.original_class,
+                    expected_class.expect("failure class"),
+                    "{case}: today's class"
+                );
+                assert_eq!(failure.error_code, code.as_str());
                 match &recovered_task_failure_code {
                     Some(expected) => assert_eq!(
                         code, expected,

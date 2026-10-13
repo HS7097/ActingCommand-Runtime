@@ -506,7 +506,7 @@ impl HostShared {
                         HostLocation::VerifyProposalReports,
                         RuntimeErrorCode::InvalidRequest,
                     )
-                    .with_native_detail(format!("artifact_id={artifact_id}")),
+                    .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)),
                 ));
             }
         }
@@ -719,12 +719,13 @@ impl HostShared {
             // Workflow #375 R5b: an evidence frame that cannot be read (deleted by hand, say)
             // refuses the request; it never stops the Runtime.
             if read_projected_verified(self.artifacts.root(), reference).is_err() {
+                let artifact_id = artifact_id_text(reference)?;
                 return Err(RuntimeHostError::request(
                     HostCode::StrategicEvidenceUnavailable,
                     HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 )
-                .with_native_detail(format!("artifact_id={}", artifact_id_text(reference)?)));
+                .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)));
             }
             pointers.push(strategic_evidence_pointer(reference)?);
         }
@@ -769,7 +770,7 @@ impl HostShared {
                     HostLocation::ReadStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 )
-                .with_native_detail(format!("artifact_id={artifact_id}")));
+                .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)));
             };
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(

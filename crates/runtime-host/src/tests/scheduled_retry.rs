@@ -137,7 +137,7 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
         .find_map(|event| match &event.payload {
             ProjectionPayload::Full(payload) => match payload.as_ref() {
                 EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
-                    Some(payload.outcome())
+                    Some(payload.policy_result())
                 }
                 _ => None,
             },

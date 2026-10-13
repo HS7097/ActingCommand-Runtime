@@ -275,8 +275,8 @@ fn gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head() 
 /// R3′: a Runtime failure latched while a held start prepares stops the start under its own
 /// code, `install_startup_stopped` during `install_transition`, and names the latched cause as
 /// `cause=<code> cause_operation=<operation>` on the FATAL line (actingd prints
-/// `FATAL actingd: <complete_message>`), in the transition's status fact and in the lifecycle
-/// failure's detail.
+/// `FATAL actingd: <complete_message>`), in the transition's status fact and, since ledger
+/// revision 3 (#378 A3), as the lifecycle failure outcome's `caused_by` link.
 #[test]
 fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause() {
     const CAUSE: &str = "cause=ledger_failure cause_operation=append_runtime_event";
@@ -323,25 +323,28 @@ fn gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_
         .expect("runtime facts");
     host.close().expect("close the cold Runtime");
 
-    let stopped_details = failures
+    let stopped_outcomes = failures
         .iter()
         .filter_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload.lifecycle_failure(),
+            EventPayload::Runtime(RuntimePayload::Failed(payload))
+                if payload.lifecycle_failure().is_some() =>
+            {
+                Some(payload.outcome())
+            }
             _ => None,
         })
-        .filter(|failure| failure.code() == "install_startup_stopped")
-        .map(|failure| {
-            failure
-                .native_detail()
-                .map(|detail| detail.text().to_owned())
-        })
+        .filter(|outcome| outcome.code().as_str() == "install_startup_stopped")
         .collect::<Vec<_>>();
-    assert_eq!(stopped_details.len(), 1, "{stopped_details:?}");
+    assert_eq!(stopped_outcomes.len(), 1, "{stopped_outcomes:?}");
     assert!(
-        stopped_details[0]
-            .as_deref()
-            .is_some_and(|detail| detail.contains(CAUSE)),
-        "lifecycle failure detail: {stopped_details:?}"
+        outcome_links(
+            stopped_outcomes[0],
+            actingcommand_contract::outcome::CauseRelation::CausedBy
+        )
+        .iter()
+        .any(|cause| cause.code().as_str() == "ledger_failure"
+            && outcome_str(cause, "operation") == Some("append_runtime_event")),
+        "lifecycle failure outcome: {stopped_outcomes:?}"
     );
 
     let failed_status = facts
@@ -533,7 +536,8 @@ fn reachable_device() -> Arc<FakeState> {
 /// INST-1 (Workflow #390, FCM D-01; the 10-11 install on board #71): a held start whose
 /// preparation reaches one device and not the other goes on. Only the unreachable instance is
 /// unavailable, under one explicit `install_preparation_instance_unavailable` (warning, stage
-/// `install_release`) that names its self-check failure as `cause=<code>`; the reachable
+/// `install_release`) whose `caused_by` link is its self-check failure (ledger revision 3,
+/// #378 A3); the reachable
 /// instance has no failure record, the transition is released and the Runtime runs.
 #[test]
 fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on() {
@@ -586,23 +590,33 @@ fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_star
         .filter_map(|event| match event.payload() {
             EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload
                 .lifecycle_failure()
-                .map(|failure| (event.severity(), failure)),
+                .map(|failure| (event.severity(), failure, payload.outcome())),
             _ => None,
         })
         .collect::<Vec<_>>();
+    // Ledger revision 3 (#378 A3): the failure's code and stage are its outcome's, and the
+    // self-check failure is its `caused_by` link.
     let unavailable = lifecycle
         .iter()
-        .filter(|(_, failure)| {
-            failure.code() == HostCode::InstallPreparationInstanceUnavailable.as_str()
+        .filter(|(_, _, outcome)| {
+            outcome.code().as_str() == HostCode::InstallPreparationInstanceUnavailable.as_str()
         })
-        .map(|(severity, failure)| {
+        .map(|(severity, failure, outcome)| {
             (
                 *severity,
-                failure.stage().to_owned(),
+                outcome
+                    .value("stage")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
                 failure.instance_id(),
-                failure
-                    .native_detail()
-                    .map(|detail| detail.text().to_owned()),
+                outcome.value("instance_id").cloned(),
+                outcome_links(
+                    outcome,
+                    actingcommand_contract::outcome::CauseRelation::CausedBy,
+                )
+                .into_iter()
+                .map(|cause| cause.code().as_str().to_owned())
+                .collect::<Vec<_>>(),
             )
         })
         .collect::<Vec<_>>();
@@ -610,19 +624,21 @@ fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_star
         unavailable,
         [(
             EventSeverity::Warning,
-            "runtime.lifecycle.install_release".to_owned(),
+            Some("runtime_lifecycle_install_release".to_owned()),
             Some(unreachable),
-            Some(format!(
-                "cause={}",
-                DeviceSelfCheckFailure::InputBackendOpenFailed.as_str()
-            )),
+            Some(serde_json::to_value(unreachable).expect("instance id value")),
+            vec![
+                DeviceSelfCheckFailure::InputBackendOpenFailed
+                    .as_str()
+                    .to_owned()
+            ],
         )],
         "the unreachable instance's explicit code"
     );
     assert!(
         lifecycle
             .iter()
-            .all(|(_, failure)| failure.instance_id() != Some(reachable)),
+            .all(|(_, failure, _)| failure.instance_id() != Some(reachable)),
         "the reachable instance has a failure record"
     );
     let last_status = facts

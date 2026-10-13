@@ -11,7 +11,7 @@
 //! on code text. Every timestamp is a fixed instant after `T0`.
 
 use super::fixture::FormalRoot;
-use super::retention_events::RetentionEvents;
+use super::retention_events::{RetentionEvents, code_of};
 use crate::global::{FrameErrorPoint, FrameRetentionSwitches, FrameRetentionView};
 use actingcommand_contract::{EventLinksDraft, EventSeverity, TaskOutcome};
 
@@ -24,9 +24,10 @@ const SWITCHES: FrameRetentionSwitches = FrameRetentionSwitches {
     dedup_error: true,
     dedup_lab: false,
 };
-/// The fixture's own failure codes.
-const FAILURE_FIRST: &str = "fixture_failure_first";
-const FAILURE_RENAMED: &str = "fixture_failure_renamed";
+/// Two registered failure codes (ledger revision 3: a terminal's failure is an outcome of a
+/// registered code; an unregistered spelling would name no leaf of its own).
+const FAILURE_FIRST: &str = "capture_failed";
+const FAILURE_RENAMED: &str = "recognition_failed";
 
 fn view(root: &FormalRoot) -> FrameRetentionView {
     root.ledger()
@@ -100,7 +101,8 @@ fn gate_error_points_depend_only_on_outcome_severity_and_links() {
         at += 1_000;
         let persisted = match event {
             Terminal(outcome) => {
-                let failure_code = (outcome != Success).then_some(FAILURE_FIRST);
+                // Ledger revision 3: the terminal's severity is its failure's category.
+                let failure_code = (outcome != Success).then(|| code_of(severity));
                 events.terminal(links, outcome, failure_code, severity, at)
             }
             RuntimeFailed => events.runtime_failed(links, severity, at),

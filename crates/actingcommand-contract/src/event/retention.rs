@@ -5,6 +5,7 @@ use super::{
     RequestId, RunId, SanitizationError,
 };
 use crate::codes::SanitizationCode;
+use crate::outcome::{IoOp, Outcome};
 use crate::{TaskOutcome, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,7 @@ pub enum FailedRunRetentionBasis {
 pub struct FailedRunRetentionEvidence {
     pub policy: FailedRunRetentionPolicy,
     pub terminal: TerminalEvent,
-    pub outcome: TaskOutcome,
+    pub task_result: TaskOutcome,
     pub terminal_unix_ms: u64,
     pub evaluated_at_unix_ms: u64,
     pub basis: FailedRunRetentionBasis,
@@ -69,8 +70,10 @@ impl FailedRunRetentionEvidence {
     fn validate(&self, through_sequence: u64) -> Result<(), SanitizationError> {
         self.policy.validate()?;
         event(&self.terminal)?;
-        if !matches!(self.outcome, TaskOutcome::Failure | TaskOutcome::Cancelled)
-            || self.terminal_unix_ms == 0
+        if !matches!(
+            self.task_result,
+            TaskOutcome::Failure | TaskOutcome::Cancelled
+        ) || self.terminal_unix_ms == 0
             || self.evaluated_at_unix_ms == 0
             || self.terminal.sequence > through_sequence
         {
@@ -213,37 +216,10 @@ pub struct ArtifactEvictionIntentRecord {
     pub through_sequence: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactEvictionIo {
-    pub kind: String,
-    pub raw_os_error: Option<i32>,
-    pub message: String,
-    pub message_truncated: bool,
-}
-
-impl ArtifactEvictionIo {
-    pub fn from_io(error: &std::io::Error) -> Self {
-        let message = error.to_string();
-        let mut chars = message.chars();
-        let bounded = chars.by_ref().take(256).collect();
-        Self {
-            kind: format!("{:?}", error.kind()),
-            raw_os_error: error.raw_os_error(),
-            message: bounded,
-            message_truncated: chars.next().is_some(),
-        }
-    }
-    pub fn validate(&self) -> Result<(), SanitizationError> {
-        if self.kind.is_empty()
-            || self.kind.len() > 64
-            || !self.kind.bytes().all(|b| b.is_ascii_alphanumeric())
-            || self.message.chars().count() > 256
-        {
-            return Err(invalid("io"));
-        }
-        Ok(())
-    }
+/// The `foreign_os_error` of a failed eviction's file removal (ledger revision 3, model
+/// section 8.1; was `ArtifactEvictionIo {kind, raw_os_error, message, message_truncated}`).
+pub fn artifact_eviction_io_outcome(error: &std::io::Error) -> Outcome {
+    Outcome::from_io_error(error, IoOp::Remove)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,7 +236,9 @@ pub struct ArtifactEvictionOutcomeRecord {
     pub identity: ArtifactRetentionIdentity,
     pub intent: TerminalEvent,
     pub disposition: ArtifactEvictionDisposition,
-    pub io: Option<ArtifactEvictionIo>,
+    /// A failed eviction's I/O failure (ledger revision 3; was `io`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,12 +305,10 @@ impl ArtifactRetentionFact {
             }
             Self::EvictionOutcome(value) => {
                 event(&value.intent)?;
-                if (value.disposition == ArtifactEvictionDisposition::Failed) != value.io.is_some()
+                if (value.disposition == ArtifactEvictionDisposition::Failed)
+                    != value.outcome.is_some()
                 {
                     return Err(invalid("outcome_io"));
-                }
-                if let Some(io) = &value.io {
-                    io.validate()?;
                 }
                 Ok(())
             }
@@ -346,7 +322,7 @@ impl ArtifactRetentionFact {
 pub struct ArtifactEvictionProof {
     pub identity: ArtifactRetentionIdentity,
     pub intent: TerminalEvent,
-    pub outcome: Option<TerminalEvent>,
+    pub terminal_event: Option<TerminalEvent>,
     pub disposition: Option<ArtifactEvictionDisposition>,
     pub through_sequence: u64,
 }
@@ -357,7 +333,7 @@ pub struct ArtifactEvictionProof {
 pub struct ArtifactEvictionObservation {
     pub artifact_id: super::ArtifactId,
     pub intent: TerminalEvent,
-    pub outcome: Option<TerminalEvent>,
+    pub terminal_event: Option<TerminalEvent>,
     pub disposition: Option<ArtifactEvictionDisposition>,
     pub through_sequence: u64,
 }
@@ -366,13 +342,14 @@ impl ArtifactEvictionObservation {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         event(&self.intent)?;
         if self.intent.sequence > self.through_sequence
-            || self.outcome.is_some() != self.disposition.is_some()
+            || self.terminal_event.is_some() != self.disposition.is_some()
         {
             return Err(invalid("observation"));
         }
-        if let Some(outcome) = &self.outcome {
-            event(outcome)?;
-            if outcome.sequence <= self.intent.sequence || outcome.sequence > self.through_sequence
+        if let Some(terminal) = &self.terminal_event {
+            event(terminal)?;
+            if terminal.sequence <= self.intent.sequence
+                || terminal.sequence > self.through_sequence
             {
                 return Err(invalid("observation_order"));
             }
@@ -387,16 +364,16 @@ impl ArtifactEvictionProof {
         if self.intent.sequence > through_sequence {
             return None;
         }
-        let outcome = self
-            .outcome
+        let terminal_event = self
+            .terminal_event
             .as_ref()
-            .filter(|outcome| outcome.sequence <= through_sequence)
+            .filter(|terminal| terminal.sequence <= through_sequence)
             .cloned();
         Some(ArtifactEvictionObservation {
             artifact_id: self.identity.artifact.artifact_id,
             intent: self.intent,
-            disposition: outcome.as_ref().and(self.disposition),
-            outcome,
+            disposition: terminal_event.as_ref().and(self.disposition),
+            terminal_event,
             through_sequence,
         })
     }
@@ -404,13 +381,14 @@ impl ArtifactEvictionProof {
         self.identity.validate()?;
         event(&self.intent)?;
         if self.intent.sequence > self.through_sequence
-            || self.outcome.is_some() != self.disposition.is_some()
+            || self.terminal_event.is_some() != self.disposition.is_some()
         {
             return Err(invalid("proof"));
         }
-        if let Some(outcome) = &self.outcome {
-            event(outcome)?;
-            if outcome.sequence <= self.intent.sequence || outcome.sequence > self.through_sequence
+        if let Some(terminal) = &self.terminal_event {
+            event(terminal)?;
+            if terminal.sequence <= self.intent.sequence
+                || terminal.sequence > self.through_sequence
             {
                 return Err(invalid("proof_order"));
             }

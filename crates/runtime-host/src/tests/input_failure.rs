@@ -218,7 +218,15 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         assert_eq!(detail.category(), "protocol");
         assert_eq!(detail.stage(), "adb.input.bounds_validate");
         assert_eq!(detail.backend(), "adb_shell_input");
-        assert_eq!(outcome.cleanup_cause().is_some(), close_failure);
+        // Ledger revision 3 (#378 A3): a failed close is the outcome's `cleanup` link.
+        assert_eq!(
+            !outcome_links(
+                outcome.outcome(),
+                actingcommand_contract::outcome::CauseRelation::Cleanup
+            )
+            .is_empty(),
+            close_failure
+        );
         assert_eq!(failed.links().run_id().is_some(), contained);
         assert!(
             !events
@@ -233,8 +241,10 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
                 )) = event.payload()
                 {
                     let lifecycle = failure.lifecycle_failure()?;
-                    (lifecycle.native_detail()?.text() == primary_text)
-                        .then_some((event, lifecycle))
+                    // Ledger revision 3 (#378 A3): the native text is `raw_text` on a foreign
+                    // link of the failure's outcome.
+                    let text = outcome_with_raw_text(failure.outcome(), primary_text)?;
+                    Some((event, lifecycle, text))
                 } else {
                     None
                 }
@@ -242,7 +252,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
             .expect("original private native input detail");
         assert_eq!(native.0.links(), failed.links());
         assert_eq!(native.1.primary_detail(), outcome.detail());
-        assert!(!native.1.native_detail().unwrap().truncated());
+        assert_eq!(native.2.value("raw_text_truncated"), None);
         assert!(
             !serde_json::to_string(&native.0.payload().public_projection())
                 .unwrap()
@@ -268,7 +278,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         }
         let terminals = events.iter().filter(|event| matches!(event.payload(),
             EventPayload::Task(TaskPayload::Semantic(payload))
-            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
         assert_eq!(terminals.len(), usize::from(contained && !close_failure));
         if let Some(terminal) = terminals.first() {
             assert_eq!(terminal.links().run_id(), failed.links().run_id());
@@ -399,20 +409,37 @@ fn input_failure_persists_adb_bounds_context() {
             let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
             assert_eq!(lifecycle.entered_event_id(), Some(flow[1].event_id));
             assert_eq!(lifecycle.primary_detail(), outcome.detail());
-            let native = lifecycle.native_detail().expect("original cause");
-            assert_eq!(native.text(), "tap x 101 exceeds touch screen max 100");
-            assert!(!native.truncated());
+            // Ledger revision 3 (#378 A3): the original cause is `raw_text` on a foreign link.
+            let native = outcome_with_raw_text(
+                native_outcome.outcome(),
+                "tap x 101 exceeds touch screen max 100",
+            )
+            .expect("original cause");
+            assert_eq!(native.value("raw_text_truncated"), None);
             let public = serde_json::to_string(&native_payload.public_projection())
                 .expect("public native failure");
             assert!(!public.contains("tap x 101 exceeds touch screen max 100"));
         }
         let detail = outcome.detail().expect("bounds detail");
-        assert_eq!(detail.message(), expected_message);
+        // Ledger revision 3 (#378 A3): the detail keeps no message. The failure is the record's
+        // outcome, the device's own text its foreign `raw_text`, and the Runtime's bounds
+        // summary goes only to the developer log.
+        assert_eq!(
+            *outcome.outcome().code(),
+            actingcommand_contract::codes::SharedCode::InputBackendOperationFailed.code()
+        );
+        assert!(
+            outcome_with_raw_text(outcome.outcome(), "tap x 101 exceeds touch screen max 100")
+                .is_some()
+        );
+        if include_context {
+            let full = serde_json::to_string(payload.as_ref()).expect("full input failure");
+            assert!(!full.contains(&expected_message));
+        }
         assert_eq!(detail.category(), "protocol");
         assert_eq!(detail.stage(), "adb.input.bounds_validate");
         assert_eq!(detail.backend(), "adb_shell_input");
         assert_eq!(detail.operation(), "tap");
-        assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 0);
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
@@ -483,8 +510,14 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.stage(), "device_registry.input.operation");
     assert_eq!(detail.backend(), "adb_shell_input");
     assert_eq!(detail.operation(), "reset");
-    assert_eq!(detail.message(), "injected backend failure");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+    // Ledger revision 3 (#378 A3): the device's text left the detail; it is the error's native
+    // detail, recorded as a sensitive foreign `raw_text`.
+    let native = kernel_error.native_detail().expect("device text");
+    assert_eq!(native.text(), "injected backend failure");
+    assert_eq!(
+        outcome_str(&native.outcome(), "raw_text_sensitivity"),
+        Some("sensitive")
+    );
     let runtime_error = RuntimeHostError::execution(
         crate::codes::HostLocation::ExecuteInputBackend,
         &kernel_error,
@@ -549,7 +582,9 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
             if value.adb_recovery().is_some())
     }).collect::<Vec<_>>();
     assert_eq!(warnings.len(), 1);
-    assert_eq!(warnings[0].severity(), EventSeverity::Warning);
+    // Ledger revision 3 (#378 A3): the recovery record carries no outcome, so its severity is
+    // its event type's category (`runtime.lifecycle_observed`: info).
+    assert_eq!(warnings[0].severity(), EventSeverity::Info);
     let full = serde_json::to_string(warnings[0].payload()).unwrap();
     assert!(full.contains("preserved original offline error"));
     let public = serde_json::to_string(&warnings[0].payload().public_projection()).unwrap();
@@ -595,8 +630,12 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.stage(), "device_registry.input.operation");
     assert_eq!(detail.backend(), "adb_shell_input");
     assert_eq!(detail.operation(), "reset");
-    assert_eq!(detail.message(), "injected backend failure");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+    let device_text = outcome_with_raw_text(outcome.outcome(), "injected backend failure")
+        .expect("device text on a foreign link");
+    assert_eq!(
+        outcome_str(device_text, "raw_text_sensitivity"),
+        Some("sensitive")
+    );
     wait_until(Duration::from_secs(2), || {
         state.close_count.load(Ordering::Acquire) == 1
     });

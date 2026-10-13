@@ -9,7 +9,7 @@ use crate::error::spelled;
 use actingcommand_contract::codes::{
     ContractLocation, DeviceSelfCheckFailure, RuntimeErrorCode, SharedCode,
 };
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     CaptureBackendName, CaptureExtent, CaptureGeometryObservation,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
@@ -181,16 +181,38 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) intent_already_recorded: bool,
     pub(super) final_page: Option<String>,
     pub(super) executed_steps: Option<u32>,
-    pub(super) failure_code: Option<&'static str>,
-    pub(super) failure_severity: Option<EventSeverity>,
-    /// Failure severity used when the outcome projection rejects this terminal.
-    pub(super) projection_failure_severity: Option<EventSeverity>,
+    /// A failed or cancelled run's failure: the terminal's outcome (ledger revision 3; the
+    /// terminal's severity is its category, so no separate severity is kept).
+    pub(super) failure: Option<Outcome>,
+    /// The failure point's verdict that the failure must pause the task: the terminal's
+    /// `failure_severe` (see [`terminal_failure_severe`]). Only a failed terminal sets it.
+    pub(super) failure_severe: bool,
     pub(super) scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
     pub(super) selected_scheduling_outcome: Option<String>,
     pub(super) capture_summary: Option<CapturePipelineSummary>,
     pub(super) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     /// Readings taken on the successful terminal frame (Workflow #335 S5b); in memory only.
     pub(super) resource_readings: Option<ContainedTaskResourceReadings>,
+}
+
+/// The failure point's verdict that a failed run must pause its task: the terminal's
+/// `failure_severe` (Workflow #378 A3, model section 8.1; coordinator ruling 9, 2026-10-13).
+/// `severe` is the verdict where the failure arose (the run poisoned the Runtime or its error
+/// was fatal); a `linear_steps` main package's device backend failure that did not poison the
+/// Runtime is rerun only and so not severe (R25-2). The policy class follows the verdict
+/// (`actingcommand_contract::scheduled_failure_class`) in the live settlement, the startup
+/// recovery and the ledger alike.
+fn terminal_failure_severe(
+    severe: bool,
+    failure: &Outcome,
+    poison_runtime: bool,
+    linear_main: bool,
+) -> bool {
+    severe
+        && !(linear_main
+            && !poison_runtime
+            && crate::failure_identity::RERUN_ONLY_BACKEND_FAILURES
+                .contains(&failure.code().as_str()))
 }
 
 /// The resource readings a run took on its successful terminal frame (Workflow #335 S5b),
@@ -303,20 +325,19 @@ fn refuse_resource_readings(
     code: impl Into<Code>,
     detail: String,
 ) -> RequestFailure {
-    let code: Code = code.into();
+    let error = RuntimeHostError::request(
+        code,
+        HostLocation::AppendContainedTaskTerminal,
+        RuntimeErrorCode::BackendOperationFailed,
+    );
     draft.outcome = TaskOutcome::Failure;
     draft.final_page = None;
-    draft.failure_code = Some(code.as_str());
-    draft.failure_severity = draft.projection_failure_severity;
+    draft.failure = Some(error.outcome());
+    draft.failure_severe = false;
     draft.scheduling_outcome = None;
     draft.selected_scheduling_outcome = None;
     RequestFailure::request(
-        RuntimeHostError::request(
-            code,
-            HostLocation::AppendContainedTaskTerminal,
-            RuntimeErrorCode::BackendOperationFailed,
-        )
-        .with_native_detail(detail),
+        error.with_native_detail(detail),
         RuntimeReceiptState::Failed,
         None,
     )
@@ -376,12 +397,12 @@ impl PackageIdentity {
     }
 }
 
-/// A committed `task.failed` terminal: the run it ended and its failure code.
-#[derive(Clone, Copy)]
+/// A committed `task.failed` terminal: the run it ended and the code of its outcome.
+#[derive(Clone)]
 pub(super) struct FailedTaskTerminal {
     pub(super) task_id: IssuedTaskId,
     pub(super) run_id: IssuedRunId,
-    pub(super) failure_code: &'static str,
+    pub(super) failure_code: CodeStr,
 }
 
 impl ContainedRunControl {
@@ -1085,7 +1106,7 @@ fn fail_contained_task_entry(
     runtime
         .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::FailClosed,
-            failure_code: Some(code.to_owned()),
+            outcome: Some(Outcome::relayed(code)),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     Err(ContainedTaskRunError::task(code))
@@ -1183,7 +1204,7 @@ fn task_geometry_error(code: impl Into<Code>) -> RuntimeHostError {
 
 fn task_geometry_failure_ref(error: &RuntimeHostError) -> TaskGeometryFailure {
     TaskGeometryFailure {
-        code: error.code().to_owned(),
+        outcome: error.outcome(),
         event_id: error.diagnostics().recorded_event().get().copied(),
     }
 }
@@ -1213,12 +1234,8 @@ fn task_geometry_request_failure(
         terminal: event.map(terminal),
         poison_runtime: error.is_fatal(),
         task_failure: Some(TaskFailureEvidence {
-            code: error.code(),
-            severity: if error.is_fatal() {
-                EventSeverity::Fatal
-            } else {
-                EventSeverity::Warning
-            },
+            outcome: error.outcome(),
+            severe: error.is_fatal(),
         }),
         error: Box::new(error),
     }
@@ -1572,11 +1589,11 @@ impl RuntimeContainedTask<'_> {
         for fact in [
             TaskSemanticFact::EntryRecoveryFailed {
                 package_sha256,
-                failure_code: primary.code().to_owned(),
+                outcome: primary.outcome(),
             },
             TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
-                failure_code: Some(primary.code().to_owned()),
+                outcome: Some(primary.outcome()),
             },
         ] {
             self.append_task(
@@ -1606,17 +1623,17 @@ impl RuntimeContainedTask<'_> {
         open_packages: &[actingcommand_contract::PackageRef],
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
-        let code = primary.code().to_owned();
+        let outcome = primary.outcome();
         for fact in open_packages
             .iter()
             .rev()
             .map(|package_sha256| TaskSemanticFact::EntryRecoveryFailed {
                 package_sha256: package_sha256.clone(),
-                failure_code: code.clone(),
+                outcome: outcome.clone(),
             })
             .chain([TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
-                failure_code: Some(code.clone()),
+                outcome: Some(outcome.clone()),
             }])
         {
             self.append_task(
@@ -2035,7 +2052,7 @@ impl RuntimeContainedTask<'_> {
             .error
             .as_ref()
             .clone()
-            .with_failure_stage("runtime.lifecycle.selection_record");
+            .with_failure_stage(HostLocation::RuntimeLifecycleSelectionRecord);
         let unrecorded = self
             .host
             .append_lifecycle_failure(
@@ -3220,6 +3237,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         } else {
                             EffectDisposition::NotPerformed
                         },
+                        runtime_error.record_outcome(),
                         runtime_error.diagnostic_detail().cloned(),
                         runtime_error.cleanup_cause().cloned(),
                         AuditInput::new(),
@@ -3239,12 +3257,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         terminal: Some(terminal(&failed)),
                         poison_runtime: runtime_error.is_fatal(),
                         task_failure: Some(TaskFailureEvidence {
-                            code: runtime_error.code(),
-                            severity: if runtime_error.is_fatal() {
-                                EventSeverity::Fatal
-                            } else {
-                                EventSeverity::Warning
-                            },
+                            outcome: runtime_error.outcome(),
+                            severe: runtime_error.is_fatal(),
                         }),
                         error: Box::new(runtime_error),
                     })
@@ -3510,11 +3524,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     } else {
                         self.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                             disposition: TaskEntryTargetDisposition::FailClosed,
-                            failure_code: Some(
-                                SharedCode::ContainedTaskHomeEntryNotMatched
-                                    .as_str()
-                                    .to_owned(),
-                            ),
+                            outcome: Some(Outcome::new(
+                                SharedCode::ContainedTaskHomeEntryNotMatched,
+                            )),
                         })
                     };
                 }
@@ -3527,11 +3539,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     } else {
                         TaskEntryTargetDisposition::FailClosed
                     },
-                    failure_code: (!matched).then(|| {
-                        SharedCode::ContainedTaskHomeEntryNotMatched
-                            .as_str()
-                            .to_owned()
-                    }),
+                    outcome: (!matched)
+                        .then(|| Outcome::new(SharedCode::ContainedTaskHomeEntryNotMatched)),
                 })
             }
             ContainedTaskTrace::CaptureCompleted { width, height } => {
@@ -4100,7 +4109,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     EventSeverity::Info,
                     self.links(),
                     TaskPayloadDraft::semantic(
-                        TaskSemanticFact::Finalizing { outcome },
+                        TaskSemanticFact::Finalizing {
+                            task_result: outcome,
+                        },
                         AuditInput::new(),
                     ),
                 )
@@ -4669,10 +4680,10 @@ impl HostShared {
             .filter_map(|event| match event.payload() {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
                     TaskSemanticFact::TerminalCommitted {
+                        task_result,
                         outcome,
-                        failure_code,
                         ..
-                    } => Some((event, *outcome, failure_code.as_deref())),
+                    } => Some((event, *task_result, outcome.as_ref().map(Outcome::code))),
                     _ => None,
                 },
                 _ => None,
@@ -5550,6 +5561,9 @@ impl HostShared {
             .cloned()
             .map(|declaration| (prepared.game().to_owned(), declaration));
         let expected_stability_declaration = prepared.stability_termination().cloned();
+        // R25-2: a `linear_steps` main package's non-poisoning device backend failure is rerun
+        // only, so its terminal is not severe (`terminal_failure_severe`).
+        let linear_main = prepared.execution_mode() == "linear_steps";
         let expects_post_admission_ocr = prepared.has_post_admission_ocr();
         let sampling_run_seed = Some(
             contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
@@ -5810,9 +5824,8 @@ impl HostShared {
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
                             executed_steps,
-                            failure_code: Some(failure.error.code()),
-                            failure_severity: scheduled.then_some(EventSeverity::Warning),
-                            projection_failure_severity: None,
+                            failure: Some(failure.error.outcome()),
+                            failure_severe: false,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
@@ -5823,8 +5836,8 @@ impl HostShared {
                     if scheduled {
                         failure.terminal = Some(terminal(&task_terminal));
                         failure.task_failure = Some(TaskFailureEvidence {
-                            code: failure.error.code(),
-                            severity: EventSeverity::Warning,
+                            outcome: failure.error.outcome(),
+                            severe: false,
                         });
                         return Err(self.cleanup_composite_failure_with_run_links(
                             request,
@@ -5862,9 +5875,25 @@ impl HostShared {
                         },
                     });
                 }
-                let task_failure = scheduled.then_some(failure.task_failure).flatten();
-                let failure_severity = task_failure.map(|evidence| evidence.severity);
-                if failure_severity.is_some() || !scheduled && !failure.poison_runtime {
+                let task_failure = if scheduled {
+                    failure.task_failure.clone()
+                } else {
+                    None
+                };
+                let (task_outcome, severe) = match &task_failure {
+                    Some(evidence) => (evidence.outcome.clone(), evidence.severe),
+                    None => (
+                        failure.error.outcome(),
+                        failure.poison_runtime || failure.error.is_fatal(),
+                    ),
+                };
+                let failure_severe = terminal_failure_severe(
+                    severe,
+                    &task_outcome,
+                    failure.poison_runtime,
+                    linear_main,
+                );
+                if task_failure.is_some() || !scheduled && !failure.poison_runtime {
                     let capture_summary =
                         match capture_evidence.finalize(TaskOutcome::Failure, self) {
                             Ok(summary) => summary,
@@ -5888,13 +5917,8 @@ impl HostShared {
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
                             executed_steps,
-                            failure_code: Some(
-                                task_failure
-                                    .map(|evidence| evidence.code)
-                                    .unwrap_or_else(|| failure.error.code()),
-                            ),
-                            failure_severity,
-                            projection_failure_severity: None,
+                            failure: Some(task_outcome),
+                            failure_severe,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
@@ -5904,7 +5928,9 @@ impl HostShared {
                     )?;
                     failure.terminal = Some(terminal(&event));
                     if failure.error.lifecycle.capacity.is_none()
-                        && task_failure.is_none_or(|evidence| evidence.code == failure.error.code())
+                        && task_failure.as_ref().is_none_or(|evidence| {
+                            evidence.outcome.code().as_str() == failure.error.code()
+                        })
                     {
                         let _ = failure
                             .error
@@ -5953,27 +5979,6 @@ impl HostShared {
                         ));
                     }
                 };
-                let failure_severity = scheduled.then_some(EventSeverity::Warning);
-                let event = self.append_contained_task_terminal(
-                    request,
-                    &token,
-                    ContainedTaskTerminalDraft {
-                        task_id,
-                        run_id,
-                        outcome: TaskOutcome::Failure,
-                        intent_already_recorded: finalizing.is_some(),
-                        final_page: None,
-                        executed_steps,
-                        failure_code: Some(error.code().as_str()),
-                        failure_severity,
-                        projection_failure_severity: None,
-                        scheduling_outcome: None,
-                        selected_scheduling_outcome: None,
-                        capture_summary: Some(capture_summary),
-                        task_timing: Some(task_timing.clone()),
-                        resource_readings: None,
-                    },
-                )?;
                 let mut task_error = RuntimeHostError::relayed_request(
                     error.code().as_str(),
                     ContractLocation::RunContainedTask.as_str(),
@@ -5985,6 +5990,27 @@ impl HostShared {
                         RuntimeErrorCode::BackendOperationFailed
                     },
                 );
+                // Ledger revision 3: the terminal carries the task failure as its outcome.
+                let task_outcome = task_error.outcome();
+                let event = self.append_contained_task_terminal(
+                    request,
+                    &token,
+                    ContainedTaskTerminalDraft {
+                        task_id,
+                        run_id,
+                        outcome: TaskOutcome::Failure,
+                        intent_already_recorded: finalizing.is_some(),
+                        final_page: None,
+                        executed_steps,
+                        failure: Some(task_outcome.clone()),
+                        failure_severe: false,
+                        scheduling_outcome: None,
+                        selected_scheduling_outcome: None,
+                        capture_summary: Some(capture_summary),
+                        task_timing: Some(task_timing.clone()),
+                        resource_readings: None,
+                    },
+                )?;
                 // Workflow #336 L2d: the page-graph home entry's refusal of a configured
                 // return-home package carries its detail as a linear failure does. Workflow
                 // #371-2: so does a page-graph step whose confirmation failed.
@@ -6018,9 +6044,9 @@ impl HostShared {
                     },
                     Some(terminal(&event)),
                 );
-                failure.task_failure = failure_severity.map(|severity| TaskFailureEvidence {
-                    code: error.code().as_str(),
-                    severity,
+                failure.task_failure = scheduled.then_some(TaskFailureEvidence {
+                    outcome: task_outcome,
+                    severe: false,
                 });
                 // Workflow #336 L2c: a linear failure with a detail also gets the run's runtime
                 // lifecycle failure record, which carries the detail and names the terminal, as
@@ -6103,9 +6129,8 @@ impl HostShared {
                 intent_already_recorded: true,
                 final_page: outcome.final_page.clone(),
                 executed_steps: Some(outcome.executed_steps),
-                failure_code: None,
-                failure_severity: None,
-                projection_failure_severity: scheduled.then_some(EventSeverity::Warning),
+                failure: None,
+                failure_severe: false,
                 scheduling_outcome,
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
@@ -6186,7 +6211,7 @@ impl HostShared {
             runtime
                 .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                     disposition: TaskEntryTargetDisposition::Started,
-                    failure_code: None,
+                    outcome: None,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             return prepared.run(runtime);
@@ -6210,10 +6235,13 @@ impl HostShared {
                 }
             },
         };
-        let recovery_request =
-            ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()).map_err(
-                |_| ContainedTaskRunError::task("contained_task_home_recovery_binding_invalid"),
-            )?;
+        let recovery_request = ContainedTaskRequest::new(
+            binding.package_path(),
+            binding.expected_sha256(),
+        )
+        .map_err(|_| {
+            ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryBindingInvalid.as_str())
+        })?;
         let recovery = match prepare_contained_task(
             instance_alias,
             &recovery_request,
@@ -6226,10 +6254,11 @@ impl HostShared {
             Ok(recovery) => recovery,
             Err(mut failure) => {
                 let code = failure.error.code();
+                let outcome = failure.error.outcome();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: binding.expected_sha256().to_owned(),
-                        failure_code: code.to_owned(),
+                        outcome: outcome.clone(),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
@@ -6251,13 +6280,13 @@ impl HostShared {
                     runtime
                         .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                             disposition: TaskEntryTargetDisposition::FailClosed,
-                            failure_code: Some(code.to_owned()),
+                            outcome: Some(outcome.clone()),
                         })
                         .map_err(ContainedTaskRunError::Boundary)?;
                     failure.state = RuntimeReceiptState::Failed;
                     failure.task_failure = Some(TaskFailureEvidence {
-                        code,
-                        severity: EventSeverity::Warning,
+                        outcome,
+                        severe: false,
                     });
                     return Err(ContainedTaskRunError::Boundary(failure));
                 }
@@ -6275,7 +6304,9 @@ impl HostShared {
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                         disposition: TaskEntryTargetDisposition::FailClosed,
-                        failure_code: Some(prerequisite::INCOMPATIBLE.to_owned()),
+                        outcome: Some(Outcome::new(
+                            SharedCode::ContainedTaskPrerequisiteIncompatible,
+                        )),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return Err(ContainedTaskRunError::Task(
@@ -6355,7 +6386,7 @@ impl HostShared {
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
-                        failure_code: error.code().as_str().to_owned(),
+                        outcome: Outcome::relayed(error.code().as_str()),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return fail_contained_task_entry(runtime, error.code().as_str());
@@ -6380,17 +6411,17 @@ impl HostShared {
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::NonfatalOperation(failure));
                 }
-                let code = failure.error.code();
+                let outcome = failure.error.outcome();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
-                        failure_code: code.to_owned(),
+                        outcome: outcome.clone(),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                         disposition: TaskEntryTargetDisposition::FailClosed,
-                        failure_code: Some(code.to_owned()),
+                        outcome: Some(outcome),
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return Err(if nonfatal_operation {
@@ -6454,7 +6485,7 @@ impl HostShared {
         runtime
             .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::Started,
-                failure_code: None,
+                outcome: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let mut outcome = prepared.run(runtime)?;
@@ -6580,17 +6611,17 @@ impl HostShared {
             .iter()
             .filter_map(|(event, fact)| match fact {
                 TaskSemanticFact::TerminalCommitted {
-                    outcome,
+                    task_result,
                     final_page,
                     executed_steps,
-                    failure_code,
+                    outcome,
                     ..
                 } => Some((
                     (*event).clone(),
-                    *outcome,
+                    *task_result,
                     final_page.clone(),
                     *executed_steps,
-                    failure_code.clone(),
+                    outcome.as_ref().map(|outcome| outcome.code().clone()),
                 )),
                 _ => None,
             })
@@ -6627,11 +6658,9 @@ impl HostShared {
                 TaskOutcome::Cancelled,
                 None,
                 None,
-                Some(
-                    HostCode::ContainedTaskRecoveredAfterRestart
-                        .as_str()
-                        .to_owned(),
-                ),
+                Some(CodeStr::from(
+                    HostCode::ContainedTaskRecoveredAfterRestart.code(),
+                )),
             ));
         }
         let lease_disposition = if let Some(lease_id) = lease_id {
@@ -6729,7 +6758,7 @@ impl HostShared {
                     task_request_id: request.request_id(),
                     response_deadline_monotonic_ms: deadline_monotonic_ms,
                     reason: ContainedTaskCancellationReason::from_failure_code(
-                        failure_code.as_deref(),
+                        failure_code.as_ref(),
                     ),
                     lease_terminal: lease_disposition,
                 },
@@ -6776,7 +6805,7 @@ impl HostShared {
                 links.clone(),
                 TaskPayloadDraft::semantic(
                     TaskSemanticFact::Finalizing {
-                        outcome: TaskOutcome::Cancelled,
+                        task_result: TaskOutcome::Cancelled,
                     },
                     AuditInput::new(),
                 ),
@@ -6792,14 +6821,14 @@ impl HostShared {
                 links,
                 TaskPayloadDraft::semantic(
                     TaskSemanticFact::TerminalCommitted {
-                        outcome: TaskOutcome::Cancelled,
+                        task_result: TaskOutcome::Cancelled,
                         final_page: None,
                         executed_steps: None,
-                        failure_code: Some(
-                            HostCode::ContainedTaskRecoveredAfterRestart
-                                .as_str()
-                                .to_owned(),
+                        outcome: Some(
+                            Outcome::new(HostCode::ContainedTaskRecoveredAfterRestart)
+                                .operation(HostLocation::RecoverContainedTaskTerminal),
                         ),
+                        failure_severe: false,
                         scheduling_disposition: None,
                         task_timing: None,
                     },
@@ -7332,14 +7361,8 @@ impl HostShared {
                 Err(failure) if failure.error.code().starts_with("contained_task_outcome_") => {
                     draft.outcome = TaskOutcome::Failure;
                     draft.final_page = None;
-                    draft.failure_code = Some(failure.error.code());
-                    draft.failure_severity = draft.projection_failure_severity.map(|severity| {
-                        if failure.poison_runtime {
-                            EventSeverity::Fatal
-                        } else {
-                            severity
-                        }
-                    });
+                    draft.failure = Some(failure.error.outcome());
+                    draft.failure_severe = failure.poison_runtime;
                     (None, Some(failure))
                 }
                 Err(failure) => return Err(failure),
@@ -7368,7 +7391,7 @@ impl HostShared {
                         links.clone(),
                         TaskPayloadDraft::semantic(
                             TaskSemanticFact::Finalizing {
-                                outcome: draft.outcome,
+                                task_result: draft.outcome,
                             },
                             AuditInput::new(),
                         ),
@@ -7376,14 +7399,13 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?,
                 );
             }
-            let severity = match (draft.outcome, draft.failure_severity) {
+            // Ledger revision 3 (model N2): a terminal's severity is its outcome's category; a
+            // successful terminal carries no outcome, a failed or cancelled one must.
+            let severity = match (draft.outcome, &draft.failure) {
                 (TaskOutcome::Success, None) => EventSeverity::Info,
-                (TaskOutcome::Failure, None) => EventSeverity::Error,
-                (
-                    TaskOutcome::Failure,
-                    Some(severity @ (EventSeverity::Warning | EventSeverity::Fatal)),
-                ) => severity,
-                (TaskOutcome::Cancelled, None) => EventSeverity::Warning,
+                (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(failure)) => {
+                    EventSeverity::from_category(failure.category())
+                }
                 _ => {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
@@ -7418,10 +7440,11 @@ impl HostShared {
                     links,
                     TaskPayloadDraft::semantic(
                         TaskSemanticFact::TerminalCommitted {
-                            outcome: draft.outcome,
+                            task_result: draft.outcome,
                             final_page: draft.final_page,
                             executed_steps: draft.executed_steps,
-                            failure_code: draft.failure_code.map(str::to_string),
+                            outcome: draft.failure.clone(),
+                            failure_severe: draft.failure_severe,
                             scheduling_disposition,
                             task_timing: draft.task_timing,
                         },
@@ -7438,14 +7461,16 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?;
             }
             if draft.outcome == TaskOutcome::Failure
-                && let Some(failure_code) = draft.failure_code
+                && let Some(failure) = &draft.failure
             {
                 self.note_failed_task_terminal(
                     request.request_id(),
                     FailedTaskTerminal {
                         task_id: draft.task_id,
                         run_id: draft.run_id,
-                        failure_code,
+                        // Coordinator ruling 7 (acceptance H-L6): an unregistered relayed
+                        // spelling triggers the ladder by its `raw_code`.
+                        failure_code: actingcommand_contract::scheduled_failure_code_str(failure),
                     },
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
@@ -7497,7 +7522,7 @@ impl HostShared {
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-                    TaskSemanticFact::TerminalCommitted { outcome, .. } => Some(*outcome),
+                    TaskSemanticFact::TerminalCommitted { task_result, .. } => Some(*task_result),
                     _ => None,
                 },
                 _ => None,
@@ -7515,7 +7540,8 @@ impl HostShared {
                         TaskSemanticFact::TerminalRejected {
                             committed_outcome: *committed_outcome,
                             attempted_outcome: draft.outcome,
-                            reason: HostCode::TerminalAlreadyCommitted.as_str().to_string(),
+                            outcome: Outcome::new(HostCode::TerminalAlreadyCommitted)
+                                .operation(HostLocation::AppendContainedTaskTerminal),
                         },
                         AuditInput::new(),
                     ),

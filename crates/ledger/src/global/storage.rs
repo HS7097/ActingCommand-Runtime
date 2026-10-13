@@ -20,7 +20,8 @@ use actingcommand_contract::{
     OriginModule, PolicyDispatchEventData, PolicyDispatchPayload, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
     PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
-    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
+    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact, record_severity,
+    scheduled_failure_class, scheduled_failure_code,
 };
 #[cfg(test)]
 use actingcommand_contract::{
@@ -586,8 +587,10 @@ impl<B: DurableStorage> EventStore<B> {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        // Ledger revision 3 (Workflow #378 A3): a record's severity is its category (model
+        // section 8.1), so the completion is checked against the rule, not a fixed value.
         if draft.event_type() != EventType::PolicyDispatchCompleted
-            || draft.severity() != EventSeverity::Info
+            || draft.severity() != record_severity(EventSeverity::Info, draft.payload())
             || draft.origin().source() != EventSource::Scheduler
             || draft.origin().module() != OriginModule::Policy
             || draft.origin().actor() != EventActor::Scheduler
@@ -822,16 +825,9 @@ impl<B: DurableStorage> EventStore<B> {
                 ContractLocation::RecoverPolicyExecution.location(),
             ));
         };
-        let expected_severity = match execution.outcome() {
-            PolicyExecutionOutcome::Succeeded { .. } => EventSeverity::Info,
-            PolicyExecutionOutcome::Failed { failure }
-                if failure.effective_class == PolicyFailureClass::Recoverable =>
-            {
-                EventSeverity::Warning
-            }
-            PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
-        };
-        if draft.severity() != expected_severity {
+        // Ledger revision 3 (Workflow #378 A3): the record's severity is its category (an
+        // execution record carries no outcome: its event type's), never the policy's class.
+        if draft.severity() != record_severity(EventSeverity::Info, draft.payload()) {
             return Err(GlobalLedgerError::settlement_refusal(
                 LedgerCode::ScheduledExecutionRecoverySeverityInvalid.code(),
                 ContractLocation::RecoverPolicyExecution.location(),
@@ -970,7 +966,7 @@ impl<B: DurableStorage> EventStore<B> {
             }
         };
         if handed_on.is_none()
-            && (release.severity() != EventSeverity::Info
+            && (release.severity() != record_severity(EventSeverity::Info, release.payload())
                 || release.payload().action() != EventAction::LeaseRelease
                 || !matches!(
                     release.payload(),
@@ -1015,7 +1011,7 @@ impl<B: DurableStorage> EventStore<B> {
         // on #670, R4).
         let recovered_interruption = (handed_on.is_some()
             || release.payload().effect_disposition() == Some(EffectDisposition::NotPerformed))
-            && is_interrupted_settlement(execution.outcome());
+            && is_interrupted_settlement(execution.policy_result());
         let source_fact = match terminals.as_slice() {
             _ if recovered_interruption => release,
             [] => release,
@@ -1052,7 +1048,7 @@ impl<B: DurableStorage> EventStore<B> {
         // duration); the host checks the policy's exact rule.
         let runtime_rewrite_valid = |reported_success: bool, runtime_ms: u64| {
             matches!(
-                execution.outcome(),
+                execution.policy_result(),
                 PolicyExecutionOutcome::Failed { failure }
                     if failure.is_runtime_budget_rewrite(reported_success)
                         && failure.runtime_ms == runtime_ms
@@ -1104,7 +1100,7 @@ impl<B: DurableStorage> EventStore<B> {
                                 )
                         })
                         && matches!(
-                            execution.outcome(),
+                            execution.policy_result(),
                             PolicyExecutionOutcome::Failed { failure }
                                 if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                                     && failure.original_class == PolicyFailureClass::Severe
@@ -1165,7 +1161,8 @@ impl<B: DurableStorage> EventStore<B> {
                 if *terminal != source_fact
                     || !same_task_run_chain(source_fact.links(), recovered_links)
                     || !terminal_lease_end_valid(source_fact, true)
-                    || source_fact.severity() != EventSeverity::Info
+                    || source_fact.severity()
+                        != record_severity(EventSeverity::Info, source_fact.payload())
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
                     || !matches!(
@@ -1174,14 +1171,14 @@ impl<B: DurableStorage> EventStore<B> {
                             if matches!(
                                 payload.fact(),
                                 TaskSemanticFact::TerminalCommitted {
-                                    outcome: TaskOutcome::Success,
-                                    failure_code: None,
+                                    task_result: TaskOutcome::Success,
+                                    outcome: None,
                                     ..
                                 }
                             )
                     )
                     || !(matches!(
-                        execution.outcome(),
+                        execution.policy_result(),
                         PolicyExecutionOutcome::Succeeded {
                             runtime_ms: actual
                         } if *actual == runtime_ms
@@ -1200,16 +1197,17 @@ impl<B: DurableStorage> EventStore<B> {
                         ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
-                let class = match source_fact.severity() {
-                    EventSeverity::Warning => PolicyFailureClass::Recoverable,
-                    EventSeverity::Fatal => PolicyFailureClass::Severe,
-                    EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
-                        return Err(GlobalLedgerError::settlement_refusal(
-                            LedgerCode::ScheduledExecutionRecoveryFailureSeverityAmbiguous.code(),
-                            ContractLocation::RecoverPolicyExecution.location(),
-                        ));
-                    }
-                };
+                // Ledger revision 3 (Workflow #378 A3): a terminal's severity is its outcome's
+                // category; one that breaks the rule is refused as before, and the class is read
+                // from the terminal's outcome code below (model section 8.1), never from it.
+                if source_fact.severity()
+                    != record_severity(EventSeverity::Info, source_fact.payload())
+                {
+                    return Err(GlobalLedgerError::settlement_refusal(
+                        LedgerCode::ScheduledExecutionRecoveryFailureSeverityAmbiguous.code(),
+                        ContractLocation::RecoverPolicyExecution.location(),
+                    ));
+                }
                 let EventPayload::Task(TaskPayload::Semantic(payload)) = source_fact.payload()
                 else {
                     return Err(GlobalLedgerError::settlement_refusal(
@@ -1218,8 +1216,9 @@ impl<B: DurableStorage> EventStore<B> {
                     ));
                 };
                 let TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
-                    failure_code: Some(failure_code),
+                    task_result: TaskOutcome::Failure,
+                    outcome: Some(failure_outcome),
+                    failure_severe,
                     ..
                 } = payload.fact()
                 else {
@@ -1228,6 +1227,11 @@ impl<B: DurableStorage> EventStore<B> {
                         ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
+                // The code and the class come from the terminal through the contract's shared
+                // functions, as the Runtime's live settlement and startup recovery read them
+                // (model section 8.1).
+                let failure_code = scheduled_failure_code(failure_outcome);
+                let class = scheduled_failure_class(failure_outcome.code(), *failure_severe);
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
@@ -1251,9 +1255,9 @@ impl<B: DurableStorage> EventStore<B> {
                     || !(admission_fact.sequence() < task_request.sequence()
                         && task_request.sequence() < source_fact.sequence())
                     || !(matches!(
-                        execution.outcome(),
+                        execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
-                            if failure.error_code == *failure_code
+                            if failure.error_code == failure_code
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms
@@ -1283,7 +1287,7 @@ impl<B: DurableStorage> EventStore<B> {
                             )
                     })
                     || !matches!(
-                        execution.outcome(),
+                        execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
                             if failure.error_code == SharedCode::PolicySettlementInterrupted.as_str()
                                 && failure.original_class == PolicyFailureClass::Severe
@@ -1643,9 +1647,10 @@ impl SegmentStorage {
 fn scheduled_policy_execution_recovery_draft(
     execution: &PolicyExecutionEventData,
 ) -> GlobalLedgerResult<SanitizedEventDraft> {
+    // The stored severity is the record's category (ledger revision 3, Workflow #378 A3).
     scheduled_policy_recovery_draft(
         execution.observed_at_unix_ms,
-        scheduled_policy_execution_severity(&execution.outcome),
+        EventSeverity::Info,
         PolicyPayloadDraft::execution_recorded(execution.clone(), AuditInput::new()).into(),
     )
 }
@@ -1694,18 +1699,6 @@ fn scheduled_policy_recovery_draft(
             LedgerLocation::BuildScheduledPolicyRecovery.location(),
         )
     })
-}
-
-fn scheduled_policy_execution_severity(outcome: &PolicyExecutionOutcome) -> EventSeverity {
-    match outcome {
-        PolicyExecutionOutcome::Succeeded { .. } => EventSeverity::Info,
-        PolicyExecutionOutcome::Failed { failure }
-            if failure.effective_class == PolicyFailureClass::Recoverable =>
-        {
-            EventSeverity::Warning
-        }
-        PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
-    }
 }
 
 fn dispatch_event_data(payload: &PolicyDispatchPayload) -> PolicyDispatchEventData {
@@ -2583,7 +2576,7 @@ fn verify_recovery_event(
     );
     if event.event_id() != &expected_id
         || event.event_type() != EventType::LedgerRecovered
-        || event.severity() != EventSeverity::Warning
+        || event.severity() != record_severity(EventSeverity::Info, event.payload())
         || event.sensitivity() != Sensitivity::Public
         || event.origin()
             != &EventOrigin::new(

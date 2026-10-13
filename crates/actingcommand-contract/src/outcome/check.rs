@@ -12,13 +12,15 @@
 use super::{Category, CodeStr, KeyKind, Outcome, key_kind};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::OnceLock;
 
 #[derive(Deserialize)]
 struct CatalogDocument {
     codes: HashMap<String, CatalogCode>,
+    #[serde(default)]
+    locations: HashMap<String, JsonValue>,
 }
 
 #[derive(Deserialize)]
@@ -35,9 +37,10 @@ enum Presence {
     Optional,
 }
 
-/// The codes of a catalog with their categories and keys.
+/// The codes of a catalog with their categories and keys, and its locations.
 pub(crate) struct CatalogIndex {
     codes: HashMap<String, CatalogCode>,
+    locations: HashSet<String>,
 }
 
 impl CatalogIndex {
@@ -45,8 +48,26 @@ impl CatalogIndex {
         let document = CatalogDocument::deserialize(document)?;
         Ok(Self {
             codes: document.codes,
+            locations: document.locations.into_keys().collect(),
         })
     }
+}
+
+/// The keys every code accepts as optional while its entry is pending (Workflow #378 A3; the
+/// settlement in v0.12.1 lists them per code): the location keys (`operation`, `stage`,
+/// `boundary`), which say where a result arose, which every result may say (spec section 6),
+/// and `runtime_code`, the Runtime error code a receipt projects, which a `runtime.failed`
+/// record's outcome carries whatever the failure's code (M378 section 8.1).
+const CONTEXT_KEYS: [&str; 4] = ["operation", "stage", "boundary", "runtime_code"];
+
+/// The category of a registered code in the catalog this build embeds.
+pub(crate) fn code_category(spelling: &str) -> Option<Category> {
+    index().codes.get(spelling).map(|entry| entry.category)
+}
+
+/// Whether the catalog this build embeds lists the location.
+pub(crate) fn location_registered(spelling: &str) -> bool {
+    index().locations.contains(spelling)
 }
 
 /// One way an emitted outcome breaks its catalog entry.
@@ -199,7 +220,11 @@ fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckF
             });
         }
         for (key, presence) in &entry.values {
-            if *presence == Presence::Required && !outcome.inner.values.contains_key(key) {
+            // A relayed spelling carries no values (the A2-R bridge); its other checks stay.
+            if *presence == Presence::Required
+                && !outcome.inner.relayed
+                && !outcome.inner.values.contains_key(key)
+            {
                 failures.push(CheckFailure::RequiredKeyMissing {
                     outcome: outcome.inner.code.clone(),
                     key: key.clone(),
@@ -223,9 +248,10 @@ fn check_node(outcome: &Outcome, index: &CatalogIndex, failures: &mut Vec<CheckF
     }
 }
 
-/// A key the entry lists, or the `<key>_total` of a listed list or records key.
+/// A key the entry lists, a context key, or the `<key>_total` of a listed list or records
+/// key.
 fn declared(key: &str, values: &HashMap<String, Presence>) -> bool {
-    if values.contains_key(key) {
+    if values.contains_key(key) || CONTEXT_KEYS.contains(&key) {
         return true;
     }
     key.strip_suffix("_total").is_some_and(|base| {

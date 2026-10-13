@@ -262,6 +262,9 @@ fn read_source_head(
     connection: &Connection,
 ) -> GlobalLedgerResult<Option<SourceHead>> {
     match (format_version(connection)?, table_count(connection)?) {
+        (UNSUPPORTED_FORMAT_VERSION, tables) if tables != 0 => {
+            return Err(unsupported_format());
+        }
         (0, 0) => {
             let declared: i64 = connection
                 .query_row(

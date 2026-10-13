@@ -244,7 +244,7 @@ pub(super) fn run_linear_gated(
     runtime
         .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::Started,
-            failure_code: None,
+            outcome: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     let mut outcome = prepared.run(runtime)?;
@@ -506,14 +506,16 @@ fn record_closed(
     open: &[PackageRef],
     code: &str,
 ) -> Result<(), RequestFailure> {
+    // Ledger revision 3: the gate's failure is each fact's outcome, the code it relays.
+    let outcome = actingcommand_contract::outcome::Outcome::relayed(code);
     for package_sha256 in open.iter().rev() {
         runtime.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
             package_sha256: package_sha256.clone(),
-            failure_code: code.to_owned(),
+            outcome: outcome.clone(),
         })?;
     }
     runtime.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
         disposition: TaskEntryTargetDisposition::FailClosed,
-        failure_code: Some(code.to_owned()),
+        outcome: Some(outcome),
     })
 }

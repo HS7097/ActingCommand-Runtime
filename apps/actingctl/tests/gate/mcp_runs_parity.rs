@@ -15,6 +15,7 @@
 
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     AuditInput, CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, EffectDisposition,
     EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
@@ -238,13 +239,14 @@ impl Ledger {
                 },
                 TaskSemanticFact::EntryTargetDisposition {
                     disposition: TaskEntryTargetDisposition::FailClosed,
-                    failure_code: Some(failure.to_owned()),
+                    outcome: Some(Outcome::new(SharedCode::ContainedTaskHomeEntryNotMatched)),
                 },
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     final_page: None,
                     executed_steps: Some(0),
-                    failure_code: Some(failure.to_owned()),
+                    outcome: Some(Outcome::new(SharedCode::ContainedTaskHomeEntryNotMatched)),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -287,7 +289,7 @@ impl Ledger {
                 TaskSemanticFact::EntryRecoveryDecision { required: false },
                 TaskSemanticFact::EntryTargetDisposition {
                     disposition: TaskEntryTargetDisposition::Started,
-                    failure_code: None,
+                    outcome: None,
                 },
                 TaskSemanticFact::StepStarted {
                     step_index: 0,
@@ -302,10 +304,11 @@ impl Ledger {
                     phase: None,
                 },
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     final_page: Some("neutral/terminal".to_owned()),
                     executed_steps: Some(1),
-                    failure_code: None,
+                    outcome: None,
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -506,7 +509,6 @@ fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventDat
         reason_chain_id: "reasons.runs.scheduled".to_owned(),
         reasons: vec![PolicyReasonRecord {
             code: "scheduled".to_owned(),
-            detail: "scripted dispatch".to_owned(),
         }],
         catalog_hash: placeholder('c'),
         catalog_version: 1,

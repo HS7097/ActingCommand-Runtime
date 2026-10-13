@@ -30,13 +30,17 @@ pub enum ProviderStartupStage {
     CapabilityAdmission,
 }
 
+/// A provider startup failure (ledger revision 3, model section 8.1): `outcome` is the failure
+/// with its native text as a `foreign_*` link, and `module` names the module that reported
+/// it. The category replaces the former `severity`; no Runtime text is kept. `module` stays a
+/// member: of the modules it names (`actingd.config`, `execution-kernel`, the device's
+/// `mumu_manager`, the host's `provider` and `emulator_control`) only the host's provider has
+/// an `origin_module` token (acceptance CL-M3, L5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderNativeFailure {
     pub module: String,
-    pub code: String,
-    pub severity: String,
-    pub message: String,
+    pub outcome: Outcome,
 }
 
 /// One instance reported by `MuMuManager info -v all`, with the alias it was bound to, if any.
@@ -78,6 +82,13 @@ pub enum ProviderStartupObservation {
     Failed {
         stage: ProviderStartupStage,
         failure: ProviderNativeFailure,
+    },
+    /// A folder under the vision root's `models` that breaks the folder rule (ledger revision
+    /// 3, Workflow #378 A3): `outcome` is `vision_model_folder_invalid` with the folder's
+    /// `path` and, when it fits the name rule, its `model_name`. Startup goes on; only the
+    /// requests that name the folder fail. The specific reason is `check-config`'s report only.
+    ModelFolderInvalid {
+        outcome: Outcome,
     },
     /// One successful `MuMuManager` discovery run per startup (Workflow #316).
     InstanceDiscovery {
@@ -124,14 +135,7 @@ impl ProviderStartupRecord {
                         .into_iter()
                         .all(|value| valid(value))
             }
-            ProviderStartupObservation::Failed { failure, .. } => [
-                &failure.module,
-                &failure.code,
-                &failure.severity,
-                &failure.message,
-            ]
-            .into_iter()
-            .all(|value| valid(value)),
+            ProviderStartupObservation::Failed { failure, .. } => valid(&failure.module),
             ProviderStartupObservation::ModelBinding {
                 model_ref,
                 model_sha256,
@@ -238,6 +242,13 @@ impl PayloadDetail for ProviderPayload {
     }
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
+    }
+    fn outcome(&self) -> Option<&Outcome> {
+        match &self.record.observation {
+            ProviderStartupObservation::Failed { failure, .. } => Some(&failure.outcome),
+            ProviderStartupObservation::ModelFolderInvalid { outcome } => Some(outcome),
+            _ => None,
+        }
     }
 }
 

@@ -10,9 +10,9 @@
 // the evaluator, and the kernel converts one into the other.
 
 use super::{
-    PolicyReasonRecord, validate_policy_digest, validate_policy_text, validate_policy_token,
-    validate_task_semantic_label,
+    PolicyReasonRecord, validate_policy_digest, validate_policy_token, validate_task_semantic_label,
 };
+use crate::outcome::Outcome;
 use crate::{CandidateProjection, CandidateProjectionError, SanitizationError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -57,25 +57,16 @@ pub enum TaskSelectionUnknownReason {
     LookupMiss,
 }
 
-/// Mirrors the evaluator's `SelectionOutcome`.
+/// Mirrors the evaluator's `SelectionOutcome`; an unknown outcome keeps its reason, and the
+/// evaluator's text goes only to the developer log (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSelectionOutcome {
-    Selected {
-        count: u32,
-    },
+    Selected { count: u32 },
     Empty,
-    Insufficient {
-        surviving: u32,
-        required: u32,
-    },
-    Ambiguous {
-        candidate_ids: Vec<String>,
-    },
-    Unknown {
-        reason: TaskSelectionUnknownReason,
-        detail: String,
-    },
+    Insufficient { surviving: u32, required: u32 },
+    Ambiguous { candidate_ids: Vec<String> },
+    Unknown { reason: TaskSelectionUnknownReason },
 }
 
 /// Mirrors the evaluator's `GateOutcome`.
@@ -98,7 +89,7 @@ pub enum TaskSelectionGateOutcome {
 #[serde(deny_unknown_fields)]
 pub struct TaskSelectionGateResult {
     pub gate_id: String,
-    pub outcome: TaskSelectionGateOutcome,
+    pub selection_result: TaskSelectionGateOutcome,
 }
 
 /// Mirrors the evaluator's `TermOutcome`.
@@ -122,7 +113,7 @@ pub enum TaskSelectionTermOutcome {
 #[serde(deny_unknown_fields)]
 pub struct TaskSelectionTermResult {
     pub term_id: String,
-    pub outcome: TaskSelectionTermOutcome,
+    pub selection_result: TaskSelectionTermOutcome,
     pub weight_milli: i64,
     pub contribution_milli: i64,
 }
@@ -171,11 +162,13 @@ pub enum TaskSelectionConfirmation {
         projection: Option<Box<CandidateProjection>>,
     },
     PageChanged,
+    /// The guard's failure (ledger revision 3; was `code`).
     GuardFailed {
-        code: String,
+        outcome: Outcome,
     },
+    /// The confirmation capture's failure (ledger revision 3; was `code`).
     CaptureFailed {
-        code: String,
+        outcome: Outcome,
     },
 }
 
@@ -193,7 +186,7 @@ pub struct TaskSelectionRecord {
     pub now_unix_ms: u64,
     /// The evaluator's canonical identity of candidates, facts and instant, `sha256:<hex>`.
     pub input_sha256: String,
-    pub outcome: TaskSelectionOutcome,
+    pub selection_result: TaskSelectionOutcome,
     pub outcome_key: String,
     pub selected: Vec<String>,
     pub verdicts: Vec<TaskSelectionVerdict>,
@@ -222,7 +215,7 @@ impl TaskSelectionRecord {
             return Err(invalid("now_unix_ms"));
         }
         validate_policy_digest(&self.input_sha256, "input_sha256")?;
-        self.outcome.validate()?;
+        self.selection_result.validate()?;
         validate_task_semantic_label(&self.outcome_key, "outcome_key")?;
 
         if self.verdicts.len() > TASK_SELECTION_MAX_CANDIDATES {
@@ -240,7 +233,7 @@ impl TaskSelectionRecord {
             }
         }
 
-        let expected = match self.outcome {
+        let expected = match self.selection_result {
             TaskSelectionOutcome::Selected { count } => count as usize,
             _ => 0,
         };
@@ -298,7 +291,7 @@ impl TaskSelectionRecord {
     }
 
     fn validate_confirmation(&self) -> Result<(), SanitizationError> {
-        let selected = matches!(self.outcome, TaskSelectionOutcome::Selected { .. });
+        let selected = matches!(self.selection_result, TaskSelectionOutcome::Selected { .. });
         let attempted = !matches!(self.confirmation, TaskSelectionConfirmation::NotAttempted);
         if selected != attempted {
             return Err(invalid("confirmation"));
@@ -341,10 +334,8 @@ impl TaskSelectionRecord {
                     return Err(invalid("confirmation"));
                 }
             }
-            TaskSelectionConfirmation::GuardFailed { code }
-            | TaskSelectionConfirmation::CaptureFailed { code } => {
-                validate_policy_token(code, "confirmation_code")?;
-            }
+            TaskSelectionConfirmation::GuardFailed { .. }
+            | TaskSelectionConfirmation::CaptureFailed { .. } => {}
         }
         Ok(())
     }
@@ -381,8 +372,10 @@ impl TaskSelectionOutcome {
                 }
                 Ok(())
             }
-            Self::Unknown { detail, .. } => validate_policy_text(detail, "outcome_detail"),
-            Self::Selected { .. } | Self::Empty | Self::Insufficient { .. } => Ok(()),
+            Self::Unknown { .. }
+            | Self::Selected { .. }
+            | Self::Empty
+            | Self::Insufficient { .. } => Ok(()),
         }
     }
 }
@@ -403,7 +396,6 @@ impl TaskSelectionVerdict {
 fn validate_reasons(reasons: &[PolicyReasonRecord]) -> Result<(), SanitizationError> {
     for reason in reasons {
         validate_policy_token(&reason.code, "reason_code")?;
-        validate_policy_text(&reason.detail, "reason_detail")?;
     }
     Ok(())
 }

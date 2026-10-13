@@ -336,7 +336,7 @@ impl RetentionIndex {
                 source(events, settlement)?,
                 failed_run
                     .as_ref()
-                    .map_or(TaskOutcome::Success, |failed| failed.outcome),
+                    .map_or(TaskOutcome::Success, |failed| failed.task_result),
             )
         {
             return Ok(None);
@@ -409,7 +409,7 @@ impl RetentionIndex {
         Some(FailedRunRetentionEvidence {
             policy,
             terminal: failed.source,
-            outcome: failed.outcome,
+            task_result: failed.outcome,
             terminal_unix_ms: failed.timestamp_unix_ms,
             evaluated_at_unix_ms: now,
             basis,
@@ -420,7 +420,11 @@ impl RetentionIndex {
         let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
             return;
         };
-        let TaskSemanticFact::TerminalCommitted { outcome, .. } = payload.fact() else {
+        let TaskSemanticFact::TerminalCommitted {
+            task_result: outcome,
+            ..
+        } = payload.fact()
+        else {
             return;
         };
         let Some(run) = event.links().run_id() else {
@@ -735,7 +739,7 @@ impl RetentionIndex {
                     .proof
                     .as_ref()
                     .ok_or_else(|| invalid(LedgerCode::ArtifactEvictionIntentMissing.code()))?;
-                if proof.intent != outcome.intent || proof.outcome.is_some() {
+                if proof.intent != outcome.intent || proof.terminal_event.is_some() {
                     return Err(invalid(LedgerCode::ArtifactEvictionOutcomeConflict.code()));
                 }
             }
@@ -824,9 +828,9 @@ impl RetentionIndex {
                 let expected = intent
                     .failed_run
                     .as_ref()
-                    .map_or(TaskOutcome::Success, |failed| failed.outcome);
+                    .map_or(TaskOutcome::Success, |failed| failed.task_result);
                 if !matches!(success.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome, .. } if *outcome == expected))
+                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result, .. } if *task_result == expected))
                 {
                     return Err(invalid(
                         LedgerCode::ArtifactEvictionTaskNotSuccessful.code(),
@@ -863,7 +867,7 @@ impl RetentionIndex {
                         intent
                             .failed_run
                             .as_ref()
-                            .map_or(TaskOutcome::Success, |failed| failed.outcome),
+                            .map_or(TaskOutcome::Success, |failed| failed.task_result),
                     )
                 {
                     return Err(invalid(
@@ -939,7 +943,7 @@ impl RetentionIndex {
                 EventPayload::Task(TaskPayload::Semantic(payload)) => matches!(
                     payload.fact(),
                     TaskSemanticFact::TerminalCommitted {
-                        outcome: TaskOutcome::Success,
+                        task_result: TaskOutcome::Success,
                         ..
                     }
                 ),
@@ -1131,7 +1135,7 @@ impl RetentionIndex {
                     object.proof = Some(ArtifactEvictionProof {
                         identity: fact.identity().clone(),
                         intent: terminal(event),
-                        outcome: None,
+                        terminal_event: None,
                         disposition: None,
                         through_sequence: event.sequence(),
                     });
@@ -1143,7 +1147,7 @@ impl RetentionIndex {
                         .proof
                         .as_mut()
                         .expect("intent validated before commit");
-                    proof.outcome = Some(terminal(event));
+                    proof.terminal_event = Some(terminal(event));
                     proof.disposition = Some(outcome.disposition);
                 }
             }
@@ -1363,7 +1367,7 @@ fn settlement_matches<E: LedgerEventRead>(event: &E, outcome: TaskOutcome) -> bo
     let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = event.payload() else {
         return false;
     };
-    match (outcome, payload.outcome()) {
+    match (outcome, payload.policy_result()) {
         (TaskOutcome::Success, PolicyExecutionOutcome::Succeeded { .. }) => true,
         (
             TaskOutcome::Failure | TaskOutcome::Cancelled,
@@ -1576,7 +1580,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         }
         let reference = guard.reference().clone();
         if let Some(proof) = self.retention.proof(&reference)? {
-            if proof.outcome.is_some() {
+            if proof.terminal_event.is_some() {
                 return Ok((ArtifactEvictionAdmission::Deferred, Vec::new()));
             }
             if !self.recovering_retention {
@@ -1676,7 +1680,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         &mut self,
         permit: ArtifactEvictionPermit,
         disposition: ArtifactEvictionDisposition,
-        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        outcome: Option<actingcommand_contract::outcome::Outcome>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         if permit.guard.root() != self.backend.material_root()
             || permit.guard.reference() != &permit.intent.identity.artifact
@@ -1692,7 +1696,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                 identity: permit.intent.identity,
                 intent: permit.source,
                 disposition,
-                io,
+                outcome,
             },
         );
         let event = self.append_retention_fact(fact, &permit.source, true)?;
@@ -1715,13 +1719,9 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         let links = source(&self.events, source_ref)?
             .links()
             .artifact_retention_source();
-        let severity = if matches!(&fact, ArtifactRetentionFact::EvictionOutcome(outcome)
-            if outcome.disposition == ArtifactEvictionDisposition::Failed)
-        {
-            EventSeverity::Error
-        } else {
-            EventSeverity::Info
-        };
+        // The stored severity is the record's category: a failed eviction's I/O outcome, else
+        // the event type's (ledger revision 3, Workflow #378 A3).
+        let severity = EventSeverity::Info;
         let ids = IdentifierIssuer::new().map_err(|error| invalid(error.code()))?;
         let timestamp = match &fact {
             ArtifactRetentionFact::EvictionIntent(intent) if intent.failed_run.is_some() => {
@@ -1768,7 +1768,7 @@ impl ArtifactEvictionPermit {
         &mut self,
     ) -> (
         ArtifactEvictionDisposition,
-        Option<actingcommand_contract::ArtifactEvictionIo>,
+        Option<actingcommand_contract::outcome::Outcome>,
     ) {
         if self.recovery && !self.guard.material_present() {
             return (ArtifactEvictionDisposition::RecoveryAbsent, None);
@@ -1777,7 +1777,7 @@ impl ArtifactEvictionPermit {
             Ok(()) => (ArtifactEvictionDisposition::Deleted, None),
             Err(error) => (
                 ArtifactEvictionDisposition::Failed,
-                Some(actingcommand_contract::ArtifactEvictionIo::from_io(&error)),
+                Some(actingcommand_contract::artifact_eviction_io_outcome(&error)),
             ),
         }
     }
@@ -1877,14 +1877,14 @@ impl super::GlobalLedger {
             .sender
             .as_ref()
             .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
-        let (disposition, io) = permit.perform();
+        let (disposition, outcome) = permit.perform();
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         super::send_command(
             sender,
             super::WriterCommand::FinishArtifactEviction {
                 permit,
                 disposition,
-                io,
+                outcome,
                 response,
             },
             LedgerLocation::FinishArtifactEviction.location(),

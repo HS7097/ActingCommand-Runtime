@@ -563,12 +563,13 @@ impl EventDraft {
             .fold(payload.sensitivity(), |current, artifact| {
                 current.max(artifact.sensitivity())
             });
+        let severity = record_severity(self.severity, &payload);
         Ok(SanitizedEventDraft {
             schema_version: GLOBAL_EVENT_SCHEMA_VERSION.to_string(),
             event_id: self.event_id.into_transport(),
             timestamp_unix_ms: self.timestamp_unix_ms,
             event_type: payload.event_type(),
-            severity: self.severity,
+            severity,
             sensitivity,
             origin: self.origin,
             links: self.links.into_transport(),
@@ -577,6 +578,19 @@ impl EventDraft {
             artifacts,
         })
     }
+}
+
+/// The severity a record has (ledger revision 3, model section 8.1): the category of its
+/// outcome, or of its event type when it carries none. A producer chooses only whether the
+/// record is a debug record; any other requested severity is replaced by the category.
+pub fn record_severity(requested: EventSeverity, payload: &EventPayload) -> EventSeverity {
+    if requested == EventSeverity::Debug {
+        return EventSeverity::Debug;
+    }
+    EventSeverity::from_category(payload.outcome().map_or_else(
+        || payload.event_type().category(),
+        |outcome| outcome.category(),
+    ))
 }
 
 impl fmt::Debug for EventDraft {

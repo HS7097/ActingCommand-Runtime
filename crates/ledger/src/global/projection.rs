@@ -406,8 +406,8 @@ pub(super) fn project_scheduling_outcomes(
         ));
     };
     let TaskSemanticFact::TerminalCommitted {
-        outcome: TaskOutcome::Success,
-        failure_code: None,
+        task_result: TaskOutcome::Success,
+        outcome: None,
         scheduling_disposition: Some(disposition),
         ..
     } = terminal_payload.fact()

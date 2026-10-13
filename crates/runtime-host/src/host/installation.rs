@@ -869,8 +869,8 @@ impl HostShared {
     ///   and the start ends `install_preparation_selfcheck_failed` as before;
     /// - otherwise each failed instance stays unavailable and is recorded once as
     ///   `install_preparation_instance_unavailable` (warning) at stage `install_release`, with
-    ///   its self-check failure as the token `cause=<code>` until A2 makes it a `caused_by`
-    ///   link, and the start goes on with the instances that passed.
+    ///   its self-check failure as the outcome's `caused_by` link (ledger revision 3), and the
+    ///   start goes on with the instances that passed.
     pub(super) fn settle_install_selfchecks(
         &self,
         checks: &[(InstanceId, SchedulingResumeSelfCheck)],
@@ -903,10 +903,17 @@ impl HostShared {
             .as_ref()
             .and_then(|transition| transition.entered_event_id);
         for (instance_id, check) in failed {
-            let mut unavailable = install_error(HostCode::InstallPreparationInstanceUnavailable);
+            // Ledger revision 3: the instance is the outcome's required value `instance_id`.
+            let mut unavailable = install_error(HostCode::InstallPreparationInstanceUnavailable)
+                .with_outcome_values(|outcome| {
+                    outcome.instance_id(crate::failure_identity::identifier_text(instance_id))
+                });
             unavailable.lifecycle.instance_id = Some(*instance_id);
+            // Ledger revision 3 (#378 A3): the self-check failure is the `caused_by` link (it
+            // was the `cause=<code>` token).
             if let Some(cause) = &check.failure_code {
-                unavailable = unavailable.with_native_detail(format!("cause={cause}"));
+                unavailable.lifecycle.caused_by =
+                    Some(actingcommand_contract::outcome::Outcome::relayed(cause));
             }
             self.append_lifecycle_failure_with_severity(
                 RuntimeLifecycleFailureStage::InstallRelease,
@@ -988,9 +995,9 @@ impl HostShared {
             RuntimeLifecycleFailureStage::InstallHeld
         };
         let mut failure = error.clone();
-        failure.lifecycle.failure_stage = Some(stage.as_str());
+        failure.lifecycle.failure_stage = Some(stage.location().location());
         if let Some(complete) = &mut failure.lifecycle.complete_failure {
-            complete.primary.lifecycle.failure_stage = Some(stage.as_str());
+            complete.primary.lifecycle.failure_stage = Some(stage.location().location());
         }
         self.append_lifecycle_failure(
             stage,

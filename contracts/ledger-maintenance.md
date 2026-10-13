@@ -61,7 +61,9 @@ transaction's reconstructed facts and common indexes are compared without it.
 One Immediate transaction creates the Ledger schema, inserts all original
 records and indexes, appends the typed `LedgerRecovered / storage_cutover`
 completion, and writes the authenticated ready marker. The database format
-header (`user_version = 1`) changes in that same transaction. It distinguishes
+header (`user_version = 2`, ledger revision 3) changes in that same transaction; a
+database whose ledger tables carry `user_version = 1` is refused with
+`ledger_format_unsupported` (fatal) and never imported into. It distinguishes
 missing formal tables from an unmigrated database; State rows and their tags
 remain unchanged. The completion records source/backup identity, count, first
 and last sequence, original head/content digest, State digest and cutover position.

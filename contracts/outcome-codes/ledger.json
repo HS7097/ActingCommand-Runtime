@@ -1539,6 +1539,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_format_unsupported": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after reading only its format: before any ledger row is read or written and, at the Runtime's start, before the owner journal and the writer lock.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ledger_index_mismatch": {
       "category": "error",
       "ladder_class": "none",

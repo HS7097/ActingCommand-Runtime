@@ -355,7 +355,8 @@ reconciliation, the start scans the events between the last two `runtime.started
 `runtime.takeover` events and writes, as Runtime/Runtime on the run's original links
 (request, correlation, causation, instance, lease, task, run), the same two events a
 resubmission of the original request writes: `task.terminal_intent` (cancelled) and
-`task.cancelled` with `failure_code: contained_task_recovered_after_restart`,
+`task.cancelled` whose terminal fact carries `task_result: cancelled`, the outcome
+`contained_task_recovered_after_restart` (ledger revision 3; it was `failure_code`) and
 `executed_steps: null`; an actually granted lease without `lease.released` / `lease.expired` gets the
 same `lease.released` (`not_performed`). A resubmission of the original request afterwards
 meets that terminal and answers `ContainedTaskCancelled(RecoveredAfterRestart)` unchanged.

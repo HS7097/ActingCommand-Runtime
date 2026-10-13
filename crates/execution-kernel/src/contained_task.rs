@@ -129,6 +129,17 @@ impl ContainedTaskCode {
             Self::Host { host_code } => host_code,
         }
     }
+
+    /// The code as a record's outcome (ledger revision 3): a registered code as it is, a
+    /// relayed host code through the embedded catalog ([`Outcome::relayed`]).
+    pub fn outcome(self) -> actingcommand_contract::outcome::Outcome {
+        match self {
+            Self::Registered(code) => actingcommand_contract::outcome::Outcome::new(code),
+            Self::Host { host_code } => {
+                actingcommand_contract::outcome::Outcome::relayed(host_code)
+            }
+        }
+    }
 }
 
 impl From<Code> for ContainedTaskCode {

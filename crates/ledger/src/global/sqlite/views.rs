@@ -5,8 +5,11 @@ use super::*;
 use actingcommand_contract::{EventSeverity, LedgerView, LedgerViewDefinition};
 use serde::Serialize;
 
-const SEVERITIES: [EventSeverity; 5] = [
+// Ledger revision 3 (Workflow #378 A3): a record's severity is its category, so `success` is
+// stored too; the list keeps the category order.
+const SEVERITIES: [EventSeverity; 6] = [
     EventSeverity::Debug,
+    EventSeverity::Success,
     EventSeverity::Info,
     EventSeverity::Warning,
     EventSeverity::Error,

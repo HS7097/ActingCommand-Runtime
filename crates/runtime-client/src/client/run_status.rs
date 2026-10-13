@@ -106,11 +106,15 @@ pub struct ContainedRunStatus {
     pub evidence: ContainedRunEvidence,
 }
 
+/// A run's terminal as `actingcommand.run-status.v1` shows it. `failure_code` is the code of the
+/// terminal's committed outcome (ledger revision 3). A relayed spelling the catalog does not
+/// register was committed as `outcome_relay_unregistered`, and that is the code this member
+/// reads; the original spelling (a token) stays in that outcome's `raw_code` value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainedRunTerminal {
     pub outcome: TaskOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_code: Option<String>,
+    pub failure_code: Option<actingcommand_contract::outcome::CodeStr>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_page: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -679,22 +683,23 @@ impl RuntimeClient {
                     });
                 }
                 TaskSemanticFact::TerminalCommitted {
-                    outcome,
+                    task_result,
                     final_page,
                     executed_steps,
-                    failure_code,
+                    outcome,
                     ..
                 } => {
+                    let failure_code = outcome.as_ref().map(|outcome| outcome.code().clone());
                     let found = ContainedRunTerminal {
-                        outcome: *outcome,
-                        failure_code: failure_code.clone(),
+                        outcome: *task_result,
                         final_page: final_page.clone(),
                         executed_steps: *executed_steps,
-                        cancellation_reason: (*outcome == TaskOutcome::Cancelled).then_some(
+                        cancellation_reason: (*task_result == TaskOutcome::Cancelled).then_some(
                             ContainedTaskCancellationReason::from_failure_code(
-                                failure_code.as_deref(),
+                                failure_code.as_ref(),
                             ),
                         ),
+                        failure_code,
                         sequence: event.sequence,
                         event_id: event.event_id,
                     };

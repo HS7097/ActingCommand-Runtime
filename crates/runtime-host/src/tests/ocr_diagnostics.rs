@@ -189,11 +189,11 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
     assert!(matches!(
         projected_task_semantic_fact(terminal),
         Some(TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Failure,
+            task_result: TaskOutcome::Failure,
             executed_steps: Some(0),
-            failure_code: Some(code),
+            outcome: Some(outcome),
             ..
-        }) if code == "contained_task_post_admission_ocr_failed"
+        }) if outcome.code().as_str() == "contained_task_post_admission_ocr_failed"
     ));
     for event_type in [EventType::TaskFailed, EventType::CaptureSummaryCommitted] {
         assert_eq!(
@@ -316,11 +316,11 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
             if matches!(
                 payload.fact(),
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     executed_steps: Some(0),
-                    failure_code: Some(code),
+                    outcome: Some(outcome),
                     ..
-                } if code == "contained_task_post_admission_ocr_failed"
+                } if outcome.code().as_str() == "contained_task_post_admission_ocr_failed"
             )
     ));
     assert_eq!(
@@ -600,7 +600,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             // any recognition or input.
             let actingcommand_contract::TaskDiagnosticPayload::Terminal(
                 actingcommand_contract::TaskDiagnosticTerminalData::OperationError {
-                    code,
+                    outcome,
                     executed_steps,
                 },
             ) = &terminal.payload
@@ -610,7 +610,11 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                     terminal.payload
                 )
             };
-            assert_eq!(code, "contained_task_geometry_budget_unavailable");
+            // Ledger revision 3 (#378 A3): the operation error is its outcome (was `code`).
+            assert_eq!(
+                outcome.code().as_str(),
+                "contained_task_geometry_budget_unavailable"
+            );
             assert_eq!(*executed_steps, Some(0));
             assert!(observed.task_failure.is_none());
             assert_eq!(state.input_count.load(Ordering::Acquire), 0);
@@ -623,22 +627,23 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
                 projected_task_semantic_fact(failed),
                 Some(TaskSemanticFact::TerminalCommitted {
                     executed_steps: Some(0),
-                    failure_code: Some(code),
+                    outcome: Some(outcome),
                     ..
-                }) if code == "contained_task_geometry_budget_unavailable"
+                }) if outcome.code().as_str() == "contained_task_geometry_budget_unavailable"
             ));
         } else if case != "success" {
             let actingcommand_contract::TaskDiagnosticPayload::Terminal(
                 actingcommand_contract::TaskDiagnosticTerminalData::TaskError {
-                    code,
+                    outcome,
                     executed_steps,
                     timing,
-                    ..
                 },
             ) = &terminal.payload
             else {
                 panic!("original task error")
             };
+            // Ledger revision 3 (#378 A3): the task error is its outcome (was `code`).
+            let code = outcome.code().as_str();
             let timing = timing.as_ref().expect("actual timing decision");
             assert_eq!(&observed.task_failure.as_ref().unwrap().timing, timing);
             let dispatched = u32::from(case == "post-delay-budget");

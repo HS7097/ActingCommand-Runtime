@@ -1536,6 +1536,10 @@
     "device_state_probe": {
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
+    },
+    "mumu_manager_version": {
+      "type": "version",
+      "description": "The version MuMuManager reported in a discovery."
     }
   },
   "vocabularies": {
@@ -4161,6 +4165,9 @@
       "tokens": {
         "confirmed": {
           "description": "The Stop was confirmed."
+        },
+        "control": {
+          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager.control)."
         },
         "control_exit": {
           "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."

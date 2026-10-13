@@ -58,7 +58,7 @@ fn start_host_with(config: RuntimeHostConfig, registered: InstanceId) -> Runtime
     .expect("the new process starts after the crash")
 }
 
-/// The outcome and failure code of a task terminal of `run`.
+/// The task result and the failure code (its outcome's code) of a task terminal of `run`.
 fn run_terminal<'a>(
     event: &'a PersistedEvent,
     run: &RunId,
@@ -69,10 +69,13 @@ fn run_terminal<'a>(
     match event.payload() {
         EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
             TaskSemanticFact::TerminalCommitted {
+                task_result,
                 outcome,
-                failure_code,
                 ..
-            } => Some((*outcome, failure_code.as_deref())),
+            } => Some((
+                *task_result,
+                outcome.as_ref().map(|outcome| outcome.code().as_str()),
+            )),
             _ => None,
         },
         _ => None,

@@ -192,7 +192,6 @@ pub enum TaskDiagnosticPageData {
         index: usize,
         page_id: String,
         matched: bool,
-        message: String,
         required_passed: usize,
         required_total: usize,
         any_of_passed: usize,
@@ -202,11 +201,12 @@ pub enum TaskDiagnosticPageData {
         forbidden_passed: usize,
         forbidden_total: usize,
     },
+    /// The page's error text is not persisted (ledger revision 3); `failed_target` names the
+    /// target whose recognition failed.
     Failed {
         phase: String,
         index: usize,
         page_id: String,
-        error: String,
         failed_target: Option<TaskDiagnosticTargetFailure>,
     },
 }
@@ -221,12 +221,13 @@ pub struct TaskDiagnosticTargetFailure {
     pub cause: TaskDiagnosticRecognitionError,
 }
 
+/// A recognition error: its severity and code as the recognition pack names them (A2-P
+/// registers these spellings); its text is not persisted (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDiagnosticRecognitionError {
     pub severity: String,
     pub code: String,
-    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Box<crate::OcrRegionEvidence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,7 +246,6 @@ pub struct TaskDiagnosticTargetData {
     pub id: String,
     pub kind: String,
     pub passed: bool,
-    pub message: String,
     pub template: Option<TaskDiagnosticTemplateData>,
     pub color: Option<TaskDiagnosticColorData>,
     pub source: TaskDiagnosticTargetSource,
@@ -308,7 +308,6 @@ pub enum TaskDiagnosticTargetSource {
         target_index: usize,
         target_id: String,
         passed: bool,
-        message: String,
     },
     Guard {
         phase: String,
@@ -480,9 +479,10 @@ pub struct TaskDiagnosticNnRank {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum TaskDiagnosticErrorData {
+    /// The batch failure that ended page recognition (ledger revision 3; was `message`).
     Page {
         phase: String,
-        message: String,
+        outcome: crate::outcome::Outcome,
     },
     Recognition {
         phase: String,
@@ -498,10 +498,11 @@ pub enum TaskDiagnosticUnexecutedData {
         phase: String,
         page: TaskDiagnosticUnexecutedPage,
     },
+    /// Why the guard target was not evaluated (ledger revision 3; was `reason`).
     Guard {
         phase: String,
         target_id: Option<String>,
-        reason: String,
+        outcome: crate::outcome::Outcome,
     },
 }
 
@@ -510,7 +511,8 @@ pub enum TaskDiagnosticUnexecutedData {
 pub struct TaskDiagnosticUnexecutedPage {
     pub index: usize,
     pub page_id: String,
-    pub reason: String,
+    /// Why the page was not evaluated (ledger revision 3; was `reason`).
+    pub outcome: crate::outcome::Outcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -574,19 +576,20 @@ pub struct TaskTimingFailure {
 #[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskDiagnosticTerminalData {
     Returned {
-        outcome: crate::TaskOutcome,
+        task_result: crate::TaskOutcome,
         executed_steps: u32,
         final_page: Option<String>,
     },
+    /// The run's task failure (ledger revision 3; was `code` and `detail`).
     TaskError {
-        code: String,
-        detail: Option<String>,
+        outcome: crate::outcome::Outcome,
         executed_steps: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timing: Option<TaskTimingFailure>,
     },
+    /// The operation failure that ended the run (ledger revision 3; was `code`).
     OperationError {
-        code: String,
+        outcome: crate::outcome::Outcome,
         executed_steps: Option<u32>,
     },
 }

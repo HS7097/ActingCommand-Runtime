@@ -1536,6 +1536,10 @@
     "device_state_probe": {
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
+    },
+    "mumu_manager_version": {
+      "type": "version",
+      "description": "The version MuMuManager reported in a discovery."
     }
   },
   "vocabularies": {
@@ -4161,6 +4165,9 @@
       "tokens": {
         "confirmed": {
           "description": "The Stop was confirmed."
+        },
+        "control": {
+          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager.control)."
         },
         "control_exit": {
           "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
@@ -7337,11 +7344,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared adb_path is not the discovered adb.",
+      "description": "A provider native failure: the declared adb_path is not the discovered adb. alias names the configured instance, adb_path the declared adb, other_path the discovered one, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -7351,11 +7363,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the discovered adb path is not UTF-8.",
+      "description": "A provider native failure: the discovered adb path is not UTF-8. alias names the configured instance, other_path the discovered adb (lossy), adb_path the declared adb when one is declared, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -10513,6 +10530,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "authoring_validation_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource authoring transaction refused or failed: the candidate tree failed its validation (formerly the unregistered spelling authoring_validation_failed).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "authoring_validation_package_hash_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -11066,11 +11097,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -11122,11 +11155,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -11721,11 +11756,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -13390,6 +13427,108 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "config_subsystem_always_on": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the Runtime always runs; count is the number of allowed client identities when the governance subsystem restricts them.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file configures: its flag is on or its section is present.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured_off": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file turns off with its flag; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_bound": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem on: count instances are bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_unbound": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem off: no instance is bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_flag_absent": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem whose flag the configuration file does not name, so its default applies; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_section_absent": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem off because the configuration file has no section for it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "config_unavailable": {
       "category": "error",
       "ladder_class": "none",
@@ -13410,11 +13549,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14052,6 +14193,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A contained task was asked for a home entry it does not require.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_home_recovery_binding_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host reports contained task home recovery binding invalid: the return-home binding's package path or hash does not form a valid contained task request (formerly the unregistered spelling contained_task_home_recovery_binding_invalid).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17323,11 +17478,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17337,11 +17494,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17760,11 +17919,14 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_manager_version": "optional",
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup refused the emulator capability profile from discovery.",
+      "description": "Provider startup refused the emulator capability profile from discovery. mumu_manager_version is the version discovery reported, mumu_root the configured MuMu folder when one is configured, and the host's refusal is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17844,7 +18006,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17872,7 +18041,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17886,7 +18062,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17900,7 +18083,14 @@
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -17923,12 +18113,12 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "required",
         "stop_elapsed_ms": "required",
-        "stop_result": "required"
+        "stop_result": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
       "handling": "TBD"
     },
@@ -17947,12 +18137,12 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "optional",
         "stop_elapsed_ms": "required",
-        "stop_result": "required"
+        "stop_result": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
       "handling": "TBD"
     },
@@ -20911,11 +21101,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_host": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared host differs from the discovered one.",
+      "description": "A provider native failure: the declared host differs from the discovered one. alias names the configured instance, adb_host the declared host, and instances the discovered instance with the host it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21687,7 +21881,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. Until slice A2 turns it into a caused_by link, the self-check's failure is carried as the token cause=<code>, for example input_backend_open_failed. When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. The self-check's failure is the outcome's caused_by link, for example input_backend_open_failed (ledger revision 3). When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
       "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
       "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
     },
@@ -22205,7 +22399,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. Until slice A2 turns it into a caused_by link, the latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. The latched failure is the outcome's caused_by link in the ledger (ledger revision 3), and the tokens cause=<code> cause_operation=<operation> on the FATAL line and in the transition's status fact. A restart may succeed, so the watchdog considers a start.",
       "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
       "handling": "TBD"
     },
@@ -22285,11 +22479,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22299,11 +22495,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22397,11 +22595,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found more than one discovered emulator instance for a binding key.",
+      "description": "Provider startup found more than one discovered emulator instance for a binding key. alias names the configured instance, instance_name its declared binding key, and instances the discovered candidates.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22425,11 +22628,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found no discovered emulator instance for a binding key.",
+      "description": "Provider startup found no discovered emulator instance for a binding key. alias names the configured instance and instance_index or instance_name its declared binding key.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -23620,20 +23827,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Event or record sanitization refused a value: invalid config subsystem name.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_config_subsystem_reason": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Event or record sanitization refused a value: invalid config subsystem reason.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -28937,7 +29130,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required"
+        "lease_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -28995,7 +29188,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required"
+        "lease_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -29067,7 +29260,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "timeout_ms": "required",
+        "timeout_ms": "optional",
         "holder_kind": "optional",
         "queue_position": "optional"
       },
@@ -29507,6 +29700,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports ledger format marker mismatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ledger_format_unsupported": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "ledger",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The database holds a format-1 ledger (ledger revision 2, written by v0.11); this Runtime reads only ledger revision 3 (SQLite format 2) and refuses it after reading only its format: before any ledger row is read or written and, at the Runtime's start, before the owner journal and the writer lock.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -32853,6 +33060,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports outcome projection terminal not unique.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_relay_unregistered": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_code": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code arrived as its spelling (relayed by a crate whose channel is not typed yet, received from a client, or read back from a record) and the embedded catalog does not list it; raw_code keeps the spelling when it is a token.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -37520,7 +37743,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "failure_code": "required",
+        "failure_code": "optional",
         "instance_id": "required",
         "lease_id": "optional",
         "task_id": "required"
@@ -37766,11 +37989,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port differs from the discovered one.",
+      "description": "A provider native failure: the declared port differs from the discovered one. alias names the configured instance, adb_port the declared port, and instances the discovered instance with the port it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -37780,11 +38007,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance.",
+      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance. alias names the configured instance, adb_port the declared port, and instances the discovered instance, which reported no port.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -40114,6 +40345,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "provider_native_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "device_category": "optional",
+        "mumu_root": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text. mumu_root names the configured MuMu folder of a failed discovery when one is configured.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "provider_startup_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -40134,11 +40382,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -40148,11 +40398,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -40755,6 +41007,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recovery_ladder_exhausted": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder ran out of rungs after the rungs that ran failed on their own (or every rung was skipped); the recovery_ladder_finished record's outcome, caused by the last failed rung's outcome when one failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "recovery_ladder_instance_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -40766,6 +41032,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports recovery ladder instance missing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_interrupted": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A holding interruption (shutdown, a lost key, an install drain, a closed admission, a pause drain or a key renewal refusal) ended a stuck-recovery ladder's climb; the outcome of the recovery_ladder_finished record and of the recovery_rung_finished record of the rung it ended, caused by the interruption.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -40884,6 +41164,90 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recovery_rung_skipped_adb_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's ADB baseline does not answer (the rung's recovery_rung_finished outcome; formerly the reason adb_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_capture_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's capture channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason capture_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_input_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's input channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason input_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_emulator_control": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its emulator_restart rung: the instance has no emulator control (the rung's recovery_rung_finished outcome; formerly the reason no_emulator_control).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_recovery_package": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its return_home rung: the failed run bound no recovery package and no return-home package is configured for its game and server (the rung's recovery_rung_finished outcome; formerly the reason no_recovery_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_startup_package": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its application_restart rung: the instance has no startup package (the rung's recovery_rung_finished outcome; formerly the reason no_startup_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "recovery_rung_target_not_reached": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -40946,11 +41310,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -40960,11 +41326,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -43410,11 +43778,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -44040,11 +44410,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -44054,11 +44426,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -49731,6 +50105,20 @@
       "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
       "handling": "Write the scope's whole list again with non-overlapping rows."
     },
+    "session_timeout": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An agent session reached its deadline without a response: the Runtime answers it NeedsHuman with this code as the response code (formerly the unregistered spelling session_timeout).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "sha256_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -49751,11 +50139,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52124,11 +52514,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52138,11 +52530,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52152,11 +52546,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52166,11 +52562,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52275,11 +52673,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -52289,11 +52689,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -53481,11 +53883,13 @@
       "owner": "device",
       "layer": "device",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -53509,11 +53913,14 @@
       "owner": "vision-ffi",
       "layer": "vision",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "model_name": "optional",
+        "path": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it).",
+      "description": "A vision root's model listing cannot be used: a model folder breaks the folder rule (check-config and vision-provider-check refuse it; startup records it). Startup records each such folder with its path and, when it fits the name rule, its model_name.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -53569,7 +53976,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup could not build the vision provider from the listed models.",
+      "description": "Provider startup could not build the vision provider from the listed models. The kernel error's code is the caused_by link, relayed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -63528,6 +63935,166 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime input."
+    },
+    "runtime_lifecycle_connection_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a client connection's cleanup (formerly runtime.lifecycle.connection_cleanup)."
+    },
+    "runtime_lifecycle_connection_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a step of a physical instance's connection preparation (formerly runtime.lifecycle.connection_preparation)."
+    },
+    "runtime_lifecycle_host_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the Runtime host's close (formerly runtime.lifecycle.host_close)."
+    },
+    "runtime_lifecycle_info_file_removal": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: removing the Runtime's info file (formerly runtime.lifecycle.info_file_removal)."
+    },
+    "runtime_lifecycle_install_drain": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an install transition's drain (formerly runtime.lifecycle.install_drain)."
+    },
+    "runtime_lifecycle_install_held": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a held install start (formerly runtime.lifecycle.install_held)."
+    },
+    "runtime_lifecycle_install_release": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a released install start preparing (formerly runtime.lifecycle.install_release)."
+    },
+    "runtime_lifecycle_operation_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an operation's cleanup or its failure's own record (formerly runtime.lifecycle.operation_cleanup)."
+    },
+    "runtime_lifecycle_policy_bootstrap": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy bootstrap (formerly runtime.lifecycle.policy_bootstrap)."
+    },
+    "runtime_lifecycle_policy_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy control (formerly runtime.lifecycle.policy_control)."
+    },
+    "runtime_lifecycle_policy_driver": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy driver (formerly runtime.lifecycle.policy_driver)."
+    },
+    "runtime_lifecycle_policy_forward": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy forward projection (formerly runtime.lifecycle.policy_forward)."
+    },
+    "runtime_lifecycle_policy_initialization": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy initialization (formerly runtime.lifecycle.policy_initialization)."
+    },
+    "runtime_lifecycle_policy_monitor": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy monitor (formerly runtime.lifecycle.policy_monitor)."
+    },
+    "runtime_lifecycle_retained_reference": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a retained Runtime reference at close (formerly runtime.lifecycle.retained_reference)."
+    },
+    "runtime_lifecycle_selection_record": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a select step's record that could not be written after the confirmation capture ended the run (formerly runtime.lifecycle.selection_record)."
+    },
+    "runtime_lifecycle_session_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an execution session's close (formerly runtime.lifecycle.session_close)."
+    },
+    "runtime_lifecycle_shutdown_join": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: joining the Runtime's threads at shutdown (formerly runtime.lifecycle.shutdown_join)."
+    },
+    "runtime_lifecycle_shutdown_requested": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: recording the shutdown_requested lifecycle phase as the Runtime host closes (formerly runtime.lifecycle.shutdown_requested)."
+    },
+    "runtime_lifecycle_strategic_report": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a strategic report (formerly runtime.lifecycle.strategic_report)."
     },
     "runtime_local_ipc": {
       "owner": "runtime-host",

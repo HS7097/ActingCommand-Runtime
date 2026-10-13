@@ -392,22 +392,29 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                 EventLinksDraft::default(),
                 TaskPayloadDraft::semantic(
                     TaskSemanticFact::TerminalCommitted {
-                        outcome: if failed {
+                        task_result: if failed {
                             TaskOutcome::Failure
                         } else {
                             TaskOutcome::Success
                         },
                         final_page: Some("fixture/panel".into()),
                         executed_steps: Some(0),
-                        failure_code: if field_failed {
-                            Some("contained_task_ocr_fields_unresolved".into())
+                        outcome: if field_failed {
+                            Some(actingcommand_contract::outcome::Outcome::relayed(
+                                "contained_task_ocr_fields_unresolved",
+                            ))
                         } else if legacy {
-                            Some("contained_task_post_admission_ocr_failed".into())
+                            Some(actingcommand_contract::outcome::Outcome::relayed(
+                                "contained_task_post_admission_ocr_failed",
+                            ))
                         } else if failed {
-                            Some("contained_task_timeout".into())
+                            Some(actingcommand_contract::outcome::Outcome::relayed(
+                                "contained_task_timeout",
+                            ))
                         } else {
                             None
                         },
+                        failure_severe: false,
                         scheduling_disposition: if failed { None } else { Some(disposition) },
                         task_timing: None,
                     },
@@ -685,10 +692,11 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
         EventLinksDraft::default(),
         TaskPayloadDraft::semantic(
             TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some("fixture/final".to_owned()),
                 executed_steps: Some(1),
-                failure_code: None,
+                outcome: None,
+                failure_severe: false,
                 scheduling_disposition: Some(disposition),
                 task_timing: None,
             },

@@ -14,6 +14,7 @@ use super::{
 use crate::ContainedRunState;
 use crate::ipc::DEFAULT_RUNTIME_MAX_FRAME_BYTES;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     AuditInput, CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft,
     EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity, EventSource,
@@ -49,7 +50,7 @@ fn gate_recent_runs_of_an_instance_with_more_lab_events_than_one_read_keeps_come
         .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
         .with_task_id(issuer.mint_task_id().expect("task id"))
         .with_run_id(issuer.mint_run_id().expect("run id"));
-    let failure = SharedCode::ContainedTaskHomeEntryNotMatched.as_str();
+    let failure = SharedCode::ContainedTaskHomeEntryNotMatched;
     // One run whose entry page did not match ends failed before its package is admitted; then
     // the Lab works on the same instance.
     let run_facts = [
@@ -62,13 +63,14 @@ fn gate_recent_runs_of_an_instance_with_more_lab_events_than_one_read_keeps_come
         },
         TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::FailClosed,
-            failure_code: Some(failure.to_owned()),
+            outcome: Some(Outcome::new(failure)),
         },
         TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Failure,
+            task_result: TaskOutcome::Failure,
             final_page: None,
             executed_steps: Some(0),
-            failure_code: Some(failure.to_owned()),
+            outcome: Some(Outcome::new(failure)),
+            failure_severe: false,
             scheduling_disposition: None,
             task_timing: None,
         },

@@ -8,9 +8,9 @@ use actingcommand_artifact_store::{
 };
 use actingcommand_contract::ArtifactProducer;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
-    ActionId, ArtifactKind, ArtifactRedactionState, EFFECTIVE_CONFIGURATION_SCHEMA,
+    ActionId, ArtifactKind, ArtifactRedactionState, DiagnosticCode, EFFECTIVE_CONFIGURATION_SCHEMA,
     EffectiveConfigurationFacts, EffectiveConfigurationRecord, EventQuery, EventType, FrameId,
     MAX_EFFECTIVE_CONFIGURATION_BYTES, ProjectedArtifactReference, RunId, TaskId,
 };
@@ -89,7 +89,9 @@ impl ForensicReplayRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ForensicEventFilter {
     pub origin_module: Option<String>,
-    pub diagnostic_code: Option<String>,
+    /// The typed diagnostic code the caller parsed from its token (ledger revision 3,
+    /// Workflow #378 A3); it travels to the query as the typed value.
+    pub diagnostic_code: Option<DiagnosticCode>,
     pub severity: Option<String>,
     pub correlation_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -99,7 +101,7 @@ pub struct ForensicEventFilter {
 impl ForensicEventFilter {
     pub fn new(
         origin_module: Option<String>,
-        diagnostic_code: Option<String>,
+        diagnostic_code: Option<DiagnosticCode>,
         severity: Option<String>,
         correlation_id: Option<String>,
     ) -> ForensicResult<Self> {
@@ -122,9 +124,8 @@ impl ForensicEventFilter {
     }
 
     fn query(&self) -> ForensicResult<EventQuery> {
-        let query: EventQuery = serde_json::from_value(json!({
+        let mut query: EventQuery = serde_json::from_value(json!({
             "origin_module": self.origin_module,
-            "diagnostic_code": self.diagnostic_code,
             "minimum_severity": self.severity,
             "maximum_severity": self.severity,
             "correlation_id": self.correlation_id,
@@ -137,6 +138,7 @@ impl ForensicEventFilter {
                 "event filter contains an unknown enum or invalid token",
             )
         })?;
+        query.diagnostic_code = self.diagnostic_code;
         query.validate().map_err(|error| {
             ForensicError::new(
                 error.code(),
@@ -300,7 +302,8 @@ pub enum WriterObservationReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CorruptTailReport {
-    pub code: String,
+    /// Why the tail does not parse (ledger revision 3, Workflow #378 A3; was `code`).
+    pub outcome: Outcome,
     pub segment_index: u64,
     pub byte_offset: u64,
     pub dangling_byte_count: u64,
@@ -449,11 +452,14 @@ pub struct StabilityFailure {
     // Snapshot verification may fail before the source event is admitted.
     pub source_sequence: Option<u64>,
     pub artifact: ProjectedArtifactReference,
-    pub code: &'static str,
-    pub operation: &'static str,
+    /// The failure: the relayed store or forensic code with its `operation` (ledger revision 3,
+    /// Workflow #378 A3; was `code` and `operation`).
+    pub outcome: Outcome,
 }
 
-/// Read-side representation of the existing v1 artifact, without derived values.
+/// Read-side representation of the existing v1 artifact, without derived values. The kernel's
+/// stop reason is its outcome (ledger revision 3, Workflow #378 A3; the artifact's
+/// `terminal_reason`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StabilityComparison {
@@ -474,8 +480,76 @@ pub struct StabilityComparison {
     pub consecutive_unchanged_threshold: u32,
     #[serde(default)]
     pub max_steps: Option<u32>,
-    #[serde(deserialize_with = "Option::<String>::deserialize")]
-    pub terminal_reason: Option<String>,
+    pub outcome: Option<Outcome>,
+}
+
+/// The v1 stability artifact exactly as the execution kernel writes it: its stop reason is
+/// present (`null` while the run goes on) and spells the code that stopped the run.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StabilityArtifact {
+    schema_version: String,
+    task_id: TaskId,
+    run_id: RunId,
+    action_id: ActionId,
+    step_index: u32,
+    operation_label: String,
+    previous_frame_id: FrameId,
+    current_frame_id: FrameId,
+    region: StabilityRegion,
+    comparison_mode: String,
+    comparison_parameters: serde_json::Map<String, serde_json::Value>,
+    result: String,
+    prior_consecutive_unchanged: u32,
+    new_consecutive_unchanged: u32,
+    consecutive_unchanged_threshold: u32,
+    #[serde(default)]
+    max_steps: Option<u32>,
+    #[serde(deserialize_with = "Option::<StabilityStop>::deserialize")]
+    terminal_reason: Option<StabilityStop>,
+}
+
+/// The two stop reasons of the v1 artifact, spelled as their shared codes.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StabilityStop {
+    ConsecutiveUnchangedThresholdReached,
+    MaxStepsReached,
+}
+
+impl StabilityStop {
+    fn outcome(self) -> Outcome {
+        Outcome::new(match self {
+            Self::ConsecutiveUnchangedThresholdReached => {
+                SharedCode::ConsecutiveUnchangedThresholdReached
+            }
+            Self::MaxStepsReached => SharedCode::MaxStepsReached,
+        })
+    }
+}
+
+impl StabilityArtifact {
+    fn into_comparison(self) -> StabilityComparison {
+        StabilityComparison {
+            schema_version: self.schema_version,
+            task_id: self.task_id,
+            run_id: self.run_id,
+            action_id: self.action_id,
+            step_index: self.step_index,
+            operation_label: self.operation_label,
+            previous_frame_id: self.previous_frame_id,
+            current_frame_id: self.current_frame_id,
+            region: self.region,
+            comparison_mode: self.comparison_mode,
+            comparison_parameters: self.comparison_parameters,
+            result: self.result,
+            prior_consecutive_unchanged: self.prior_consecutive_unchanged,
+            new_consecutive_unchanged: self.new_consecutive_unchanged,
+            consecutive_unchanged_threshold: self.consecutive_unchanged_threshold,
+            max_steps: self.max_steps,
+            outcome: self.terminal_reason.map(StabilityStop::outcome),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -613,6 +687,16 @@ impl ForensicError {
         self.operation
     }
 
+    /// This failure as an outcome (ledger revision 3, Workflow #378 A3): its relayed code, with
+    /// its `operation` when the catalog lists the spelling.
+    pub fn outcome(&self) -> Outcome {
+        let outcome = Outcome::relayed(self.code);
+        match Location::relayed(self.operation) {
+            Some(location) => outcome.operation(location),
+            None => outcome,
+        }
+    }
+
     /// Kind of the `std::io::Error` behind a ledger failure, if any.
     pub fn io_kind(&self) -> Option<LedgerIoKind> {
         self.io_kind
@@ -657,8 +741,8 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     let task_evidence = request.command == ForensicCommand::TaskEvidence;
     let material = stability || export || task_evidence;
     let config = GlobalLedgerEvidenceConfig::new(&request.state_root);
-    // Each failed artifact, and whether its file does not exist.
-    let mut opening_failures = Vec::new();
+    // Each failed artifact with its store error.
+    let mut opening_failures: Vec<(ProjectedArtifactReference, ArtifactStoreError)> = Vec::new();
     let snapshot = GlobalLedger::open_evidence(
         if material {
             config.sqlite_material_per_artifact()
@@ -697,15 +781,7 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
                 Ok(verified) => Some(verified),
                 Err(error) => {
                     if stability || export || task_evidence {
-                        opening_failures.push((
-                            StabilityFailure {
-                                source_sequence: None,
-                                artifact: reference.clone(),
-                                code: error.code(),
-                                operation: error.operation(),
-                            },
-                            error.is_material_missing(),
-                        ));
+                        opening_failures.push((reference.clone(), error));
                     }
                     None
                 }
@@ -715,44 +791,51 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
     .map_err(map_ledger_error)?;
     // Workflow #375 R5b: on an SQLite root an artifact whose file does not exist is listed
     // once as `material_missing`, not as a failure; a Segment root keeps its behavior.
-    let mut artifact_failures = Vec::new();
+    let mut failed_artifacts = Vec::new();
     let mut material_missing: Vec<ProjectedArtifactReference> = Vec::new();
-    for (failure, missing) in opening_failures {
-        if missing && snapshot.segment().is_none() {
+    for (artifact, error) in opening_failures {
+        if error.is_material_missing() && snapshot.segment().is_none() {
             if !material_missing
                 .iter()
-                .any(|known| known.artifact_id == failure.artifact.artifact_id)
+                .any(|known| known.artifact_id == artifact.artifact_id)
             {
-                material_missing.push(failure.artifact);
+                material_missing.push(artifact);
             }
         } else {
-            artifact_failures.push(failure);
+            failed_artifacts.push((artifact, map_artifact_store_error(error)));
         }
     }
 
-    if export && let Some(failure) = artifact_failures.first() {
+    if export && let Some((_, failure)) = failed_artifacts.first() {
         let mut detail = format!(
             "{} artifact(s) failed material verification; raw content withheld: ",
-            artifact_failures.len()
+            failed_artifacts.len()
         );
-        for (index, failed) in artifact_failures.iter().take(64).enumerate() {
-            let id =
-                serde_json::to_value(failed.artifact.artifact_id).map_err(serialization_error)?;
+        for (index, (artifact, failed)) in failed_artifacts.iter().take(64).enumerate() {
+            let id = serde_json::to_value(artifact.artifact_id).map_err(serialization_error)?;
             let id = id.as_str().map_or_else(|| id.to_string(), str::to_owned);
             if index > 0 {
                 detail.push_str(", ");
             }
-            detail.push_str(&format!("{id}={}", failed.code));
+            detail.push_str(&format!("{id}={}", failed.code()));
         }
-        if artifact_failures.len() > 64 {
-            detail.push_str(&format!(" … and {} more", artifact_failures.len() - 64));
+        if failed_artifacts.len() > 64 {
+            detail.push_str(&format!(" … and {} more", failed_artifacts.len() - 64));
         }
         return Err(ForensicError::relayed(
-            failure.code,
-            failure.operation,
+            failure.code(),
+            failure.operation(),
             detail,
         ));
     }
+    let artifact_failures = failed_artifacts
+        .into_iter()
+        .map(|(artifact, error)| StabilityFailure {
+            source_sequence: None,
+            artifact,
+            outcome: error.outcome(),
+        })
+        .collect::<Vec<_>>();
 
     match request.command {
         ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(Box::new(
@@ -1474,8 +1557,7 @@ fn stability_report(
                 Err(error) => failures.push(StabilityFailure {
                     source_sequence: Some(event.sequence()),
                     artifact: reference,
-                    code: error.code(),
-                    operation: error.operation(),
+                    outcome: error.outcome(),
                 }),
             }
         }
@@ -1551,18 +1633,13 @@ fn project_stability(
     if schema != STABILITY_SCHEMA {
         return Err(invalid(ForensicsCode::StabilitySchemaUnsupported.code()));
     }
-    let comparison: StabilityComparison = serde_json::from_value(value)
-        .map_err(|_| invalid(ForensicsCode::StabilityFieldsInvalid.code()))?;
+    // The stop reason is one of the two typed reasons; any other spelling does not parse.
+    let comparison = serde_json::from_value::<StabilityArtifact>(value)
+        .map_err(|_| invalid(ForensicsCode::StabilityFieldsInvalid.code()))?
+        .into_comparison();
     if comparison.comparison_mode != "exact_pixels_v1"
         || !comparison.comparison_parameters.is_empty()
         || !matches!(comparison.result.as_str(), "changed" | "unchanged")
-        || comparison.terminal_reason.as_deref().is_some_and(|value| {
-            ![
-                SharedCode::ConsecutiveUnchangedThresholdReached.as_str(),
-                SharedCode::MaxStepsReached.as_str(),
-            ]
-            .contains(&value)
-        })
     {
         return Err(invalid(ForensicsCode::StabilityFieldsInvalid.code()));
     }
@@ -1644,7 +1721,7 @@ fn writer_report(observation: &GlobalLedgerWriterMetadataObservation) -> WriterO
 
 fn corrupt_tail_report(tail: &GlobalLedgerCorruptTail) -> CorruptTailReport {
     CorruptTailReport {
-        code: tail.code.as_str().to_owned(),
+        outcome: Outcome::new(tail.code),
         segment_index: tail.segment_index,
         byte_offset: tail.byte_offset,
         dangling_byte_count: tail.dangling_byte_count,
@@ -1752,7 +1829,7 @@ fn render_export(
         writeln!(
             report,
             "corrupt_tail: {} segment={} offset={} bytes={} sha256={}",
-            tail.code,
+            tail.outcome.code(),
             tail.segment_index,
             tail.byte_offset,
             tail.dangling_byte_count,

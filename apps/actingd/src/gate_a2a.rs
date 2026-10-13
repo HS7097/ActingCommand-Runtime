@@ -140,4 +140,22 @@ fn gate_an_ignored_env_override_is_warned_as_the_fixed_code_with_the_variable() 
             "the code spelling carries no variable"
         );
     }
+    // #378 A3 (Fail Loud, coordinator ruling 11): the startup record names every ignored
+    // variable in the `env_overrides` row of `config.subsystems`.
+    let manifest = actingcommand_contract::RuntimeConfigManifest {
+        subsystems: vec![config::env_overrides_subsystem(Some(false), &ignored)],
+        parameters: Vec::new(),
+    };
+    let [subsystems, _] =
+        manifest.to_fact_records(0, actingcommand_contract::OriginModule::Runtime);
+    assert!(
+        matches!(
+            &subsystems.value,
+            actingcommand_contract::FactValue::RecordList(rows)
+                if rows[0].get(actingcommand_contract::CONFIG_SUBSYSTEM_IGNORED_VARIABLES_FIELD)
+                    == Some(&actingcommand_contract::FactScalar::String(set.join(",")))
+        ),
+        "the env_overrides row names the ignored variables: {:?}",
+        subsystems.value
+    );
 }

@@ -629,6 +629,21 @@ pub enum VisionProviderErrorCode {
     Internal,
 }
 
+impl VisionProviderErrorCode {
+    /// The code's spelling, which a caller relays with `Outcome::relayed` (Workflow #378 A3).
+    /// The catalog does not register these codes yet (B4), so the relayed spelling stays
+    /// visible as the `raw_code` of `outcome_relay_unregistered`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Timeout => "timeout",
+            Self::ModelMismatch => "model_mismatch",
+            Self::InvalidResponse => "invalid_response",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionProviderError {
     code: VisionProviderErrorCode,

@@ -44,6 +44,8 @@ use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
 mod manifest;
+#[cfg(test)]
+pub(crate) use manifest::env_overrides_subsystem;
 mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
@@ -456,6 +458,9 @@ pub(super) struct VisionInventory {
 pub(super) struct VisionRefusal {
     pub(super) code: Code,
     pub(super) message: String,
+    /// The foreign failure behind the refusal, when the OS reported one (ledger revision 3:
+    /// the provider startup record carries it as the refusal's `caused_by` link).
+    pub(super) cause: Option<Outcome>,
 }
 
 impl ConfiguredVision {
@@ -487,6 +492,10 @@ impl ConfiguredVision {
                 "vision root {} is unavailable: {error}",
                 configured.display()
             ),
+            cause: Some(Outcome::from_io_error(
+                &error,
+                actingcommand_contract::outcome::IoOp::Canonicalize,
+            )),
         })?;
         if let Some(install_root) = &self.install_root
             && ["A", "B"]
@@ -500,12 +509,14 @@ impl ConfiguredVision {
                     root.display(),
                     install_root.display()
                 ),
+                cause: None,
             });
         }
         let models_dir = root.join(VISION_MODELS_DIRECTORY);
         let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
             code: VisionListingCode::VisionRootUnavailable.code(),
             message: error.message().to_owned(),
+            cause: error.os_cause().cloned(),
         })?;
         let runtime = VisionRuntimeSpec::from_vision_root(
             &root,
@@ -515,11 +526,13 @@ impl ConfiguredVision {
         .map_err(|error| VisionRefusal {
             code: ActingdCode::VisionRuntimeUnavailable.code(),
             message: error.message().to_owned(),
+            cause: error.os_cause().cloned(),
         })?;
         if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
             return Err(VisionRefusal {
                 code: VisionListingCode::VisionModelsEmpty.code(),
                 message: format!("{} holds no model folder", models_dir.display()),
+                cause: None,
             });
         }
         Ok(VisionInventory {
@@ -1331,9 +1344,11 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
         .collect()
 }
 
-/// The text one env-override warning has in `check-config`'s v1 `warnings` and in the
-/// `env_overrides` manifest subsystem reason, `env_override_ignored:<VAR>`. The one boundary of
-/// that text: A3 and A6a replace both places with the outcome itself.
+/// The text one env-override warning has in `check-config`'s v1 `warnings`,
+/// `env_override_ignored:<VAR>`: the one boundary of that text, which A6a replaces with the
+/// outcome itself. Since ledger revision 3 the startup record carries the warnings as `note`
+/// links of the `env_overrides` subsystem's outcome, and its `config.subsystems` row names the
+/// variables under `ignored_variables` (never silent).
 pub(super) fn env_override_warning_v1(warning: &Outcome) -> String {
     let variable = warning
         .value("variable")
@@ -2339,21 +2354,33 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(failures.len(), 1);
             let failure = failures[0];
+            // Ledger revision 3: the native cause is a link of the failure's outcome that
+            // carries the device's text as `raw_text`.
+            fn foreign_text(
+                outcome: &actingcommand_contract::outcome::Outcome,
+            ) -> Option<&actingcommand_contract::outcome::Outcome> {
+                if outcome.value("raw_text").is_some() {
+                    return Some(outcome);
+                }
+                outcome
+                    .causes()
+                    .iter()
+                    .find_map(|link| foreign_text(link.outcome()))
+            }
             let details = events
                 .iter()
                 .filter_map(|event| {
-                    let EventPayload::Runtime(RuntimePayload::Failed(outcome)) = event.payload()
+                    let EventPayload::Runtime(RuntimePayload::Failed(payload)) = event.payload()
                     else {
                         return None;
                     };
-                    outcome
-                        .lifecycle_failure()
-                        .filter(|detail| detail.native_detail().is_some())
-                        .map(|detail| (event, detail))
+                    let lifecycle = payload.lifecycle_failure()?;
+                    foreign_text(payload.outcome())
+                        .map(|native| (event, payload, lifecycle, native))
                 })
                 .collect::<Vec<_>>();
             assert_eq!(details.len(), 1, "one private native cause per operation");
-            let (event, lifecycle) = details[0];
+            let (event, payload, lifecycle, native) = details[0];
             assert_eq!(lifecycle.entered_event_id(), Some(*failure.event_id()));
             assert_eq!(
                 event.links().correlation_id(),
@@ -2372,28 +2399,28 @@ mod tests {
                 }
             );
             assert_eq!(detail.operation(), "ensure_device");
+            // Ledger revision 3: the device's text is foreign text, declared sensitive.
             assert_eq!(
-                detail.declared_sensitivity(),
-                if capture {
-                    Sensitivity::Sensitive
-                } else {
-                    Sensitivity::Internal
-                }
+                payload.outcome().foreign_text_sensitivity(),
+                Some(Sensitivity::Sensitive)
             );
-            let native = lifecycle.native_detail().expect("native cause");
-            assert!(!native.truncated());
-            assert!(native.text().contains("failed to spawn adb"));
+            assert!(native.value("raw_text_truncated").is_none());
+            let text = native
+                .value("raw_text")
+                .and_then(serde_json::Value::as_str)
+                .expect("native cause");
+            assert!(text.contains("failed to spawn adb"));
             // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
             // reaches the native cause only as its label token; a `HOST:PORT` target keeps its
             // address there, as before.
             if by_serial {
-                assert!(!native.text().contains(endpoint));
-                assert!(native.text().contains("[device:handset:neutral.device]"));
+                assert!(!text.contains(endpoint));
+                assert!(text.contains("[device:handset:neutral.device]"));
             } else {
-                assert!(native.text().contains(endpoint));
+                assert!(text.contains(endpoint));
             }
             if !capture {
-                assert!(native.text().contains("child_operation=ensure_device"));
+                assert!(text.contains("child_operation=ensure_device"));
             }
             let public = serde_json::to_string(&event.payload().public_projection())
                 .expect("public payload");
@@ -2428,12 +2455,17 @@ mod tests {
             }]
         });
         for (configured, enabled, source, reason) in [
-            (None, true, ConfigParameterSource::Default, "flag absent"),
+            (
+                None,
+                true,
+                ConfigParameterSource::Default,
+                ActingdCode::ConfigSubsystemFlagAbsent,
+            ),
             (
                 Some(false),
                 false,
                 ConfigParameterSource::Explicit,
-                "configured off",
+                ActingdCode::ConfigSubsystemConfiguredOff,
             ),
         ] {
             let mut value = value.clone();
@@ -2559,7 +2591,7 @@ mod tests {
                 .find(|subsystem| subsystem.name == "frame_retention")
                 .expect("frame retention subsystem");
             assert_eq!(retention.enabled, enabled);
-            assert_eq!(retention.reason, reason);
+            assert_eq!(retention.outcome, Outcome::new(reason));
             let parameter = assembly
                 .manifest
                 .parameters
@@ -2839,20 +2871,38 @@ mod tests {
             b"",
         )
         .expect("runtime placeholder");
+        // Ledger revision 3 (acceptance CA-M1): a `models` entry that is a file, so listing it
+        // fails with an OS error.
+        fs::create_dir_all(root.path().join("models-file")).expect("vision root fixture");
+        fs::write(root.path().join("models-file").join("models"), b"").expect("models file");
         let vision = |root: &str| json!({"execution_provider": "cpu", "root": root});
-        for (index, vision, expected) in [
+        // Each refusal with the `io_op` of the `foreign_os_error` link it carries, if any.
+        for (index, vision, expected, os_link) in [
             (
                 0,
                 Some(vision("missing-root")),
                 Some("vision_root_unavailable"),
+                Some("canonicalize"),
             ),
             (
                 1,
                 Some(vision("no-runtime")),
                 Some("vision_runtime_unavailable"),
+                None,
             ),
-            (2, Some(vision("no-models")), Some("vision_models_empty")),
-            (3, None, None),
+            (
+                2,
+                Some(vision("no-models")),
+                Some("vision_models_empty"),
+                None,
+            ),
+            (
+                4,
+                Some(vision("models-file")),
+                Some("vision_root_unavailable"),
+                Some("read_dir"),
+            ),
+            (3, None, None, None),
         ] {
             let state_root = root.path().join(format!("state-{index}"));
             let mut config = serde_json::from_value::<ActingdConfigFile>(json!({
@@ -2916,12 +2966,35 @@ mod tests {
                     panic!("native failure missing")
                 };
                 assert!(!failure.module.is_empty());
-                assert!(!failure.code.is_empty());
-                assert!(!failure.message.is_empty());
+                // Ledger revision 3: the native failure is the refusal's outcome; the OS text
+                // of an unavailable root is its foreign link, never public.
+                assert_eq!(Some(failure.outcome.code().as_str()), expected);
+                // The OS error behind a refusal is its `caused_by` link, as `foreign_os_error`
+                // with the failed I/O verb.
+                let os_links = failure
+                    .outcome
+                    .causes()
+                    .iter()
+                    .filter(|link| link.outcome().code().as_str() == "foreign_os_error")
+                    .map(|link| {
+                        link.outcome()
+                            .value("io_op")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(os_links, os_link.map(Some).into_iter().collect::<Vec<_>>());
                 let public =
                     serde_json::to_string(&provider_terminal.0.payload().public_projection())
                         .expect("public projection");
-                assert!(!public.contains(&failure.message));
+                for link in failure.outcome.causes() {
+                    if let Some(text) = link
+                        .outcome()
+                        .value("raw_text")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        assert!(!public.contains(text));
+                    }
+                }
                 assert!(!snapshot.events().iter().any(|event| matches!(
                     event.event_type(),
                     EventType::RuntimeStarted | EventType::RuntimeTakeover

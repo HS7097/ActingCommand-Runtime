@@ -83,7 +83,7 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         event.payload(),
         EventPayload::Task(TaskPayload::Semantic(payload))
             if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Cancelled,
                 executed_steps: None,
                 ..
             })

@@ -98,12 +98,12 @@ impl HostShared {
                     self.fatal.mark((*failure.error).clone())?;
                 }
                 #[cfg(test)]
-                if let Some(detail) = failure.error.native_detail() {
+                {
                     lock(
-                        &self.failure_details_for_test,
+                        &self.failure_outcomes_for_test,
                         crate::codes::test_spellings::TestLocation::RecordFailureDetailForTest,
                     )?
-                    .insert(request.request_id(), detail.to_owned());
+                    .insert(request.request_id(), failure.error.outcome());
                 }
                 let projection = failure
                     .error
@@ -591,10 +591,14 @@ pub(super) struct RequestFailure {
     pub(super) task_failure: Option<TaskFailureEvidence>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The original task failure of a run, kept while a cleanup failure replaces its error: its
+/// outcome is the run's terminal outcome (ledger revision 3), and `severe` is the verdict where
+/// it arose that it must pause the task (its error was fatal there; the terminal's
+/// `failure_severe`, which the policy class follows; Workflow #378 A3 ruling 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TaskFailureEvidence {
-    pub(super) code: &'static str,
-    pub(super) severity: EventSeverity,
+    pub(super) outcome: actingcommand_contract::outcome::Outcome,
+    pub(super) severe: bool,
 }
 
 pub(super) struct ActionFailure {
@@ -706,8 +710,11 @@ mod request_failure_tests {
             )),
             poison_runtime: false,
             task_failure: Some(TaskFailureEvidence {
-                code: "capture_backend_operation_failed",
-                severity: EventSeverity::Warning,
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+                )
+                .operation(crate::codes::HostLocation::RunContainedTaskCapture),
+                severe: false,
             }),
         };
 
@@ -722,8 +729,11 @@ mod request_failure_tests {
         assert_eq!(
             escalated.task_failure,
             Some(TaskFailureEvidence {
-                code: "capture_backend_operation_failed",
-                severity: EventSeverity::Warning,
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+                )
+                .operation(crate::codes::HostLocation::RunContainedTaskCapture),
+                severe: false,
             })
         );
     }
@@ -751,12 +761,8 @@ impl ActionFailure {
 
     pub(super) fn backend(error: RuntimeHostError) -> Self {
         let task_failure = Some(Box::new(TaskFailureEvidence {
-            code: error.code(),
-            severity: if error.is_fatal() {
-                EventSeverity::Fatal
-            } else {
-                EventSeverity::Warning
-            },
+            outcome: error.outcome(),
+            severe: error.is_fatal(),
         }));
         Self {
             diagnostic: DiagnosticCode::BackendOperationFailed,
@@ -821,10 +827,11 @@ impl ConnectionFailureStage {
     }
 }
 
+/// A connection's failure context. Ledger revision 3 records its failure as the record's
+/// outcome; the former connection serial, decode flag and timing summary were Runtime text and
+/// are not recorded (the timings are still taken per request).
 pub(super) struct ConnectionFailureContext {
-    pub(super) connection_serial: u64,
     stage: Option<ConnectionFailureStage>,
-    pub(super) request_decoded: bool,
     pub(super) links: EventLinksDraft,
     pub(super) timing: ConnectionTiming,
 }
@@ -889,14 +896,11 @@ pub(super) fn connection_boundary(
     mut stream: TcpStream,
     shared: Arc<HostShared>,
     connection_id: ConnectionId,
-    connection_serial: u64,
     maximum_frame_bytes: usize,
     io_timeout: Duration,
 ) -> RuntimeHostResult<()> {
     let mut context = ConnectionFailureContext {
-        connection_serial,
         stage: None,
-        request_decoded: false,
         links: EventLinksDraft::default(),
         timing: ConnectionTiming::default(),
     };
@@ -990,7 +994,6 @@ fn connection_loop(
     let mut cache = RequestCache::default();
     while !shared.fatal.is_shutdown_requested() {
         context.stage = Some(ConnectionFailureStage::RequestRead);
-        context.request_decoded = false;
         context.links = EventLinksDraft::default();
         context.timing = ConnectionTiming::default();
         context.timing.receive.begin();
@@ -1038,7 +1041,6 @@ fn connection_loop(
                 return Err(protocol_error(HostLocation::RuntimeRequestDecodeFailed));
             }
         };
-        context.request_decoded = true;
         let material_context = MaterialReadContext::for_request(&request, maximum_frame_bytes)?;
         // Idle sockets hold no admission. A decoded request remains in flight through its reply.
         let _work = shared.begin_request(request.operation(), connection_id)?;

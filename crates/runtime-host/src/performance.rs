@@ -1247,7 +1247,7 @@ impl PerformanceMonitor {
             PerformanceMonitorStateEventData {
                 observed_at_unix_ms,
                 health: self.health,
-                failure_code: None,
+                outcome: None,
                 consecutive_failures: 0,
                 terminal: false,
                 unavailable_metrics: sample.unavailable_metrics.clone(),
@@ -1325,7 +1325,7 @@ impl PerformanceMonitor {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms: sample.observed_at_unix_ms,
                     health: self.health,
-                    failure_code: None,
+                    outcome: None,
                     consecutive_failures: 0,
                     terminal: false,
                     unavailable_metrics: sample.unavailable_metrics.clone(),
@@ -1456,7 +1456,9 @@ impl PerformanceMonitor {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms,
                     health: PerformanceMonitorHealth::Degraded,
-                    failure_code: Some(code.to_owned()),
+                    // Ledger revision 3: the failure is the record's outcome; a code of the
+                    // dynamic family `<code>.<event_type>` stays visible as its relayed spelling.
+                    outcome: Some(actingcommand_contract::outcome::Outcome::relayed(code)),
                     consecutive_failures: *consecutive_failures,
                     terminal,
                     unavailable_metrics,
@@ -3177,7 +3179,8 @@ mod tests {
         assert!(matches!(
             degraded.events.as_slice(),
             [PerformanceSemanticEvent::MonitorDegraded(data)]
-                if data.failure_code.as_deref() == Some("performance_pipeline_start_missing")
+                if data.outcome.as_ref().map(|outcome| outcome.code().as_str())
+                    == Some("performance_pipeline_start_missing")
                     && data.unavailable_metrics == pipeline_metrics()
         ));
         let context = monitor

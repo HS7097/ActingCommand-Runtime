@@ -413,3 +413,57 @@ fn concurrent_acquire(
         receipt
     })
 }
+
+// Ledger revision 3 (Workflow #378 A3): a record's failure is its `outcome`; the operation and
+// stage are its location values, foreign text is `raw_text` on its `foreign_*` links.
+
+/// A text value of one outcome node (`operation`, `stage`, `raw_text`, ...).
+fn outcome_str<'a>(
+    outcome: &'a actingcommand_contract::outcome::Outcome,
+    key: &str,
+) -> Option<&'a str> {
+    outcome.value(key).and_then(serde_json::Value::as_str)
+}
+
+/// The outcomes linked to `outcome` by `relation`, in link order.
+fn outcome_links(
+    outcome: &actingcommand_contract::outcome::Outcome,
+    relation: actingcommand_contract::outcome::CauseRelation,
+) -> Vec<&actingcommand_contract::outcome::Outcome> {
+    outcome
+        .causes()
+        .iter()
+        .filter(|link| *link.relation() == relation)
+        .map(actingcommand_contract::outcome::Link::outcome)
+        .collect()
+}
+
+/// Every foreign text of the outcome and its links, depth first.
+fn outcome_raw_texts(outcome: &actingcommand_contract::outcome::Outcome) -> Vec<&str> {
+    let mut texts = outcome_str(outcome, "raw_text")
+        .into_iter()
+        .collect::<Vec<_>>();
+    for link in outcome.causes() {
+        texts.extend(outcome_raw_texts(link.outcome()));
+    }
+    texts
+}
+
+/// The node of the outcome (itself or a link, depth first) whose foreign text is `text`.
+fn outcome_with_raw_text<'a>(
+    outcome: &'a actingcommand_contract::outcome::Outcome,
+    text: &str,
+) -> Option<&'a actingcommand_contract::outcome::Outcome> {
+    if outcome_str(outcome, "raw_text") == Some(text) {
+        return Some(outcome);
+    }
+    outcome
+        .causes()
+        .iter()
+        .find_map(|link| outcome_with_raw_text(link.outcome(), text))
+}
+
+/// A code as the Runtime receives it from a record or another process (a `CodeStr`).
+fn received_code(spelling: &str) -> actingcommand_contract::outcome::CodeStr {
+    serde_json::from_value(serde_json::json!(spelling)).expect("a received code")
+}

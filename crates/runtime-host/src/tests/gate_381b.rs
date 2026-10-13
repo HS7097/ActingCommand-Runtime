@@ -162,21 +162,37 @@ fn actions(events: &[PersistedEvent], event_type: EventType) -> Vec<EventAction>
         .collect()
 }
 
-/// The `runtime.failed` records among `events`: each one's code and primary detail message.
+/// The `runtime.failed` records among `events`: each one's code and its outcome as the
+/// `key=value` tokens its primary detail message carried before ledger revision 3 (#378 A3):
+/// every scalar value of the outcome, and `cause=<code>` for each `caused_by` link.
 fn failures(events: &[PersistedEvent]) -> Vec<(String, String)> {
     events
         .iter()
         .filter_map(|event| match event.payload() {
-            EventPayload::Runtime(RuntimePayload::Failed(record)) => {
-                record.lifecycle_failure().map(|failure| {
-                    (
-                        failure.code().to_owned(),
-                        failure
-                            .primary_detail()
-                            .map(|detail| detail.message().to_owned())
-                            .unwrap_or_default(),
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.lifecycle_failure().is_some() =>
+            {
+                let outcome = record.outcome();
+                let mut tokens = outcome
+                    .values()
+                    .iter()
+                    .filter_map(|(key, value)| match value {
+                        serde_json::Value::String(text) => Some(format!("{key}={text}")),
+                        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                            Some(format!("{key}={value}"))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                tokens.extend(
+                    outcome_links(
+                        outcome,
+                        actingcommand_contract::outcome::CauseRelation::CausedBy,
                     )
-                })
+                    .into_iter()
+                    .map(|cause| format!("cause={}", cause.code())),
+                );
+                Some((outcome.code().as_str().to_owned(), tokens.join(" ")))
             }
             _ => None,
         })
@@ -364,11 +380,50 @@ fn gate_a_restart_whose_stop_wait_expired_still_starts_and_fails_in_the_stop_pha
             "adb_port_present=false",
             "device_process_present=true",
             "cause=emulator_control_wait_timeout",
+            "cause=foreign_mumu_manager_error",
         ],
     );
     for key in ["stop_elapsed_ms=", "start_elapsed_ms="] {
         assert!(recorded[0].1.contains(key), "{key} in {}", recorded[0].1);
     }
+    // #378 A3 acceptance H-M1: the failing phase's vendor output is MuMuManager's, with the
+    // control command's exit status (0 when the wait expired) as `exit_code`; an exit status
+    // is never an OS error, so no link of the record carries `foreign_os_error` or `os_error`.
+    let outcome = events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.lifecycle_failure().is_some() =>
+            {
+                Some(record.outcome())
+            }
+            _ => None,
+        })
+        .expect("the restart's runtime.failed record");
+    let vendor = outcome_links(
+        outcome,
+        actingcommand_contract::outcome::CauseRelation::CausedBy,
+    )
+    .into_iter()
+    .find(|link| link.code().as_str() == "foreign_mumu_manager_error")
+    .expect("the vendor output link");
+    assert_eq!(vendor.value("exit_code"), Some(&serde_json::json!(0)));
+    assert_eq!(
+        vendor.value("raw_source"),
+        Some(&serde_json::json!("mumu_manager"))
+    );
+    assert_eq!(
+        vendor.value("raw_text"),
+        Some(&serde_json::json!("scripted vendor output"))
+    );
+    assert!(vendor.value("os_error").is_none() && vendor.value("io_kind").is_none());
+    assert!(
+        outcome
+            .codes()
+            .iter()
+            .all(|code| code.as_str() != "foreign_os_error"),
+        "{outcome}"
+    );
     run.host.close().expect("close host");
 }
 
@@ -622,7 +677,9 @@ fn gate_an_errcode_refusal_on_a_running_instance_reads_its_state_once_and_keeps_
 /// G19 row 1, the busy row (Workflow #369 H-4, W-3, S6b): an emulator control behind a holder
 /// waits at most 5 s for its turn in the instance's queue; at the cap it is refused Denied
 /// `lease_queue_expired`, naming the holder and its queue position, with one `scheduler.denied`
-/// `lease.queue_expired` at Warning, no `emulator_control_busy` pair and no provider call.
+/// `lease.queue_expired`, no `emulator_control_busy` pair and no provider call. Ledger revision
+/// 3 (#378 A3): the record's severity is its outcome's category, `lease_queue_expired`'s
+/// `error` (was Warning).
 #[test]
 fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_provider_call() {
     // A frozen clock, so the holder's lease does not lapse while the control waits.
@@ -648,13 +705,19 @@ fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_pro
     let error = receipt.error_projection().expect("refusal projection");
     assert_eq!(error.code, RuntimeErrorCode::QueueExpired);
     assert_eq!(error.host_code(), Some("lease_queue_expired"));
+    // Ledger revision 3 (acceptance H-L3): the refusal's facts are its outcome's values.
+    let refusal = run
+        .host
+        .failure_outcome_for_test(receipt.request_id())
+        .expect("refusal outcome")
+        .expect("the refusal's outcome");
+    assert_eq!(refusal.code().as_str(), "lease_queue_expired");
+    assert_eq!(refusal.value("timeout_ms"), Some(&serde_json::json!(5000)));
     assert_eq!(
-        run.host
-            .failure_detail_for_test(receipt.request_id())
-            .expect("refusal detail")
-            .as_deref(),
-        Some("timeout_ms=5000 holder_kind=client_lease queue_position=1")
+        refusal.value("holder_kind"),
+        Some(&serde_json::json!("client_lease"))
     );
+    assert_eq!(refusal.value("queue_position"), Some(&serde_json::json!(1)));
     assert!(
         control_calls(&run.state.emulator.calls()).is_empty(),
         "no provider call"
@@ -662,7 +725,7 @@ fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_pro
     let events = request_events(&run.host, &receipt);
     let denied = of_type(&events, EventType::SchedulerDenied);
     assert_eq!(denied.len(), 1, "{events:?}");
-    assert_eq!(denied[0].severity(), EventSeverity::Warning);
+    assert_eq!(denied[0].severity(), EventSeverity::Error);
     assert!(matches!(
         denied[0].payload(),
         EventPayload::Scheduler(SchedulerPayload::Denied(payload))

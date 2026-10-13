@@ -3,7 +3,7 @@
 use super::{ForensicError, ForensicResult, map_ledger_error, query_view_page};
 use crate::codes::{ForensicsCode, ForensicsLocation};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     EventPayload, EventQuery, EventType, LedgerReadScope, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_FACTS, OriginModule, ProjectedEvent, ProjectionPayload, ProjectionProfile,
@@ -36,11 +36,12 @@ pub enum ForensicRuntimeFactsResult {
         latest_sequence: u64,
         reason: ForensicRuntimeFactsUnavailable,
     },
-    /// Reading or replaying failed; no partial store is returned.
+    /// Reading or replaying failed; no partial store is returned. `outcome` is the failure: the
+    /// relayed ledger or forensic code with its `operation` (ledger revision 3, Workflow #378
+    /// A3; was `code` and `operation`).
     Failed {
         position: u64,
-        code: &'static str,
-        operation: &'static str,
+        outcome: Outcome,
         detail: String,
         /// Present only when the failure came from a `std::io::Error`.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,17 +119,16 @@ fn facts_at(
     mut deadline_of: impl FnMut(ForensicFactsPhase) -> Instant,
 ) -> ForensicRuntimeFactsResult {
     let mut phase = ForensicFactsPhase::Position;
-    read(state_root, position, &mut phase, &mut deadline_of).unwrap_or_else(|error| {
+    read(state_root, position, &mut phase, &mut deadline_of).unwrap_or_else(|mut error| {
         let deadline_ran_out = error.code == LedgerCode::LedgerReadBudgetExceeded.as_str()
             || error.code == ForensicsCode::RuntimeFactsReadBudgetExceeded.as_str();
+        // Workflow #395: a deadline that ran out names its phase as the outcome's operation.
+        if deadline_ran_out {
+            error.operation = phase.location().as_str();
+        }
         ForensicRuntimeFactsResult::Failed {
             position,
-            code: error.code,
-            operation: if deadline_ran_out {
-                phase.location().as_str()
-            } else {
-                error.operation
-            },
+            outcome: error.outcome(),
             detail: error.detail,
             io_kind: error.io_kind,
         }

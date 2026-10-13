@@ -87,7 +87,7 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, StartupPackageDisposition, TaskEntryRecognitionPhase,
+    SchedulingOutcomeProjection, StartupPackageDisposition, TaskEntryRecognitionPhase,
     TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
     TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
     TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
@@ -1054,6 +1054,18 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
+        // Workflow #378 A3 (acceptance CL-M1): a format-1 ledger is refused before the owner
+        // journal is written or the writer lock is taken; the check reads only the database's
+        // format and creates nothing.
+        actingcommand_ledger::refuse_unsupported_ledger_format(&config.state_root).map_err(
+            |error| {
+                RuntimeHostError::relayed_fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            },
+        )?;
         let events =
             RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;
@@ -1480,7 +1492,7 @@ impl RuntimeHost {
             #[cfg(test)]
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             #[cfg(test)]
-            failure_details_for_test: Mutex::new(BTreeMap::new()),
+            failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -2606,16 +2618,17 @@ impl RuntimeHost {
             .process_request(request, connection_id)
     }
 
-    /// Workflow #369 S5: the native detail of a refused request (its `key=value` tokens).
+    /// Workflow #369 S5: the outcome of a refused request; ledger revision 3 carries the
+    /// refusal's facts as its values (they were the native detail's `key=value` tokens).
     #[cfg(test)]
-    pub(crate) fn failure_detail_for_test(
+    pub(crate) fn failure_outcome_for_test(
         &self,
         request_id: RequestId,
-    ) -> RuntimeHostResult<Option<String>> {
+    ) -> RuntimeHostResult<Option<actingcommand_contract::outcome::Outcome>> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest)?;
         Ok(lock(
-            &shared.failure_details_for_test,
+            &shared.failure_outcomes_for_test,
             crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest,
         )?
         .get(&request_id)
@@ -3223,9 +3236,8 @@ impl RuntimeHost {
                     intent_already_recorded,
                     final_page,
                     executed_steps: Some(executed_steps),
-                    failure_code,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: failure_code.map(actingcommand_contract::outcome::Outcome::relayed),
+                    failure_severe: false,
                     scheduling_outcome: None,
                     selected_scheduling_outcome: None,
                     capture_summary: None,
@@ -3311,9 +3323,8 @@ impl RuntimeHost {
                     intent_already_recorded: false,
                     final_page,
                     executed_steps: Some(0),
-                    failure_code: None,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: None,
+                    failure_severe: false,
                     scheduling_outcome: Some((game, declaration)),
                     selected_scheduling_outcome,
                     capture_summary: None,
@@ -3474,7 +3485,7 @@ impl RuntimeHost {
                     )
                     .map(|_| ())
                     .map_err(|error| {
-                        error.with_failure_stage("runtime.lifecycle.shutdown_requested")
+                        error.with_failure_stage(HostLocation::RuntimeLifecycleShutdownRequested)
                     }),
             );
         }
@@ -3899,10 +3910,10 @@ struct HostShared {
     lease_expiry_scan_test_gate: Mutex<()>,
     #[cfg(test)]
     lease_expiry_test_checkpoints: Mutex<Vec<LeaseExpiryTestCheckpoint>>,
-    /// Workflow #369 S5: the native detail of each refused request, by request id; it carries
-    /// the refusal's `key=value` tokens, which no receipt carries until #378 A2/A3.
+    /// Workflow #369 S5: the outcome of each refused request, by request id; its values are the
+    /// refusal's facts, which no receipt carries (ledger revision 3).
     #[cfg(test)]
-    failure_details_for_test: Mutex<BTreeMap<RequestId, String>>,
+    failure_outcomes_for_test: Mutex<BTreeMap<RequestId, actingcommand_contract::outcome::Outcome>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -4182,7 +4193,7 @@ impl HostShared {
                             HostLocation::CloseExecutionKernel,
                             &error,
                         )
-                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.as_str())),
+                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.location())),
                     );
                 }
                 if unconfirmed {
@@ -4314,7 +4325,6 @@ fn accept_loop(
                             stream,
                             connection_shared,
                             connection_id,
-                            connection_serial,
                             maximum_frame_bytes,
                             io_timeout,
                         )

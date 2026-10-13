@@ -264,16 +264,20 @@ fn gate_each_runtime_facts_phase_has_its_own_deadline_and_a_run_out_names_its_ph
             FACTS_PHASES[..=index],
             "{phase:?}: the phases before it finished under their own deadlines"
         );
-        let ForensicRuntimeFactsResult::Failed {
-            code, operation, ..
-        } = &result
-        else {
+        // Ledger revision 3 (Workflow #378 A3): the failure's code and operation are its
+        // outcome's.
+        let ForensicRuntimeFactsResult::Failed { outcome, .. } = &result else {
             panic!("{phase:?}: a deadline that ran out fails the read: {result:?}");
         };
-        assert!(FACTS_DEADLINE_CODES.contains(code), "{phase:?}: {result:?}");
+        assert!(
+            FACTS_DEADLINE_CODES.contains(&outcome.code().as_str()),
+            "{phase:?}: {result:?}"
+        );
         assert_eq!(
-            *operation,
-            phase.location().as_str(),
+            outcome
+                .value("operation")
+                .and_then(serde_json::Value::as_str),
+            Some(phase.location().as_str()),
             "{phase:?}: {result:?}"
         );
     }

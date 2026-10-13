@@ -151,11 +151,17 @@ impl HostShared {
                 if let Some(last) = page.last() {
                     after = last.sequence();
                 }
-                older.extend(page.into_iter().map(|event| ProjectDiagnosticProjection {
-                    sequence: event.sequence(),
-                    timestamp_unix_ms: event.timestamp_unix_ms(),
-                    severity: event.severity(),
-                    event_type: event.event_type(),
+                older.extend(page.into_iter().map(|event| {
+                    ProjectDiagnosticProjection {
+                        sequence: event.sequence(),
+                        timestamp_unix_ms: event.timestamp_unix_ms(),
+                        severity: event.severity(),
+                        event_type: event.event_type(),
+                        code: event
+                            .payload()
+                            .outcome()
+                            .map(|outcome| outcome.code().clone()),
+                    }
                 }));
                 if older.len() > MAX_PROJECT_DIAGNOSTICS {
                     older.drain(..older.len() - MAX_PROJECT_DIAGNOSTICS);

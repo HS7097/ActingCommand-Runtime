@@ -73,7 +73,7 @@ fn agent_dispatcher_sidecar_child_process() {
             let response = AgentSessionResponse::new(
                 session_id,
                 AgentResponseDisposition::RetryableFailure,
-                "fake_sidecar_failed",
+                received_code("fake_sidecar_failed"),
                 unix_ms_now().expect("wall clock"),
             )
             .expect("agent response");
@@ -327,7 +327,7 @@ fn agent_session_start_and_completion_are_idempotent() {
     let response = AgentSessionResponse::new(
         session_id,
         AgentResponseDisposition::Completed,
-        "fake_sidecar_completed",
+        received_code("fake_sidecar_completed"),
         unix_ms_now().expect("wall clock"),
     )
     .expect("agent response");
@@ -436,7 +436,7 @@ fn agent_terminal_history_allows_restart_without_dispatcher_config() {
     let response = AgentSessionResponse::new(
         context.status().session_id(),
         AgentResponseDisposition::Completed,
-        "fake_sidecar_completed",
+        received_code("fake_sidecar_completed"),
         unix_ms_now().expect("wall clock"),
     )
     .expect("agent response");
@@ -619,7 +619,7 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
     let response = AgentSessionResponse::new(
         session_id,
         AgentResponseDisposition::RetryableFailure,
-        "fake_sidecar_failed",
+        received_code("fake_sidecar_failed"),
         unix_ms_now().expect("wall clock"),
     )
     .expect("agent response");
@@ -933,7 +933,7 @@ fn record_agent_response(
     let response = AgentSessionResponse::new(
         session_id,
         disposition,
-        answer,
+        received_code(answer),
         unix_ms_now().expect("clock"),
     )
     .expect("agent response");

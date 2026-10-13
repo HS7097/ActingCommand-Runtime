@@ -13,6 +13,7 @@ use crate::{
     CudaDeviceSelector, NnEngine, OcrEngine, OcrSessionId, OnnxExecutionProvider, VisionFfiError,
     VisionFfiErrorCode, VisionFfiResult,
 };
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -65,10 +66,10 @@ impl VisionRuntimeSpec {
         let onnxruntime_library = directory.join(ONNXRUNTIME_LIBRARY);
         let mut runtime_library_closure = Vec::new();
         let shared = directory.join(ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY);
-        if regular_file(&shared).map_err(runtime_unavailable)? {
+        if runtime_file(&shared)? {
             runtime_library_closure.push(shared);
         }
-        if !regular_file(&onnxruntime_library).map_err(runtime_unavailable)? {
+        if !runtime_file(&onnxruntime_library)? {
             return Err(runtime_unavailable(format!(
                 "{} is missing",
                 onnxruntime_library.display()
@@ -77,7 +78,7 @@ impl VisionRuntimeSpec {
         runtime_library_closure.push(onnxruntime_library.clone());
         if execution_provider == OnnxExecutionProvider::Cuda {
             let cuda = directory.join(ONNXRUNTIME_CUDA_PROVIDER_LIBRARY);
-            if !regular_file(&cuda).map_err(runtime_unavailable)? {
+            if !runtime_file(&cuda)? {
                 return Err(runtime_unavailable(format!(
                     "{} is missing; it is required for execution_provider cuda",
                     cuda.display()
@@ -464,7 +465,8 @@ enum FolderModel {
 /// of earlier releases, manifests) are not models and are skipped. A folder that breaks the
 /// rule is listed as invalid with its reason; only an unreadable `models_dir` fails.
 pub fn list_vision_models(models_dir: &Path) -> VisionFfiResult<VisionModelListing> {
-    let unreadable = |error: std::io::Error| {
+    // Ledger revision 3: the OS error stays with the refusal as its `os_cause`.
+    let unreadable = |error: std::io::Error, op: IoOp| {
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
             MODULE,
@@ -473,11 +475,14 @@ pub fn list_vision_models(models_dir: &Path) -> VisionFfiResult<VisionModelListi
                 models_dir.display()
             ),
         )
+        .with_os_cause(Outcome::from_io_error(&error, op))
     };
     let mut entries = Vec::new();
-    for entry in fs::read_dir(models_dir).map_err(unreadable)? {
-        let entry = entry.map_err(unreadable)?;
-        let file_type = entry.file_type().map_err(unreadable)?;
+    for entry in fs::read_dir(models_dir).map_err(|error| unreadable(error, IoOp::ReadDir))? {
+        let entry = entry.map_err(|error| unreadable(error, IoOp::ReadDir))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| unreadable(error, IoOp::Metadata))?;
         if file_type.is_file() {
             continue;
         }
@@ -633,15 +638,45 @@ fn read_description(
 
 /// True for a regular file, false when nothing is there; anything else is an error.
 fn regular_file(path: &Path) -> Result<bool, String> {
+    regular_file_entry(path).map_err(|refusal| refusal.message)
+}
+
+/// Why an entry is not a usable regular file, with the OS error behind an entry whose metadata
+/// cannot be read.
+struct RegularFileRefusal {
+    message: String,
+    os_error: Option<std::io::Error>,
+}
+
+/// [`regular_file`], keeping the OS error behind an entry whose metadata cannot be read.
+fn regular_file_entry(path: &Path) -> Result<bool, RegularFileRefusal> {
+    let refused = |message: String, os_error| Err(RegularFileRefusal { message, os_error });
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(format!("{} is a symbolic link", path.display()))
+            refused(format!("{} is a symbolic link", path.display()), None)
         }
         Ok(metadata) if metadata.is_file() => Ok(true),
-        Ok(_) => Err(format!("{} is not a regular file", path.display())),
+        Ok(_) => refused(format!("{} is not a regular file", path.display()), None),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("{} is unavailable: {error}", path.display())),
+        Err(error) => refused(
+            format!("{} is unavailable: {error}", path.display()),
+            Some(error),
+        ),
     }
+}
+
+/// A runtime library as [`regular_file`] reads it; a refusal keeps the OS error behind it as
+/// its `os_cause` (ledger revision 3).
+fn runtime_file(path: &Path) -> VisionFfiResult<bool> {
+    regular_file_entry(path).map_err(|refusal| {
+        let error = runtime_unavailable(refusal.message);
+        match refusal.os_error {
+            Some(os_error) => {
+                error.with_os_cause(Outcome::from_io_error(&os_error, IoOp::Metadata))
+            }
+            None => error,
+        }
+    })
 }
 
 /// True for a directory, false when nothing is there; anything else is an error.

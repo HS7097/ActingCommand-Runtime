@@ -13,8 +13,7 @@ use actingcommand_contract::{
     DiagnosticDetailDraft, EffectDisposition, EventActor, EventLinksDraft, EventSeverity,
     EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, FailedRunRetentionPolicy, OriginModule,
     OwnerEpoch, ProjectedArtifactReference, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS,
-    RETENTION_ROUND_START_BUDGET_MS, RuntimeErrorCode, RuntimePayloadDraft, Sensitivity,
-    TerminalEvent,
+    RETENTION_ROUND_START_BUDGET_MS, RuntimeErrorCode, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
     ArtifactEvictionAdmission, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
@@ -118,7 +117,7 @@ impl super::HostShared {
     }
 
     /// One Warning `runtime.failed` with system links for a frame the cleaner could not remove
-    /// or move; its detail carries only `key=value` tokens.
+    /// or move; its outcome carries the frame, the kept folder and the OS error as values.
     fn record_frame_retention_warning(
         &self,
         warning: &FrameRetentionWarning,
@@ -132,13 +131,12 @@ impl super::HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                warning.outcome(),
                 DiagnosticDetailDraft::new(
                     "frame_retention",
                     warning.stage(),
                     "artifact_store",
                     HostLocation::MaintainFrameRetention.as_str(),
-                    warning.message(),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),
@@ -352,28 +350,26 @@ impl FrameRetentionWarning {
         }
     }
 
-    /// Only `key=value` tokens.
-    fn message(&self) -> String {
-        let mut message = format!("host_code={}", self.code.as_str());
+    /// The warning as its record's outcome (ledger revision 3; was a message of `key=value`
+    /// tokens): its code with the frame, the kept folder and the OS error as values.
+    fn outcome(&self) -> actingcommand_contract::outcome::Outcome {
+        let mut outcome = actingcommand_contract::outcome::Outcome::new(self.code)
+            .operation(HostLocation::MaintainFrameRetention);
         if let Some(artifact_id) = &self.artifact_id {
-            message.push_str(&format!(
-                " artifact_id={}",
-                crate::failure_identity::identifier_text(artifact_id)
-            ));
+            outcome = outcome.artifact_id(crate::failure_identity::identifier_text(artifact_id));
         }
         if let Some(entry) = &self.entry {
-            message.push_str(&format!(" entry={entry}"));
+            outcome = outcome.entry(entry);
         }
         if let Some(kind) = self.io_kind {
-            message.push_str(&format!(
-                " io_kind={}",
-                actingcommand_contract::outcome::IoKind::from_error_kind(kind).as_str()
+            outcome = outcome.io_kind(actingcommand_contract::outcome::IoKind::from_error_kind(
+                kind,
             ));
         }
         if let Some(code) = self.os_error {
-            message.push_str(&format!(" os_error={code}"));
+            outcome = outcome.os_error(code);
         }
-        message
+        outcome
     }
 }
 

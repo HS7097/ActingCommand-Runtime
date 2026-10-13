@@ -20,11 +20,12 @@ use super::{
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     CandidateFeature, CandidateProjection, InputAction, InputSamplingEvidence,
-    InstanceFactSnapshot, TaskSelectionConfirmation, TaskSelectionPolicy, TaskSelectionRecord,
-    validate_candidate_layout_id,
+    InstanceFactSnapshot, PolicyReasonRecord, TaskSelectionConfirmation, TaskSelectionGateResult,
+    TaskSelectionOutcome, TaskSelectionPolicy, TaskSelectionRecord, TaskSelectionTermResult,
+    TaskSelectionVerdict, validate_candidate_layout_id,
 };
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::LoadedBundle;
@@ -33,9 +34,9 @@ use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
-    Candidate, GateUnknownHandling, MAX_DOCUMENT_BYTES, ScalarValue, SelectionDecision,
-    SelectionFactSnapshot, SelectionOutcome, SelectionPolicy, TermUnknownHandling, ValueRef,
-    ValueType, evaluate, parse_canonical_json,
+    Candidate, CandidateVerdict, DecisionReason, GateUnknownHandling, MAX_DOCUMENT_BYTES,
+    ScalarValue, SelectionDecision, SelectionFactSnapshot, SelectionOutcome, SelectionPolicy,
+    TermUnknownHandling, ValueRef, ValueType, evaluate, parse_canonical_json,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -518,6 +519,69 @@ fn mirror<T: Serialize, U: DeserializeOwned>(value: &T) -> Result<U, ContainedTa
         })
 }
 
+/// The record's outcome of the decision (ledger revision 3): an unknown outcome keeps its
+/// reason, and the evaluator's `detail` text stays out of the record.
+fn record_outcome(outcome: &SelectionOutcome) -> Result<TaskSelectionOutcome, ContainedTaskError> {
+    match outcome {
+        SelectionOutcome::Unknown { reason, .. } => Ok(TaskSelectionOutcome::Unknown {
+            reason: mirror(reason)?,
+        }),
+        other => mirror(other),
+    }
+}
+
+/// The record's reason chain (ledger revision 3): each reason's code; the evaluator's English
+/// `detail` stays out of the record.
+fn record_reasons(reasons: &[DecisionReason]) -> Vec<PolicyReasonRecord> {
+    reasons
+        .iter()
+        .map(|reason| PolicyReasonRecord {
+            code: reason.code.clone(),
+        })
+        .collect()
+}
+
+/// The record's per-candidate breakdown: each gate's and term's result as its
+/// `selection_result` (ledger revision 3), each reason as [`record_reasons`] keeps it.
+fn record_verdicts(
+    verdicts: &[CandidateVerdict],
+) -> Result<Vec<TaskSelectionVerdict>, ContainedTaskError> {
+    verdicts
+        .iter()
+        .map(|verdict| {
+            Ok(TaskSelectionVerdict {
+                candidate_id: verdict.candidate_id.clone(),
+                status: mirror(&verdict.status)?,
+                score_milli: verdict.score_milli,
+                rank: verdict.rank,
+                gates: verdict
+                    .gates
+                    .iter()
+                    .map(|gate| {
+                        Ok(TaskSelectionGateResult {
+                            gate_id: gate.gate_id.clone(),
+                            selection_result: mirror(&gate.outcome)?,
+                        })
+                    })
+                    .collect::<Result<_, ContainedTaskError>>()?,
+                terms: verdict
+                    .terms
+                    .iter()
+                    .map(|term| {
+                        Ok(TaskSelectionTermResult {
+                            term_id: term.term_id.clone(),
+                            selection_result: mirror(&term.outcome)?,
+                            weight_milli: term.weight_milli,
+                            contribution_milli: term.contribution_milli,
+                        })
+                    })
+                    .collect::<Result<_, ContainedTaskError>>()?,
+                reasons: record_reasons(&verdict.reasons),
+            })
+        })
+        .collect()
+}
+
 /// The decision's record, mirrored before the confirmation frame is captured; the attempt
 /// sets its `confirmation`.
 fn selection_record(
@@ -541,11 +605,11 @@ fn selection_record(
         input_ledger_position: snapshot.ledger_position,
         now_unix_ms,
         input_sha256: decision.input_sha256.clone(),
-        outcome: mirror(&decision.outcome)?,
+        selection_result: record_outcome(&decision.outcome)?,
         outcome_key: decision.outcome_key.clone(),
         selected: decision.selected.clone(),
-        verdicts: mirror(&decision.candidates)?,
-        reasons: mirror(&decision.reasons)?,
+        verdicts: record_verdicts(&decision.candidates)?,
+        reasons: record_reasons(&decision.reasons),
         confirmation: TaskSelectionConfirmation::NotAttempted,
     })
 }
@@ -876,7 +940,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: error.code().as_str().to_owned(),
+                        outcome: error.code().outcome(),
                     },
                     Err(error.into()),
                 ));
@@ -884,7 +948,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::NonfatalOperation(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
+                        outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
                     },
                     Err(ContainedTaskRunError::NonfatalOperation(error)),
                 ));
@@ -895,7 +959,7 @@ impl PreparedContainedTask {
             {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
+                        outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
                     },
                     Err(ContainedTaskRunError::Boundary(error)),
                 ));
@@ -939,7 +1003,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::GuardFailed {
-                        code: error.code().as_str().to_owned(),
+                        outcome: error.code().outcome(),
                     },
                     Err(error.into()),
                 ));
@@ -966,7 +1030,7 @@ impl PreparedContainedTask {
                             Err(ContainedTaskRunError::Task(error)) => {
                                 return Ok((
                                     TaskSelectionConfirmation::GuardFailed {
-                                        code: error.code().as_str().to_owned(),
+                                        outcome: error.code().outcome(),
                                     },
                                     Err(error.into()),
                                 ));
@@ -979,7 +1043,7 @@ impl PreparedContainedTask {
                 Err(ContainedTaskRunError::Task(error)) => {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: error.code().as_str().to_owned(),
+                            outcome: error.code().outcome(),
                         },
                         Err(error.into()),
                     ));
@@ -987,7 +1051,7 @@ impl PreparedContainedTask {
                 Err(ContainedTaskRunError::NonfatalOperation(error)) => {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
+                            outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
                         },
                         Err(ContainedTaskRunError::NonfatalOperation(error)),
                     ));
@@ -997,7 +1061,7 @@ impl PreparedContainedTask {
                 {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            code: SELECTION_CONFIRMATION_CAPTURE_FAILED.as_str().to_owned(),
+                            outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
                         },
                         Err(ContainedTaskRunError::Boundary(error)),
                     ));

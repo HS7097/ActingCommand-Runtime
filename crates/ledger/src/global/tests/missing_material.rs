@@ -20,15 +20,14 @@ use actingcommand_artifact_store::{
     ArtifactWriteContext, ArtifactWriteRequest, try_artifact_delete_guard,
 };
 use actingcommand_contract::{
-    ArtifactEvictionDisposition, ArtifactEvictionIo, ArtifactId, ArtifactIssuePolicy, ArtifactKind,
-    ArtifactLinksDraft, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
-    ArtifactProducer, ArtifactRedactionState, ArtifactRetentionFact, ArtifactRetentionIdentity,
-    AuditInput, CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft,
-    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
-    FRAME_RETENTION_POLICY_VERSION, FailedRunRetentionPolicy, IdentifierIssuer, IssuedInstanceId,
-    OriginModule, OwnerEpoch, OwnerResourceDisposition, ProjectedArtifactReference,
-    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft,
-    SanitizedEventDraft, TerminalEvent,
+    ArtifactEvictionDisposition, ArtifactId, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft,
+    ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord, ArtifactProducer,
+    ArtifactRedactionState, ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput,
+    CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
+    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION,
+    FailedRunRetentionPolicy, IdentifierIssuer, IssuedInstanceId, OriginModule, OwnerEpoch,
+    OwnerResourceDisposition, ProjectedArtifactReference, ResourceQuiescence, RetentionClass,
+    RuntimeLifecyclePhase, RuntimePayloadDraft, SanitizedEventDraft, TerminalEvent,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_host::{
@@ -353,9 +352,9 @@ fn finish_failed(ledger: &GlobalLedger, permit: Box<ArtifactEvictionPermit>) {
         WriterCommand::FinishArtifactEviction {
             permit,
             disposition: ArtifactEvictionDisposition::Failed,
-            io: Some(ArtifactEvictionIo::from_io(&std::io::Error::from(
-                std::io::ErrorKind::PermissionDenied,
-            ))),
+            outcome: Some(actingcommand_contract::artifact_eviction_io_outcome(
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            )),
             response,
         },
         LedgerLocation::FinishArtifactEviction.location(),

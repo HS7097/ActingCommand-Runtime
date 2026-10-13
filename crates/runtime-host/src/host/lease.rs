@@ -3829,18 +3829,21 @@ impl HostShared {
         drop(order);
         // Q-4: a removed entry may leave an eligible one first on a free instance.
         self.pump(instance_id)?;
-        let mut detail = format!("timeout_ms={cap_ms}");
-        if let Some(holder_kind) = holder_kind {
-            detail.push_str(&format!(" holder_kind={}", holder_kind.as_str()));
-        }
-        detail.push_str(&format!(" queue_position={}", removed.queued().position()));
+        let queue_position = removed.queued().position();
         Err(RequestFailure::request(
             RuntimeHostError::request(
                 actingcommand_contract::codes::SharedCode::LeaseQueueExpired,
                 HostLocation::AwaitOperatorClaim,
                 RuntimeErrorCode::QueueExpired,
             )
-            .with_native_detail(detail),
+            // Ledger revision 3: the record's outcome carries the wait as values.
+            .with_outcome_values(|outcome| {
+                let outcome = outcome.timeout_ms(cap_ms).queue_position(queue_position);
+                match holder_kind {
+                    Some(kind) => outcome.holder_kind(crate::error::ClaimKindToken(kind)),
+                    None => outcome,
+                }
+            }),
             RuntimeReceiptState::Denied,
             Some(terminal(&event)),
         ))

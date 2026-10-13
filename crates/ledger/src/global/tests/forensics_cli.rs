@@ -1508,6 +1508,13 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
         } else if after < 3 {
             let mut expected = fact.clone();
             expected["max_steps"] = serde_json::Value::Null;
+            // Ledger revision 3 (Workflow #378 A3): the report carries the artifact's stop reason
+            // (none here) as its outcome.
+            expected
+                .as_object_mut()
+                .expect("object")
+                .remove("terminal_reason");
+            expected["outcome"] = serde_json::Value::Null;
             assert_eq!(page["rows"][0]["comparison"], expected);
             assert_eq!(
                 page["rows"][0]["artifact"],
@@ -1519,7 +1526,10 @@ fn stability_cli_pages_errors_and_source_files_are_explicit() {
                     .expect("sequence"),
             );
         } else {
-            assert_eq!(page["failures"][0]["code"], "stability_schema_unsupported");
+            assert_eq!(
+                page["failures"][0]["outcome"]["code"],
+                "stability_schema_unsupported"
+            );
             assert_eq!(page["failures"][0]["source_sequence"], after + 1);
             assert_eq!(page["window_complete"], false);
         }

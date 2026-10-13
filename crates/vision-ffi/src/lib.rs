@@ -15,6 +15,7 @@ pub mod codes;
 pub mod ffi;
 pub mod models;
 
+use actingcommand_contract::outcome::Outcome;
 pub use actingcommand_contract::{
     PPOCR_DIAGNOSTIC_RESULT_SCHEMA, PPOCR_MAX_BUSINESS_JSON_BYTES, PPOCR_MAX_DIAGNOSTIC_JSON_BYTES,
     PPOCR_MAX_DIAGNOSTIC_NODES, PPOCR_MAX_DIAGNOSTIC_REPORTS, PPOCR_MAX_ENVELOPE_BYTES,
@@ -67,6 +68,10 @@ pub struct VisionFfiError {
     message: String,
     #[serde(skip)]
     ppocr_diagnostics: PpocrDiagnostics,
+    /// The OS failure behind the error, when an OS or file-system call raised it (ledger
+    /// revision 3: a startup refusal records it as its `caused_by` link).
+    #[serde(skip)]
+    os_cause: Option<Outcome>,
 }
 
 impl VisionFfiError {
@@ -85,6 +90,7 @@ impl VisionFfiError {
             module,
             message: message.into(),
             ppocr_diagnostics: Vec::new(),
+            os_cause: None,
         }
     }
 
@@ -111,6 +117,17 @@ impl VisionFfiError {
     pub fn with_ppocr_diagnostics(mut self, diagnostics: PpocrDiagnostics) -> Self {
         self.ppocr_diagnostics.extend(diagnostics);
         self
+    }
+
+    /// This error with the OS failure that raised it (`Outcome::from_io_error`).
+    pub fn with_os_cause(mut self, cause: Outcome) -> Self {
+        self.os_cause = Some(cause);
+        self
+    }
+
+    /// The OS failure behind the error, when an OS or file-system call raised it.
+    pub fn os_cause(&self) -> Option<&Outcome> {
+        self.os_cause.as_ref()
     }
 }
 

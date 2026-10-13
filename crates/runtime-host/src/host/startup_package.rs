@@ -456,21 +456,17 @@ impl HostShared {
                 Some(rejection) => {
                     RuntimePayloadDraft::resource_declaration_rejected(rejection.clone())
                 }
+                // Ledger revision 3: the failure is the record's outcome; the former
+                // `key=value` summary is not recorded (the instance is the record's link).
                 None => RuntimePayloadDraft::failed(
                     DiagnosticCode::RuntimeDiagnostic,
                     EffectDisposition::NotPerformed,
+                    error.record_outcome(),
                     DiagnosticDetailDraft::new(
                         pending.run.failure_category(),
                         RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
                         "runtime_host",
                         error.operation(),
-                        format!(
-                            "host_code={} fatal={} instance_alias={}",
-                            error.code(),
-                            error.is_fatal(),
-                            pending.instance_alias
-                        ),
-                        Sensitivity::Internal,
                     ),
                     AuditInput::new(),
                 ),
