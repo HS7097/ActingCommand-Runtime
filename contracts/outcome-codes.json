@@ -1576,6 +1576,14 @@
     "removed_package_ids": {
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
+    },
+    "event_type": {
+      "type": "vocab:event_type",
+      "description": "A ledger event type, for example the type of a performance event the contract rejected."
+    },
+    "resource_target_id": {
+      "type": "token",
+      "description": "The id of a resource target in an instance's resource-targets document."
     }
   },
   "vocabularies": {
@@ -2472,6 +2480,18 @@
         },
         "lookup_miss": {
           "description": "No lookup entry covers the value and the transform declares no default."
+        },
+        "dependency_state_missing": {
+          "description": "No terminal state is recorded for the task a predicate depends on."
+        },
+        "outcome_missing": {
+          "description": "No result is recorded under the task's outcome key."
+        },
+        "outcome_expired": {
+          "description": "The result recorded under the task's outcome key has expired."
+        },
+        "resource_outcome_missing": {
+          "description": "No result is recorded for the resource a pool reads from a task's outcome."
         }
       }
     },
@@ -4197,64 +4217,64 @@
       }
     },
     "emulator_stop_result": {
-      "description": "How the Stop phase of an emulator restart ended: confirmed, or the device stage it failed at (the stage's last part).",
+      "description": "How the Stop phase of an emulator restart ended: confirmed, or the token the host's stop-result table gives the stage the Stop failed at.",
       "tokens": {
         "confirmed": {
           "description": "The Stop was confirmed."
         },
         "control": {
-          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager.control)."
+          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager_control)."
         },
         "control_exit": {
-          "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
+          "description": "The shutdown command exited non-zero (mumu_manager_control_exit)."
         },
         "control_errcode": {
-          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager.control_errcode)."
+          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager_control_errcode)."
         },
         "launch_error": {
-          "description": "info reported launch_err_code not 0 (mumu_manager.launch_error)."
+          "description": "info reported launch_err_code not 0 (mumu_manager_launch_error)."
         },
         "wait_timeout": {
-          "description": "The readiness wait for the stopped state expired (mumu_manager.wait_timeout)."
+          "description": "The readiness wait for the stopped state expired (mumu_manager_wait_timeout)."
         },
         "run": {
-          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager.run)."
+          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager_run)."
         },
         "timeout": {
-          "description": "The shutdown command passed its bound (mumu_manager.timeout)."
+          "description": "The shutdown command passed its bound (mumu_manager_timeout)."
         },
         "path": {
-          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager.path)."
+          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager_path)."
         },
         "errcode": {
-          "description": "An info poll answered an errcode envelope (mumu_manager.errcode)."
+          "description": "An info poll answered an errcode envelope (mumu_manager_errcode)."
         },
         "entry": {
-          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager.entry)."
+          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager_entry)."
         },
         "exit": {
-          "description": "An info poll exited non-zero (mumu_manager.exit)."
+          "description": "An info poll exited non-zero (mumu_manager_exit)."
         },
         "shape": {
-          "description": "An info poll answered an unexpected shape (mumu_manager.shape)."
+          "description": "An info poll answered an unexpected shape (mumu_manager_shape)."
         },
         "decode": {
-          "description": "An info poll's output is not UTF-8 (mumu_manager.decode)."
+          "description": "An info poll's output is not UTF-8 (mumu_manager_decode)."
         },
         "json": {
-          "description": "An info poll's output is not JSON (mumu_manager.json)."
+          "description": "An info poll's output is not JSON (mumu_manager_json)."
         },
         "output_bound": {
-          "description": "An info poll's output passed its bound (mumu_manager.output_bound)."
+          "description": "An info poll's output passed its bound (mumu_manager_output_bound)."
         },
         "unavailable": {
-          "description": "The instance has no MuMuManager binding (emulator_control.unavailable)."
+          "description": "The instance has no MuMuManager binding (emulator_control_binding)."
         },
         "unsupported": {
-          "description": "The provider has no instance control (emulator_control.unsupported)."
+          "description": "The provider has no instance control (emulator_control_support)."
         },
         "unregistered": {
-          "description": "The instance is not registered with the provider (emulator_control.unregistered)."
+          "description": "The instance is not registered with the provider (emulator_control_registration)."
         }
       }
     },
@@ -7362,6 +7382,12 @@
     ],
     "interrupt_": [
       "runtime-host"
+    ],
+    "environment_value_": [
+      "execution-kernel"
+    ],
+    "recognition_pack_": [
+      "recognition-pack"
     ]
   },
   "codes": {
@@ -12161,6 +12187,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "candidate_ranked": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate passed every gate and received its rank.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "candidate_requires_explicit_disposition": {
       "category": "error",
       "ladder_class": "none",
@@ -12309,6 +12353,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "candidate_scored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate received its score from the document's scoring terms.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "candidate_search_incomplete": {
       "category": "error",
       "ladder_class": "budget_or_permission",
@@ -12345,6 +12407,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports candidate segment root present.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "candidate_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate is among the chosen ones.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14625,7 +14705,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose fact_code is this code followed by key=value tokens and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
+      "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose outcome is this code with these values and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
       "common_causes": "A daily or window budget already used that day, often by an owed run that served the previous day's slot; the activity window closed before the slot could run; the task is paused after repeated failures; the task is disabled for the instance, or the instance lacks the operation or a matching activity profile.",
       "handling": "Compare next_eligible_unix_ms with next_occurrence_unix_ms: below it, the slot runs later in the same or the next window; at or above it, the slot is lost to the next occurrence. Change the catalog (budget, slot times, activity window) or the instance configuration if the slot must run."
     },
@@ -15914,6 +15994,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_guard_page_mismatch": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task operation's guard target was not evaluated because the observed page is not the guard's page.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_guard_refused": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -15929,6 +16027,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A contained task operation's guard did not pass before its input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_guard_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task operation declares unguarded_trusted_coordinate, so no guard target was evaluated before its input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19848,6 +19964,25 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "decision_candidate_not_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "decision_reason_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -21069,7 +21204,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the host's stop-result table gives the stage no token.",
       "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
       "handling": "TBD"
     },
@@ -21096,7 +21231,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the host's stop-result table gives the stage no token.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
       "handling": "TBD"
     },
@@ -21148,6 +21283,42 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An ACTINGCOMMAND_* environment variable is set but ignored because allow_env_overrides is off.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "environment_value_expired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An environment detection result's value is older than its declared lifetime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "environment_value_low_confidence": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An environment detection result's value has a confidence below the declared minimum.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -24554,6 +24725,82 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): frame workspace unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_rejected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) does not hold for the candidate, which is rejected.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_aborted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and its document ends the evaluation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and its document drops the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "gate_unknown_substituted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection gate (rule_id) met an unknown input and used its declared verdict.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -37127,7 +37374,7 @@
       "handling": "TBD"
     },
     "maintenance_recheck_suggested": {
-      "category": "error",
+      "category": "info",
       "ladder_class": "none",
       "owner": "runtime-host",
       "layer": "host",
@@ -37140,7 +37387,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports maintenance recheck suggested.",
+      "description": "A predictive maintenance assessment of a task on an instance suggests a recheck: the outcome of a drift_predicted planning signal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -39715,6 +39962,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ocr_region_unresolved": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An OCR target's region could not be resolved on the frame: its anchor did not match, or the region lies outside the frame.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "offline_decision_fingerprint_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -41553,13 +41818,14 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "performance_event_type_encode_failed": {
+    "performance_event_rejected": {
       "category": "error",
       "ladder_class": "none",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
       "values": {
+        "event_type": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -41567,9 +41833,24 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports performance event type encode failed.",
+      "description": "A performance observation event that contract sanitization refused was dropped, and the performance monitor degraded instead of ending the Runtime; the refusal is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "performance_event_type_encode_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "retired",
+      "since": "0.12.0",
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #378 A2-P). The rejected event type of a performance observation event could not be spelled into the monitor failure code <code>.<event type>. Since 0.12.0 the failure is performance_event_rejected with the event type as the value event_type, which needs no encoding.",
+      "common_causes": "None known: an event type always had a spelling.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "performance_frame_gap_missing": {
       "category": "error",
@@ -42378,6 +42659,26 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: planning document size invalid.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "planning_fact_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy candidate's predicate read a fact (fact_key) that is unknown (unknown_reason), and the policy reserves a detection for it: the outcome of a detection_reserved or detection_quota_exhausted planning signal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -43288,6 +43589,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_detection_reason_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation's detection suggestion carries a reason that the unknown_reason vocabulary does not list, so its planning signal cannot be recorded.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "policy_detection_signal_runtime_owned": {
       "category": "error",
       "ladder_class": "none",
@@ -44175,6 +44494,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports policy instance dispatch conflict.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "policy_instance_fact_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy evaluation found no usable instance fact (fact_key) for an instance and projected the instance unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -47038,6 +47376,25 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "priority_offset_unknown_task": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A priority offset names a task (task_id) the active catalog does not declare; the offset is ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "priority_selection_percentile_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -49423,6 +49780,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "rank_assigned": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selected scheduling candidate's deterministic total score ranked it first on its instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "rank_breakdown": {
       "category": "info",
       "ladder_class": "none",
@@ -49566,6 +49941,114 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime's wire error code (receipt projection `code`): recognition failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition pack's package or target declaration is invalid, or a recognition evaluation failed without a more specific code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The vision provider failed while a recognition target was evaluated.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition target needs a vision provider that is not configured.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_response_invalid": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The vision provider answered a recognition target's request with an invalid response.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_target_unsupported": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition target declares semantics this build cannot evaluate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_text_read_refused": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A text read refused to conclude because its read budget ran out; the error's own outcome names the budget.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -53769,6 +54252,63 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_target_applied": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) with an open gap is applied to the candidate's effective score.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_override": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An override resource target (resource_target_id) supersedes the candidate's selection score and, unless it keeps it, its manual offset.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) is configured but waits for a valid observation of its resource.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "resource_target_policy_expired": {
       "category": "info",
       "ladder_class": "none",
@@ -53823,6 +54363,25 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_target_satisfied": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) is met: its gap is closed and it no longer moves the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "resource_target_tasks_unevaluable": {
       "category": "warning",
       "ladder_class": "none",
@@ -53838,6 +54397,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scheduling decision reason: some tasks the resource target policy names cannot be evaluated.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_target_unmapped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "resource_target_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource target (resource_target_id) of the instance's resource-targets policy cannot be mapped to the candidate's task or resource.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -59075,6 +59653,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "runtime_receipt_build_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host could not build the runtime receipt of a request; the host latches the failure (was the runtime client's runtime_receipt_invalid, which names a receipt the client cannot read).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_receipt_decode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -61538,6 +62134,42 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "score_computed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The score stage computed a scheduling candidate's effective score from its selection score, utility term, manual offset and applied resource target.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "score_cost_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Neither a scheduling candidate's last run duration nor its declared expected duration is above zero, so its utility term is dropped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "score_deferred": {
       "category": "info",
       "ladder_class": "none",
@@ -61589,6 +62221,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scheduling decision reason: the priority selection promotes the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "score_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The selection document could not score a scheduling candidate because one of its gates rejected it (rule_id); only the utility term, the manual offset and any applied resource target apply.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -61736,6 +62387,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_ambiguous": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The declared tie-break order does not separate the selection candidates at the cut; nothing is chosen.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_confirmation_capture_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -61751,6 +62420,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's confirmation frame could not be captured.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_empty": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose nothing, which its document allows.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -61826,6 +62513,42 @@
       "common_causes": "An instruction key (session.) was never set for the instance; the document's lookup lacks an entry and a default for a value the candidate has; the document reads a field the candidate does not carry.",
       "handling": "Supply the instruction for the instance, or fix the selection document (add the lookup entry or default, or read a field the scheduling layer provides) and approve the catalog again."
     },
+    "selection_inputs_identity": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the canonical identity of its candidates, facts and instant.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_insufficient": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Fewer selection candidates survived than the document requires; nothing is chosen.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_not_selected": {
       "category": "error",
       "ladder_class": "none",
@@ -61844,6 +62567,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_outcome_key_chosen": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose the outcome key its document maps the decision to.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_page_changed": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",
@@ -61859,6 +62600,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's confirmation frame shows another page.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_policy_identity": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the canonical identity of its selection-policy document.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -61930,6 +62689,42 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_requirement_declared": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision names the selection mode and count its document requires.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_selected": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection decision chose the required number of surviving candidates.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_state_unavailable": {
       "category": "error",
       "ladder_class": "none",
@@ -61945,6 +62740,25 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The runtime has no instance fact snapshot or instant for a select step.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection evaluation ended unknown: a record list could not be read, or an unknown input reached a rule whose document ends the evaluation (unknown_reason).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -64415,6 +65229,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "strategic_feasibility_red": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal infeasible on an instance at best effort: the outcome of a feasibility_red planning signal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "strategic_report_encode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -64518,6 +65350,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports strategic signal identity encode failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "strategic_timeline_reached": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A strategic report finds a goal's deadline reached on an instance with a shortfall left: the outcome of a timeline_reached planning signal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -65602,6 +66452,24 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "task_eligible": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling candidate's trigger passed and its feedback stop did not fire: the task is eligible on the instance.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "task_evidence_export_incomplete": {
       "category": "error",
       "ladder_class": "none",
@@ -65828,6 +66696,63 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "term_unknown_aborted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and its document ends the evaluation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "term_unknown_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and its document drops the candidate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "term_unknown_substituted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection scoring term (rule_id) met an unknown input and used its declared value.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "terminal_already_committed": {
       "category": "error",
       "ladder_class": "none",
@@ -65977,6 +66902,24 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A text read was refused before calling the OCR provider: one consumer (one page recognition or one guard evaluation) would exceed its budget of provider calls or of summed region area in pixels (Workflow #396 REC-1). count is the amount already used, limit_count the budget. An evaluation error.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "tie_break_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A selection candidate's tie-break key is unknown, so the candidate orders after every candidate whose key is known.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -67734,6 +68677,46 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: activate release set."
     },
+    "adb_endpoint_pending": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a session-opening refusal: the discovered instance's ADB endpoint is pending (the stopped instance reported no port)."
+    },
+    "adb_endpoint_unresolved": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an endpoint rebind refusal: the started instance reported ADB port 0."
+    },
+    "adb_ensure_device_get_state": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: adb get-state while confirming that the target answers device."
+    },
+    "adb_input_bounds_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the adb shell input backend reading or validating the touch bounds, or refusing an action outside them."
+    },
+    "adb_input_rotation_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the adb shell input backend resolving the display rotation at connect."
+    },
     "admit_artifact_bytes": {
       "owner": "artifact-store",
       "layer": "store",
@@ -68133,6 +69116,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: append vendor stdio close."
+    },
+    "application_foreground_unsupported": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a foreground application observation refusal: the execution backend provider has no ADB baseline (the kernel's default and the host's fixture emit it)."
     },
     "application_lifecycle": {
       "owner": "runtime-client",
@@ -68998,6 +69989,14 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: canonicalize read only root."
     },
+    "capture_frame_layout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating a captured frame's dimensions and pixel buffer length."
+    },
     "capture_identity": {
       "owner": "device",
       "layer": "device",
@@ -69005,6 +70004,174 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Nemu capture operation: coordinating the capture's MuMu installation identity with the target and its adb."
+    },
+    "capture_scrcpy_config": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy capture backend's configuration check before it starts."
+    },
+    "capture_scrcpy_connect": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: connecting to the scrcpy server's sockets."
+    },
+    "capture_scrcpy_crop": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: computing the scrcpy capture crop from the display size."
+    },
+    "capture_scrcpy_first_frame": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: waiting for the first scrcpy frame after the start."
+    },
+    "capture_scrcpy_forward": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: creating the adb forward to the scrcpy server or reading its port."
+    },
+    "capture_scrcpy_fresh_wait": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: waiting for a scrcpy frame encoded after the capture floor."
+    },
+    "capture_scrcpy_header": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the scrcpy stream header (device name and codec)."
+    },
+    "capture_scrcpy_server_digest": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the scrcpy server file the build carries before it is pushed."
+    },
+    "capture_scrcpy_server_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy server process exited before its sockets connected."
+    },
+    "capture_scrcpy_server_local_copy": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing the carried scrcpy server to a local file for the push."
+    },
+    "capture_scrcpy_server_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the scrcpy server to the device."
+    },
+    "capture_scrcpy_server_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the scrcpy server process through adb."
+    },
+    "capture_scrcpy_socket": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: configuring or reading a scrcpy socket."
+    },
+    "capture_scrcpy_stream_decode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: decoding a scrcpy video packet."
+    },
+    "capture_scrcpy_stream_decoder_open": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: opening the scrcpy video decoder."
+    },
+    "capture_scrcpy_stream_protocol": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a malformed scrcpy stream packet."
+    },
+    "capture_scrcpy_stream_server_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy server exited while streaming."
+    },
+    "capture_scrcpy_stream_socket_closed": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy video socket closed while streaming."
+    },
+    "capture_scrcpy_stream_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the scrcpy stream reader."
+    },
+    "capture_scrcpy_stream_state": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the scrcpy stream's shared state."
+    },
+    "capture_scrcpy_stream_video_size": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the scrcpy encoder's video size differs from the requested crop."
     },
     "capture_sequence": {
       "owner": "contract",
@@ -70342,6 +71509,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: device diagnostic count overflow."
     },
+    "device_registry_input_operation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an input operation failure in the device registry's input backend when the device error names no stage of its own."
+    },
     "device_rotation": {
       "owner": "device",
       "layer": "device",
@@ -70390,6 +71565,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: effective configuration limit exceeded."
     },
+    "effective_configuration_size_check": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a contained task's effective configuration record: checking the encoded record against its byte limit."
+    },
     "emit_capture_dedup_window": {
       "owner": "artifact-store",
       "layer": "store",
@@ -70405,6 +71588,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The artifact store's operation or stage: emit capture similarity."
+    },
+    "emulator_control_binding": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance has no emulator binding (registered without discovery, or a fixture)."
+    },
+    "emulator_control_registration": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance is not registered with the provider."
+    },
+    "emulator_control_support": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the execution backend provider has no instance control."
     },
     "encode_backup_binding": {
       "owner": "runtime-host",
@@ -70854,6 +72061,30 @@
       "since": "0.12.0",
       "description": "The artifact store's operation or stage: format screenshot name."
     },
+    "frame_retention_counter": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: writing the move counter failed."
+    },
+    "frame_retention_move": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: moving a frame to the kept folder failed."
+    },
+    "frame_retention_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: removing a frame failed."
+    },
     "frame_retention_view": {
       "owner": "ledger",
       "layer": "store",
@@ -71118,6 +72349,38 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: initialize sqlite ledger."
     },
+    "input_close": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: closing the backend."
+    },
+    "input_key": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a key press."
+    },
+    "input_long_tap": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a long tap."
+    },
+    "input_nemu_capability": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the selected Nemu input capability is unavailable for the operation."
+    },
     "input_preempted_at_safe_boundary": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71125,6 +72388,46 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: input preempted at safe boundary."
+    },
+    "input_reset": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: resetting the touch state."
+    },
+    "input_segmented_swipe_capability": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the selected input backend does not support segmented swipe."
+    },
+    "input_swipe": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a swipe (an adb long tap is delegated as one)."
+    },
+    "input_tap": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: a tap."
+    },
+    "input_text": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of an input backend: text input."
     },
     "insert_sqlite_record": {
       "owner": "ledger",
@@ -71318,6 +72621,14 @@
       "since": "0.12.0",
       "description": "Nemu capture operation: resolving the MuMu installation (root, adb and capture DLL)."
     },
+    "instance_discovery_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an instance discovery failure whose device error names no stage of its own."
+    },
     "instance_discovery_observation_kind": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71333,6 +72644,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: instance discovery source."
+    },
+    "instance_discovery_unsupported": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an instance discovery refusal: the execution backend provider has no discovery surface (the kernel's default and the host's registry emit it)."
     },
     "instantiate_template": {
       "owner": "runtime-host",
@@ -71726,6 +73045,190 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: lock writer without metadata write."
     },
+    "maatouch_handshake_aborted": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MaaTouch reported Aborted during its handshake."
+    },
+    "maatouch_handshake_channel_receive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: receiving the MaaTouch handshake from its reader."
+    },
+    "maatouch_handshake_pid_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the MaaTouch pid line."
+    },
+    "maatouch_handshake_pid_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the MaaTouch pid line."
+    },
+    "maatouch_handshake_pressure_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the configured MaaTouch default pressure against the device range."
+    },
+    "maatouch_handshake_stdout_eof": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MaaTouch stdout ended before the handshake."
+    },
+    "maatouch_handshake_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch handshake did not arrive in time."
+    },
+    "maatouch_handshake_version_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the MaaTouch version value."
+    },
+    "maatouch_handshake_version_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the MaaTouch handshake line."
+    },
+    "maatouch_handshake_version_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch version line has an unexpected shape."
+    },
+    "maatouch_handshake_version_value_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the MaaTouch handshake values."
+    },
+    "maatouch_install_chmod": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: making the pushed MaaTouch binary executable."
+    },
+    "maatouch_install_local_file_metadata": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the local MaaTouch file's metadata."
+    },
+    "maatouch_install_local_file_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the local MaaTouch file."
+    },
+    "maatouch_install_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the MaaTouch binary to the device."
+    },
+    "maatouch_operation_inactive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: an operation on a MaaTouch backend that is not connected."
+    },
+    "maatouch_process_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch process exited unexpectedly."
+    },
+    "maatouch_process_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch child process is missing."
+    },
+    "maatouch_process_poll": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: polling the MaaTouch process status."
+    },
+    "maatouch_process_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the MaaTouch process."
+    },
+    "maatouch_stdin_flush": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: flushing a MaaTouch command."
+    },
+    "maatouch_stdin_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MaaTouch stdin is missing."
+    },
+    "maatouch_stdin_write": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing a MaaTouch command."
+    },
     "maintain_frame_retention": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71806,6 +73309,14 @@
       "since": "0.12.0",
       "description": "A runtime client operation: match diagnostic signatures."
     },
+    "material_read_attempt": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime material read failure: the read attempt."
+    },
     "material_read_context_missing": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71813,6 +73324,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: material read context missing."
+    },
+    "material_read_deadline_compute": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: computing its deadline from the read budget."
+    },
+    "material_read_length_convert": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: converting a chunk's length to the reply's integer type."
     },
     "material_read_reply_encode_failed": {
       "owner": "runtime-host",
@@ -71854,6 +73381,206 @@
       "since": "0.12.0",
       "description": "The runtime state store's operation or stage: migrate state document."
     },
+    "minitouch_handshake_channel_receive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: receiving the minitouch handshake from its reader."
+    },
+    "minitouch_handshake_max_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the minitouch max line."
+    },
+    "minitouch_handshake_max_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch max line."
+    },
+    "minitouch_handshake_max_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch max line has an unexpected field count."
+    },
+    "minitouch_handshake_max_value_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing a minitouch max value."
+    },
+    "minitouch_handshake_max_value_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch handshake values are not positive."
+    },
+    "minitouch_handshake_pid_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: parsing the minitouch pid line."
+    },
+    "minitouch_handshake_pid_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch pid line."
+    },
+    "minitouch_handshake_pid_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch pid line is empty."
+    },
+    "minitouch_handshake_pressure_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: checking the configured minitouch default pressure against the device range."
+    },
+    "minitouch_handshake_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch handshake did not arrive in time."
+    },
+    "minitouch_handshake_version_parse": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch version line is invalid."
+    },
+    "minitouch_handshake_version_read": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the minitouch version line."
+    },
+    "minitouch_install_chmod": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: making the pushed minitouch binary executable."
+    },
+    "minitouch_install_local_file_metadata": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the local minitouch file's metadata."
+    },
+    "minitouch_install_local_file_validate": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: validating the local minitouch file."
+    },
+    "minitouch_install_push": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: pushing the minitouch binary to the device."
+    },
+    "minitouch_operation_inactive": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: an operation on a minitouch backend that is not connected."
+    },
+    "minitouch_process_exited": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch process exited unexpectedly."
+    },
+    "minitouch_process_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch child process is missing."
+    },
+    "minitouch_process_poll": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: polling the minitouch process status."
+    },
+    "minitouch_process_spawn": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting the minitouch process."
+    },
+    "minitouch_stdin_flush": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: flushing a minitouch command."
+    },
+    "minitouch_stdin_missing": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the minitouch stdin is missing."
+    },
+    "minitouch_stdin_write": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: writing a minitouch command."
+    },
     "monitor_state_observation_kind": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71870,6 +73597,174 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: monitor state source."
     },
+    "mumu_manager_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control failure whose device error names no stage of its own."
+    },
+    "mumu_manager_control_errcode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager control exited 0 with an errcode envelope whose errcode is not 0."
+    },
+    "mumu_manager_control_exit": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager control exited non-zero."
+    },
+    "mumu_manager_decode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager stdout is not valid UTF-8."
+    },
+    "mumu_manager_discover": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager instance discovery."
+    },
+    "mumu_manager_entry": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager info entry carries an errcode envelope."
+    },
+    "mumu_manager_errcode": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager exited 0 with an errcode envelope."
+    },
+    "mumu_manager_exit": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager read command exited non-zero."
+    },
+    "mumu_manager_json": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager stdout is not JSON."
+    },
+    "mumu_manager_launch_error": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager info reported a launch error code that is not 0."
+    },
+    "mumu_manager_output_bound": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager output passed its byte bound."
+    },
+    "mumu_manager_path": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the MuMuManager path is not usable."
+    },
+    "mumu_manager_process_list": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a confirmed Stop whose process listing failed (emulator_stop_process_unverified)."
+    },
+    "mumu_manager_registry": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: reading the uninstall registry to find the MuMu installation."
+    },
+    "mumu_manager_restart_refused": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a vendor restart verb refused before any command (a restart is a shutdown then a launch)."
+    },
+    "mumu_manager_run": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: starting or polling a MuMuManager process."
+    },
+    "mumu_manager_shape": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager document has an unexpected shape."
+    },
+    "mumu_manager_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: a MuMuManager command passed its time bound."
+    },
+    "mumu_manager_version": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager version is not a four-part numeric version."
+    },
+    "mumu_manager_version_floor": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: MuMuManager version is below the Runtime's minimum."
+    },
+    "mumu_manager_wait_timeout": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: the emulator control's readiness wait passed its deadline."
+    },
     "negotiate_project_interface": {
       "owner": "runtime-host",
       "layer": "host",
@@ -71877,6 +73772,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: negotiate project interface."
+    },
+    "nemu_capture_identity": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: coordinating the Nemu capture identity with the target."
+    },
+    "nemu_installation_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: resolving the MuMu installation for Nemu."
+    },
+    "nemu_target_resolve": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Device stage: resolving the Nemu target instance."
     },
     "normalize_evidence_output": {
       "owner": "artifact-store",
@@ -71917,6 +73836,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: note failed task terminal."
+    },
+    "observation_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a contained observation failure's diagnostic detail."
     },
     "observe_catalog_state": {
       "owner": "runtime-state",
@@ -76566,6 +78493,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: resolve runtime instance."
     },
+    "resource_declaration_prepare": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a resource declaration rejection: preparing the contained task's declared resources."
+    },
     "resource_package": {
       "owner": "actingd",
       "layer": "config",
@@ -76934,6 +78869,62 @@
       "since": "0.12.0",
       "description": "A runtime client operation: runtime input."
     },
+    "runtime_ipc_connection_panic": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: the connection's handler panicked."
+    },
+    "runtime_ipc_dispatch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: dispatching the request."
+    },
+    "runtime_ipc_receipt_build": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: building the receipt."
+    },
+    "runtime_ipc_receipt_write": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: writing the receipt."
+    },
+    "runtime_ipc_request_cache": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: looking up or keeping the request's cached receipt."
+    },
+    "runtime_ipc_request_decode": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: decoding the request."
+    },
+    "runtime_ipc_request_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: reading the request."
+    },
     "runtime_lifecycle_connection_cleanup": {
       "owner": "runtime-host",
       "layer": "host",
@@ -77117,6 +79108,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime monitor configure."
+    },
+    "runtime_monitor_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a monitor registry failure: restoring the persisted registry at start."
     },
     "runtime_monitor_status": {
       "owner": "runtime-client",
@@ -77973,6 +79972,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: unlock owner file."
+    },
+    "unlock_owner_ledger": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an offline owner unlock: recording the unlock fact in the ledger (unlock-owner v1 prints it as ledger)."
     },
     "update_owner_file": {
       "owner": "runtime-host",
