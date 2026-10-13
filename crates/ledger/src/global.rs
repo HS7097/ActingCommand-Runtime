@@ -25,7 +25,7 @@ pub use migration::*;
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
-    verify_release_source_reference, verify_transaction_event,
+    refuse_unsupported_ledger_format, verify_release_source_reference, verify_transaction_event,
 };
 
 pub(crate) use projection::query_matches;

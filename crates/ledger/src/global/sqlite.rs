@@ -444,6 +444,30 @@ fn mark_formal_format(connection: &Connection) -> GlobalLedgerResult<()> {
         .map_err(|error| sql_error(error, LedgerLocation::MarkDatabaseFormat.location()))
 }
 
+/// Workflow #378 A3 (acceptance CL-M1): refuses a format-1 ledger under `state_root` before
+/// the Runtime's start writes its owner journal or takes the writer lock. It reads only the
+/// database's `user_version` and its ledger table count, through a read-only open without the
+/// whole-file check; a root without the runtime database is fresh and passes, and nothing is
+/// created.
+pub fn refuse_unsupported_ledger_format(state_root: &std::path::Path) -> GlobalLedgerResult<()> {
+    let present = state_root
+        .join(actingcommand_runtime_database::DATABASE_FILE)
+        .try_exists()
+        .map_err(|error| {
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::InspectRuntimeLedger.location(),
+                &error,
+            )
+        })?;
+    if !present {
+        return Ok(());
+    }
+    let database = RuntimeDatabase::open_existing_unchecked(state_root)?;
+    let connection = database.connection(LedgerLocation::ReadDatabaseFormat.location())?;
+    refuse_unsupported_format(&connection)
+}
+
 pub(super) fn has_schema(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
     let connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     match (format_version(&connection)?, table_count(&connection)?) {

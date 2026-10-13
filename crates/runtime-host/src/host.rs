@@ -1055,6 +1055,18 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
+        // Workflow #378 A3 (acceptance CL-M1): a format-1 ledger is refused before the owner
+        // journal is written or the writer lock is taken; the check reads only the database's
+        // format and creates nothing.
+        actingcommand_ledger::refuse_unsupported_ledger_format(&config.state_root).map_err(
+            |error| {
+                RuntimeHostError::relayed_fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            },
+        )?;
         let events =
             RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;

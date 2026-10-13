@@ -71,6 +71,64 @@ fn sqlite_runs_the_existing_seven_store_contracts() {
     store_contract::signature_catalog_rebuilds_versions_and_binds_paginated_multiple_matches(open);
 }
 
+/// Workflow #378 A3 (acceptance CL-M1, CA-L6): on the Runtime's production start path a
+/// format-1 ledger is refused with `ledger_format_unsupported` (fatal) before the owner journal
+/// is written or the writer lock is taken. The root is the format-1 fixture of
+/// `a_format_1_ledger_is_refused_and_a_new_ledger_is_format_2`.
+#[test]
+fn runtime_start_refuses_a_format_1_ledger_before_the_owner_journal_and_the_writer_lock() {
+    use actingcommand_device::{
+        AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+        TouchBackendChoice, TouchBackendConfig,
+    };
+    use actingcommand_runtime_host::{
+        ExecutionBackendProvider, ExecutionBackendRegistration, ExecutionBackendRegistry,
+        RuntimeHost,
+    };
+    use host::{config, instance_id};
+
+    let root = TempDir::new().expect("format-1 root");
+    let formal = database(root.path());
+    crate::global::sqlite::initialize_formal_empty(&formal).expect("initialize a formal ledger");
+    formal
+        .connection(DatabaseLocation::OpenExistingDatabase.location())
+        .expect("connection")
+        .execute_batch("PRAGMA user_version=1")
+        .expect("mark the database format 1");
+    drop(formal);
+    let owner_journal = root.path().join("owner.lock");
+    let journal_before = std::fs::read(&owner_journal).ok();
+    let provider: Arc<dyn ExecutionBackendProvider> = Arc::new(
+        ExecutionBackendRegistry::new([ExecutionBackendRegistration::new(
+            "node.a",
+            instance_id(),
+            "neutral.application",
+            TouchBackendConfig::new(
+                AdbConfig::default(),
+                DeviceTarget::default(),
+                MaaTouchConfig::default(),
+            )
+            .with_requested(TouchBackendChoice::AdbShellInput),
+            CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+                .with_requested(CaptureBackendChoice::Adb),
+        )
+        .expect("explicit instance configuration")])
+        .expect("single-instance registry"),
+    );
+    let refused = RuntimeHost::start(config(&root), provider)
+        .err()
+        .expect("a format-1 ledger is refused");
+    assert_eq!(refused.code(), "ledger_format_unsupported");
+    assert!(refused.is_fatal());
+    assert_eq!(
+        std::fs::read(&owner_journal).ok(),
+        journal_before,
+        "the owner journal is unchanged"
+    );
+    assert!(!root.path().join("ledger").join("writer.lock").exists());
+    assert!(!root.path().join("writer.lock").exists());
+}
+
 #[test]
 fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
     let root = TempDir::new().expect("root");
