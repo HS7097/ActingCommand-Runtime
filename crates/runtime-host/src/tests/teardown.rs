@@ -848,8 +848,9 @@ fn required_failure_events_preserve_cleanup_detail() {
                 }
             );
             // Ledger revision 3 (#378 A3): the failed cleanup is the outcome's `cleanup` link (its
-            // code) and the record's `cleanup_detail` (where it arose); the cleanup's text and its
-            // declared sensitivity are no longer part of the record.
+            // code) and the record's `cleanup_detail` (where it arose); the cleanup's text is the
+            // `cleanup` link's own foreign link (`raw_text`) with the sensitivity the device
+            // declared, and the record keeps the highest of them.
             let cleanups = outcome_links(outcome.outcome(), CauseRelation::Cleanup);
             assert_eq!(cleanups.len(), usize::from(cleanup_detail.is_some()));
             if let [cleanup] = cleanups.as_slice() {
@@ -863,6 +864,26 @@ fn required_failure_events_preserve_cleanup_detail() {
                     assert_eq!(detail.stage(), "maatouch.stdin.flush");
                     assert_eq!(detail.backend(), "maatouch");
                     assert_eq!(detail.operation(), "close");
+                    // Acceptance H-L1: a Secret device text under the `cleanup` link stays in
+                    // the record, classed Secret, and makes the record Secret.
+                    let foreign = cleanup
+                        .causes()
+                        .iter()
+                        .map(actingcommand_contract::outcome::Link::outcome)
+                        .find(|link| link.value("raw_text").is_some())
+                        .expect("the cleanup's foreign text");
+                    assert_eq!(
+                        foreign.value("raw_text"),
+                        Some(&serde_json::json!("exit_status=1 stderr=cleanup_failed"))
+                    );
+                    assert_eq!(
+                        foreign.value("raw_text_sensitivity"),
+                        Some(&serde_json::json!("secret"))
+                    );
+                    assert_eq!(
+                        flow[1].sensitivity,
+                        actingcommand_contract::Sensitivity::Secret
+                    );
                 }
             } else {
                 assert!(outcome.cleanup_detail().is_none());
