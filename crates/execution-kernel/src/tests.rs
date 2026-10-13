@@ -20,6 +20,9 @@ mod emulator_controller;
 // Workflow #381 B, test plan E-2 G2.
 mod gate_381b;
 
+// Workflow #373 NAV-3b, test rows N3b-1 and N3b-2.
+mod gate_373_nav3b;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {

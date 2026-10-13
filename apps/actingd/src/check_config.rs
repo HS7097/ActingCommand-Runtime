@@ -73,8 +73,6 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             host,
             provider,
             policy,
-            // Workflow #397: reported through the manifest's `policy.monitor.*` parameters.
-            policy_monitor: _,
             manifest,
             resource_packages,
             ignored_env_overrides,

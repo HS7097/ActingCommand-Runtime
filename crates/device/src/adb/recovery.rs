@@ -39,7 +39,17 @@ pub struct AdbRecoveryText {
     pub truncated: bool,
 }
 impl AdbRecoveryText {
+    /// Workflow #398 RD-1a (rule 4): kept text names a bound serial only by its label token.
     pub(crate) fn new(text: &str) -> Self {
+        Self::bounded(&crate::device_serial::redact_bound_serials(text))
+    }
+
+    /// Workflow #398 RD-1a (rule 5): a bound serial is recorded as its label.
+    pub(crate) fn endpoint(serial: &str) -> Self {
+        Self::new(&crate::device_serial::bound_label(serial).unwrap_or_else(|| serial.to_owned()))
+    }
+
+    fn bounded(text: &str) -> Self {
         let mut end = text.len().min(MAX_ADB_RECOVERY_TEXT_BYTES);
         while !text.is_char_boundary(end) {
             end -= 1;
@@ -67,6 +77,9 @@ pub struct AdbCommandEvidence {
     pub stdout_lossy_decode: bool,
     pub stderr_lossy_decode: bool,
     pub state: AdbTransportState,
+    /// Workflow #398 RD-1a: a bound device serial in `stdout` or `stderr` was replaced by its
+    /// label token.
+    pub raw_text_redacted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +130,7 @@ impl Adb {
     }
 }
 
-pub(super) fn command_evidence(
+pub(crate) fn command_evidence(
     output: &CommandOutput,
     succeeded: bool,
     exit_code: Option<i32>,
@@ -154,6 +167,8 @@ pub(super) fn command_evidence(
         stdout_lossy_decode: output.stdout_lossy_decode,
         stderr_lossy_decode: output.stderr_lossy_decode,
         state,
+        raw_text_redacted: crate::device_serial::names_bound_serial(&output.stdout)
+            || crate::device_serial::names_bound_serial(&output.stderr),
     }
 }
 
@@ -202,7 +217,7 @@ pub(super) fn is_tcp_endpoint(serial: &str) -> bool {
         })
 }
 
-pub(super) fn ensure_input_device_with_commands(
+pub(crate) fn ensure_input_device_with_commands(
     serial: &str,
     budget: Duration,
     mut run: impl FnMut(&[&str], Duration) -> DeviceResult<CommandOutput>,
@@ -342,7 +357,7 @@ pub(super) fn ensure_input_device_with_commands(
         && recovery_error.is_none()
         && cleanup_failure.is_none();
     let report = AdbTargetRecovery {
-        endpoint: AdbRecoveryText::new(serial),
+        endpoint: AdbRecoveryText::endpoint(serial),
         initial_error,
         path,
         budget_ms: budget.as_millis().min(u128::from(u64::MAX)) as u64,

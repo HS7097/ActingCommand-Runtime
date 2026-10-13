@@ -190,13 +190,13 @@ Behaviour (`contracts/emulator-control.md`, "Startup package hook"): only a succ
 (the host waits up to 30 s for adbd after the vendor reports `running`;
 `emulator_control_adb_not_ready` otherwise); the control request appends one
 `runtime.lifecycle_observed` (phase `startup_package_scheduled`, the locator in the audit
-path, a fresh causation id), queues the package's claim while it still holds the instance's
-admission guard (Workflow #369 H-6), and returns `startup_package: scheduled`; the claim is
-granted when the control lets the guard go, and the instance's worker then runs the package
-on the claim's key as an ordinary contained task under that causation id, with self-minted
-request and correlation ids, the claim's holder and synthesized connection, origin
-`(Agent, Adapter)`, hash admission, no lease of its own and the full `task.*` chain. A
-configured package is always invoked; no configuration, `stop`, a failed action, or an
+path, a fresh causation id), hands the instance's key to the package's claim as it releases
+the key, through the scheduling gate (Workflow #369 H-4, S6b; under a scheduling pause the
+claim waits until the resume), and returns `startup_package: scheduled`; the instance's worker
+then runs the package on the claim's key as an ordinary contained task under that causation
+id, with self-minted request and correlation ids, the claim's holder and synthesized
+connection, origin `(Agent, Adapter)`, hash admission, no lease of its own and the full
+`task.*` chain. A configured package is always invoked; no configuration, `stop`, a failed action, or an
 instance found already running at daemon startup pull nothing.
 
 The package runs only after ADB is ready: the worker probes the ADB baseline once more

@@ -8,7 +8,9 @@ use actingcommand_contract::candidate_projection::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MAX_IDENTITY_ENTRIES: usize = 128;
+/// The largest business identity domain a pack may declare: its entries are the domain
+/// (Workflow #308 L2), and a policy's identity enum must equal it.
+pub const MAX_IDENTITY_ENTRIES: usize = 1_024;
 pub const MAX_IDENTITY_ALIASES: usize = 8;
 pub const MAX_IDENTITY_TEXT_CHARS: usize = 128;
 pub const MAX_IDENTITY_TEMPLATES: usize = 16;
@@ -356,4 +358,72 @@ fn edit_distance(left: &str, right: &str, limit: u16) -> u16 {
         previous = next;
     }
     previous[right.len()].min(limit + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pack_declares_an_identity_domain_of_up_to_1024_entries() {
+        let declaration = |size: usize| CandidateIdentityDeclaration {
+            entries: (0..size)
+                .map(|index| CandidateIdentityEntry {
+                    id: format!("member-{index:04}"),
+                    variant: None,
+                    aliases: vec![format!("member {index:04}")],
+                })
+                .collect(),
+            recognition: CandidateIdentityRecognition::OcrAliases {
+                max_distance: 1,
+                minimum_margin: 1,
+                minimum_confidence_milli: 800,
+                confusions: BTreeMap::new(),
+            },
+        };
+        assert_eq!(MAX_IDENTITY_ENTRIES, 1_024);
+        let domain = declaration(MAX_IDENTITY_ENTRIES);
+        domain.validate().expect("a 1024-entry domain validates");
+        assert_eq!(domain.domain().len(), 1_024);
+        assert!(declaration(MAX_IDENTITY_ENTRIES + 1).validate().is_err());
+
+        // The pack that declares the domain in a layout is admitted at 1024 entries and
+        // refused at 1025 under the pack's refusal code.
+        let pack = |size: usize| -> crate::RecognitionPack {
+            serde_json::from_value(serde_json::json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": [{
+                    "type": "ocr", "id": "candidate/name",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "languages": ["en"], "timeout_ms": 2000, "match_mode": "exact",
+                    "expected": ["member 0000"], "case_sensitive": true,
+                    "minimum_confidence": 0.8, "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "a".repeat(64)
+                }],
+                "candidate_layouts": [{
+                    "id": "layout-list", "page_id": "neutral/home", "kind": "fixed_slots",
+                    "features": [{"name": "member", "value": "identity",
+                                  "identity": declaration(size)}],
+                    "slots": [{"rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                               "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                               "targets": {"member": "candidate/name"}}]
+                }]
+            }))
+            .expect("pack decodes")
+        };
+        crate::RecognitionEvaluator::new(std::path::PathBuf::new(), pack(MAX_IDENTITY_ENTRIES))
+            .expect("a pack with a 1024-entry domain is admitted");
+        let refusal = crate::RecognitionEvaluator::new(
+            std::path::PathBuf::new(),
+            pack(MAX_IDENTITY_ENTRIES + 1),
+        )
+        .expect_err("a pack with a 1025-entry domain is refused");
+        assert_eq!(
+            refusal.code(),
+            crate::RecognitionPackErrorCode::InvalidPackage
+        );
+    }
 }

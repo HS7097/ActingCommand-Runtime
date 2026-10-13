@@ -33,6 +33,14 @@ elapsed time, chosen path and last observed transport state remain typed fields.
 No periodic samples are collected. An unsuccessful or unconfirmed transport
 operation does not establish device state, release or an external root cause.
 
+Device serials (Workflow #398 RD-1a) never reach the report. A target addressed
+by an adb serial records its endpoint as its label `handset:<alias>`. Before
+stdout, stderr or error text is kept, every serial the Runtime holds a binding
+for is replaced by `[device:<label>]`, and a command observation whose output
+was changed so carries `raw_text_redacted: true` (omitted otherwise). Device
+error text names a target by its label, and an unavailable MaaTouch target
+reports only how many devices `adb devices -l` listed in each state.
+
 Kernel carries the one-time open report with the input result or original error.
 Host commits a WARNING lifecycle observation for successful transport recovery,
 including when the later geometry/action fails. It does so before input.committed

@@ -2831,3 +2831,6 @@ mod fixture;
 mod gate_l2;
 #[path = "tests/retention_events.rs"]
 mod retention_events;
+// Workflow #395 (LEDG-395): per-phase deadlines of the offline material and runtime fact reads.
+#[path = "tests/gate_395.rs"]
+mod gate_395;

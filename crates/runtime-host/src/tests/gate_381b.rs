@@ -14,9 +14,9 @@ use super::instance_workers::{
 use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::{
-    EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome, RuntimeErrorProjection,
-    RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope, RuntimeLifecyclePhase,
-    RuntimePayload,
+    DiagnosticCode, EmulatorInstanceAction, EventAction, RecoveryRung, RecoveryRungOutcome,
+    RuntimeErrorProjection, RuntimeFactInvalidationReason, RuntimeFactRecord, RuntimeFactScope,
+    RuntimeLifecyclePhase, RuntimePayload, SchedulerPayload,
 };
 use actingcommand_device::DeviceProcessPresence;
 
@@ -632,6 +632,66 @@ fn gate_an_errcode_refusal_on_a_running_instance_reads_its_state_once_and_keeps_
     assert_eq!(read_calls(&calls), 1, "{calls:?}");
     assert_eq!(status_port(&run.host), Some(16384));
     assert!(connected(&instance_facts(&run.host, run.instance_id)));
+    run.host.close().expect("close host");
+}
+
+/// G19 row 1, the busy row (Workflow #369 H-4, W-3, S6b): an emulator control behind a holder
+/// waits at most 5 s for its turn in the instance's queue; at the cap it is refused Denied
+/// `lease_queue_expired`, naming the holder and its queue position, with one `scheduler.denied`
+/// `lease.queue_expired` at Warning, no `emulator_control_busy` pair and no provider call.
+#[test]
+fn gate_an_emulator_control_behind_a_holder_expires_after_its_wait_without_a_provider_call() {
+    // A frozen clock, so the holder's lease does not lapse while the control waits.
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
+        Arc::new(FakeProvider::one(ALIAS, instance_id, Arc::clone(&state))),
+    )
+    .expect("runtime host");
+    bind_fake_emulator(&host, ALIAS, instance_id, &state);
+    let run = EmulatorHost {
+        _root: root,
+        host,
+        state,
+        instance_id,
+    };
+    let mut holder = TestClient::connect(&run.host);
+    let (_, token) = holder.acquire(ALIAS);
+    let receipt = control(&run.host, START);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    let error = receipt.error_projection().expect("refusal projection");
+    assert_eq!(error.code, RuntimeErrorCode::QueueExpired);
+    assert_eq!(error.host_code(), Some("lease_queue_expired"));
+    assert_eq!(
+        run.host
+            .failure_detail_for_test(receipt.request_id())
+            .expect("refusal detail")
+            .as_deref(),
+        Some("timeout_ms=5000 holder_kind=client_lease queue_position=1")
+    );
+    assert!(
+        control_calls(&run.state.emulator.calls()).is_empty(),
+        "no provider call"
+    );
+    let events = request_events(&run.host, &receipt);
+    let denied = of_type(&events, EventType::SchedulerDenied);
+    assert_eq!(denied.len(), 1, "{events:?}");
+    assert_eq!(denied[0].severity(), EventSeverity::Warning);
+    assert!(matches!(
+        denied[0].payload(),
+        EventPayload::Scheduler(SchedulerPayload::Denied(payload))
+            if payload.diagnostic_code() == DiagnosticCode::LeaseQueueExpired
+    ));
+    assert!(of_type(&events, EventType::CommandRejected).is_empty());
+    assert!(of_type(&events, EventType::CommandValidated).is_empty());
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        holder.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(holder);
     run.host.close().expect("close host");
 }
 

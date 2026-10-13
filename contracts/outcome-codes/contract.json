@@ -77,13 +77,14 @@
         "raw_code": "optional",
         "raw_text_truncated": "optional",
         "raw_text_sensitivity": "optional",
+        "raw_text_redacted": "optional",
         "exit_code": "optional",
-        "adb_serial": "optional"
+        "device_label": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "description": "adb failed or printed a failure; raw_text keeps its output, with every bound device serial replaced by its label token (raw_text_redacted).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -384,7 +385,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -400,7 +401,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -1762,7 +1763,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), and a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted), and since 0.12.0 an emulator control (CLI, console, MCP ac_emulator; 5 s, once for a restart; nothing is driven). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
       "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
@@ -1903,6 +1904,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ocr_field_low_confidence": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

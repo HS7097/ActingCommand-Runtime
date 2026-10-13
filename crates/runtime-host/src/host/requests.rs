@@ -383,7 +383,13 @@ impl HostShared {
                 action,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
-                self.control_emulator_instance(request, validated, instance_alias, *action)
+                self.control_emulator_instance(
+                    request,
+                    validated,
+                    instance_alias,
+                    *action,
+                    connection_id,
+                )
             }
             // Workflow #191 ps1: an instance pause applies to physical instances only.
             RuntimeOperation::PauseScheduling {

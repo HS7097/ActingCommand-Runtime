@@ -283,8 +283,14 @@ is unchanged; `--config` on any other command is a usage error.
 `actingcommand_ledger_forensics::runtime_facts_at(state_root, position,
 deadline)` is the single offline implementation of the startup replay above,
 bound to a ledger position (inclusive) instead of the latest one. The UI and
-every other offline consumer call it; none folds `runtime.fact_*` events
-itself.
+every other offline consumer call it, or `runtime_facts_at_per_phase(state_root,
+position, budget)`, the same read with a deadline per phase; none folds
+`runtime.fact_*` events itself. Its three steps are its phases (Workflow #395),
+named `read_runtime_facts_position`, `read_runtime_fact_snapshot_set` and
+`read_runtime_fact_changes`. `runtime_facts_at`'s one `deadline` bounds them
+together; `runtime_facts_at_per_phase` gives each phase its budget from the
+phase's own start, and the snapshot serves each later phase under that phase's
+deadline (`GlobalLedgerMetadata::set_read_deadline`).
 
 1. It opens one read-only metadata snapshot of the state root
    (`GlobalLedger::open_metadata`, the source `actingledger views` uses) and
@@ -329,9 +335,12 @@ The result `ForensicRuntimeFactsResult` is one of:
   completely readable (`runtime_facts_source_incomplete`), no event at the
   position (`runtime_facts_position_missing`), the cooperative deadline
   (`runtime_facts_read_budget_exceeded`), or `runtime_fact_replay_failed`.
+  When a deadline runs out (`ledger_read_budget_exceeded` or
+  `runtime_facts_read_budget_exceeded`), `operation` names the phase it ran out
+  in.
 
 `actingledger --state-root <state-root> facts --at <sequence>` prints the
-result as one JSON line under `command: facts`, with a 30 s deadline. It exits
+result as one JSON line under `command: facts`, with 30 s for each phase. It exits
 0 only for `available`; otherwise the result is printed first and the tool
 exits nonzero with `runtime_facts_not_available` or the failure code.
 

@@ -4333,6 +4333,7 @@ fn project_ocr_fields(
                         OcrFieldReason::Resolved
                             | OcrFieldReason::UnknownEntry
                             | OcrFieldReason::AmbiguousEntry
+                            | OcrFieldReason::LowConfidence
                     ) {
                         return Err(invalid());
                     }
@@ -4410,7 +4411,8 @@ fn official_ocr_marker_expected(
             ..
         } = payload.fact()
         {
-            expected |= *outcome.code() == SharedCode::ContainedTaskOcrFieldsUnresolved.code();
+            expected |= *outcome.code() == SharedCode::ContainedTaskOcrFieldsUnresolved.code()
+                || *outcome.code() == SharedCode::OcrFieldLowConfidence.code();
         }
     }
     Ok(expected)

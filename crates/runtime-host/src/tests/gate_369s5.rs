@@ -25,7 +25,7 @@ fn frozen_host(root: &TempDir, instance: InstanceId, state: Arc<FakeState>) -> R
 }
 
 /// A neutral package for a direct run, with its digest computed as the existing tests do.
-fn direct_run_package(root: &TempDir, state: &FakeState) -> (String, String) {
+pub(super) fn direct_run_package(root: &TempDir, state: &FakeState) -> (String, String) {
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");

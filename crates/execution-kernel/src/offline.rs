@@ -504,7 +504,10 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         let required = prepare(&bytes);
-        assert_eq!(required.required_home_entry_page(), Some("neutral/home"));
+        assert_eq!(
+            required.required_entry_pages(),
+            Some(["neutral/home".to_owned()].as_slice())
+        );
         let offline = simulate_contained_task(&required, vec![home_frame(true)]).unwrap();
         let effecting = effecting_decision(&required, vec![home_frame(true)]);
         assert_eq!(offline.decision, effecting.decision);

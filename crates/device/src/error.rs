@@ -736,7 +736,7 @@ impl DeviceError {
             evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Transient,
-            message: message.into(),
+            message: crate::device_serial::redact_owned(message.into()),
             diagnostic: None,
             context: None,
             diagnostic_message: None,
@@ -752,7 +752,7 @@ impl DeviceError {
             evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity: DeviceErrorSeverity::Fatal,
-            message: message.into(),
+            message: crate::device_serial::redact_owned(message.into()),
             diagnostic: None,
             context: None,
             diagnostic_message: None,
@@ -768,7 +768,7 @@ impl DeviceError {
             evidence: None,
             occurrence: Arc::new(DeviceCloseOccurrence::default()),
             severity,
-            message: message.into(),
+            message: crate::device_serial::redact_owned(message.into()),
             diagnostic: None,
             context: None,
             diagnostic_message: None,
@@ -1153,7 +1153,7 @@ impl DeviceError {
     }
 
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
-        self.message = message.into();
+        self.message = crate::device_serial::redact_owned(message.into());
         self
     }
 
@@ -1227,7 +1227,7 @@ impl DeviceError {
         message: impl Into<String>,
     ) -> Self {
         self.severity = severity;
-        self.message = message.into();
+        self.message = crate::device_serial::redact_owned(message.into());
         self
     }
 

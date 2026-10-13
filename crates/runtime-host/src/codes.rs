@@ -286,8 +286,12 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskEffectInvalid => "contained_task_effect_invalid": error / none,
         ContainedTaskFinalizingStateInvalid => "contained_task_finalizing_state_invalid": error / none,
         ContainedTaskFrameIdentityMissing => "contained_task_frame_identity_missing": error / none,
-        ContainedTaskGeometryAspectMismatch => "contained_task_geometry_aspect_mismatch": error / declaration_error,
         ContainedTaskGeometryBudgetUnavailable => "contained_task_geometry_budget_unavailable": error / none,
+        /// Error. Workflow #392 DA-A: a contained task's frame and the logical display it was
+        /// captured from have different aspect ratios, so the run is refused before any input.
+        /// The frame's own aspect ratio is never checked. Replaces
+        /// `contained_task_geometry_aspect_mismatch`.
+        ContainedTaskGeometryFrameDisplayMismatch => "contained_task_geometry_frame_display_mismatch": error / environment_fault,
         ContainedTaskGeometryFrameExtentInvalid => "contained_task_geometry_frame_extent_invalid": error / environment_fault,
         ContainedTaskGeometryFrameUnavailable => "contained_task_geometry_frame_unavailable": error / environment_fault,
         ContainedTaskGeometryInputPrerequisiteMissing => "contained_task_geometry_input_prerequisite_missing": error / none,
@@ -1358,6 +1362,8 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #369 S6b.
+        HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
         HashFactSnapshot => "hash_fact_snapshot",
         HashPolicyFactSnapshot => "hash_policy_fact_snapshot",
@@ -1443,6 +1449,8 @@ actingcommand_contract::outcome_locations! {
         OpenNemuSession => "open_nemu_session",
         OpenObservationPackage => "open_observation_package",
         OpenOwnerFile => "open_owner_file",
+        // Workflow #383 AO-7: the daemon's policy monitor opens the host's business notifications.
+        OpenPolicyWakes => "open_policy_wakes",
         OpenRecoveryLadderWindow => "open_recovery_ladder_window",
         OpenSuspensionLedger => "open_suspension_ledger",
         PauseGlobalScheduling => "pause_global_scheduling",
@@ -1461,6 +1469,8 @@ actingcommand_contract::outcome_locations! {
         PostHostClaim => "post_host_claim",
         PrepareAgentDispatcher => "prepare_agent_dispatcher",
         PrepareApplicationResources => "prepare_application_resources",
+        // Workflow #369 S6b.
+        PrepareClaimHandOff => "prepare_claim_hand_off",
         PrepareCleanupTransfer => "prepare_cleanup_transfer",
         PrepareHostClaim => "prepare_host_claim",
         PrepareIdlePreemption => "prepare_idle_preemption",
@@ -1549,6 +1559,8 @@ actingcommand_contract::outcome_locations! {
         ReadDeviceSessionGate => "read_device_session_gate",
         ReadDispatchProcedureRef => "read_dispatch_procedure_ref",
         ReadDueMonitors => "read_due_monitors",
+        // Workflow #369 S6b.
+        ReadEmulatorControlClaimTtl => "read_emulator_control_claim_ttl",
         ReadExecutionCloseResult => "read_execution_close_result",
         ReadFactSnapshot => "read_fact_snapshot",
         ReadFactSource => "read_fact_source",

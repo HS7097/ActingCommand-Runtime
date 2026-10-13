@@ -476,6 +476,7 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
                             matched_expected: None,
                             match_mode: "exact".to_owned(),
                             block_count: 0,
+                            located: None,
                         },
                     )),
                 },

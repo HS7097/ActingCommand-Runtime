@@ -19,7 +19,7 @@ use super::{
     ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
-    MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageObservation, PostAdmissionOcrCollector,
+    MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageCandidates, PageObservation, PostAdmissionOcrCollector,
     PreparedContainedTask, TaskControl, TaskOperation, TaskProgram, resolve_page_reference,
     selection,
 };
@@ -499,9 +499,9 @@ impl TaskProgram {
         }
         let resolve = |page: &str| resolve_page_reference(&control.game, page, detector);
         // Workflow #336 R24: the application entry `any` is never resolved to a detector page.
+        // Workflow #373 NAV-3b: a linear task keeps one entry page; a set is refused.
         let entry = match self
-            .entry_page
-            .as_deref()
+            .single_entry_page()
             .ok_or_else(|| invalid("entry_page", None))?
         {
             ANY_PAGE => LinearFrom::Any,
@@ -1591,6 +1591,13 @@ impl PreparedContainedTask {
         candidates: &[&str],
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        self.capture_frame(runtime, None, None, timing, Some(candidates), None)
+        self.capture_frame(
+            runtime,
+            None,
+            None,
+            timing,
+            Some(PageCandidates::Ordered(candidates)),
+            None,
+        )
     }
 }

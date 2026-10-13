@@ -14,9 +14,9 @@ use actingcommand_contract::{
     digest_named,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceSerial,
+    DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_execution_kernel::{
     ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
@@ -817,9 +817,6 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) provider: ConfiguredProvider,
     pub(super) policy: Option<PolicyBootstrap>,
-    /// Workflow #397: `policy.monitor`, resolved; every default without a `policy` section,
-    /// where no policy monitor runs.
-    pub(super) policy_monitor: PolicyMonitorSettings,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
@@ -1336,10 +1333,6 @@ impl ActingdConfigFile {
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
-        let policy_monitor = policy
-            .as_ref()
-            .map(|policy| policy.monitor.settings)
-            .unwrap_or_default();
         let policy = if let Some(policy) = policy {
             // Workflow #369 E3 (#670 ruling 1): a restart closes a scheduled dispatch whose run
             // was cut before its first task event; the host tells them apart by these refs.
@@ -1363,7 +1356,6 @@ impl ActingdConfigFile {
             host,
             provider,
             policy,
-            policy_monitor,
             manifest,
             resource_packages,
             ignored_env_overrides,
@@ -1926,8 +1918,11 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
         let target = DeviceTarget {
-            serial: self.serial,
+            serial: self
+                .serial
+                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
             host,
             port: port.unwrap_or(0),
             connect,
@@ -2286,11 +2281,19 @@ mod tests {
         use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
         use actingcommand_runtime_host::RuntimeHost;
 
-        for (capture, endpoint) in [
-            (false, "127.0.0.1:16384"),
-            (true, "198.51.100.42:16416"),
-            (true, "[2001:db8::42]:16416"),
-            (true, "device.example.test:16416"),
+        // Workflow #398 RD-1a: a configured serial is bound for the whole test process and
+        // redacted wherever it appears, so the serial rows are neutral fake serials. A target
+        // configured by host and port is labelled `HOST:PORT` and kept as it is, so the address
+        // forms (IPv4, IPv6, host name) are rows configured that way (train 3 review fix).
+        for (capture, by_serial, endpoint) in [
+            (false, true, "TESTSERIAL0006"),
+            (true, true, "TESTSERIAL0007"),
+            (true, true, "TESTSERIAL0008"),
+            (true, true, "TESTSERIAL0009"),
+            (false, false, "127.0.0.1:16384"),
+            (true, false, "198.51.100.42:16416"),
+            (true, false, "[2001:db8::42]:16416"),
+            (true, false, "device.example.test:16416"),
         ] {
             let root = TempDir::new().expect("tempdir");
             let id = IdentifierIssuer::new()
@@ -2298,17 +2301,25 @@ mod tests {
                 .mint_instance_id()
                 .expect("instance id");
             let missing_adb = root.path().join("missing-adb.exe");
+            let mut instance = json!({
+                "alias": "neutral.device", "instance_id": id.transport(),
+                "application_id": "neutral.application", "adb_path": missing_adb,
+                "connect": false,
+                "touch_backend": "adb_shell_input", "capture_backend": "adb"
+            });
+            if by_serial {
+                instance["serial"] = json!(endpoint);
+            } else {
+                let (host, port) = endpoint.rsplit_once(':').expect("HOST:PORT");
+                instance["host"] = json!(host);
+                instance["port"] = json!(port.parse::<u16>().expect("port"));
+            }
             let value = json!({
                 "schema_version": CONFIG_SCHEMA_VERSION,
                 "state_root": root.path(),
                 "bind_host": "127.0.0.1", "bind_port": 0,
                 "secret_fingerprint_salt": "0123456789abcdef",
-                "instances": [{
-                    "alias": "neutral.device", "instance_id": id.transport(),
-                    "application_id": "neutral.application", "adb_path": missing_adb,
-                    "serial": endpoint, "connect": false,
-                    "touch_backend": "adb_shell_input", "capture_backend": "adb"
-                }]
+                "instances": [instance]
             });
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             let assembly = config.assemble().expect("runtime assembly");
@@ -2419,7 +2430,15 @@ mod tests {
                 .and_then(serde_json::Value::as_str)
                 .expect("native cause");
             assert!(text.contains("failed to spawn adb"));
-            assert!(text.contains(endpoint));
+            // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
+            // reaches the native cause only as its label token; a `HOST:PORT` target keeps its
+            // address there, as before.
+            if by_serial {
+                assert!(!text.contains(endpoint));
+                assert!(text.contains("[device:handset:neutral.device]"));
+            } else {
+                assert!(text.contains(endpoint));
+            }
             if !capture {
                 assert!(text.contains("child_operation=ensure_device"));
             }
