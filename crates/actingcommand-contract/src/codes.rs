@@ -1125,5 +1125,8 @@ crate::outcome_locations! {
         InstanceDiscoveryUnsupported => "instance_discovery_unsupported",
         ApplicationForegroundUnsupported => "application_foreground_unsupported",
         ResourceDeclarationPrepare => "resource_declaration_prepare",
+        /// An instance's connection preparation: the client's operation that waits for it and
+        /// the stage a recovery ladder's trigger names (Workflow #387 D1c).
+        ConnectionPreparation => "connection_preparation",
     }
 }

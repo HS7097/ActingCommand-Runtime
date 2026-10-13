@@ -15984,6 +15984,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a resource declaration rejection: preparing the contained task's declared resources."
+    },
+    "connection_preparation": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operation and a stage several owners name with one meaning (contract-owned, Workflow #387 D1c): an instance's connection preparation, the client's operation that waits for it and the stage a recovery ladder trigger names."
     }
   }
 }

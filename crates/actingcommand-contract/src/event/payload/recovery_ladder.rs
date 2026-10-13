@@ -9,7 +9,7 @@
 // that a record agrees with itself (§6.2).
 
 use super::{RuntimeLifecyclePhase, SanitizationError};
-use crate::codes::SanitizationCode;
+use crate::codes::{ContractLocation, SanitizationCode};
 use crate::outcome::{CodeStr, LadderClass};
 use crate::{RunId, TaskId, TerminalEvent};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -95,7 +95,7 @@ impl RecoveryTriggerStage {
         match self {
             Self::Task => "task",
             Self::StartupPreparation => "startup_preparation",
-            Self::ConnectionPreparation => "connection_preparation",
+            Self::ConnectionPreparation => ContractLocation::ConnectionPreparation.as_str(),
             Self::RecoveryPreparation => "recovery_preparation",
             Self::ResourceFence => "resource_fence",
             Self::StabilityWarnings => "stability_warnings",

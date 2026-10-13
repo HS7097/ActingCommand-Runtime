@@ -6078,7 +6078,7 @@ pub(super) fn receipt_response_timeout(
         .ok_or_else(|| {
             RuntimeClientError::fatal(
                 ClientCode::RuntimeReceiptTimeoutOverflow,
-                ClientLocation::ConnectionPreparation.location(),
+                ContractLocation::ConnectionPreparation.location(),
             )
         }),
         _ => Ok(io_timeout),
