@@ -292,6 +292,7 @@ The new codes, locations, keys and vocabulary tokens are catalog entries, not ro
 | Q24 | `actingledger export --task-evidence` `gaps` | renamed token (wire) | A2-P | A2-P | `artifact_unverifiable` (was `artifact_verification_failed`, also a contract code) |
 | Q25 | actinglab `resource restore` report `data.gaps[].codes`; a draft `task.json` `provenance` gap | renamed token (wire, file) | A2-P | A2-P | `lab_input_failed` (was `input_failed`, the contract code's spelling; CD-8) |
 | Q26 | resource-tooling `package validate` `recognition_pack_diagnostics[].unsupported_targets[]` | changed members (wire) | A2-P | A2-P | `{id, method?, mask}` (`method` the pack spelling `rgb_count` / `hsv_count`, absent for `ncc`; `mask` boolean); was `{id, reason}` English. The Lab's `recognition_unsupported_targets[].reason` keeps its member (B4) and reads `method=rgb_count, mask` |
+| Q27 | selection-policy document `gates[].gate_id`, `scoring[].term_id` | tightened rule (resource file format, not a ledger shape) | A2-P (coordinator ruling 5) | resource side | a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`; at most 128 bytes as before), the form of the `rule_id` value its reasons carry (Q7); the declaration gate and contained task admission refuse another id with `resource_declaration_invalid`, reason `invalid_value`, at `/gates/<j>/gate_id` or `/scoring/<k>/term_id` of the policy document ([selection-graph.md](selection-graph.md), Select step) |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

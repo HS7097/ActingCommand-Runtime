@@ -48,6 +48,21 @@ pub const MAX_ENUM_VALUES: usize = 1_024;
 /// per row, less the key column.
 pub const MAX_RECORD_LIST_COLUMNS: usize = 63;
 
+/// Whether `id` can name a hard gate or a scoring term. A selection reason carries the id as
+/// its outcome value `rule_id` (Workflow #378 A2-P), whose key type is `token`: lowercase ASCII
+/// letters, digits, `_`, `.`, `:` and `-`, never empty, and here at most [`MAX_ID_BYTES`]
+/// bytes. Pack admission refuses a document whose gate or term id is not one (coordinator
+/// ruling 5 on A2-P).
+pub fn is_rule_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ID_BYTES
+        && id.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'_' | b'.' | b':' | b'-')
+        })
+}
+
 /// Closed set of failure codes reported by this crate. Each variant names one registered code
 /// (the crate's [`SelectionPolicyCode`] or the contract's `SharedCode`); its serde spelling is
 /// that code's spelling.

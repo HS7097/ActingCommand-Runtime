@@ -335,6 +335,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
 | The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
+| Each `gate_id` and `term_id` is a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`), the form of the `rule_id` a selection reason carries (`InvalidValue`). | `/gates/<j>/gate_id`, `/scoring/<k>/term_id` | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
 | Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
