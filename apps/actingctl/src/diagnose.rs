@@ -38,7 +38,6 @@ use actingcommand_runtime_client::{
     ContainedRunState, ContainedRunStatus, RunListFilter, RuntimeClient, RuntimeClientConfig,
     RuntimeClientError,
 };
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -605,16 +604,18 @@ fn command_rejected_code(rejected: &DiagnosticOutcomePayload) -> CodeStr {
 }
 
 /// `policy.execution_recorded` of a run that paused its task (disposition `paused_task`): the
-/// policy task id and the failure code the policy recorded (`error_code`, already the run
-/// outcome's `scheduled_failure_code`), read as a received code. `None` for any other execution.
+/// policy task id and the failure code the policy recorded (its failure `outcome`'s code, an
+/// unregistered relayed spelling read back from its `raw_code`: `scheduled_failure_code_str`).
+/// `None` for any other execution.
 fn paused_task(execution: &PolicyExecutionPayload) -> Option<(String, CodeStr)> {
     match execution.policy_result() {
         PolicyExecutionOutcome::Failed { failure }
             if failure.disposition == PolicyFailureDisposition::PausedTask =>
         {
-            // A spelling deserialises into a received code; a string always does.
-            let code = CodeStr::deserialize(Value::String(failure.error_code.clone())).ok()?;
-            Some((execution.task_id().to_owned(), code))
+            Some((
+                execution.task_id().to_owned(),
+                scheduled_failure_code_str(&failure.outcome),
+            ))
         }
         _ => None,
     }
