@@ -110,11 +110,70 @@ impl Request {
     }
 }
 
+/// What is wrong with one argument or flag. Its text is only the developer message beside the
+/// usage code (`argument <field> <problem>`); the code is decided by the frontend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgumentProblem {
+    /// Not a parameter of `actingctl events` / `ac_events`.
+    UnknownArgument,
+    /// Not a flag of `actingctl events`.
+    UnknownFlag,
+    /// A CLI flag or value that is not UTF-8.
+    NotUtf8,
+    /// A CLI flag without its value.
+    ValueMissing,
+    /// A CLI flag given more than once.
+    GivenTwice,
+    /// A required CLI flag that is absent.
+    Required,
+    /// Not a non-empty string.
+    NotText,
+    /// A CLI value that is not an unsigned integer.
+    NotUnsigned,
+    /// An integer outside its range.
+    OutOfRange { minimum: u64, maximum: u64 },
+    /// Text that is none of its type's spellings; the type, as in "a ledger view".
+    NotA(&'static str),
+    /// `detail` other than `brief` or `payload`.
+    DetailUnknown,
+    /// `exclude_event_types` that is not a list of event types.
+    NotEventTypes,
+    /// `cursor` together with `after_sequence`.
+    CursorWithAfterSequence,
+}
+
+impl std::fmt::Display for ArgumentProblem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownArgument => formatter.write_str("is not an argument of this tool"),
+            Self::UnknownFlag => formatter.write_str("is not a flag of actingctl events"),
+            Self::NotUtf8 => formatter.write_str("is not UTF-8"),
+            Self::ValueMissing => formatter.write_str("needs a value"),
+            Self::GivenTwice => formatter.write_str("is given twice"),
+            Self::Required => formatter.write_str("is required"),
+            Self::NotText => formatter.write_str("must be a non-empty string"),
+            Self::NotUnsigned => formatter.write_str("must be an unsigned integer"),
+            Self::OutOfRange { minimum, maximum } => {
+                write!(formatter, "must be an integer from {minimum} to {maximum}")
+            }
+            Self::NotA(what) => write!(formatter, "is not {what}"),
+            Self::DetailUnknown => formatter.write_str("must be brief or payload"),
+            Self::NotEventTypes => formatter.write_str("must list event types"),
+            Self::CursorWithAfterSequence => formatter.write_str(
+                "and after_sequence exclude each other: a cursor already holds where its pages go on",
+            ),
+        }
+    }
+}
+
 /// Why `actingctl events` / `ac_events` gives no page.
 #[derive(Debug)]
 pub(crate) enum EventsError {
     /// An argument or flag is unknown, repeated, of the wrong type or out of its range.
-    Argument { field: String, reason: String },
+    Argument {
+        field: String,
+        problem: ArgumentProblem,
+    },
     /// The instance selector names no single instance.
     Selector {
         error: SelectorError,
@@ -132,17 +191,17 @@ pub(crate) enum EventsError {
 }
 
 impl EventsError {
-    fn argument(field: &str, reason: &str) -> Self {
+    fn argument(field: &str, problem: ArgumentProblem) -> Self {
         Self::Argument {
             field: field.to_owned(),
-            reason: reason.to_owned(),
+            problem,
         }
     }
 
-    /// The message beside the code; for an argument, "argument <field> <reason>".
+    /// The message beside the code; for an argument, "argument <field> <problem>".
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::Argument { field, reason } => format!("argument {field} {reason}"),
+            Self::Argument { field, problem } => format!("argument {field} {problem}"),
             Self::Selector { error, selector } => error.message(selector),
             Self::Query(error) => format!("the Runtime refuses this event query: {error}"),
             Self::CursorInvalid => "this cursor belongs to another query, Runtime connection or process; read again from the first page, or from after_sequence, without a cursor".to_owned(),
@@ -165,24 +224,37 @@ pub(crate) fn parse(
     {
         return Err(EventsError::argument(
             unknown,
-            "is not an argument of this tool",
+            ArgumentProblem::UnknownArgument,
         ));
     }
     let detail = match text(arguments, "detail")? {
         None | Some("brief") => Detail::Brief,
         Some("payload") => Detail::Payload,
-        Some(_) => return Err(EventsError::argument("detail", "must be brief or payload")),
+        Some(_) => {
+            return Err(EventsError::argument(
+                "detail",
+                ArgumentProblem::DetailUnknown,
+            ));
+        }
     };
     let limit = integer(arguments, "limit", 1, u64::from(max_limit))?
         .map_or(Ok(DEFAULT_LIMIT), u16::try_from)
-        .map_err(|_| EventsError::argument("limit", "is too large"))?;
+        .map_err(|_| {
+            EventsError::argument(
+                "limit",
+                ArgumentProblem::OutOfRange {
+                    minimum: 1,
+                    maximum: u64::from(max_limit),
+                },
+            )
+        })?;
     let wait = Duration::from_secs(integer(arguments, "wait_s", 0, MAX_WAIT_S)?.unwrap_or(0));
     let after_sequence = integer(arguments, "after_sequence", 0, u64::MAX - 1)?;
     let cursor = text(arguments, "cursor")?.map(str::to_owned);
     if cursor.is_some() && after_sequence.is_some() {
         return Err(EventsError::argument(
             "cursor",
-            "and after_sequence exclude each other: a cursor already holds where its pages go on",
+            ArgumentProblem::CursorWithAfterSequence,
         ));
     }
     let exclude_event_types = match arguments.get("exclude_event_types") {
@@ -192,16 +264,16 @@ pub(crate) fn parse(
             .map(|event_type| {
                 event_type
                     .as_str()
-                    .and_then(|event_type| parsed::<EventType>(event_type))
+                    .and_then(parsed::<EventType>)
                     .ok_or_else(|| {
-                        EventsError::argument("exclude_event_types", "must list event types")
+                        EventsError::argument("exclude_event_types", ArgumentProblem::NotEventTypes)
                     })
             })
             .collect::<Result<Vec<EventType>, _>>()?,
         Some(_) => {
             return Err(EventsError::argument(
                 "exclude_event_types",
-                "must list event types",
+                ArgumentProblem::NotEventTypes,
             ));
         }
     };
@@ -241,7 +313,7 @@ fn text<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<Option<&'a s
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) if !text.is_empty() => Ok(Some(text.as_str())),
-        Some(_) => Err(EventsError::argument(key, "must be a non-empty string")),
+        Some(_) => Err(EventsError::argument(key, ArgumentProblem::NotText)),
     }
 }
 
@@ -258,10 +330,7 @@ fn integer(
             .filter(|number| (minimum..=maximum).contains(number))
             .map(Some)
             .ok_or_else(|| {
-                EventsError::argument(
-                    key,
-                    &format!("must be an integer from {minimum} to {maximum}"),
-                )
+                EventsError::argument(key, ArgumentProblem::OutOfRange { minimum, maximum })
             }),
     }
 }
@@ -273,11 +342,11 @@ fn parsed<T: DeserializeOwned>(text: &str) -> Option<T> {
 fn typed<T: DeserializeOwned>(
     arguments: &Map<String, Value>,
     key: &str,
-    what: &str,
+    what: &'static str,
 ) -> Result<Option<T>, EventsError> {
     text(arguments, key)?
         .map(|text| {
-            parsed(text).ok_or_else(|| EventsError::argument(key, &format!("is not {what}")))
+            parsed(text).ok_or_else(|| EventsError::argument(key, ArgumentProblem::NotA(what)))
         })
         .transpose()
 }
@@ -655,35 +724,32 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
     while index < arguments.len() {
         let flag = arguments[index]
             .to_str()
-            .ok_or_else(|| EventsError::argument("flag", "is not UTF-8"))?;
+            .ok_or_else(|| EventsError::argument("flag", ArgumentProblem::NotUtf8))?;
         let name = flag
             .strip_prefix("--")
             .filter(|name| !name.contains('_'))
-            .ok_or_else(|| EventsError::argument(flag, "is not a flag of actingctl events"))?;
+            .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::UnknownFlag))?;
         let value = arguments
             .get(index + 1)
-            .ok_or_else(|| EventsError::argument(flag, "needs a value"))?;
+            .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::ValueMissing))?;
         index += 2;
         if name == "state-root" {
             if state_root.replace(PathBuf::from(value)).is_some() {
-                return Err(EventsError::argument(flag, "is given twice"));
+                return Err(EventsError::argument(flag, ArgumentProblem::GivenTwice));
             }
             continue;
         }
         let key = name.replace('-', "_");
         if !PARAMETERS.contains(&key.as_str()) {
-            return Err(EventsError::argument(
-                flag,
-                "is not a flag of actingctl events",
-            ));
+            return Err(EventsError::argument(flag, ArgumentProblem::UnknownFlag));
         }
         let text = value
             .to_str()
-            .ok_or_else(|| EventsError::argument(flag, "is not UTF-8"))?;
+            .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::NotUtf8))?;
         let typed = if INTEGER_PARAMETERS.contains(&key.as_str()) {
             json!(
                 text.parse::<u64>()
-                    .map_err(|_| EventsError::argument(flag, "must be an unsigned integer"))?
+                    .map_err(|_| EventsError::argument(flag, ArgumentProblem::NotUnsigned))?
             )
         } else if LIST_PARAMETERS.contains(&key.as_str()) {
             Value::Array(text.split(',').map(|item| json!(item)).collect())
@@ -691,11 +757,11 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
             json!(text)
         };
         if parameters.insert(key, typed).is_some() {
-            return Err(EventsError::argument(flag, "is given twice"));
+            return Err(EventsError::argument(flag, ArgumentProblem::GivenTwice));
         }
     }
-    let state_root =
-        state_root.ok_or_else(|| EventsError::argument("--state-root", "is required"))?;
+    let state_root = state_root
+        .ok_or_else(|| EventsError::argument("--state-root", ArgumentProblem::Required))?;
     Ok((state_root, parameters))
 }
 
