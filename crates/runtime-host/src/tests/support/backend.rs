@@ -81,7 +81,13 @@ pub(super) struct FakeState {
     capture_floors: std::sync::Mutex<Vec<Option<actingcommand_device::CaptureFloor>>>,
     inputs_completed: std::sync::Mutex<Vec<(Instant, usize)>>,
     capture_error_after_input: std::sync::Mutex<Option<DeviceError>>,
+    // Workflow #373 NAV-6: given a capture's number and the inputs so far, the pixels (index,
+    // RGB) the capture shows over the frame the flags above give, such as an overlay.
+    pixel_script: std::sync::Mutex<Option<PixelScript>>,
 }
+
+/// Workflow #373 NAV-6: a frame script of [`FakeState`].
+type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sync>;
 
 impl FakeState {
     /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A).
@@ -335,6 +341,19 @@ impl CaptureBackend for FakeCapture {
         let mut pixels = [first.as_slice(), guard.as_slice()].concat();
         if physical_task_geometry {
             pixels.resize(width as usize * height as usize * 3, 0);
+        }
+        let script = self
+            .state
+            .pixel_script
+            .lock()
+            .expect("pixel script")
+            .clone();
+        if let Some(script) = script {
+            for (index, rgb) in script(capture_number, input_count) {
+                if let Some(pixel) = pixels.get_mut(index * 3..index * 3 + 3) {
+                    pixel.copy_from_slice(&rgb);
+                }
+            }
         }
         let mut frame = Frame::from_pixels(
             width,

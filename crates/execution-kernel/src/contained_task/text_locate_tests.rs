@@ -611,3 +611,96 @@ fn a_locate_target_is_never_a_field_or_reading_target() {
     );
     assert_eq!(reading_target_refusal(&task.evaluator, "text/plain"), None);
 }
+
+/// Workflow #373 NAV-6, test row N6-14 (model M-373 v1.1 §6.1, REC-M §3.3): two shared interrupt
+/// pages whose page rules read the same located text request, evaluated as an interrupt check
+/// evaluates its feature package (one scene evaluation of the offered frame): both match, and
+/// the provider is called once.
+#[test]
+fn n6_14_two_interrupt_pages_on_one_located_read_call_the_provider_once() {
+    let list = rect(40, 60, 560, 280);
+    let pack = load_pack_from_json_str(
+        &json!({
+            "schema_version": "0.7",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 640, "height": 360},
+            "defaults": {"color_max_distance": 0.0},
+            "targets": [
+                json!({"type": "color", "id": "page/home", "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                       "expected": [255, 0, 0]}),
+                ocr("text/notice", list, Some(detect())),
+                ocr("text/alert", list, Some(detect())),
+            ]
+        })
+        .to_string(),
+    )
+    .expect("recognition pack");
+    let provider = Arc::new(FixedOcr {
+        blocks: list_blocks()
+            .into_iter()
+            .map(|(text, rect)| (text.to_owned(), rect))
+            .collect(),
+        calls: AtomicUsize::new(0),
+    });
+    let evaluator = RecognitionEvaluator::with_vision_provider(
+        pack,
+        Arc::new(FsAssetResolver::new(PathBuf::new())),
+        provider.clone(),
+    )
+    .expect("recognition evaluator");
+    let detector = PageDetector::new(
+        serde_json::from_value(json!({
+            "schema_version": "0.6",
+            "pages": [
+                {"id": "neutral/home", "required": ["page/home"]},
+                {"id": "neutral/notice", "required": ["text/notice"]},
+                {"id": "neutral/alert", "required": ["text/alert"]}
+            ]
+        }))
+        .expect("page set"),
+    )
+    .expect("page detector");
+    let control = control();
+    let program = TaskProgram {
+        schema_version: "0.9".to_string(),
+        task_id: "task".to_string(),
+        game: "neutral".to_string(),
+        server_scope: vec!["test".to_string()],
+        coordinate_space: control.resolution,
+        entry_page: None,
+        phases: None,
+        timeout_ms: None,
+        max_steps: None,
+        target_page: Some(PageDeclaration::Singleton("home".to_string())),
+        error_pages: Vec::new(),
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        resource_readings: None,
+        stability_termination: None,
+        recovery: None,
+        defaults: TaskOperationDefaults::default(),
+        operations: Vec::new(),
+    };
+    let features = PreparedContainedTask {
+        control,
+        program,
+        evaluator,
+        detector,
+        entry_page: None,
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        package_sha256: "fixture-sha256".into(),
+        post_admission_fields: None,
+        entry_count: 5,
+        task_count: 1,
+    };
+    let scene = scene_from_frame(&home_frame()).expect("scene");
+
+    let matched = features
+        .matching_pages_on_scene(&scene, &["neutral/notice", "neutral/alert"])
+        .expect("one scene evaluation");
+
+    assert_eq!(matched, ["neutral/notice", "neutral/alert"]);
+    assert_eq!(provider.calls(), 1);
+}

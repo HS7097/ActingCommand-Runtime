@@ -112,6 +112,8 @@ mod gate_369s5;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
+// Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
+mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;

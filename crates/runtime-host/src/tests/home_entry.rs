@@ -407,7 +407,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     );
     assert!(facts.iter().any(|fact| matches!(
         fact,
-        TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 }
+        TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256, role: None }
             if package_sha256 == &actingcommand_contract::PackageRef::from(&recovery_sha256)
     )));
     assert!(facts.iter().any(|fact| matches!(
@@ -416,6 +416,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
             package_sha256,
             final_page,
             executed_steps: 1,
+            role: None,
         } if package_sha256 == &actingcommand_contract::PackageRef::from(&recovery_sha256) && final_page == "fixture01/home"
     )));
     assert!(facts.iter().any(|fact| matches!(
@@ -651,6 +652,7 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
                 TaskSemanticFact::EntryRecoveryFailed {
                     package_sha256,
                     outcome,
+                    role: None,
                 } if package_sha256 == &actingcommand_contract::PackageRef::from(&recovery_sha256) && outcome.code().as_str() == expected_code
             )));
         } else {

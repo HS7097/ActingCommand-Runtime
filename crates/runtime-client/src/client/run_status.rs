@@ -654,7 +654,7 @@ impl RuntimeClient {
                         return Err(status_error(ClientCode::RunStatusPackageFactCountInvalid));
                     }
                 }
-                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } => {
+                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256, .. } => {
                     recovery_packages.push(package_sha256.clone());
                 }
                 TaskSemanticFact::StepStarted {

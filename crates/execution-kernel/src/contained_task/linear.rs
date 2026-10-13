@@ -32,6 +32,7 @@ use actingcommand_contract::{
     TaskTimingFailure, TaskTimingScope, TaskTimingStage,
 };
 use actingcommand_page_detector::PageDetector;
+use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -1375,7 +1376,7 @@ impl PreparedContainedTask {
             .last()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let settle = candidates.settle;
-        let started = Instant::now();
+        let mut started = Instant::now();
         loop {
             if Instant::now() >= deadline {
                 return Err(self
@@ -1394,7 +1395,7 @@ impl PreparedContainedTask {
                 run.timing.with_deadline(observation_deadline)
             };
             let captured = Instant::now();
-            let observation = self.linear_observe(runtime, &candidates.pages, timing)?;
+            let observation = self.linear_observe_scene(runtime, &candidates.pages, timing)?;
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1404,21 +1405,35 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
-            if let Some(observation) = observation {
-                let captured = if observation.sampling.is_some() {
-                    observation.frame_started
-                } else {
-                    captured
-                };
-                if observation.page_label != skip_target || settle.is_zero() {
-                    return Ok(Ok(observation));
-                }
-                match seen {
-                    Some(first) if captured.saturating_duration_since(first) >= settle => {
+            match observation {
+                Ok(observation) => {
+                    let captured = if observation.sampling.is_some() {
+                        observation.frame_started
+                    } else {
+                        captured
+                    };
+                    if observation.page_label != skip_target || settle.is_zero() {
                         return Ok(Ok(observation));
                     }
-                    Some(_) => {}
-                    None => seen = Some(captured),
+                    match seen {
+                        Some(first) if captured.saturating_duration_since(first) >= settle => {
+                            return Ok(Ok(observation));
+                        }
+                        Some(_) => {}
+                        None => seen = Some(captured),
+                    }
+                }
+                // Workflow #373 NAV-6 (§6.1 point 3): nothing passed on the frame; it is offered
+                // to the shared interrupt pages, and the wait (its settle included) is paused
+                // while one is handled.
+                Err(scene) => {
+                    if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                        started += paused;
+                        if let Some(first) = &mut seen {
+                            *first += paused;
+                        }
+                        continue;
+                    }
                 }
             }
             let limit = seen
@@ -1517,13 +1532,14 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let deadline = timing.deadline();
-        let started = Instant::now();
-        let timing = if self.evaluator.pack().target_consensus.is_empty() {
-            timing
-        } else {
-            timing.with_deadline(started + budget)
-        };
+        let base_timing = timing;
+        let mut started = Instant::now();
         loop {
+            let timing = if self.evaluator.pack().target_consensus.is_empty() {
+                base_timing
+            } else {
+                base_timing.with_deadline(started + budget)
+            };
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1533,7 +1549,7 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
-            let observation = self.linear_observe(runtime, candidates, timing)?;
+            let observation = self.linear_observe_scene(runtime, candidates, timing)?;
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1543,8 +1559,16 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
-            if observation.is_some() {
-                return Ok(observation);
+            let scene = match observation {
+                Ok(observation) => return Ok(Some(observation)),
+                Err(scene) => scene,
+            };
+            // Workflow #373 NAV-6 (§6.1 point 3): a frame on which no awaited page passed is
+            // offered to the shared interrupt pages; the wait's budget is paused while one is
+            // handled.
+            if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                started += paused;
+                continue;
             }
             if started.elapsed() >= budget {
                 return Ok(None);
@@ -1585,13 +1609,13 @@ impl PreparedContainedTask {
     /// One capture and the evaluation of `candidates` only, recorded as every capture is, at
     /// the `CapturePage` boundary (§5.3). The first passing candidate is the frame's page; with
     /// the frame's input reference the committed input context binds a following input.
-    fn linear_observe<R: ContainedTaskRuntime>(
+    fn linear_observe_scene<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         candidates: &[&str],
         timing: ContainedTaskTimingContext,
-    ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        self.capture_frame(
+    ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame_scene(
             runtime,
             None,
             None,

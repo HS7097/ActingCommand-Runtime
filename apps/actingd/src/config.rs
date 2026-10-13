@@ -154,6 +154,10 @@ pub(super) struct ActingdConfigFile {
     /// Not a configuration fact; read at startup.
     #[serde(default)]
     return_home_packages: Option<Vec<ReturnHomePackageConfigFile>>,
+    /// Workflow #373 NAV-6: the installed standard packs (`standard_packs.root`). Not a
+    /// configuration fact; read at startup.
+    #[serde(default)]
+    standard_packs: Option<StandardPacksConfigFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -281,6 +285,17 @@ fn assemble_return_home_packages(
         }
     }
     Ok(packages)
+}
+
+/// `standard_packs { root }` (Workflow #373 NAV-6, model M-373 v1.1 §4.3): the directory that
+/// holds one root per game, `<root>/<game>/`, written once by the installer. A relative path
+/// resolves against the configuration file's directory; an empty one is refused
+/// (`config_decode_failed`). Without the section no standard-pack root is read. A startup key:
+/// changing it needs a restart.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StandardPacksConfigFile {
+    root: PathBuf,
 }
 
 /// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
@@ -1263,11 +1278,24 @@ impl ActingdConfigFile {
                 .with_performance_monitor(performance_monitor)
                 .with_governance_policy(governance_policy);
         let instances_startup_package_count = startup_packages.len();
+        let standard_packs_root = self
+            .standard_packs
+            .map(|section| {
+                if section.root.as_os_str().is_empty() {
+                    Err(SharedCode::ConfigDecodeFailed.code())
+                } else if section.root.is_absolute() {
+                    Ok(section.root)
+                } else {
+                    Ok(self.source_root.join(section.root))
+                }
+            })
+            .transpose()?;
         host = host
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
             .with_prerequisite_packages(prerequisite_packages)
-            .with_return_home_packages(return_home_packages);
+            .with_return_home_packages(return_home_packages)
+            .with_standard_packs_root(standard_packs_root);
         // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,

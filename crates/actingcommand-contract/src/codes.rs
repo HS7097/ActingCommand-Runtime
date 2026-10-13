@@ -324,6 +324,10 @@ crate::outcome_codes! {
         SemanticActionRequiresDestructiveOptIn => "semantic_action_requires_destructive_opt_in": error / declaration_error,
         SerializationFailed => "serialization_failed": error / none,
         SignatureReplayIncomplete => "signature_replay_incomplete": error / none,
+        // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
+        // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
+        // root reader and check-config report it; the resource tools share the same check.
+        StandardPackRootInvalid => "standard_pack_root_invalid": error / declaration_error,
         StateDirectorySyncFailed => "state_directory_sync_failed": error / none,
         StateDocumentChanged => "state_document_changed": error / none,
         StateRootCreateFailed => "state_root_create_failed": error / none,
@@ -719,6 +723,9 @@ crate::outcome_codes! {
         InvalidTaskRecognitionResult => "invalid_task_recognition_result": error / none,
         InvalidTaskEntryRecovery => "invalid_task_entry_recovery": error / none,
         InvalidTaskEntryDisposition => "invalid_task_entry_disposition": error / none,
+        // Workflow #373 NAV-6: an `interrupt_handled` or `interrupt_ambiguous` task fact out of
+        // its bounds.
+        InvalidTaskInterrupt => "invalid_task_interrupt": error / none,
         InvalidTaskPhase => "invalid_task_phase": error / none,
         InvalidTaskEffect => "invalid_task_effect": error / none,
         InvalidTaskTerminal => "invalid_task_terminal": error / none,

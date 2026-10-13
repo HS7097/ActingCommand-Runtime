@@ -651,6 +651,7 @@ pub(super) struct PreparedPackageRun<'a> {
     task_request_message: RuntimeRequest,
     prepared: PreparedContainedTask,
     prerequisites: Vec<PreparedContainedTask>,
+    interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
     task_id: IssuedTaskId,
     run_id: IssuedRunId,
     run_links: RuntimeRunLinks,
@@ -889,7 +890,7 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) host: &'a HostShared,
     pub(super) request: &'a ValidatedRuntimeRequest<'a>,
     pub(super) token: &'a LeaseToken,
-    instance_alias: &'a str,
+    pub(super) instance_alias: &'a str,
     connection_id: ConnectionId,
     pub(super) task_id: IssuedTaskId,
     pub(super) run_id: IssuedRunId,
@@ -927,9 +928,31 @@ pub(super) struct RuntimeContainedTask<'a> {
     post_admission_ocr_observations: u32,
     post_admission_ocr_comparison_recorded: bool,
     pub(super) current_recognition_id: Option<IssuedRecognitionId>,
-    step_actions: BTreeMap<u32, (IssuedActionId, String)>,
+    pub(super) step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     pub(super) step_index_offset: u32,
     pub(super) executed_steps: Option<u32>,
+    /// Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation; taken
+    /// out while one is handled.
+    pub(super) interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+    /// Workflow #373 NAV-6: the steps the interrupt layers of the run executed.
+    pub(super) interrupt_steps: u32,
+    /// Workflow #373 NAV-6: the effective configuration records of interrupt layer packages,
+    /// one per distinct package, beyond the seven of the run (M-373 §8.3).
+    pub(super) interrupt_configurations: u8,
+    /// Workflow #373 NAV-6: the most steps the run's own layers can execute (its prerequisite
+    /// chain and package, or its entry recovery package and package); interrupt layers fit
+    /// within 1000 beside them.
+    pub(super) planned_steps: u32,
+    /// Workflow #373 NAV-6: one more than the highest step index recorded so far.
+    pub(super) next_free_step_index: u32,
+    /// Workflow #373 NAV-6: the steps of interrupt layers since the running layer began, which
+    /// its later steps follow.
+    pub(super) step_shift: u32,
+    /// Workflow #373 NAV-6: the running layer's step that an interrupt layer ran inside: its own
+    /// index and the index it keeps.
+    pub(super) pinned_step: Option<(u32, u32)>,
+    /// Workflow #373 NAV-6: whether the traces now recorded are an interrupt layer's.
+    pub(super) interrupt_layer: bool,
     entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
@@ -1096,6 +1119,17 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         } else {
             self.inner.record(trace)
         }
+    }
+
+    /// Workflow #373 NAV-6: a layer of the run looks at the run's shared interrupt pages too.
+    fn shared_interrupt(
+        &mut self,
+        frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
+    ) -> Result<
+        actingcommand_execution_kernel::SharedInterruptVerdict,
+        ContainedTaskRunError<Self::Error>,
+    > {
+        self.inner.offered_shared_interrupt(frame)
     }
 }
 
@@ -1590,6 +1624,7 @@ impl RuntimeContainedTask<'_> {
             TaskSemanticFact::EntryRecoveryFailed {
                 package_sha256,
                 outcome: primary.outcome(),
+                role: None,
             },
             TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
@@ -1630,6 +1665,7 @@ impl RuntimeContainedTask<'_> {
             .map(|package_sha256| TaskSemanticFact::EntryRecoveryFailed {
                 package_sha256: package_sha256.clone(),
                 outcome: outcome.clone(),
+                role: None,
             })
             .chain([TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
@@ -1699,8 +1735,9 @@ impl RuntimeContainedTask<'_> {
         source_sequence: Option<u64>,
     ) -> Result<(), RequestFailure> {
         // Initial, at most one EntryRecovery per prerequisite package (three declared, Workflow
-        // #336 L2b, and one return-home, L2c), Capture and Input.
-        if self.configuration_records >= 7 {
+        // #336 L2b, and one return-home, L2c), Capture and Input; Workflow #373 NAV-6: and one
+        // per distinct interrupt layer package.
+        if self.configuration_records >= 7_u8.saturating_add(self.interrupt_configurations) {
             return Err(RequestFailure::poison_without_terminal(
                 artifact_store_error(HostLocation::EffectiveConfigurationLimitExceeded),
             ));
@@ -2106,15 +2143,13 @@ impl RuntimeContainedTask<'_> {
     }
 
     fn absolute_step_index(&self, step_index: u32) -> Result<u32, RequestFailure> {
-        self.step_index_offset
-            .checked_add(step_index)
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    HostCode::ContainedTaskStepIndexOverflow,
-                    ContractLocation::RunContainedTask,
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })
+        self.layer_step_index(step_index).ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                HostCode::ContainedTaskStepIndexOverflow,
+                ContractLocation::RunContainedTask,
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })
     }
 
     fn offset_trace(
@@ -2793,6 +2828,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(true)
     }
 
+    /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).
+    fn shared_interrupt(
+        &mut self,
+        frame: actingcommand_execution_kernel::SharedInterruptFrame<'_>,
+    ) -> Result<
+        actingcommand_execution_kernel::SharedInterruptVerdict,
+        ContainedTaskRunError<Self::Error>,
+    > {
+        self.offered_shared_interrupt(frame)
+    }
+
     fn record_candidate_evaluation(
         &mut self,
         target_id: &str,
@@ -2807,7 +2853,16 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn update_run_progress(&mut self, executed_steps: u32) {
-        self.executed_steps = self.step_index_offset.checked_add(executed_steps);
+        // Workflow #373 NAV-6: beside the steps of the interrupt layers that ran.
+        let shift = if self.interrupt_layer {
+            0
+        } else {
+            self.step_shift
+        };
+        self.executed_steps = self
+            .step_index_offset
+            .checked_add(executed_steps)
+            .and_then(|steps| steps.checked_add(shift));
     }
 
     fn observe_task_timing(&mut self, context: ContainedTaskTimingContext) {
@@ -3814,6 +3869,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 let action_id = self.host.events.issuer().mint_action_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(runtime_identifier_error())
                 })?;
+                // Workflow #373 NAV-6: an interrupt layer's steps follow every step so far.
+                self.next_free_step_index =
+                    self.next_free_step_index.max(step_index.saturating_add(1));
                 if self
                     .step_actions
                     .insert(step_index, (action_id, operation_label.clone()))
@@ -4829,6 +4887,8 @@ impl HostShared {
         let prerequisites = self.resolve_prerequisite_chain(instance_alias, &prepared, || {
             self.package_material_deadline(active_run.control.deadline())
         })?;
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
+        let interrupts = self.prepare_run_interrupts(&prepared)?;
         self.append_request_lifecycle(
             original,
             request,
@@ -4885,6 +4945,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
+            interrupts,
             task_request,
             token,
             task_id,
@@ -4910,7 +4971,7 @@ impl HostShared {
         with_recovery_ladder_staging(executed, awaited)
     }
 
-    fn package_material_deadline(
+    pub(super) fn package_material_deadline(
         &self,
         deadline_monotonic_ms: u64,
     ) -> Result<Instant, RequestFailure> {
@@ -5105,6 +5166,8 @@ impl HostShared {
         }
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
+        let interrupts = self.prepare_run_interrupts(&prepared)?;
         if pending.recovery_rung {
             let (capture, input) = prepared.recovery_entry_channels();
             if let Some(code) = self
@@ -5179,6 +5242,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
+            interrupts,
             task_id,
             run_id,
             run_links,
@@ -5210,6 +5274,7 @@ impl HostShared {
             task_request_message,
             prepared,
             prerequisites,
+            interrupts,
             task_id,
             run_id,
             run_links,
@@ -5260,6 +5325,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
+            interrupts,
             &task_request,
             token,
             task_id,
@@ -5459,6 +5525,8 @@ impl HostShared {
                 prerequisite_deadline,
             )?,
         };
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
+        let interrupts = self.prepare_run_interrupts(&prepared)?;
         let expected_outcome_keys = lock(
             self.policy()?,
             HostLocation::ValidatePolicyOutcomeDeclaration,
@@ -5519,6 +5587,7 @@ impl HostShared {
             connection_id,
             prepared,
             prerequisites,
+            interrupts,
             task_request,
             token.clone(),
             context.issued_task_id(),
@@ -5543,6 +5612,7 @@ impl HostShared {
         connection_id: ConnectionId,
         prepared: PreparedContainedTask,
         prerequisites: Vec<PreparedContainedTask>,
+        interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
         task_request: &ContainedTaskRequest,
         token: LeaseToken,
         task_id: IssuedTaskId,
@@ -5553,6 +5623,13 @@ impl HostShared {
         admission_request_id: Option<RequestId>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
+        // Workflow #373 NAV-6: the steps the run's own layers can execute.
+        let planned_steps = prerequisites
+            .iter()
+            .chain(std::iter::once(&prepared))
+            .fold(0_u32, |planned, package| {
+                planned.saturating_add(package.maximum_executed_steps())
+            });
         // Workflow #332 H2f M1: a manual run's release also carries its task/run links, so
         // its run scope closes in its own epoch; `scheduled` keeps the original meaning.
         let release_links = run_links.or(Some(RuntimeRunLinks::new(task_id, run_id)));
@@ -5606,6 +5683,14 @@ impl HostShared {
             step_actions: BTreeMap::new(),
             step_index_offset: 0,
             executed_steps: Some(0),
+            interrupts,
+            interrupt_steps: 0,
+            interrupt_configurations: 0,
+            planned_steps,
+            next_free_step_index: 0,
+            step_shift: 0,
+            pinned_step: None,
+            interrupt_layer: false,
             entry_preflight_recorded: false,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
@@ -5648,7 +5733,8 @@ impl HostShared {
             )
         } else {
             let execution = prepared.run(&mut runtime);
-            execution
+            // Workflow #373 NAV-6: the run's steps include those of its interrupt layers.
+            execution.and_then(|outcome| runtime.with_layer_end(outcome))
         };
         // Workflow #308: a select record that could not be written after the confirmation
         // capture ended the run is already in the ledger as its own failure; the run's failure
@@ -6188,7 +6274,9 @@ impl HostShared {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
         // Workflow #373 NAV-3b: the required entry is one page or an entry page set.
         let Some(required_pages) = prepared.required_entry_pages().map(<[String]>::to_vec) else {
-            return prepared.run(runtime);
+            return prepared
+                .run(runtime)
+                .and_then(|outcome| runtime.with_layer_end(outcome));
         };
 
         let initial_page = prepared.recognize_required_entry(runtime)?;
@@ -6214,7 +6302,9 @@ impl HostShared {
                     outcome: None,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            return prepared.run(runtime);
+            return prepared
+                .run(runtime)
+                .and_then(|outcome| runtime.with_layer_end(outcome));
         }
 
         // Workflow #336 L2d (R23): a request that binds no recovery package takes the
@@ -6259,6 +6349,7 @@ impl HostShared {
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: binding.expected_sha256().to_owned(),
                         outcome: outcome.clone(),
+                        role: None,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
@@ -6326,8 +6417,17 @@ impl HostShared {
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_sha256: recovery_sha256.clone(),
+                role: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        // Workflow #373 NAV-6: the recovery package's steps follow those of the interrupt
+        // layers that ran so far, and the run's own steps are now its and the package's.
+        runtime.planned_steps = recovery
+            .maximum_executed_steps()
+            .saturating_add(prepared.maximum_executed_steps());
+        runtime.begin_layer(0).ok_or_else(|| {
+            ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
+        })?;
         let previous_timing = runtime.task_timing.context();
         let recovery_execution = {
             if runtime.configuration_records > 0 {
@@ -6387,6 +6487,7 @@ impl HostShared {
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
                         outcome: Outcome::relayed(error.code().as_str()),
+                        role: None,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return fail_contained_task_entry(runtime, error.code().as_str());
@@ -6416,6 +6517,7 @@ impl HostShared {
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_sha256: recovery_sha256,
                         outcome: outcome.clone(),
+                        role: None,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 runtime
@@ -6442,6 +6544,7 @@ impl HostShared {
                 package_sha256: recovery_sha256,
                 final_page: final_page.clone(),
                 executed_steps: recovery_outcome.executed_steps,
+                role: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
@@ -6474,6 +6577,7 @@ impl HostShared {
         if recovery_outcome
             .executed_steps
             .checked_add(prepared.maximum_executed_steps())
+            .and_then(|maximum| maximum.checked_add(runtime.interrupt_steps))
             .is_none_or(|maximum| maximum > 1_000)
         {
             return fail_contained_task_entry(
@@ -6481,7 +6585,11 @@ impl HostShared {
                 HostCode::ContainedTaskHomeRecoveryStepLimit.as_str(),
             );
         }
-        runtime.step_index_offset = recovery_outcome.executed_steps;
+        runtime
+            .begin_layer(recovery_outcome.executed_steps)
+            .ok_or_else(|| {
+                ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
+            })?;
         runtime
             .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::Started,
@@ -6489,12 +6597,9 @@ impl HostShared {
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         let mut outcome = prepared.run(runtime)?;
-        outcome.executed_steps = outcome
-            .executed_steps
-            .checked_add(recovery_outcome.executed_steps)
-            .ok_or_else(|| {
-                ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
-            })?;
+        outcome.executed_steps = runtime.layer_end(outcome.executed_steps).ok_or_else(|| {
+            ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
+        })?;
         Ok(outcome)
     }
 
@@ -6575,9 +6680,11 @@ impl HostShared {
         let recovery_packages = semantic
             .iter()
             .filter_map(|(_, fact)| match fact {
-                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } => {
-                    Some(package_sha256)
-                }
+                // Workflow #373 NAV-6: an interrupt layer is no gate package.
+                TaskSemanticFact::EntryRecoveryPackageAdmitted {
+                    package_sha256,
+                    role: None,
+                } => Some(package_sha256),
                 _ => None,
             })
             .collect::<Vec<_>>();

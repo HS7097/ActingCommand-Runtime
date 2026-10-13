@@ -8,7 +8,7 @@ use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_ma
 use actingcommand_runtime_host::{
     CatalogGeneration, CatalogPreview, CatalogPreviewRequest, ExecutionBackendProvider,
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
-    preview_policy_catalog_transition,
+    inspect_standard_packs, preview_policy_catalog_transition,
 };
 use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
 use config::InstanceBindingKey;
@@ -512,6 +512,24 @@ fn summarize(
     if let Some(unresolved) = mumu_root_unresolved {
         report["mumu_root_unresolved"] = unresolved;
     }
+    // Workflow #373 NAV-6 (M-373 §7): the standard-pack root as startup reads it (root files
+    // only, no package admitted). A broken game root is that game's problem and one warning
+    // (`<code>:<game>`); the configuration itself is not refused.
+    let standard_packs = inspect_standard_packs(checked.host.standard_packs_root());
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        if let Some(problem) = &standard_packs.root_problem {
+            warnings.push(json!(problem.code().to_string()));
+        }
+        for (game, problem) in standard_packs.problems() {
+            warnings.push(json!(format!("{}:{game}", problem.code())));
+        }
+    }
+    report["standard_packs"] = serde_json::to_value(&standard_packs).map_err(|_| {
+        registered(
+            ActingdCode::CheckConfigReportEncodeFailed,
+            ActingdLocation::ConfigAssemble,
+        )
+    })?;
     Ok(report)
 }
 

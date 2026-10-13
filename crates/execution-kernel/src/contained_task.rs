@@ -1824,6 +1824,26 @@ pub enum ApplicationEffectSupport {
     Unsupported,
 }
 
+/// Workflow #373 NAV-6 (model M-373 v1.1 §6): what a runtime did with a frame that did not give
+/// the running package what it awaited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedInterruptVerdict {
+    /// No shared interrupt page was handled: the package goes on as it would without them.
+    NotHandled,
+    /// A shared interrupt page was handled and the run resumes: the package looks at a fresh
+    /// frame, its wait budget paused for the time the handling took.
+    Handled,
+}
+
+/// Workflow #373 NAV-6: the frame a shared interrupt check looks at, and the package whose
+/// expectation it did not meet. A shared interrupt page that package declares itself (its page
+/// id without the game prefix) is the package's own to handle (§6.1).
+pub struct SharedInterruptFrame<'a> {
+    pub scene: &'a Scene,
+    pub game: &'a str,
+    pub own_pages: &'a [&'a str],
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
@@ -1942,6 +1962,26 @@ pub trait ContainedTaskRuntime {
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error>;
+
+    /// Workflow #373 NAV-6 (model M-373 v1.1 §6.1): `frame` did not give the running package
+    /// what it awaited (its entry's verdict, a page-graph frame no page of the package matched,
+    /// a frame of a wait for a step's, a transition's or an `expect_after` page). A runtime with
+    /// shared interrupt pages evaluates them on the frame and, when exactly one matched, handles
+    /// it; a failure of the handling ends the run with its own code. A runtime without them
+    /// answers `NotHandled` and does nothing else.
+    fn shared_interrupt(
+        &mut self,
+        _frame: SharedInterruptFrame<'_>,
+    ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<Self::Error>> {
+        Ok(SharedInterruptVerdict::NotHandled)
+    }
+}
+
+/// Workflow #373 NAV-6: a frame of an entry check, the page of the entry it matched or the scene
+/// of a frame that matched none.
+enum EntryFrame {
+    Matched(String),
+    Unmatched(Scene),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2430,6 +2470,9 @@ impl PreparedContainedTask {
     /// Workflow #373 NAV-3b: each frame evaluates only the pages of the required entry; it returns
     /// the one page that matched, `None` when none matched within the window, and fails with
     /// `contained_task_recognition_conflict` when one frame matched more than one of them.
+    ///
+    /// Workflow #373 NAV-6 (§4.4, §6.1): when the window ends unmatched, its last frame is offered
+    /// to the runtime's shared interrupt pages; after a handled one the check starts again.
     pub fn recognize_required_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2444,29 +2487,39 @@ impl PreparedContainedTask {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let started = Instant::now();
+        let mut started = Instant::now();
         let budget = Duration::from_millis(
             self.control
                 .step_timeout()
                 .milliseconds
                 .min(self.control.task_timeout().milliseconds),
         );
-        let timing = ContainedTaskTimingContext::new(
-            started,
-            started + budget,
-            actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
-        );
+        let window = |started: Instant| {
+            ContainedTaskTimingContext::new(
+                started,
+                started + budget,
+                actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
+            )
+        };
+        let mut timing = window(started);
         if !self.evaluator.pack().target_consensus.is_empty() {
-            return self
-                .capture_frame(
+            loop {
+                let scene = match self.capture_frame_scene(
                     runtime,
                     None,
                     None,
                     timing,
                     Some(PageCandidates::Exclusive(&pages)),
                     Some(timing.deadline()),
-                )
-                .map(|observation| observation.map(|value| value.page_label));
+                )? {
+                    Ok(observation) => return Ok(Some(observation.page_label)),
+                    Err(scene) => scene,
+                };
+                if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
+                    return Ok(None);
+                }
+                timing = window(Instant::now());
+            }
         }
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         loop {
@@ -2482,14 +2535,22 @@ impl PreparedContainedTask {
                 ended: Instant::now(),
                 succeeded: matched.is_ok(),
             });
-            if let Some(page) = matched? {
-                return Ok(Some(page));
-            }
+            let scene = match matched? {
+                EntryFrame::Matched(page) => return Ok(Some(page)),
+                EntryFrame::Unmatched(scene) => scene,
+            };
             let elapsed = started.elapsed();
-            if elapsed >= budget
-                || !runtime
-                    .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?
+            if elapsed >= budget {
+                if self.offer_shared_interrupt(runtime, &scene)?.is_some() {
+                    started = Instant::now();
+                    timing = window(started);
+                    continue;
+                }
+                return Ok(None);
+            }
+            if !runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?
             {
                 return Ok(None);
             }
@@ -2510,6 +2571,9 @@ impl PreparedContainedTask {
 
     /// Workflow #336 L2b: one observation of the first step's page. Declared target samples
     /// use the shared capture transaction and a single bounded entry deadline.
+    ///
+    /// Workflow #373 NAV-6 (§4.4, §6.1): an unmatched frame is offered to the runtime's shared
+    /// interrupt pages; after a handled one the check is made again on a fresh frame.
     pub fn recognize_linear_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -2517,19 +2581,28 @@ impl PreparedContainedTask {
         let page = self
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
-        let started = Instant::now();
-        let timing = ContainedTaskTimingContext::new(
-            started,
-            started
-                + Duration::from_millis(
-                    self.control
-                        .step_timeout()
-                        .milliseconds
-                        .min(self.control.task_timeout().milliseconds),
-                ),
-            actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
-        );
-        self.recognize_entry_frame(runtime, page, timing)
+        loop {
+            let started = Instant::now();
+            let timing = ContainedTaskTimingContext::new(
+                started,
+                started
+                    + Duration::from_millis(
+                        self.control
+                            .step_timeout()
+                            .milliseconds
+                            .min(self.control.task_timeout().milliseconds),
+                    ),
+                actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
+            );
+            match self.recognize_entry_frame(runtime, page, timing)? {
+                EntryFrame::Matched(_) => return Ok(true),
+                EntryFrame::Unmatched(scene) => {
+                    if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
     }
 
     /// Workflow #336 L2b: after a prerequisite package ran, frames of the first step's page are
@@ -2551,8 +2624,8 @@ impl PreparedContainedTask {
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
-        let started = Instant::now();
-        let timing = ContainedTaskTimingContext::new(started, started + budget, origin);
+        let mut started = Instant::now();
+        let mut timing = ContainedTaskTimingContext::new(started, started + budget, origin);
         loop {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
@@ -2569,11 +2642,21 @@ impl PreparedContainedTask {
                     succeeded: matched.is_ok(),
                 });
             }
-            if matched? {
-                return Ok(LinearEntryAwait {
-                    timing,
-                    unmatched: None,
-                });
+            let scene = match matched? {
+                EntryFrame::Matched(_) => {
+                    return Ok(LinearEntryAwait {
+                        timing,
+                        unmatched: None,
+                    });
+                }
+                EntryFrame::Unmatched(scene) => scene,
+            };
+            // Workflow #373 NAV-6 (§6.2): the wait's budget is paused while a shared interrupt
+            // page is handled.
+            if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                started += paused;
+                timing = ContainedTaskTimingContext::new(started, started + budget, origin);
+                continue;
             }
             let elapsed = started.elapsed();
             if elapsed >= budget {
@@ -2626,23 +2709,23 @@ impl PreparedContainedTask {
         runtime: &mut R,
         page: &str,
         timing: ContainedTaskTimingContext,
-    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+    ) -> Result<EntryFrame, ContainedTaskRunError<R::Error>> {
         self.recognize_entry_pages_frame(runtime, &[page], timing)
-            .map(|matched| matched.is_some())
     }
 
     /// One entry frame evaluated against the required entry pages only (Workflow #373 NAV-3b):
-    /// the one page that matched, `None` when none did, and `contained_task_recognition_conflict`
-    /// when more than one did. A single page keeps the single-page evaluation.
+    /// the one page that matched, the frame's scene when none did (Workflow #373 NAV-6), and
+    /// `contained_task_recognition_conflict` when more than one did. A single page keeps the
+    /// single-page evaluation.
     fn recognize_entry_pages_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         pages: &[&str],
         timing: ContainedTaskTimingContext,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+    ) -> Result<EntryFrame, ContainedTaskRunError<R::Error>> {
         if !self.evaluator.pack().target_consensus.is_empty() {
             return self
-                .capture_frame(
+                .capture_frame_scene(
                     runtime,
                     None,
                     None,
@@ -2650,7 +2733,10 @@ impl PreparedContainedTask {
                     Some(PageCandidates::Exclusive(pages)),
                     Some(timing.deadline()),
                 )
-                .map(|observation| observation.map(|value| value.page_label));
+                .map(|observation| match observation {
+                    Ok(observation) => EntryFrame::Matched(observation.page_label),
+                    Err(scene) => EntryFrame::Unmatched(scene),
+                });
         }
         let frame = runtime
             .capture()
@@ -2673,13 +2759,12 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
+        let scene = scene_from_frame(&frame)?;
         let [page] = pages else {
-            return self.recognize_entry_set_frame(runtime, &frame, pages, candidate_pages);
+            return self.recognize_entry_set_frame(runtime, &frame, scene, pages, candidate_pages);
         };
         let page = *page;
-        let result = self
-            .detector
-            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page);
+        let result = self.detector.evaluate_page(&self.evaluator, &scene, page);
         let results = Ok(vec![PageOutcome {
             index: 0,
             page_id: page.to_owned(),
@@ -2712,7 +2797,11 @@ impl PreparedContainedTask {
                 targets,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(matched.then(|| page.to_owned()))
+        Ok(if matched {
+            EntryFrame::Matched(page.to_owned())
+        } else {
+            EntryFrame::Unmatched(scene)
+        })
     }
 
     /// Workflow #373 NAV-3b: one entry frame evaluated against the pages of an entry page set
@@ -2721,14 +2810,15 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         frame: &Frame,
+        scene: Scene,
         pages: &[&str],
         candidate_pages: Vec<String>,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
-        let scene = scene_from_frame(frame)?;
-        let context = self.evaluator.scene_context(&scene);
-        let results = self
-            .detector
-            .evaluate_pages_outcomes_in_context(&context, pages);
+    ) -> Result<EntryFrame, ContainedTaskRunError<R::Error>> {
+        let results = {
+            let context = self.evaluator.scene_context(&scene);
+            self.detector
+                .evaluate_pages_outcomes_in_context(&context, pages)
+        };
         runtime
             .record_page_evaluations("home_preflight", &results, None)
             .map_err(ContainedTaskRunError::Boundary)?;
@@ -2784,7 +2874,84 @@ impl PreparedContainedTask {
                 targets,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(page)
+        Ok(match page {
+            Some(page) => EntryFrame::Matched(page),
+            None => EntryFrame::Unmatched(scene),
+        })
+    }
+
+    /// Workflow #373 NAV-6 (model M-373 v1.1 §6.1): offers `scene`, a frame that did not give
+    /// this package what it awaited, to the runtime's shared interrupt pages, with this
+    /// package's own page ids. `Some` with the time the handling took once one was handled.
+    fn offer_shared_interrupt<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        scene: &Scene,
+    ) -> Result<Option<Duration>, ContainedTaskRunError<R::Error>> {
+        let own_pages = self.detector.page_ids().collect::<Vec<_>>();
+        let started = Instant::now();
+        match runtime.shared_interrupt(SharedInterruptFrame {
+            scene,
+            game: &self.control.game,
+            own_pages: &own_pages,
+        })? {
+            SharedInterruptVerdict::NotHandled => Ok(None),
+            SharedInterruptVerdict::Handled => Ok(Some(started.elapsed())),
+        }
+    }
+
+    /// Workflow #373 NAV-6: this package's pages `pages` evaluated on `scene` in one scene
+    /// evaluation (one read per distinct request, REC-1), as a shared interrupt check evaluates
+    /// its feature package: the ids of the pages that matched, in `pages` order. An evaluation
+    /// error is `contained_task_recognition_failed`.
+    pub fn matching_pages_on_scene(
+        &self,
+        scene: &Scene,
+        pages: &[&str],
+    ) -> Result<Vec<String>, ContainedTaskError> {
+        let results = {
+            let context = self.evaluator.scene_context(scene);
+            self.detector
+                .evaluate_pages_outcomes_in_context(&context, pages)
+        };
+        let evaluations = results
+            .map_err(|error| {
+                actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })
+            .and_then(require_all_page_evaluations)
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                    error.to_string(),
+                )
+                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+            })?;
+        Ok(evaluations
+            .into_iter()
+            .filter(|evaluation| evaluation.matched)
+            .map(|evaluation| evaluation.page_id)
+            .collect())
+    }
+
+    /// Workflow #373 NAV-6: this package's page ids.
+    pub fn page_ids(&self) -> Vec<&str> {
+        self.detector.page_ids().collect()
+    }
+
+    /// Workflow #373 NAV-6: whether this package's declared `entry_page` holds `page` (a page id
+    /// without the game prefix): the page itself or a page of its entry page set; `any` holds
+    /// none.
+    pub fn entry_holds_page(&self, page: &str) -> bool {
+        let game = &self.control.game;
+        let holds = |entry: &String| {
+            crate::canonical_page_anchor(game, entry) == page && entry != linear::ANY_PAGE
+        };
+        match &self.program.entry_page {
+            Some(EntryPageDeclaration::Page(entry)) => holds(entry),
+            Some(EntryPageDeclaration::Set(entries)) => entries.iter().any(holds),
+            None => false,
+        }
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -3955,26 +4122,35 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
-        let started = Instant::now();
-        let timing = if self.evaluator.pack().target_consensus.is_empty() {
-            timing
-        } else {
-            timing.with_deadline(started + timeout)
-        };
+        let base_timing = timing;
+        let mut started = Instant::now();
         loop {
+            let timing = if self.evaluator.pack().target_consensus.is_empty() {
+                base_timing
+            } else {
+                base_timing.with_deadline(started + timeout)
+            };
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
                     .into());
             }
-            let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
+            let observation = self.capture_page_scene(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
                     .into());
             }
-            if let Some(observation) = observation {
-                return Ok(observation);
+            let scene = match observation {
+                Ok(observation) => return Ok(observation),
+                Err(scene) => scene,
+            };
+            // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
+            // offered to the shared interrupt pages before the wait goes on, its budget paused
+            // while one is handled.
+            if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                started += paused;
+                continue;
             }
             if started.elapsed() >= timeout {
                 return Err(ContainedTaskError::timed(
@@ -4028,26 +4204,34 @@ impl PreparedContainedTask {
             && runtime
                 .candidate_sampling_checkpoint()
                 .map_err(ContainedTaskRunError::operation::<R>)?;
-        let started = Instant::now();
-        let deadline = (started + budget).min(timing.deadline());
+        let mut deadline = (Instant::now() + budget).min(timing.deadline());
         loop {
-            if let Some(observation) = self.capture_page(
+            let scene = match self.capture_page_scene(
                 runtime,
                 ocr_collector,
                 Some(RequiredEntry { pages, waits }),
                 timing,
             )? {
-                return Ok(observation);
-            }
+                Ok(observation) => return Ok(observation),
+                Err(scene) => scene,
+            };
             if !waits {
                 return Err(unmatched().into());
             }
             let now = Instant::now();
-            if now >= deadline
+            let expired = now >= deadline;
+            if expired
                 || !runtime
                     .candidate_sampling_checkpoint()
                     .map_err(ContainedTaskRunError::operation::<R>)?
             {
+                // Workflow #373 NAV-6 (§4.4, §6.1 point 1): the entry's verdict is unmatched; its
+                // last frame is offered to the shared interrupt pages, and after a handled one
+                // the entry check starts again.
+                if expired && self.offer_shared_interrupt(runtime, &scene)?.is_some() {
+                    deadline = (Instant::now() + budget).min(timing.deadline());
+                    continue;
+                }
                 runtime
                     .record(ContainedTaskTrace::EntryRecognition {
                         required_pages: pages.to_vec(),
@@ -4078,7 +4262,19 @@ impl PreparedContainedTask {
         required_entry: Option<RequiredEntry<'_>>,
         timing: ContainedTaskTimingContext,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        self.capture_frame(
+        self.capture_page_scene(runtime, ocr_collector, required_entry, timing)
+            .map(Result::ok)
+    }
+
+    /// `capture_page` that keeps the scene of a frame that gave no page (Workflow #373 NAV-6).
+    fn capture_page_scene<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        required_entry: Option<RequiredEntry<'_>>,
+        timing: ContainedTaskTimingContext,
+    ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame_scene(
             runtime,
             Some(ocr_collector),
             required_entry,
@@ -4088,12 +4284,6 @@ impl PreparedContainedTask {
         )
     }
 
-    /// One observation and its page recognition, recorded as every capture is, at the
-    /// `CapturePage` timing boundary. Without `ocr_collector` it is a select step's
-    /// confirmation frame (Workflow #308): it feeds neither the stability sampling nor the
-    /// post-admission OCR collector. Ordered candidates retain their order and select the
-    /// first passing page; the global page graph and exclusive candidates (an entry page set,
-    /// Workflow #373 NAV-3b) require a unique match.
     fn capture_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4103,6 +4293,33 @@ impl PreparedContainedTask {
         candidates: Option<PageCandidates<'_>>,
         sampling_deadline: Option<Instant>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame_scene(
+            runtime,
+            ocr_collector,
+            required_entry,
+            timing,
+            candidates,
+            sampling_deadline,
+        )
+        .map(Result::ok)
+    }
+
+    /// One observation and its page recognition, recorded as every capture is, at the
+    /// `CapturePage` timing boundary. Without `ocr_collector` it is a select step's
+    /// confirmation frame (Workflow #308): it feeds neither the stability sampling nor the
+    /// post-admission OCR collector. Ordered candidates retain their order and select the
+    /// first passing page; the global page graph and exclusive candidates (an entry page set,
+    /// Workflow #373 NAV-3b) require a unique match. A frame that gave no page returns its
+    /// scene (Workflow #373 NAV-6), for the shared interrupt pages.
+    fn capture_frame_scene<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
+        required_entry: Option<RequiredEntry<'_>>,
+        timing: ContainedTaskTimingContext,
+        candidates: Option<PageCandidates<'_>>,
+        sampling_deadline: Option<Instant>,
+    ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
         let (candidates, exclusive) = match candidates {
             None => (None, true),
             Some(PageCandidates::Ordered(pages)) => (Some(pages), false),
@@ -4425,7 +4642,7 @@ impl PreparedContainedTask {
                 // Workflow #371-3: inside a bounded entry wait an unmatched frame is no verdict;
                 // the wait records the entry once, matched or at its end.
                 if !matched && required.waits {
-                    return Ok(None);
+                    return Ok(Err(scene));
                 }
                 runtime
                     .record(ContainedTaskTrace::EntryRecognition {
@@ -4441,7 +4658,7 @@ impl PreparedContainedTask {
                 }
             }
             let Some(page_label) = page else {
-                return Ok(None);
+                return Ok(Err(scene));
             };
             // Preserve a recorder failure's original boundary type across the collector's task error API.
             let mut recording_failure = None;
@@ -4475,7 +4692,7 @@ impl PreparedContainedTask {
             if let Some(error) = ocr_collector.field_failure_error() {
                 return Err(error.into());
             }
-            Ok(Some(PageObservation {
+            Ok(Ok(PageObservation {
                 page_label,
                 scene,
                 stability_sample,
@@ -4508,51 +4725,64 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
-        let started = Instant::now();
-        let timing = if self.evaluator.pack().target_consensus.is_empty() {
-            timing
-        } else {
-            timing.with_deadline(started + timeout)
-        };
+        let base_timing = timing;
+        let mut started = Instant::now();
         let mut last_observation = None;
         loop {
+            let timing = if self.evaluator.pack().target_consensus.is_empty() {
+                base_timing
+            } else {
+                base_timing.with_deadline(started + timeout)
+            };
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
-            let observation = self.capture_page(runtime, ocr_collector, None, timing)?;
+            let observation = self.capture_page_scene(runtime, ocr_collector, None, timing)?;
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
-            if let Some(observation) = observation {
-                let destination_matches =
-                    operation.matching_destination_count(&self.control, &observation)?;
-                let hit_error_page = self
-                    .program
-                    .is_error_page(&self.control, &observation.page_label);
-                if destination_matches > 1 || (destination_matches == 1 && hit_error_page) {
-                    return Err(ContainedTaskError::with_detail(
-                        ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
-                        observation.page_label,
-                    )
-                    .into());
+            // Workflow #373 NAV-6 (§6.1 point 3): a frame that is no destination (and no error
+            // page) is offered to the shared interrupt pages; the confirmation budget is paused
+            // while one is handled.
+            let paused = match observation {
+                Ok(observation) => {
+                    let destination_matches =
+                        operation.matching_destination_count(&self.control, &observation)?;
+                    let hit_error_page = self
+                        .program
+                        .is_error_page(&self.control, &observation.page_label);
+                    if destination_matches > 1 || (destination_matches == 1 && hit_error_page) {
+                        return Err(ContainedTaskError::with_detail(
+                            ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
+                            observation.page_label,
+                        )
+                        .into());
+                    }
+                    if destination_matches == 1 {
+                        return Ok(PostconditionResolution::Reached(observation));
+                    }
+                    if hit_error_page {
+                        return Ok(PostconditionResolution::Failed {
+                            observation: Some(observation),
+                            hit_error_page: true,
+                            timing_failure: None,
+                        });
+                    }
+                    let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
+                    last_observation = Some(observation);
+                    paused
                 }
-                if destination_matches == 1 {
-                    return Ok(PostconditionResolution::Reached(observation));
-                }
-                if hit_error_page {
-                    return Ok(PostconditionResolution::Failed {
-                        observation: Some(observation),
-                        hit_error_page: true,
-                        timing_failure: None,
-                    });
-                }
-                last_observation = Some(observation);
+                Err(scene) => self.offer_shared_interrupt(runtime, &scene)?,
+            };
+            if let Some(paused) = paused {
+                started += paused;
+                continue;
             }
             if started.elapsed() >= timeout {
                 return Ok(PostconditionResolution::Failed {

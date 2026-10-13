@@ -528,7 +528,7 @@ impl BundleIndex {
 }
 
 /// A game or server key of a bundle: 1-128 bytes of `[a-z0-9._-]`, usable as one path segment.
-fn bundle_identifier(value: &str) -> bool {
+pub(crate) fn bundle_identifier(value: &str) -> bool {
     value.len() <= 128
         && !value.contains('/')
         && safe_source_path(value)
@@ -539,7 +539,7 @@ fn bundle_identifier(value: &str) -> bool {
 }
 
 /// A package or task id of a bundle: 1-128 bytes, trimmed, without control characters.
-fn bundle_text(value: &str) -> bool {
+pub(crate) fn bundle_text(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value.trim() == value

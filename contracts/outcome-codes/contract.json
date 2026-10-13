@@ -11328,6 +11328,39 @@
       "description": "A code several owners use with one meaning (contract-owned, A2a D3): a scheduled contained task cannot be cancelled by a client.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "standard_pack_root_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "standard_pack_problem": "required",
+        "json_pointer": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A standard-pack root file (bundle.json, pages.json or interrupts.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "invalid_task_interrupt": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: invalid task interrupt record (interrupt_handled count outside 1 to 8, or interrupt_ambiguous with fewer than two or more than 32 pages).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

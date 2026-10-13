@@ -222,6 +222,22 @@ postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. Source parsing, build and Runtime admission share this
 check; the operation and control phase declarations must match exactly.
 
+Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
+standard package may name shared interrupt pages (`interrupts.json`, see
+[package-reference.md](package-reference.md), "Standard package root"). A run looks
+at them only on a frame its own package did not accept: the verdict of its entry
+check (the frame on which the entry's window ended unmatched), and each frame of a
+wait that did not show what the package awaited (a page-graph frame no page of the
+package matched; a linear step's entry, transition, arrival or retry-decision page;
+a page-graph operation's destination). The hooked kernel loops are
+`recognize_required_entry`, `recognize_linear_entry`, `await_linear_entry`,
+`await_ordinary_home_entry` (entry verdicts) and `capture_until_page`,
+`await_postcondition`, `linear_wait`, `linear_wait_set` (waits, per frame). An
+interrupt page the running package declares itself is the package's own. One
+matched page is handled by its handler package as a layer of the run, and the wait
+resumes with its budget paused for the handling; an entry check starts again.
+Without `interrupts.json` for the game nothing is read and nothing changes.
+
 Entry page sets (Workflow #373 NAV-3b). In operation `0.9` a page-graph task
 (`navigable_route`, `in_page_guard`, `recognize_only`) may declare `entry_page` as
 an array of 1–16 distinct pages instead of one page; `any` is never a member and

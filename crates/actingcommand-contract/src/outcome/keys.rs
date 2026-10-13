@@ -380,4 +380,13 @@ outcome_keys! {
     device_state_probe: vocab(device_state_probe),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
+    // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----
+    standard_pack_problem: vocab(standard_pack_problem),
+    json_pointer: pointer,
+    navigation_role: vocab(navigation_role),
+    navigation_problem: vocab(navigation_problem),
+    page_ids: list(id),
+    added_package_ids: list(name),
+    removed_package_ids: list(name),
+    // ---- Workflow #373 NAV-6: end ----
 }

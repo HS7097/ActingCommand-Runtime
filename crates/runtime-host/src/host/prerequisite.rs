@@ -240,7 +240,10 @@ pub(super) fn run_linear_gated(
         executed: 0,
     };
     gate_layer(runtime, &mut gate, 0, prepared, prerequisites)?;
-    runtime.step_index_offset = gate.executed;
+    // Workflow #373 NAV-6: after the steps of the interrupt layers that ran so far too.
+    runtime
+        .begin_layer(gate.executed)
+        .ok_or_else(|| ContainedTaskRunError::task(STEP_LIMIT))?;
     runtime
         .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::Started,
@@ -248,9 +251,8 @@ pub(super) fn run_linear_gated(
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     let mut outcome = prepared.run(runtime)?;
-    outcome.executed_steps = outcome
-        .executed_steps
-        .checked_add(gate.executed)
+    outcome.executed_steps = runtime
+        .layer_end(outcome.executed_steps)
         .ok_or_else(|| ContainedTaskRunError::task(STEP_LIMIT))?;
     Ok(outcome)
 }
@@ -295,12 +297,17 @@ fn gate_layer(
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_sha256: package_sha256.clone(),
+            role: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     gate.open.push(package_sha256.clone());
     gate_layer(runtime, gate, layer + 1, prerequisite, rest)?;
-    // Preparation already refused a chain whose step bounds exceed the limit.
-    if u64::from(gate.executed) + u64::from(prerequisite.maximum_executed_steps()) > MAX_GATED_STEPS
+    // Preparation already refused a chain whose step bounds exceed the limit; Workflow #373
+    // NAV-6: the interrupt layers' steps count too.
+    if u64::from(gate.executed)
+        + u64::from(prerequisite.maximum_executed_steps())
+        + u64::from(runtime.interrupt_steps)
+        > MAX_GATED_STEPS
     {
         return Err(fail_gate(
             runtime,
@@ -321,7 +328,9 @@ fn gate_layer(
             )
             .map_err(ContainedTaskRunError::Boundary)?;
     }
-    runtime.step_index_offset = gate.executed;
+    runtime
+        .begin_layer(gate.executed)
+        .ok_or_else(|| fail_gate(runtime, gate, ContainedTaskRunError::task(STEP_LIMIT)))?;
     let previous_timing = runtime.task_timing.context();
     let execution = {
         let mut prerequisite_runtime = EntryRecoveryRuntime { inner: runtime };
@@ -347,6 +356,7 @@ fn gate_layer(
             package_sha256,
             final_page,
             executed_steps: outcome.executed_steps,
+            role: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     gate.open.pop();
@@ -512,6 +522,7 @@ fn record_closed(
         runtime.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
             package_sha256: package_sha256.clone(),
             outcome: outcome.clone(),
+            role: None,
         })?;
     }
     runtime.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
