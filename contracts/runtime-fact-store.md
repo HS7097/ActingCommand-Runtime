@@ -550,7 +550,7 @@ internal). For one physical instance, under its admission guard:
    with `CapacityUse::Drain` (`lease.granted`, synthetic links). A refusal (an
    active lease `lease_busy`, the takeover cooldown `lease_cooldown`, a queue)
    skips the instance: one `runtime.failed` record with lifecycle stage
-   `runtime.lifecycle.connection_preparation` names the instance and the code,
+   `runtime_lifecycle_connection_preparation` names the instance and the code,
    and its availability is withdrawn. An instance resume's reconnect and a
    `SelfCheckInstance` take no dedicated lease (Workflow #369 S5): each first
    waits, without the admission guard, for its operator claim

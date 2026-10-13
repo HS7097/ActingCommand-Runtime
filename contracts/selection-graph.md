@@ -430,7 +430,7 @@ it was cancelled or paused during the capture, the record fails its own validati
 append fails), the task still fails with the original error and its code, on a manual and on
 a scheduled run alike. The host records the refusal when it happens, before the run's terminal
 events: one `runtime.failed` lifecycle record linked to the run, with stage
-`runtime.lifecycle.selection_record` and the refusal's own code and detail. The runtime is
+`runtime_lifecycle_selection_record` and the refusal's own code and detail. The runtime is
 poisoned when the refusal poisons it. Only when the ledger refuses that record as well does the
 host join the refusal to the run's failure as the related failure `selection_record` in its
 native detail, and poison the runtime. A capture failure its runtime cannot classify forbids

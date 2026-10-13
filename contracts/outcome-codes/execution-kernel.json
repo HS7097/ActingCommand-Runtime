@@ -2559,6 +2559,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Evaluating an explicitly requested target of a contained page observation."
+    },
+    "emulator_control_support": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the execution backend provider has no instance control."
     }
   }
 }

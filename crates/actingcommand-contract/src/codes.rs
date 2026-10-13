@@ -1046,5 +1046,8 @@ crate::outcome_locations! {
         StartAgentSession => "start_agent_session",
         SubscribeRuntimeEvents => "subscribe_runtime_events",
         WriteStateDocument => "write_state_document",
+        InstanceDiscoveryUnsupported => "instance_discovery_unsupported",
+        ApplicationForegroundUnsupported => "application_foreground_unsupported",
+        ResourceDeclarationPrepare => "resource_declaration_prepare",
     }
 }

@@ -346,7 +346,7 @@ impl<'r> RetentionEvents<'r> {
                 Outcome::relayed(code_of(severity)),
                 DiagnosticDetailDraft::new(
                     "fixture_category",
-                    "fixture.stage",
+                    crate::LedgerLocation::AppendEvent.location(),
                     "fixture_backend",
                     "fixture_operation",
                 ),

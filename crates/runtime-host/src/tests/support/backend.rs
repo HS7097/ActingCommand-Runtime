@@ -127,11 +127,11 @@ impl FakeBackend {
             return Err(DeviceError::fatal("injected backend failure")
                 .with_diagnostic(
                     DeviceErrorCategory::Native,
-                    "device_registry.input.operation",
+                    crate::codes::HostLocation::DeviceRegistryInputOperation.location(),
                 )
                 .with_diagnostic_context(
                     "adb_shell_input",
-                    "reset",
+                    actingcommand_device::codes::DeviceLocation::InputReset,
                     DeviceErrorSensitivity::Sensitive,
                 ));
         }
@@ -273,11 +273,11 @@ impl CaptureBackend for FakeCapture {
             return Err(error
                 .with_diagnostic(
                     DeviceErrorCategory::Native,
-                    "device_registry.capture.operation",
+                    actingcommand_device::codes::DeviceStage::CaptureFrameLayout.location(),
                 )
                 .with_diagnostic_context(
                     "nemu_ipc",
-                    "capture",
+                    actingcommand_contract::codes::ContractLocation::CaptureSequence,
                     DeviceErrorSensitivity::Sensitive,
                 ));
         }
@@ -878,7 +878,7 @@ impl ExecutionBackendProvider for FakeProvider {
                     DeviceError::fatal("emulator control unsupported by this provider")
                         .with_diagnostic(
                             DeviceErrorCategory::Protocol,
-                            "emulator_control.unsupported",
+                            actingcommand_execution_kernel::ExecutionKernelLocation::EmulatorControlSupport.location(),
                         ),
                     0,
                 ),
@@ -909,7 +909,7 @@ impl ExecutionBackendProvider for FakeProvider {
                         DeviceError::fatal("fixture emulator readiness wait timed out")
                             .with_diagnostic(
                                 DeviceErrorCategory::ChildExit,
-                                "mumu_manager.wait_timeout",
+                                actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
                             ),
                         0,
                     ),
@@ -935,7 +935,7 @@ impl ExecutionBackendProvider for FakeProvider {
                 DeviceError::fatal("emulator state read unsupported by this provider")
                     .with_diagnostic(
                         DeviceErrorCategory::Protocol,
-                        "emulator_control.unsupported",
+                        actingcommand_execution_kernel::ExecutionKernelLocation::EmulatorControlSupport.location(),
                     )
             })?;
         entry.state.emulator.read_state()
@@ -955,7 +955,7 @@ impl ExecutionBackendProvider for FakeProvider {
             .ok_or_else(|| {
                 DeviceError::fatal("emulator control unsupported by this provider").with_diagnostic(
                     DeviceErrorCategory::Protocol,
-                    "emulator_control.unsupported",
+                    actingcommand_execution_kernel::ExecutionKernelLocation::EmulatorControlSupport.location(),
                 )
             })?;
         entry

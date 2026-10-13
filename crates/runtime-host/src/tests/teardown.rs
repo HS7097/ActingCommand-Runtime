@@ -606,10 +606,14 @@ fn required_failure_events_preserve_cleanup_detail() {
             } else {
                 *state.input_error.lock().expect("input error") = Some(
                     DeviceError::transient("primary bounded input context")
-                        .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
+                        .with_diagnostic(
+                            DeviceErrorCategory::Protocol,
+                            actingcommand_device::codes::DeviceStage::AdbInputBoundsValidate
+                                .location(),
+                        )
                         .with_diagnostic_context(
                             "adb_shell_input",
-                            "reset",
+                            actingcommand_device::codes::DeviceLocation::InputReset,
                             DeviceErrorSensitivity::Internal,
                         ),
                 );
@@ -618,10 +622,13 @@ fn required_failure_events_preserve_cleanup_detail() {
                 let mut error = DeviceError::transient("unavailable private close text");
                 if has_detail {
                     error = DeviceError::transient("exit_status=1 stderr=cleanup_failed")
-                        .with_diagnostic(DeviceErrorCategory::CommandFlush, "maatouch.stdin.flush")
+                        .with_diagnostic(
+                            DeviceErrorCategory::CommandFlush,
+                            actingcommand_device::codes::DeviceStage::MaatouchStdinFlush.location(),
+                        )
                         .with_diagnostic_context(
                             "maatouch",
-                            "close",
+                            actingcommand_device::codes::DeviceLocation::InputClose,
                             DeviceErrorSensitivity::Secret,
                         );
                 }
@@ -822,9 +829,9 @@ fn required_failure_events_preserve_cleanup_detail() {
             assert_eq!(
                 primary.stage(),
                 if capture {
-                    "device_registry.capture.operation"
+                    "capture_frame_layout"
                 } else {
-                    "adb.input.operation"
+                    "adb_input_bounds_validate"
                 }
             );
             assert_eq!(
@@ -837,7 +844,11 @@ fn required_failure_events_preserve_cleanup_detail() {
             );
             assert_eq!(
                 primary.operation(),
-                if capture { "capture" } else { "reset" }
+                if capture {
+                    "capture_sequence"
+                } else {
+                    "input_reset"
+                }
             );
             assert_eq!(
                 outcome.effect_disposition(),
@@ -861,9 +872,9 @@ fn required_failure_events_preserve_cleanup_detail() {
                 );
                 if let Some(detail) = outcome.cleanup_detail() {
                     assert_eq!(detail.category(), "command_flush");
-                    assert_eq!(detail.stage(), "maatouch.stdin.flush");
+                    assert_eq!(detail.stage(), "maatouch_stdin_flush");
                     assert_eq!(detail.backend(), "maatouch");
-                    assert_eq!(detail.operation(), "close");
+                    assert_eq!(detail.operation(), "input_close");
                     // Acceptance H-L1: a Secret device text under the `cleanup` link stays in
                     // the record, classed Secret, and makes the record Secret.
                     let foreign = cleanup

@@ -235,5 +235,6 @@ actingcommand_contract::outcome_locations! {
         EvaluatePage => "evaluate_page",
         EvaluatePageTarget => "evaluate_page_target",
         EvaluateRequestedTarget => "evaluate_requested_target",
+        EmulatorControlSupport => "emulator_control_support",
     }
 }

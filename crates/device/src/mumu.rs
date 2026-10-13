@@ -1003,10 +1003,13 @@ mod tests {
                 .contains("count=unavailable")
         );
         let original = DeviceError::fatal("complete lower detail")
-            .with_diagnostic(crate::DeviceErrorCategory::Native, "nemu.native.failure")
+            .with_diagnostic(
+                crate::DeviceErrorCategory::Native,
+                crate::codes::DeviceStage::NemuInstallationResolve.location(),
+            )
             .with_diagnostic_context(
                 "nemu_ipc",
-                "capture",
+                actingcommand_contract::codes::ContractLocation::CaptureSequence,
                 crate::DeviceErrorSensitivity::Sensitive,
             );
         let preserved = original.clone().with_nemu_resolution_context_if_absent(

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::codes::DeviceLocation;
+use actingcommand_contract::outcome::Location;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdbBoundsAction {
     Tap { x: i32, y: i32 },
@@ -7,10 +10,10 @@ pub enum AdbBoundsAction {
 }
 
 impl AdbBoundsAction {
-    pub(crate) const fn operation(self) -> &'static str {
+    pub(crate) const fn operation(self) -> Location {
         match self {
-            Self::Tap { .. } => "tap",
-            Self::Swipe { .. } => "swipe",
+            Self::Tap { .. } => DeviceLocation::InputTap.location(),
+            Self::Swipe { .. } => DeviceLocation::InputSwipe.location(),
         }
     }
 }

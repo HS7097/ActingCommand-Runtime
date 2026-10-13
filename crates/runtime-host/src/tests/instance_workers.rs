@@ -1618,8 +1618,15 @@ fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
     let host = emulator_instance_host(&root, &state, instance_id(), false);
     *state.input_open_error.lock().expect("input open error") = Some(
         DeviceError::transient("fixture input handshake failed")
-            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
-            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_diagnostic(
+                DeviceErrorCategory::Handshake,
+                actingcommand_device::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                crate::codes::HostLocation::OpenInput,
+                DeviceErrorSensitivity::Internal,
+            )
             .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
     );
     let (start, receipt) = control_emulator(&host, Start, 90);
@@ -1791,8 +1798,15 @@ fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_
     let startup_claim = startup_claim_request(&all_events(&host));
     *state.input_open_error.lock().expect("input open error") = Some(
         DeviceError::transient("fixture input handshake failed")
-            .with_diagnostic(DeviceErrorCategory::Handshake, "device_registry.input.open")
-            .with_diagnostic_context("adb_shell_input", "open", DeviceErrorSensitivity::Internal)
+            .with_diagnostic(
+                DeviceErrorCategory::Handshake,
+                actingcommand_device::codes::DeviceStage::AdbEnsureDeviceGetState.location(),
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                crate::codes::HostLocation::OpenInput,
+                DeviceErrorSensitivity::Internal,
+            )
             .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
     );
 

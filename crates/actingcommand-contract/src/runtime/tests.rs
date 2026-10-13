@@ -206,8 +206,12 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     // Ledger revision 3 (Workflow #378 A3): the failure is the payload's outcome, with its
     // `operation` and `stage`; the cause and the cleanup are its links, and native text rides
     // on foreign links. The record keeps the typed context.
-    let detail =
-        DiagnosticDetailDraft::new("native", "runtime.lifecycle.close", "maatouch", "close");
+    let detail = DiagnosticDetailDraft::new(
+        "native",
+        crate::codes::ContractLocation::OpenCapturePipeline.location(),
+        "maatouch",
+        "close",
+    );
     let failure = crate::outcome::Outcome::new(RuntimeErrorCode::BackendOperationFailed)
         .operation(crate::codes::ContractLocation::ControlInstance)
         .stage(crate::codes::ContractLocation::OpenCapturePipeline);
@@ -251,7 +255,8 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
                 EffectDisposition::Indeterminate,
                 DiagnosticDetailDraft::new(
                     "runtime_lifecycle",
-                    "runtime.lifecycle.session_close",
+                    crate::outcome::Location::relayed("runtime_lifecycle_session_close")
+                        .expect("registered stage"),
                     "runtime_host",
                     "close_execution_kernel",
                 ),
@@ -505,7 +510,8 @@ fn resource_quiescence_causes_roundtrip_and_project() {
             EffectDisposition::Indeterminate,
             DiagnosticDetailDraft::new(
                 "resource_quiescence",
-                "runtime.lifecycle.resource_close",
+                crate::outcome::Location::relayed("runtime_lifecycle_session_close")
+                    .expect("registered stage"),
                 "execution_kernel",
                 "close_resources",
             ),
@@ -2778,7 +2784,7 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
                 crate::outcome::Outcome::new(RuntimeErrorCode::ProtocolInvalid),
                 crate::DiagnosticDetailDraft::new(
                     "runtime_connection",
-                    "runtime.ipc.receipt_write",
+                    crate::codes::ContractLocation::ControlInstance,
                     "local_ipc",
                     "runtime_local_ipc",
                 ),
@@ -2832,7 +2838,7 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             );
             let detail = outcome.detail().expect("runtime failure detail");
             assert_eq!(detail.category(), "runtime_connection");
-            assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
+            assert_eq!(detail.stage(), "control_instance");
             assert_eq!(detail.backend(), "local_ipc");
             assert_eq!(detail.operation(), "runtime_local_ipc");
             assert_eq!(

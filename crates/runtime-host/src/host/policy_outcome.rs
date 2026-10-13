@@ -329,7 +329,7 @@ impl HostShared {
                         .task_id(identifier_text(task_id)),
                     DiagnosticDetailDraft::new(
                         "policy_settlement",
-                        RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
+                        RuntimeLifecycleFailureStage::PolicyInitialization.location(),
                         "runtime_host",
                         OPERATION.as_str(),
                     ),
@@ -530,7 +530,7 @@ impl HostShared {
                 outcome,
                 DiagnosticDetailDraft::new(
                     "policy_settlement",
-                    RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
+                    RuntimeLifecycleFailureStage::PolicyInitialization.location(),
                     "runtime_host",
                     operation.as_str(),
                 ),
@@ -1059,7 +1059,7 @@ impl HostShared {
                     error.record_outcome(),
                     DiagnosticDetailDraft::new(
                         "policy_driver",
-                        RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
+                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
                         "runtime_host",
                         error.operation(),
                     ),

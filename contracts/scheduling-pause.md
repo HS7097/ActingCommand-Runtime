@@ -212,7 +212,7 @@ epoch, which is why the epoch is part of the condition.
 
 An older Runtime does not know the field: `RuntimeOperation` denies unknown fields, the frame
 fails to decode and the connection is dropped without a receipt (stage
-`runtime.ipc.request_decode`, effect not performed). Only when the call wrote its own frame
+`runtime_ipc_request_decode`, effect not performed). Only when the call wrote its own frame
 and that connection then ended before the receipt header (end of stream, reset or abort) does
 the client (`RuntimeClient::resume_scheduling_expected`) reconnect and, when the same owner
 epoch answers, read `Status`; a connection already failed by an earlier call, a receipt

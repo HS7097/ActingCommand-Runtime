@@ -14039,6 +14039,20 @@
       "description": "A session.pack.schedule record breaks the pack schedule rules (field points at the offending member): its value is not a record_list of package_id, from_unix_ms, until_unix_ms and schedulable rows, a row ends at or before it starts, or two rows of one package overlap. The publication request is refused. Not fatal.",
       "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
       "handling": "Write the scope's whole list again with non-overlapping rows."
+    },
+    "runtime_receipt_build_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host could not build the runtime receipt of a request; the host latches the failure (was the runtime client's runtime_receipt_invalid, which names a receipt the client cannot read).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -20265,6 +20279,206 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime lifecycle failure stage: recording the shutdown_requested lifecycle phase as the Runtime host closes (formerly runtime.lifecycle.shutdown_requested)."
+    },
+    "adb_endpoint_pending": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a session-opening refusal: the discovered instance's ADB endpoint is pending (the stopped instance reported no port)."
+    },
+    "adb_endpoint_unresolved": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an endpoint rebind refusal: the started instance reported ADB port 0."
+    },
+    "device_registry_input_operation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an input operation failure in the device registry's input backend when the device error names no stage of its own."
+    },
+    "emulator_control_binding": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance has no emulator binding (registered without discovery, or a fixture)."
+    },
+    "emulator_control_registration": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control, state read or endpoint rebind refusal: the instance is not registered with the provider."
+    },
+    "runtime_ipc_request_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: reading the request."
+    },
+    "runtime_ipc_request_decode": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: decoding the request."
+    },
+    "runtime_ipc_request_cache": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: looking up or keeping the request's cached receipt."
+    },
+    "runtime_ipc_dispatch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: dispatching the request."
+    },
+    "runtime_ipc_receipt_build": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: building the receipt."
+    },
+    "runtime_ipc_receipt_write": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: writing the receipt."
+    },
+    "runtime_ipc_connection_panic": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime connection failure: the connection's handler panicked."
+    },
+    "frame_retention_move": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: moving a frame to the kept folder failed."
+    },
+    "frame_retention_counter": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: writing the move counter failed."
+    },
+    "frame_retention_remove": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a frame retention warning: removing a frame failed."
+    },
+    "runtime_monitor_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a monitor registry failure: restoring the persisted registry at start."
+    },
+    "observation_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a contained observation failure's diagnostic detail."
+    },
+    "instance_discovery_failed": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an instance discovery failure whose device error names no stage of its own."
+    },
+    "mumu_manager_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an emulator control failure whose device error names no stage of its own."
+    },
+    "mumu_manager_process_list": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a confirmed Stop whose process listing failed (emulator_stop_process_unverified)."
+    },
+    "material_read_attempt": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a runtime material read failure: the read attempt."
+    },
+    "unlock_owner_ledger": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an offline owner unlock: recording the unlock fact in the ledger (unlock-owner v1 prints it as ledger)."
+    },
+    "material_read_deadline_compute": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: computing its deadline from the read budget."
+    },
+    "material_read_length_convert": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a runtime material read: converting a chunk's length to the reply's integer type."
+    },
+    "effective_configuration_size_check": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Operation of a contained task's effective configuration record: checking the encoded record against its byte limit."
     }
   }
 }

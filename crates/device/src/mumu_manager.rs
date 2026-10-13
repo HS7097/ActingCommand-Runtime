@@ -32,6 +32,7 @@ use crate::{
 };
 use actingcommand_contract::EmulatorInstanceAction;
 use actingcommand_contract::codes::ContractLocation;
+use actingcommand_contract::outcome::Location;
 use std::cmp::Ordering;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -64,8 +65,9 @@ pub const MUMU_MANAGER_PROCESS_LIST_INTERVAL: Duration = Duration::from_secs(5);
 pub const MUMU_MANAGER_PROCESS_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const MUMU_MANAGER_STATE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Diagnostic stage of a `MuMuManager` run whose bound expired (distinct from
-/// `mumu_manager.run`, a spawn or poll failure). Tolerated by the readiness wait.
-pub(crate) const MUMU_MANAGER_TIMEOUT_STAGE: &str = "mumu_manager.timeout";
+/// `mumu_manager_run`, a spawn or poll failure). Tolerated by the readiness wait.
+pub(crate) const MUMU_MANAGER_TIMEOUT_STAGE: Location =
+    crate::codes::DeviceStage::MumuManagerTimeout.location();
 /// Bound of the retained `control` stdout+stderr summary (the ledger native-detail bound).
 const MAX_EMULATOR_CONTROL_SUMMARY_BYTES: usize = 1024;
 pub const MAX_MUMU_INSTANCE_NAME_BYTES: usize = 256;
@@ -250,7 +252,7 @@ pub fn mumu_capability_profile(
                 EmulatorCapability::InventoryRead | EmulatorCapability::InstanceStatusRead => (
                     EmulatorCapabilityImplementation::Supported,
                     EmulatorCapabilityAvailability::Available,
-                    "MuMuManager info -v all answered with exit 0 and a parseable instance map at discovery. A refusal surfaces as a fatal typed device error (mumu_manager.run, .timeout, .exit, .decode, .json, .errcode, .shape, .output_bound), never as an empty inventory.",
+                    "MuMuManager info -v all answered with exit 0 and a parseable instance map at discovery. A refusal surfaces as a fatal typed device error (mumu_manager_run, _timeout, _exit, _decode, _json, _errcode, _shape, _output_bound), never as an empty inventory.",
                     "mumu_manager.info",
                 ),
                 EmulatorCapability::InstanceStart
@@ -258,7 +260,7 @@ pub fn mumu_capability_profile(
                 | EmulatorCapability::InstanceRestart => (
                     EmulatorCapabilityImplementation::Supported,
                     EmulatorCapabilityAvailability::Available,
-                    "MuMuManager control -v <index> launch|shutdown, only for an explicit User+Ui or Cli emulator control request after the lease fence and session close; a restart is a shutdown then a launch, never the vendor restart verb. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding), emulator_control_unsupported (provider), mumu_manager.control_exit / .control_errcode, mumu_manager.launch_error (launch_err_code != 0), mumu_manager.wait_timeout (readiness deadline).",
+                    "MuMuManager control -v <index> launch|shutdown, only for an explicit User+Ui or Cli emulator control request after the lease fence and session close; a restart is a shutdown then a launch, never the vendor restart verb. Typed refusals: emulator_control_busy (fence), emulator_control_unavailable (no discovery binding), emulator_control_unsupported (provider), mumu_manager_control_exit / _control_errcode, mumu_manager_launch_error (launch_err_code != 0), mumu_manager_wait_timeout (readiness deadline).",
                     "mumu_manager.control",
                 ),
                 EmulatorCapability::InstanceCreate
@@ -341,10 +343,13 @@ fn with_mumu_manager_discovery_detail(error: DeviceError) -> DeviceError {
     let producer_complete = error.diagnostic().is_some() && error.diagnostic_context().is_some();
     let producer_message = error.diagnostic_message().is_some();
     let error = error
-        .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, "mumu_manager.discover")
+        .with_diagnostic_if_absent(
+            DeviceErrorCategory::Protocol,
+            crate::codes::DeviceStage::MumuManagerDiscover.location(),
+        )
         .with_diagnostic_context_if_absent(
             "mumu_manager",
-            ContractLocation::DiscoverInstances.as_str(),
+            ContractLocation::DiscoverInstances,
             DeviceErrorSensitivity::Sensitive,
         );
     if producer_complete || producer_message {
@@ -504,7 +509,7 @@ pub fn query_version(mumu_manager_path: &Path) -> DeviceResult<MumuManagerVersio
         DeviceError::fatal(format!(
             "MuMuManager version {observed:?} is not a four-part numeric version; required at least {MUMU_MANAGER_MINIMUM_VERSION} (Runtime policy floor; the vendor documents no minimum for this interface)"
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.version")
+        .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerVersion.location())
         .with_nemu_resolution_context_if_absent(NemuResolutionContext::new(
             NemuResolutionReason::ProviderVersionUnparseable,
         ))
@@ -513,7 +518,7 @@ pub fn query_version(mumu_manager_path: &Path) -> DeviceResult<MumuManagerVersio
         return Err(DeviceError::fatal(format!(
             "MuMuManager version {version} is below the Runtime policy floor {MUMU_MANAGER_MINIMUM_VERSION} (observed={version} required={MUMU_MANAGER_MINIMUM_VERSION}); the floor is a Runtime policy, not a vendor-documented minimum"
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.version_floor")
+        .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerVersionFloor.location())
         .with_nemu_resolution_context_if_absent(NemuResolutionContext::new(
             NemuResolutionReason::ProviderVersionBelowMinimum,
         )));
@@ -540,7 +545,10 @@ pub fn query_instances(
             "MuMuManager {} returned an error envelope with exit 0: {envelope}",
             args.join(" ")
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.errcode"));
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerErrcode.location(),
+        ));
     }
     let mut instances = Vec::new();
     if object.contains_key("index") {
@@ -560,7 +568,10 @@ pub fn query_instances(
                     "MuMuManager {} entry {key:?} carries an error envelope: {envelope}",
                     args.join(" ")
                 ))
-                .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.entry"));
+                .with_diagnostic(
+                    DeviceErrorCategory::Response,
+                    crate::codes::DeviceStage::MumuManagerEntry.location(),
+                ));
             }
             instances.push(parse_instance(
                 Some(key),
@@ -605,7 +616,10 @@ fn parse_instance(
                 "MuMuManager {} entry {entry_label} is missing field {name:?}",
                 args.join(" ")
             ))
-            .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.shape")
+            .with_diagnostic(
+                DeviceErrorCategory::Response,
+                crate::codes::DeviceStage::MumuManagerShape.location(),
+            )
         })
     };
     let invalid = |name: &str, expected: &str, value: &serde_json::Value| {
@@ -613,7 +627,10 @@ fn parse_instance(
             "MuMuManager {} entry {entry_label} field {name:?} is not {expected}: {value}",
             args.join(" ")
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.shape")
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerShape.location(),
+        )
     };
     let text = |name: &str, max_bytes: usize| -> DeviceResult<String> {
         let value = field(name)?;
@@ -786,11 +803,11 @@ pub struct EmulatorControlOutcome {
 
 /// Typed failure of one `control` dispatch or of the readiness wait that follows it.
 ///
-/// `error` names the failing step through its diagnostic stage: `mumu_manager.path`,
-/// `mumu_manager.run` (spawn), `mumu_manager.timeout` (the `control` bound expired),
-/// `mumu_manager.control_exit` (non-zero exit), `mumu_manager.control_errcode` (envelope with
-/// `errcode != 0` and exit 0), `mumu_manager.launch_error` (`launch_err_code != 0`),
-/// `mumu_manager.wait_timeout` (readiness deadline) or one of the `info` reader stages while
+/// `error` names the failing step through its diagnostic stage: `mumu_manager_path`,
+/// `mumu_manager_run` (spawn), `mumu_manager_timeout` (the `control` bound expired),
+/// `mumu_manager_control_exit` (non-zero exit), `mumu_manager_control_errcode` (envelope with
+/// `errcode != 0` and exit 0), `mumu_manager_launch_error` (`launch_err_code != 0`),
+/// `mumu_manager_wait_timeout` (readiness deadline) or one of the `info` reader stages while
 /// polling (an expired `info` poll is tolerated, never a failure by itself). `DeviceError` has
 /// no slot for the exit code or the retained output, which is why this is a separate type.
 #[derive(Debug, Clone)]
@@ -940,7 +957,7 @@ fn elapsed_ms_between(started: Duration, now: Duration) -> u64 {
 fn control_failure_context(error: DeviceError) -> DeviceError {
     error.with_diagnostic_context_if_absent(
         "mumu_manager",
-        ContractLocation::ControlInstance.as_str(),
+        ContractLocation::ControlInstance,
         DeviceErrorSensitivity::Sensitive,
     )
 }
@@ -953,7 +970,7 @@ fn control_failure_context(error: DeviceError) -> DeviceError {
 /// runs only after `info` reported the process stopped, at most once per
 /// `MUMU_MANAGER_PROCESS_LIST_INTERVAL`, each within `MUMU_MANAGER_PROCESS_LIST_TIMEOUT`, and a
 /// failed listing accepts `info`'s answer with `device_process_present=unknown`. A Restart is
-/// refused with `mumu_manager.restart_refused` before any vendor command (D4). The vendor documents no return value, exit code or blocking behaviour for
+/// refused with `mumu_manager_restart_refused` before any vendor command (D4). The vendor documents no return value, exit code or blocking behaviour for
 /// `control`; observed on 6.5.7.0, `launch` and `shutdown` return within about a second with
 /// exit 0 and `{"errcode": 0, "errmsg": ""}` without blocking. A non-zero exit and an
 /// `{"errcode","errmsg"}` envelope with `errcode != 0` are failures exactly like `info`;
@@ -975,7 +992,10 @@ pub fn control_instance(
                     "MuMuManager path is not valid UTF-8: {}",
                     mumu_manager_path.display()
                 ))
-                .with_diagnostic(DeviceErrorCategory::BackendLaunch, "mumu_manager.path"),
+                .with_diagnostic(
+                    DeviceErrorCategory::BackendLaunch,
+                    crate::codes::DeviceStage::MumuManagerPath.location(),
+                ),
             ),
             elapsed_ms_between(Duration::ZERO, origin.elapsed()),
         ));
@@ -1002,7 +1022,7 @@ pub(crate) fn control_instance_with(
                 DeviceError::fatal(
                     "MuMuManager control restart is never dispatched: a restart is a shutdown and then a launch, composed by the Runtime host",
                 )
-                .with_diagnostic(DeviceErrorCategory::Protocol, "mumu_manager.restart_refused"),
+                .with_diagnostic(DeviceErrorCategory::Protocol, crate::codes::DeviceStage::MumuManagerRestartRefused.location()),
             ),
             elapsed_ms_between(started, runner.now()),
         ));
@@ -1016,7 +1036,7 @@ pub(crate) fn control_instance_with(
             let mut failure = EmulatorControlFailure::without_output(
                 control_failure_context(error.with_diagnostic_if_absent(
                     DeviceErrorCategory::BackendLaunch,
-                    "mumu_manager.run",
+                    crate::codes::DeviceStage::MumuManagerRun.location(),
                 )),
                 elapsed_ms_between(started, runner.now()),
             );
@@ -1050,7 +1070,10 @@ pub(crate) fn control_instance_with(
                 output.status,
                 envelope.as_deref().unwrap_or("no errcode envelope")
             ))
-            .with_diagnostic(DeviceErrorCategory::ChildExit, "mumu_manager.control_exit"),
+            .with_diagnostic(
+                DeviceErrorCategory::ChildExit,
+                crate::codes::DeviceStage::MumuManagerControlExit.location(),
+            ),
             summary,
             None,
             elapsed_ms_between(started, runner.now()),
@@ -1064,7 +1087,7 @@ pub(crate) fn control_instance_with(
             ))
             .with_diagnostic(
                 DeviceErrorCategory::Response,
-                "mumu_manager.control_errcode",
+                crate::codes::DeviceStage::MumuManagerControlErrcode.location(),
             ),
             summary,
             None,
@@ -1089,7 +1112,7 @@ pub(crate) fn control_instance_with(
                             "MuMuManager {command}: instance {index} reports launch_err_code={} launch_err_msg={:?}",
                             state.launch_err_code, state.launch_err_msg
                         ))
-                        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.launch_error"),
+                        .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerLaunchError.location()),
                         summary,
                         Some(state),
                         elapsed_ms_between(started, runner.now()),
@@ -1181,7 +1204,7 @@ pub(crate) fn control_instance_with(
                         format!("no observation; {expired_polls} info poll(s) expired")
                     }
                 ))
-                .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.wait_timeout"),
+                .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerWaitTimeout.location()),
                 summary,
                 last_state,
                 elapsed_ms_between(started, runner.now()),
@@ -1226,7 +1249,10 @@ pub(crate) fn parse_instance_document(
             "MuMuManager {} returned an error envelope with exit 0: {envelope}",
             args.join(" ")
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.errcode"));
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerErrcode.location(),
+        ));
     }
     let entry = if object.contains_key("index") {
         object
@@ -1250,7 +1276,10 @@ pub(crate) fn parse_instance_document(
                 "MuMuManager {} entry {index:?} carries an error envelope: {envelope}",
                 args.join(" ")
             ))
-            .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.entry"));
+            .with_diagnostic(
+                DeviceErrorCategory::Response,
+                crate::codes::DeviceStage::MumuManagerEntry.location(),
+            ));
         }
         entry
     };
@@ -1267,7 +1296,10 @@ fn parse_instance_state(
             "MuMuManager {} entry {instance_index} field {name:?} is not {expected}: {value}",
             args.join(" ")
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.shape")
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerShape.location(),
+        )
     };
     let required = |name: &str| {
         entry.get(name).ok_or_else(|| {
@@ -1275,7 +1307,10 @@ fn parse_instance_state(
                 "MuMuManager {} entry {instance_index} is missing field {name:?}",
                 args.join(" ")
             ))
-            .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.shape")
+            .with_diagnostic(
+                DeviceErrorCategory::Response,
+                crate::codes::DeviceStage::MumuManagerShape.location(),
+            )
         })
     };
     let boolean = |name: &str| -> DeviceResult<bool> {
@@ -1402,7 +1437,10 @@ fn shape_error(args: &[&str], expected: &str, value: &serde_json::Value) -> Devi
         "MuMuManager {} output is not {expected}: {rendered}",
         args.join(" ")
     ))
-    .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.shape")
+    .with_diagnostic(
+        DeviceErrorCategory::Response,
+        crate::codes::DeviceStage::MumuManagerShape.location(),
+    )
 }
 
 /// Runs one read-only subcommand, requires exit 0 and strict UTF-8 stdout, and parses JSON.
@@ -1412,7 +1450,10 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
             "MuMuManager path is not valid UTF-8: {}",
             mumu_manager_path.display()
         ))
-        .with_diagnostic(DeviceErrorCategory::BackendLaunch, "mumu_manager.path")
+        .with_diagnostic(
+            DeviceErrorCategory::BackendLaunch,
+            crate::codes::DeviceStage::MumuManagerPath.location(),
+        )
     })?;
     let output = run_raw_with_timeout(
         MUMU_MANAGER_PROGRAM,
@@ -1421,7 +1462,10 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
         MUMU_MANAGER_COMMAND_TIMEOUT,
     )
     .map_err(|error| {
-        error.with_diagnostic_if_absent(DeviceErrorCategory::BackendLaunch, "mumu_manager.run")
+        error.with_diagnostic_if_absent(
+            DeviceErrorCategory::BackendLaunch,
+            crate::codes::DeviceStage::MumuManagerRun.location(),
+        )
     })?;
     if output.stdout.len() > MAX_MUMU_MANAGER_OUTPUT_BYTES {
         return Err(DeviceError::fatal(format!(
@@ -1429,7 +1473,7 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
             args.join(" "),
             output.stdout.len()
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.output_bound"));
+        .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerOutputBound.location()));
     }
     let stdout = decode_adb_text(output.stdout, "stdout", args);
     let stderr = decode_adb_text(output.stderr, "stderr", args);
@@ -1445,7 +1489,10 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
             stdout.diagnostic_text(),
             stderr.diagnostic_text()
         ))
-        .with_diagnostic(DeviceErrorCategory::ChildExit, "mumu_manager.exit"));
+        .with_diagnostic(
+            DeviceErrorCategory::ChildExit,
+            crate::codes::DeviceStage::MumuManagerExit.location(),
+        ));
     }
     if stdout.lossy {
         return Err(DeviceError::fatal(format!(
@@ -1453,7 +1500,10 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
             args.join(" "),
             stdout.diagnostic_text()
         ))
-        .with_diagnostic(DeviceErrorCategory::Response, "mumu_manager.decode"));
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerDecode.location(),
+        ));
     }
     serde_json::from_str(stdout.text.trim_start_matches('\u{feff}').trim()).map_err(|error| {
         DeviceError::fatal(format!(
@@ -1461,7 +1511,10 @@ fn run_json(mumu_manager_path: &Path, args: &[&str]) -> DeviceResult<serde_json:
             args.join(" "),
             stdout.text
         ))
-        .with_diagnostic(DeviceErrorCategory::Protocol, "mumu_manager.json")
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            crate::codes::DeviceStage::MumuManagerJson.location(),
+        )
     })
 }
 
@@ -1537,7 +1590,10 @@ mod registry {
         DeviceError::fatal(format!(
             "Windows registry {stage} failed for {key_path}: win32 error {code}"
         ))
-        .with_diagnostic(DeviceErrorCategory::Native, "mumu_manager.registry")
+        .with_diagnostic(
+            DeviceErrorCategory::Native,
+            crate::codes::DeviceStage::MumuManagerRegistry.location(),
+        )
     }
 
     fn entry_invalid(key_path: &str, detail: String) -> DeviceError {

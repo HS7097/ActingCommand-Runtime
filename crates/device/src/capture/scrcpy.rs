@@ -30,6 +30,7 @@ use crate::{
     StreamCaptureCode,
 };
 use actingcommand_contract::CaptureFrameCrop;
+use actingcommand_contract::outcome::Location;
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::fmt::Display;
@@ -122,7 +123,7 @@ impl ScrcpyConfig {
             Ok(())
         } else {
             Err(start_failure(
-                "capture.scrcpy.config",
+                crate::codes::DeviceStage::CaptureScrcpyConfig.location(),
                 "the scrcpy configuration is invalid",
             ))
         }
@@ -258,37 +259,37 @@ impl StreamEnd {
             Self::SocketClosed if server_exited => (
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorCategory::ChildExit,
-                "capture.scrcpy.stream.server_exited",
+                crate::codes::DeviceStage::CaptureScrcpyStreamServerExited.location(),
                 "the scrcpy server exited",
             ),
             Self::SocketClosed => (
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorCategory::Response,
-                "capture.scrcpy.stream.socket_closed",
+                crate::codes::DeviceStage::CaptureScrcpyStreamSocketClosed.location(),
                 "the scrcpy video socket closed",
             ),
             Self::ProtocolInvalid => (
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorCategory::Protocol,
-                "capture.scrcpy.stream.protocol",
+                crate::codes::DeviceStage::CaptureScrcpyStreamProtocol.location(),
                 "the scrcpy video stream is malformed",
             ),
             Self::DecoderUnavailable => (
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorCategory::Native,
-                "capture.scrcpy.stream.decoder_open",
+                crate::codes::DeviceStage::CaptureScrcpyStreamDecoderOpen.location(),
                 "the H.264 decoder could not be created",
             ),
             Self::DecodeFailed => (
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorCategory::Native,
-                "capture.scrcpy.stream.decode",
+                crate::codes::DeviceStage::CaptureScrcpyStreamDecode.location(),
                 "the H.264 stream could not be decoded",
             ),
             Self::VideoSizeMismatch => (
                 StreamCaptureCode::ScrcpyVideoSizeMismatch,
                 DeviceErrorCategory::Protocol,
-                "capture.scrcpy.stream.video_size",
+                crate::codes::DeviceStage::CaptureScrcpyStreamVideoSize.location(),
                 "the stream's video size is not the unscaled size requested",
             ),
         };
@@ -742,7 +743,7 @@ impl ScrcpyBackend {
         let crop = aligned_crop(natural.width, natural.height, config.size_alignment);
         if crop.is_some_and(|crop| crop.width == 0 || crop.height == 0) {
             return Err(start_failure(
-                "capture.scrcpy.crop",
+                crate::codes::DeviceStage::CaptureScrcpyCrop.location(),
                 "the display is smaller than the size alignment",
             ));
         }
@@ -750,7 +751,12 @@ impl ScrcpyBackend {
         let scid = next_scid();
         let forwarded = adb
             .forward(&serial, "tcp:0", &format!("{SOCKET_NAME_PREFIX}{scid:08x}"))
-            .map_err(|error| start_failure_from(error, "capture.scrcpy.forward"))?;
+            .map_err(|error| {
+                start_failure_from(
+                    error,
+                    crate::codes::DeviceStage::CaptureScrcpyForward.location(),
+                )
+            })?;
         let port = parse_forward_port(&forwarded.stdout)?;
         let mut backend = Self {
             adb_config,
@@ -776,24 +782,40 @@ impl ScrcpyBackend {
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let child = adb
             .shell_spawn(&self.target.adb_arg(), &arguments)
-            .map_err(|error| start_failure_from(error, "capture.scrcpy.server.spawn"))?;
+            .map_err(|error| {
+                start_failure_from(
+                    error,
+                    crate::codes::DeviceStage::CaptureScrcpyServerSpawn.location(),
+                )
+            })?;
         self.child = Some(child);
         let deadline = Instant::now() + self.config.start_timeout;
         let mut socket = self.connect(port, deadline)?;
         read_stream_header(&mut socket, deadline)?;
-        socket
-            .set_read_timeout(None)
-            .map_err(|error| start_failure("capture.scrcpy.socket", error))?;
-        let shutdown = socket
-            .try_clone()
-            .map_err(|error| start_failure("capture.scrcpy.socket", error))?;
+        socket.set_read_timeout(None).map_err(|error| {
+            start_failure(
+                crate::codes::DeviceStage::CaptureScrcpySocket.location(),
+                error,
+            )
+        })?;
+        let shutdown = socket.try_clone().map_err(|error| {
+            start_failure(
+                crate::codes::DeviceStage::CaptureScrcpySocket.location(),
+                error,
+            )
+        })?;
         let slot = Arc::new(FrameSlot::new(Instant::now(), self.config.offset_window));
         let reader_slot = Arc::clone(&slot);
         let expected = ExpectedVideo::of(self.crop, natural);
         let reader = thread::Builder::new()
             .name("scrcpy-stream".to_owned())
             .spawn(move || run_stream(socket, reader_slot, expected))
-            .map_err(|error| start_failure("capture.scrcpy.stream.spawn", error))?;
+            .map_err(|error| {
+                start_failure(
+                    crate::codes::DeviceStage::CaptureScrcpyStreamSpawn.location(),
+                    error,
+                )
+            })?;
         self.stream = Some(StreamHandle {
             slot: Arc::clone(&slot),
             socket: shutdown,
@@ -803,7 +825,7 @@ impl ScrcpyBackend {
         match slot.wait_fresh(None, remaining, self.config.fresh_margin, &SystemSlotClock) {
             Ok(_) => Ok(()),
             Err(FreshWaitFailure::Stale { .. }) => Err(start_failure(
-                "capture.scrcpy.first_frame",
+                crate::codes::DeviceStage::CaptureScrcpyFirstFrame.location(),
                 "no frame arrived within the start timeout",
             )),
             Err(failure) => Err(self.fresh_failure(failure)),
@@ -819,7 +841,7 @@ impl ScrcpyBackend {
                 && let Ok(Some(_)) = child.try_wait()
             {
                 return Err(start_failure(
-                    "capture.scrcpy.server.exited",
+                    crate::codes::DeviceStage::CaptureScrcpyServerExited.location(),
                     "the scrcpy server exited before it accepted the connection",
                 ));
             }
@@ -828,20 +850,23 @@ impl ScrcpyBackend {
                 .filter(|remaining| !remaining.is_zero())
                 .ok_or_else(|| {
                     start_failure(
-                        "capture.scrcpy.connect",
+                        crate::codes::DeviceStage::CaptureScrcpyConnect.location(),
                         "the scrcpy server did not accept the connection within the start timeout",
                     )
                 })?;
             if let Ok(mut stream) = TcpStream::connect_timeout(&address, remaining) {
-                stream
-                    .set_read_timeout(Some(remaining))
-                    .map_err(|error| start_failure("capture.scrcpy.socket", error))?;
+                stream.set_read_timeout(Some(remaining)).map_err(|error| {
+                    start_failure(
+                        crate::codes::DeviceStage::CaptureScrcpySocket.location(),
+                        error,
+                    )
+                })?;
                 let mut dummy = [0u8; 1];
                 match stream.read(&mut dummy) {
                     Ok(1) if dummy[0] == 0 => return Ok(stream),
                     Ok(1) => {
                         return Err(start_failure(
-                            "capture.scrcpy.connect",
+                            crate::codes::DeviceStage::CaptureScrcpyConnect.location(),
                             "the scrcpy server's first byte is not the connection byte",
                         ));
                     }
@@ -869,13 +894,13 @@ impl ScrcpyBackend {
                     self.config.fresh_wait.as_millis()
                 ),
             )
-            .with_diagnostic(DeviceErrorCategory::Response, "capture.scrcpy.fresh_wait"),
+            .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::CaptureScrcpyFreshWait.location()),
             FreshWaitFailure::Poisoned => coded_error(
                 StreamCaptureCode::ScrcpyStreamEnded,
                 DeviceErrorSeverity::Transient,
                 "the stream state lock was poisoned",
             )
-            .with_diagnostic(DeviceErrorCategory::Native, "capture.scrcpy.stream.state"),
+            .with_diagnostic(DeviceErrorCategory::Native, crate::codes::DeviceStage::CaptureScrcpyStreamState.location()),
         }
     }
 
@@ -1032,26 +1057,35 @@ fn read_stream_header(socket: &mut TcpStream, deadline: Instant) -> DeviceResult
         .filter(|remaining| !remaining.is_zero())
         .ok_or_else(|| {
             start_failure(
-                "capture.scrcpy.header",
+                crate::codes::DeviceStage::CaptureScrcpyHeader.location(),
                 "the scrcpy stream header did not arrive within the start timeout",
             )
         })?;
-    socket
-        .set_read_timeout(Some(remaining))
-        .map_err(|error| start_failure("capture.scrcpy.socket", error))?;
+    socket.set_read_timeout(Some(remaining)).map_err(|error| {
+        start_failure(
+            crate::codes::DeviceStage::CaptureScrcpySocket.location(),
+            error,
+        )
+    })?;
     // The device name field is read and dropped; nothing of it is kept.
     let mut device_name = [0u8; DEVICE_NAME_FIELD_BYTES];
-    socket
-        .read_exact(&mut device_name)
-        .map_err(|error| start_failure("capture.scrcpy.header", error))?;
+    socket.read_exact(&mut device_name).map_err(|error| {
+        start_failure(
+            crate::codes::DeviceStage::CaptureScrcpyHeader.location(),
+            error,
+        )
+    })?;
     let mut codec = [0u8; 4];
-    socket
-        .read_exact(&mut codec)
-        .map_err(|error| start_failure("capture.scrcpy.header", error))?;
+    socket.read_exact(&mut codec).map_err(|error| {
+        start_failure(
+            crate::codes::DeviceStage::CaptureScrcpyHeader.location(),
+            error,
+        )
+    })?;
     match u32::from_be_bytes(codec) {
         H264_CODEC_ID => Ok(()),
         other => Err(start_failure(
-            "capture.scrcpy.header",
+            crate::codes::DeviceStage::CaptureScrcpyHeader.location(),
             format!("the scrcpy server sent codec id {other:#010x}, not H.264"),
         )),
     }
@@ -1061,7 +1095,12 @@ fn push_server(adb: &Adb, serial: &str, server: &[u8], remote: &str) -> DeviceRe
     let local = LocalServerCopy::write(server)?;
     let pushed = adb.push(serial, &local.path.to_string_lossy(), remote);
     let removed = local.remove();
-    pushed.map_err(|error| start_failure_from(error, "capture.scrcpy.server.push"))?;
+    pushed.map_err(|error| {
+        start_failure_from(
+            error,
+            crate::codes::DeviceStage::CaptureScrcpyServerPush.location(),
+        )
+    })?;
     removed
 }
 
@@ -1074,20 +1113,31 @@ struct LocalServerCopy {
 impl LocalServerCopy {
     fn write(server: &[u8]) -> DeviceResult<Self> {
         let directory = std::env::temp_dir().join("actingcommand-scrcpy");
-        fs::create_dir_all(&directory)
-            .map_err(|error| start_failure("capture.scrcpy.server.local_copy", error))?;
+        fs::create_dir_all(&directory).map_err(|error| {
+            start_failure(
+                crate::codes::DeviceStage::CaptureScrcpyServerLocalCopy.location(),
+                error,
+            )
+        })?;
         let path = directory.join(format!(
             "scrcpy-server-v{SCRCPY_SERVER_VERSION}-{}-{}.jar",
             std::process::id(),
             LOCAL_COPY_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::write(&path, server)
-            .map_err(|error| start_failure("capture.scrcpy.server.local_copy", error))?;
+        fs::write(&path, server).map_err(|error| {
+            start_failure(
+                crate::codes::DeviceStage::CaptureScrcpyServerLocalCopy.location(),
+                error,
+            )
+        })?;
         let copy = Self { path };
         let written = match fs::read(&copy.path) {
             Ok(written) => written,
             Err(error) => {
-                let primary = start_failure("capture.scrcpy.server.local_copy", error);
+                let primary = start_failure(
+                    crate::codes::DeviceStage::CaptureScrcpyServerLocalCopy.location(),
+                    error,
+                );
                 return Err(match copy.remove() {
                     Ok(()) => primary,
                     Err(cleanup) => primary.merge_resource_cleanup(cleanup),
@@ -1104,8 +1154,12 @@ impl LocalServerCopy {
     }
 
     fn remove(self) -> DeviceResult<()> {
-        fs::remove_file(&self.path)
-            .map_err(|error| start_failure("capture.scrcpy.server.local_copy", error))
+        fs::remove_file(&self.path).map_err(|error| {
+            start_failure(
+                crate::codes::DeviceStage::CaptureScrcpyServerLocalCopy.location(),
+                error,
+            )
+        })
     }
 }
 
@@ -1132,7 +1186,7 @@ pub(crate) fn checked_server(bytes: &[u8]) -> DeviceResult<&[u8]> {
         )
         .with_diagnostic(
             DeviceErrorCategory::BackendLaunch,
-            "capture.scrcpy.server.digest",
+            crate::codes::DeviceStage::CaptureScrcpyServerDigest.location(),
         ))
     }
 }
@@ -1145,7 +1199,7 @@ fn parse_forward_port(stdout: &str) -> DeviceResult<u16> {
         .filter(|port| *port != 0)
         .ok_or_else(|| {
             start_failure(
-                "capture.scrcpy.forward",
+                crate::codes::DeviceStage::CaptureScrcpyForward.location(),
                 "adb forward did not report the local port it allocated",
             )
         })
@@ -1171,7 +1225,7 @@ fn coded_error(
 /// instance-level rule of board #403): only the open of that instance's capture backend, and so
 /// that instance's run, fails and the ladder handles it; the host never treats it as fatal for
 /// the Runtime. A device resource left unconfirmed keeps its own handling.
-fn start_failure(step: &'static str, detail: impl Display) -> DeviceError {
+fn start_failure(step: Location, detail: impl Display) -> DeviceError {
     coded_error(
         StreamCaptureCode::ScrcpyServerStartFailed,
         DeviceErrorSeverity::Transient,
@@ -1182,7 +1236,7 @@ fn start_failure(step: &'static str, detail: impl Display) -> DeviceError {
 
 /// An adb step of the start failed: `scrcpy_server_start_failed`, transient as in
 /// [`start_failure`], keeping the adb error's resource summary.
-fn start_failure_from(error: DeviceError, step: &'static str) -> DeviceError {
+fn start_failure_from(error: DeviceError, step: Location) -> DeviceError {
     let message = format!(
         "{}: {}",
         StreamCaptureCode::ScrcpyServerStartFailed.as_str(),

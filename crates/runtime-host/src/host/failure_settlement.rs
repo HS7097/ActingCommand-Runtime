@@ -361,7 +361,7 @@ impl HostShared {
                 error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "policy_driver",
-                    RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
+                    RuntimeLifecycleFailureStage::PolicyDriver.location(),
                     "runtime_host",
                     error.operation(),
                 ),

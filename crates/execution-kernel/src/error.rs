@@ -800,7 +800,7 @@ fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailD
         diagnostic.category().as_str(),
         diagnostic.stage(),
         context.backend(),
-        context.operation(),
+        context.operation().as_str(),
     )))
 }
 
