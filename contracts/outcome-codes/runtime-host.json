@@ -3028,76 +3028,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "contained_task_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package metadata failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_open_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_read_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package read failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_size_invalid": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "contained_task_package_state_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -3966,48 +3896,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_file_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_file_too_large": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file too large.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_instance_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -4019,20 +3907,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package instance invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package metadata failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -4050,20 +3924,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_path_not_absolute": {
       "category": "error",
       "ladder_class": "none",
@@ -4075,20 +3935,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package path not absolute.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -6906,20 +6752,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "observation_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation hash invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "observation_package_deadline_overflow": {
       "category": "error",
       "ladder_class": "none",
@@ -6931,48 +6763,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports observation package deadline overflow.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_limit_exceeded": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package limit exceeded.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -12366,20 +12156,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "saved_ocr_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "saved_ocr_package_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -12391,48 +12167,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports saved ocr package invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_limit": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17636,14 +17370,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read lab operation cleanup lease."
     },
-    "read_lab_operation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read lab operation package."
-    },
     "read_lab_operation_run": {
       "owner": "runtime-host",
       "layer": "host",
@@ -17699,14 +17425,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read monitor status."
-    },
-    "read_observation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read observation package."
     },
     "read_observed_binding": {
       "owner": "runtime-host",

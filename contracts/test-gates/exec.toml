@@ -272,7 +272,8 @@ incident = []
 key = "27"
 coverage = "Y"
 tests = [
-    "actingcommand-pack-containment::lib::tests::rejects_hash_mismatch_before_decompress",
+    "actingcommand-pack-containment::pkg_s1::s1_t1_a_digest_named_directory_is_admitted_whatever_its_content",
+    "actingcommand-pack-containment::pkg_s1::s1_t3_the_path_chooses_the_reading_and_no_reference_is_compared",
     "actingcommand-pack-containment::lib::tests::rejects_zip_slip_path",
     "actingcommand-pack-containment::lib::tests::entry_read_limit_uses_remaining_total_and_resident_budgets",
     "actingcommand-pack-containment::lib::tests::benches_are_isolated_by_instance",
@@ -299,7 +300,7 @@ incident = []
 key = "29"
 coverage = "Y"
 tests = [
-    "actingcommand-resource-tooling::lib::resource_convert::tests::schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithms",
+    "actingcommand-resource-tooling::lib::resource_convert::tests::schema_0_7_post_admission_ocr_validates_truth_and_closed_algorithms",
     "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_derives_variant_any_of_only_without_positive_page_rule",
     "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_matches_authoritative_mail_page_rule_output",
     "actingcommand-resource-tooling::lib::resource_convert::tests::build_pages_applies_page_rules",
@@ -417,12 +418,11 @@ coverage = "Y"
 tests = [
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_accepts_safe_zip",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_distinguishes_external_hash_from_self_computed_provenance",
-    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_external_hash_mismatch",
+    "actingcommand-pack-containment::pkg_s1::s1_t3_the_path_chooses_the_reading_and_no_reference_is_compared",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_reports_unsupported_recognition_targets",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_zip_slip",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_executable_entry",
-    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_hash_mismatch",
-    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal",
+    "actingcommand-pack-containment::pkg_s1::s1_t5_an_assembled_manifest_file_hash_is_not_compared",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_custom_lab_resource_root",
 ]
 incident = []

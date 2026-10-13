@@ -35,7 +35,7 @@ fn package_family_exposes_typed_requests_and_responses() {
 // Specification: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5554462313
 #[test]
 fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
-    use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+    use actingcommand_execution_kernel::PreparedContainedTask;
     use actingcommand_pack_containment::Sha256Hash;
     use actingcommand_resource_tooling::{OperationParser, open_published_package};
     use serde_json::json;
@@ -43,6 +43,11 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
     use std::io::{Cursor, Read, Write};
     use tempfile::TempDir;
     use zip::{ZipArchive, ZipWriter, write::FileOptions};
+    // The reference a caller records for a package ZIP: its own SHA-256 (Workflow #336 PKG-S1:
+    // recorded, compared with nothing).
+    let recorded = |bytes: &[u8]| {
+        actingcommand_contract::PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
+    };
 
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("resources");
@@ -177,22 +182,13 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
             writer.write_all(&bytes).unwrap();
         }
         let bytes = writer.finish().unwrap().into_inner();
-        PreparedContainedTask::load(
-            "neutral-wait",
-            &bytes,
-            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
-        )
-        .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
+        PreparedContainedTask::load("neutral-wait", &bytes, &recorded(&bytes)).map_err(
+            |error| actingcommand_contract::LabError::package_invalid(error.to_string()),
+        )?;
         fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
         Ok::<_, Box<actingcommand_contract::LabError>>(())
     };
-    let admit = |bytes: &[u8]| {
-        PreparedContainedTask::load(
-            "neutral-wait",
-            bytes,
-            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(bytes).to_string()).unwrap(),
-        )
-    };
+    let admit = |bytes: &[u8]| PreparedContainedTask::load("neutral-wait", bytes, &recorded(bytes));
     let mut package = Vec::new();
     for timeout in [None, Some(480_000), Some(600_000)] {
         let name = format!("wait-{timeout:?}");
@@ -334,12 +330,8 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
         .read_all()
         .unwrap();
     admit(&bytes).expect("Runtime phased admission");
-    actingcommand_lab::validate_lab_package_bytes(
-        "phased",
-        &bytes,
-        ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
-    )
-    .expect("Lab phased admission");
+    actingcommand_lab::validate_lab_package_bytes("phased", &bytes, &recorded(&bytes))
+        .expect("Lab phased admission");
     let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
     let mut control = String::new();
     archive
@@ -380,8 +372,7 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
             actingcommand_lab::validate_lab_package_bytes(
                 "changed-phase-control",
                 &changed,
-                ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&changed).to_string())
-                    .unwrap()
+                &recorded(&changed)
             )
             .is_err(),
             "{changed_field}"

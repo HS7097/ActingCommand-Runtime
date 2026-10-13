@@ -631,20 +631,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "content_directory_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A content directory's computed digest differs from the expected package digest.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "resource_declaration_diagnostic_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -1062,20 +1048,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A select step's selection policy document is missing from the package.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_select_policy_hash_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A select step's selection policy document does not match its sealed digest.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1794,20 +1766,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "ocr_fields_dictionary_hash_or_limit_mismatch": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A post-admission OCR field's dictionary differs from its declared digest or limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "contained_task_post_admission_ocr_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -1958,7 +1916,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Post-admission OCR results do not match the truth set.",
+      "description": "A post-admission OCR truth set is larger than its declared max_total_bytes; its declared SHA-256 is not compared (Workflow #336 PKG-S1).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-pub use actingcommand_execution_kernel::{ExternalExpectedSha256, ExternallyVerifiedBundle};
+pub use actingcommand_execution_kernel::ExternallyVerifiedBundle;
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::path::PathBuf;

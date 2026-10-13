@@ -159,11 +159,10 @@ fn production_runtime_missing_sampling_seed_fails_before_input() {
     }
 
     let package = neutral_region_contained_task_package(false);
-    let expected = ExternalExpectedSha256::parse_hex(
-        &actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
-    )
-    .expect("package hash");
-    let prepared = PreparedContainedTask::load("neutral.instance", &package, expected)
+    let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
+        actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
+    );
+    let prepared = PreparedContainedTask::load("neutral.instance", &package, &recorded)
         .expect("prepared contained task");
     let mut runtime = MissingSeedRuntime {
         frame: Frame::from_pixels(
@@ -228,11 +227,10 @@ fn execution_kernel_no_seed_caller_retains_center_fallback() {
     }
 
     let package = neutral_region_contained_task_package(false);
-    let expected = ExternalExpectedSha256::parse_hex(
-        &actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
-    )
-    .expect("package hash");
-    let prepared = PreparedContainedTask::load("neutral.instance", &package, expected)
+    let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
+        actingcommand_pack_containment::Sha256Hash::digest(&package).to_string(),
+    );
+    let prepared = PreparedContainedTask::load("neutral.instance", &package, &recorded)
         .expect("prepared contained task");
     let home = Frame::from_pixels(
         2,

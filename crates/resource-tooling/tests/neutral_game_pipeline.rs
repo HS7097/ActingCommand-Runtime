@@ -79,9 +79,11 @@ fn fields_v1_neutral_declaration_and_reference_closure() {
                 invalid["post_admission_ocr"]["fields"][0]["value"] =
                     json!({"type":"unsigned_integer","min":9,"max":2})
             }
+            // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the pin is still required and its
+            // format still checked, so a 64-character pin that is not hex is refused.
             5 => {
                 invalid["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
-                    json!("0".repeat(64))
+                    json!("g".repeat(64))
             }
             6 => {
                 invalid["post_admission_ocr"]["fields"][0]
@@ -94,6 +96,12 @@ fn fields_v1_neutral_declaration_and_reference_closure() {
         }
         assert!(convert(&invalid).is_err(), "case {case}");
     }
+    // Workflow #336 PKG-S1 (model M-PKG v1.1 S1-T4): a well-formed dictionary SHA-256 that names
+    // other bytes is accepted; the pin is compared with nothing.
+    let mut unrelated_pin = task.clone();
+    unrelated_pin["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
+        json!("0".repeat(64));
+    convert(&unrelated_pin).expect("an unrelated well-formed dictionary pin is not compared");
     let mut legacy = task.clone();
     legacy["schema_version"] = json!("0.7");
     legacy["post_admission_ocr"] = json!({"page_id":"home","target_id":"ocr/name",
@@ -117,7 +125,7 @@ fn fields_v1_neutral_declaration_and_reference_closure() {
 // Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553542252
 #[test]
 fn zero_input_fields_source_and_admission_boundaries() {
-    use actingcommand_execution_kernel::{ExternalExpectedSha256, PreparedContainedTask};
+    use actingcommand_execution_kernel::PreparedContainedTask;
     use actingcommand_pack_containment::Sha256Hash;
     use actingcommand_resource_tooling::{PackageValidateRequest, validate_package};
     use std::io::{Cursor, Write};
@@ -169,7 +177,9 @@ fn zero_input_fields_source_and_admission_boundaries() {
         PreparedContainedTask::load(
             "neutral-fields",
             &bytes,
-            ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string()).unwrap(),
+            &actingcommand_contract::PackageRef::LegacyZipSha256(
+                Sha256Hash::digest(&bytes).to_string(),
+            ),
         )
         .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
         fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();

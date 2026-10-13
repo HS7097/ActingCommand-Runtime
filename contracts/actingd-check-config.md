@@ -303,11 +303,9 @@ revision.
   with `vision_model_content` (a model's files are read, hashed and loaded only
   on its first use, see "Vision root"). `state_root_absent` is appended when
   the configured state root does not exist (see "Catalog plan"); an existing
-  state root is read. `resource_package_directory_declarations` is appended when at
-  least one instance's `resource_package` is a directory whose name is not a
-  content digest: its existence is checked, its declarations are not (see
-  "Instance resource package"). A digest-named directory is admitted in full and
-  never adds this entry.
+  state root is read. Since Workflow #336 PKG-S1 every `resource_package` is
+  admitted in full by its path (see "Instance resource package"), so no package
+  entry is ever added here.
   `mumu_discovery` is appended when no MuMu install root could be resolved
   (`mumu_root` is `null`).
 - `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
@@ -372,10 +370,8 @@ A `resource_package` failure, an `adb_install_missing` /
 `detail.alias` is the instance and `detail.path` the absolute path that was
 checked. `detail.loader_code` and `detail.loader_message` are the package
 loader's own code and message for `resource_package_invalid` on a package file
-or a digest-named package directory, and `null` otherwise. A changed or missing
-file in a digest-named directory reports `loader_code`
-`content_directory_digest_mismatch` with the expected and actual digests and the
-file count in `loader_message`.
+or directory the loader refused, and `null` otherwise. Workflow #336 PKG-S1: no
+digest is compared, so a changed file is admitted as it now is.
 
 ## Catalog plan
 
@@ -493,19 +489,13 @@ before any side effect, and fails with the same codes on the normal
 
 - `resource_package_missing`: the path does not exist (or is empty).
 - `resource_package_invalid`: the path exists but is neither a file nor a
-  directory, or it is a file that the contained-task package loader
-  (`PreparedContainedTask::load`, the loader `actingctl task-run` uses) cannot
-  read. The file's own SHA-256 serves as the expected digest, so only the
-  package content is judged.
-- A directory whose name is a content digest (64 lowercase hex digits, Workflow
-  #288) is admitted in full by the same loader (`PreparedContainedTask::load_path`,
-  no vision provider, one 60 s deadline) against the content-directory reference
-  of that name (`contracts/package-reference.md`, "Content-directory admission");
-  a refusal is `resource_package_invalid` with the loader's code, for example
-  `content_directory_digest_mismatch` after a file was changed or removed.
-- Any other directory is checked for existence only: this field carries no
-  reference to admit it against; hence the
-  `resource_package_directory_declarations` entry in `not_checked`.
+  directory, or the contained-task package loader (`PreparedContainedTask::load_path`,
+  the loader `actingctl task-run` uses, no vision provider, one 60 s deadline)
+  refuses it. Workflow #336 PKG-S1: the path chooses the reading (a directory, a
+  `.json` or `.zip` container, or a `.zip` assembled package;
+  `contracts/package-reference.md`, "Content-directory admission"), admission is
+  structural only, no digest is computed or compared and no name is read as an
+  identity; a refusal carries the loader's code.
 - Packages declare no application id (`contracts/application-lifecycle.md`), so
   nothing is compared against the instance's `application_id`.
 
