@@ -224,7 +224,8 @@ actingcommand_contract::outcome_codes! {
 }
 
 actingcommand_contract::outcome_locations! {
-    /// The kernel's locations: the stages of an online page observation.
+    /// The kernel's locations: the stages of an online page observation, and the stage of the
+    /// provider default's emulator control refusal (Workflow #378 A2-P).
     pub enum ExecutionKernelLocation {
         // Online page observation stages (`OnlineObservationError::stage`, evidence rows).
         LoadObservationResources => "load_observation_resources",
