@@ -2,7 +2,7 @@
 
 mod retention;
 use crate::codes::{ContractCode, RuntimeContractCode, SanitizationCode, SharedCode};
-use crate::outcome::{CauseRelation, Code, IoKind, Location, Outcome, RawSource};
+use crate::outcome::{CauseRelation, Code, IoKind, Outcome, RawSource};
 pub use retention::*;
 mod ledger_migration;
 mod signature;
@@ -1653,26 +1653,26 @@ pub enum ArtifactFailureStage {
     VerifiedRecord,
 }
 
-/// One failed step of an artifact store operation: a registered code and location with the
-/// store's native text. Ledger revision 3 records it as an outcome ([`Self::outcome`]).
+/// One failed step of an artifact store operation with the store's native text. Ledger
+/// revision 3 records it as an outcome ([`Self::outcome`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactFailureCause {
-    pub code: Code,
-    pub operation: Location,
+    /// The step's code with its `operation`: a registered code and location, or for a relayed
+    /// spelling the catalog does not list `outcome_relay_unregistered` with the spelling as
+    /// `raw_code` (`Outcome::relayed`).
+    pub step: Outcome,
     pub native_detail: LifecycleNativeDetail,
     pub raw_os_error: Option<i32>,
 }
 
 impl ArtifactFailureCause {
-    /// The step's code with its `operation`, and its native text as a `foreign_os_error`
-    /// (with the OS error number) or `foreign_other_error` link.
+    /// The step, with its native text as a `foreign_os_error` (with the OS error number) or
+    /// `foreign_other_error` link.
     pub fn outcome(&self) -> Outcome {
-        Outcome::new(self.code)
-            .operation(self.operation)
-            .caused_by(match self.raw_os_error {
-                Some(os_error) => self.native_detail.os_outcome(os_error),
-                None => self.native_detail.outcome(),
-            })
+        self.step.clone().caused_by(match self.raw_os_error {
+            Some(os_error) => self.native_detail.os_outcome(os_error),
+            None => self.native_detail.outcome(),
+        })
     }
 }
 

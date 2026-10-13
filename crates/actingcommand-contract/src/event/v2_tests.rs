@@ -1450,8 +1450,8 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
             artifact_id: *issued.reference().artifact_id(),
             stage: ArtifactFailureStage::BeforePublication,
             primary: ArtifactFailureCause {
-                code: crate::codes::SharedCode::ArtifactWriteFailed.code(),
-                operation: crate::codes::ContractLocation::ExportEvidence.location(),
+                step: Outcome::new(crate::codes::SharedCode::ArtifactWriteFailed)
+                    .operation(crate::codes::ContractLocation::ExportEvidence),
                 native_detail: LifecycleNativeDetail::new(secret, false),
                 raw_os_error: None,
             },
