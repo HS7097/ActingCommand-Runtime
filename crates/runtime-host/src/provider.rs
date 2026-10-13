@@ -208,7 +208,7 @@ impl ExecutionBackendRegistration {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        if input.target.resolved_serial() != capture.target.resolved_serial() {
+        if input.target.adb_arg() != capture.target.adb_arg() {
             return Err(RuntimeHostError::fatal(
                 HostCode::ExecutionBackendTargetMismatch,
                 HostLocation::BuildExecutionBackendRegistry,
@@ -238,8 +238,9 @@ impl ExecutionBackendRegistration {
             capture_backend: capture.requested.as_str().to_owned(),
             input_adb: input.adb_config.adb_path.clone(),
             capture_adb: capture.adb_config.adb_path.clone(),
-            configured_serial: input.target.serial.clone(),
-            resolved_serial: input.target.resolved_serial(),
+            // Workflow #398 RD-1a (L1): the record names the target by its label.
+            configured_serial: input.target.configured_label(),
+            resolved_serial: input.target.label(),
             input_command_timeout_ms: milliseconds(input.adb_config.command_timeout)?,
             capture_command_timeout_ms: milliseconds(capture.adb_config.command_timeout)?,
             capture_timeout_ms: milliseconds(capture.capture_timeout)?,
@@ -372,7 +373,7 @@ impl EntryEndpoint {
             target.host = host.to_owned();
             target.port = port;
         }
-        self.audit_endpoint = self.application_target.resolved_serial();
+        self.audit_endpoint = self.application_target.label();
         self.configuration.resolved_serial = self.audit_endpoint.clone();
     }
 }
@@ -405,7 +406,8 @@ impl ExecutionBackendEntry {
         };
         let mut endpoint = EntryEndpoint {
             state,
-            audit_endpoint: application_target.resolved_serial(),
+            // Workflow #398 RD-1a: the audit endpoint names the target by its label.
+            audit_endpoint: application_target.label(),
             application_target,
             input: registration.input,
             capture: registration.capture,
@@ -566,7 +568,7 @@ impl ExecutionBackendEntry {
             endpoint.require_bound(HostLocation::ControlApplication)?;
             endpoint.application_target.clone()
         };
-        let serial = application_target.resolved_serial();
+        let serial = application_target.adb_arg();
         let adb = Adb::new(self.application_adb.clone());
         adb.ensure_device(&serial, application_target.connect)?;
         match action {
@@ -595,7 +597,7 @@ impl ExecutionBackendEntry {
             endpoint.application_target.clone()
         };
         Adb::new(self.application_adb.clone())
-            .ensure_device(&application_target.resolved_serial(), true)
+            .ensure_device(&application_target.adb_arg(), true)
             .map(|_| ())
     }
 
@@ -610,12 +612,7 @@ impl ExecutionBackendEntry {
             endpoint.application_target.clone()
         };
         Adb::new(self.application_adb.clone())
-            .ensure_device_until(
-                &application_target.resolved_serial(),
-                true,
-                deadline,
-                stopped,
-            )
+            .ensure_device_until(&application_target.adb_arg(), true, deadline, stopped)
             .map(|_| ())
     }
 
@@ -629,7 +626,7 @@ impl ExecutionBackendEntry {
             endpoint.require_bound(ContractLocation::ObserveForegroundApplication)?;
             endpoint.application_target.clone()
         };
-        let serial = application_target.resolved_serial();
+        let serial = application_target.adb_arg();
         let adb = Adb::new(self.application_adb.clone());
         Ok(ForegroundApplicationObservation {
             foreground: adb.foreground_package(&serial, application_target.connect)?,

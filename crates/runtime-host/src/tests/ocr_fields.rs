@@ -13,7 +13,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     };
     use actingcommand_device::{
         AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
-        CaptureSelectionContext, DeviceTarget, InputSelectionContext, MaaTouchConfig,
+        CaptureSelectionContext, DeviceSerial, DeviceTarget, InputSelectionContext, MaaTouchConfig,
         MumuInstallSource, TouchBackendChoice, TouchBackendConfig, TouchBackendName,
     };
     use actingcommand_recognition_pack::{
@@ -533,8 +533,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .transition_capture_after_input
             .store(successful, Ordering::Release);
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target = DeviceTarget {
-            serial: Some("127.0.0.1:16384".to_owned()),
+            serial: Some(DeviceSerial::handset("TESTSERIAL0003", "neutral.instance")),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -898,8 +899,12 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             mumu: None,
         });
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target_config = DeviceTarget {
-            serial: Some("neutral-recovery".to_owned()),
+            serial: Some(DeviceSerial::handset(
+                "TESTSERIAL0004",
+                "fixture01.instance",
+            )),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -1152,8 +1157,8 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .iter()
                     .filter(|fact| matches!(fact,
                         TaskSemanticFact::EntryRecognition {
-                            phase: TaskEntryRecognitionPhase::Initial, required_page, matched,
-                        } if required_page == "neutral/home" && *matched == starts_home
+                            phase: TaskEntryRecognitionPhase::Initial, required_pages, matched, ..
+                        } if required_pages == &["neutral/home"] && *matched == starts_home
                     ))
                     .count(),
                 1
