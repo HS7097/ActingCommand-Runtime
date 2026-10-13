@@ -833,6 +833,19 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "authoring_validation_failed": {
+      "category": "error",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A resource authoring transaction refused or failed: the candidate tree failed its validation (formerly the unregistered spelling authoring_validation_failed).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "authoring_validation_package_hash_invalid": {
       "category": "error",
       "owner": "resource-tooling",

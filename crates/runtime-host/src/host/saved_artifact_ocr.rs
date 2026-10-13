@@ -599,8 +599,8 @@ fn unavailable_source_artifact(
             HostCode::SavedSourceArtifactEvicted,
             recorded(
                 proof
-                    .outcome
-                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+                    .terminal_event
+                    .map_or(proof.intent.sequence, |terminal| terminal.sequence),
             ),
         ),
         Some(actingcommand_ledger::ArtifactAvailability::PendingEviction(proof)) => source_error(
@@ -611,8 +611,8 @@ fn unavailable_source_artifact(
             HostCode::SavedSourceArtifactEvictionFailed,
             recorded(
                 proof
-                    .outcome
-                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+                    .terminal_event
+                    .map_or(proof.intent.sequence, |terminal| terminal.sequence),
             ),
         ),
         _ => relayed_source_error(

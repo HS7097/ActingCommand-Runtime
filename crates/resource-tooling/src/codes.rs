@@ -73,6 +73,7 @@ actingcommand_contract::outcome_codes! {
         AuthoringTreeRemoveFailed => "authoring_tree_remove_failed": error,
         AuthoringTreeTypeMismatch => "authoring_tree_type_mismatch": error,
         AuthoringValidationEmpty => "authoring_validation_empty": error,
+        AuthoringValidationFailed => "authoring_validation_failed": error,
         AuthoringValidationPackageHashInvalid => "authoring_validation_package_hash_invalid": error,
         RecordPromoteTargetExists => "record_promote_target_exists": error,
         // Package bundle directories (`package_directory`).

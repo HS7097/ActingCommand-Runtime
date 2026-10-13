@@ -6188,10 +6188,13 @@ impl HostShared {
                 }
             },
         };
-        let recovery_request =
-            ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()).map_err(
-                |_| ContainedTaskRunError::task("contained_task_home_recovery_binding_invalid"),
-            )?;
+        let recovery_request = ContainedTaskRequest::new(
+            binding.package_path(),
+            binding.expected_sha256(),
+        )
+        .map_err(|_| {
+            ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryBindingInvalid.as_str())
+        })?;
         let recovery = match prepare_contained_task(
             instance_alias,
             &recovery_request,

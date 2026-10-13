@@ -891,7 +891,11 @@ mod tests {
                 actingcommand_contract::Sensitivity::Internal
             );
             // The public projection carries the outcome codes only.
-            let public = event.payload().public_projection();
+            let actingcommand_contract::PublicEventPayload::Runtime(public) =
+                event.payload().public_projection()
+            else {
+                panic!("runtime public projection");
+            };
             assert_eq!(public.outcome(), Some(&failure.outcome().codes_only()));
         }
         ledger.close().unwrap();

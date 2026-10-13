@@ -759,13 +759,21 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
     let mut recovered_task_failure_code = None;
     // Ledger revision 3 (#378 A3): a failed run's class comes from its failure's code
     // (`is_severe_policy_failure`), never from the terminal's severity, which is now the
-    // code's category. The two device severities fail with the same code, so they record the
-    // same class.
-    for (case, expected_terminal) in [
-        ("success", Some(EventType::TaskCompleted)),
-        ("task-recoverable", Some(EventType::TaskFailed)),
-        ("task-severe", Some(EventType::TaskFailed)),
-        ("lease-expired", None),
+    // code's category. Scheduling keeps today's classes (model section 8.1; coordinator ruling
+    // 2026-10-13): a transient device failure is Recoverable, a fatal one Severe.
+    for (case, expected_terminal, expected_class) in [
+        ("success", Some(EventType::TaskCompleted), None),
+        (
+            "task-recoverable",
+            Some(EventType::TaskFailed),
+            Some(PolicyFailureClass::Recoverable),
+        ),
+        (
+            "task-severe",
+            Some(EventType::TaskFailed),
+            Some(PolicyFailureClass::Severe),
+        ),
+        ("lease-expired", None, Some(PolicyFailureClass::Severe)),
     ] {
         let root = TempDir::new().expect("tempdir");
         let shared_instance_id = instance_id();
@@ -999,18 +1007,14 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                 );
                 assert_eq!(
                     failure.original_class,
-                    if actingcommand_contract::is_severe_policy_failure(code) {
-                        PolicyFailureClass::Severe
-                    } else {
-                        PolicyFailureClass::Recoverable
-                    },
-                    "{case}: the class is the failure code's"
+                    expected_class.expect("failure class"),
+                    "{case}: today's class"
                 );
                 assert_eq!(failure.error_code, code.as_str());
                 match &recovered_task_failure_code {
                     Some(expected) => assert_eq!(
                         code, expected,
-                        "both device severities fail with the same code"
+                        "structured severity must not depend on the failure code"
                     ),
                     None => recovered_task_failure_code = Some(code.clone()),
                 }

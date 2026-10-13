@@ -294,6 +294,7 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskGeometrySessionUnavailable => "contained_task_geometry_session_unavailable": error,
         ContainedTaskGeometryUnavailable => "contained_task_geometry_unavailable": error,
         ContainedTaskGeometryUnknown => "contained_task_geometry_unknown": error,
+        ContainedTaskHomeRecoveryBindingInvalid => "contained_task_home_recovery_binding_invalid": error,
         ContainedTaskHomeRecoveryBindingMissing => "contained_task_home_recovery_binding_missing": error,
         ContainedTaskHomeRecoveryFinalPageMissing => "contained_task_home_recovery_final_page_missing": error,
         ContainedTaskHomeRecoveryPersistentlyNonHome => "contained_task_home_recovery_persistently_non_home": error,

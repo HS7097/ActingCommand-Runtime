@@ -2464,6 +2464,19 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_home_recovery_binding_invalid": {
+      "category": "error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host reports contained task home recovery binding invalid: the return-home binding's package path or hash does not form a valid contained task request (formerly the unregistered spelling contained_task_home_recovery_binding_invalid).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_home_recovery_binding_missing": {
       "category": "error",
       "owner": "runtime-host",
