@@ -563,12 +563,31 @@ impl HostShared {
             ),
             _ => (false, false),
         };
+        // Ledger revision 3: the earlier record carries this error's outcome when its own
+        // outcome has the error's code with every value and every link of it: a capture or
+        // input failure built from `record_outcome()`, a `runtime.failed` diagnostic of it, a
+        // policy rejection. A record of another code (a diagnostic code alone) does not, so an
+        // error whose outcome carries a `caused_by` link or values gets its lifecycle record.
+        let error_outcome = error.outcome();
+        let outcome_recorded = outcome.payload().outcome().is_some_and(|recorded| {
+            recorded.code() == error_outcome.code()
+                && error_outcome
+                    .values()
+                    .iter()
+                    .all(|(key, value)| recorded.value(key) == Some(value))
+                && error_outcome
+                    .causes()
+                    .iter()
+                    .all(|link| recorded.causes().contains(link))
+        });
         // Ledger revision 3: the device message of a failure without a fixed summary was the
         // primary detail's message before; the failure's outcome now carries it as a foreign
         // link, so like the detail it needs no lifecycle fact of its own.
         let native_detail_recorded = error.diagnostics().native_detail().is_none()
             || (primary_detail_recorded && error.diagnostics().native_detail_is_device_message());
         if native_detail_recorded
+            && (outcome_recorded
+                || (error.lifecycle.caused_by.is_none() && !error.has_outcome_values()))
             && error.lifecycle.capacity.is_none()
             && (error.diagnostic_detail().is_none() || primary_detail_recorded)
             && (error.cleanup_cause().is_none() || cleanup_cause_recorded)

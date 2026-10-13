@@ -5654,9 +5654,13 @@ fn validate_task_terminal(
             *task_result == actingcommand_contract::TaskOutcome::Success && outcome.is_none()
         }
         PolicyExecutionOutcome::Failed { failure } => {
+            // The policy's failure code is the terminal outcome's, as the Runtime derives it
+            // (`scheduled_failure_code`: an unregistered relayed spelling's `raw_code`).
             *task_result == actingcommand_contract::TaskOutcome::Failure
-                && outcome.as_ref().map(|outcome| outcome.code().as_str())
-                    == Some(failure.error_code.as_str())
+                && outcome
+                    .as_ref()
+                    .map(actingcommand_contract::scheduled_failure_code)
+                    .is_some_and(|code| code == failure.error_code)
         }
     };
     if !matches {

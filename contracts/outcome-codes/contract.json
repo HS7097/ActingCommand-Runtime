@@ -6414,20 +6414,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_config_subsystem_reason": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Event or record sanitization refused a value: invalid config subsystem reason.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_config_parameter_key": {
       "category": "error",
       "ladder_class": "none",

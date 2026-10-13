@@ -2201,8 +2201,9 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the error is the vision provider's English text, which reaches the Runtime only as a vision failure message (foreign text); B4 types the provider's errors",
     ),
     // End of the A2d bridges.
-    // A3 entries (ledger revision 3): G6 members that are data, not Runtime prose, and the
-    // policy's Severe code list (model section 8.1).
+    // A3 entries (ledger revision 3): G6 members that are data, not Runtime prose, the
+    // policy's Severe code list (model section 8.1) and the policy failure code of a terminal
+    // outcome.
     bridge(
         "crates/actingcommand-contract/src/event/payload.rs",
         "LifecycleNativeDetail.text",
@@ -2238,6 +2239,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "severe_policy_failure_codes",
         &[Check::G5],
         "B4: the policy's Severe code list (model section 8.1) spells other owners' codes; B4 reviews the list with the policy",
+    ),
+    bridge(
+        "crates/actingcommand-contract/src/event/payload.rs",
+        "scheduled_failure_code",
+        &[Check::G2],
+        "A2-P: the policy failure code of a failed run's terminal outcome (an unregistered relayed spelling keeps its raw_code), the base of the #336 failure identity `error_code`, a dynamic family A2-P splits into a fixed code and values",
     ),
     // End of the A3 entries.
 ];

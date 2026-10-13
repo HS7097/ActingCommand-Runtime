@@ -20,8 +20,8 @@ use actingcommand_contract::{
     OriginModule, PolicyDispatchEventData, PolicyDispatchPayload, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
     PolicyPayloadDraft, RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation,
-    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact, is_severe_policy_failure,
-    record_severity,
+    Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact, record_severity,
+    scheduled_failure_class, scheduled_failure_code,
 };
 #[cfg(test)]
 use actingcommand_contract::{
@@ -1218,6 +1218,7 @@ impl<B: DurableStorage> EventStore<B> {
                 let TaskSemanticFact::TerminalCommitted {
                     task_result: TaskOutcome::Failure,
                     outcome: Some(failure_outcome),
+                    failure_severe,
                     ..
                 } = payload.fact()
                 else {
@@ -1226,12 +1227,11 @@ impl<B: DurableStorage> EventStore<B> {
                         ContractLocation::RecoverPolicyExecution.location(),
                     ));
                 };
-                let failure_code = failure_outcome.code();
-                let class = if is_severe_policy_failure(failure_code) {
-                    PolicyFailureClass::Severe
-                } else {
-                    PolicyFailureClass::Recoverable
-                };
+                // The code and the class come from the terminal through the contract's shared
+                // functions, as the Runtime's live settlement and startup recovery read them
+                // (model section 8.1).
+                let failure_code = scheduled_failure_code(failure_outcome);
+                let class = scheduled_failure_class(failure_outcome.code(), *failure_severe);
                 let task_requests =
                     matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
@@ -1257,7 +1257,7 @@ impl<B: DurableStorage> EventStore<B> {
                     || !(matches!(
                         execution.policy_result(),
                         PolicyExecutionOutcome::Failed { failure }
-                            if failure.error_code == failure_code.as_str()
+                            if failure.error_code == failure_code
                                 && failure.original_class == class
                                 && !failure.reported_success
                                 && failure.runtime_ms == runtime_ms

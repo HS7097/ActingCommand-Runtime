@@ -48,6 +48,8 @@ use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
 mod manifest;
+#[cfg(test)]
+pub(crate) use manifest::env_overrides_subsystem;
 mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
@@ -1380,9 +1382,11 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
         .collect()
 }
 
-/// The text one env-override warning has in `check-config`'s v1 `warnings` and in the
-/// `env_overrides` manifest subsystem reason, `env_override_ignored:<VAR>`. The one boundary of
-/// that text: A3 and A6a replace both places with the outcome itself.
+/// The text one env-override warning has in `check-config`'s v1 `warnings`,
+/// `env_override_ignored:<VAR>`: the one boundary of that text, which A6a replaces with the
+/// outcome itself. Since ledger revision 3 the startup record carries the warnings as `note`
+/// links of the `env_overrides` subsystem's outcome, and its `config.subsystems` row names the
+/// variables under `ignored_variables` (never silent).
 pub(super) fn env_override_warning_v1(warning: &Outcome) -> String {
     let variable = warning
         .value("variable")

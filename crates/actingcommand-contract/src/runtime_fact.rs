@@ -46,6 +46,12 @@ pub const MAX_CONFIG_MANIFEST_SUBSYSTEMS: usize = 64;
 pub const MAX_CONFIG_MANIFEST_PARAMETERS: usize = 256;
 /// Upper bound on a subsystem name or a parameter key, in bytes.
 pub const MAX_CONFIG_MANIFEST_NAME_BYTES: usize = 128;
+/// The `config.subsystems` row field that names, comma-separated, the `variable` of every
+/// `note` link of the subsystem's outcome: the ignored environment overrides of `env_overrides`
+/// (Workflow #318 cfg3; Workflow #378 A3, Fail Loud).
+pub const CONFIG_SUBSYSTEM_IGNORED_VARIABLES_FIELD: &str = "ignored_variables";
+/// The outcome value key a noted environment variable carries (`env_override_ignored`).
+const NOTED_VARIABLE_KEY: &str = "variable";
 /// Key of the instance-scoped runtime fact that carries the package name the device
 /// reported in the foreground (slice #316-B3).
 pub const APPLICATION_FOREGROUND_FACT_KEY: &str = "application.foreground";
@@ -207,7 +213,7 @@ impl ConfigParameterSource {
 }
 
 impl RuntimeConfigManifest {
-    /// Checks the two list bounds and every name, key, and reason: non-empty,
+    /// Checks the two list bounds and every name and key: non-empty,
     /// control-free, and within the byte bounds. A manifest that passes here
     /// always yields two records that pass [`RuntimeFactRecord::validate`].
     pub fn validate(&self) -> Result<(), SanitizationError> {
@@ -245,7 +251,9 @@ impl RuntimeConfigManifest {
     /// Encodes the manifest as its two runtime facts, both in scope `runtime`
     /// with no lifetime and the same observation time: `config.subsystems`
     /// holds one row `{name, enabled, code}` per subsystem, plus the scalar
-    /// values of its outcome under their keys (ledger revision 3), and
+    /// values of its outcome under their keys (ledger revision 3) and, when its
+    /// outcome has `note` links with a `variable`, those names comma-separated
+    /// under `ignored_variables` (never silent), and
     /// `config.parameters` one row `{key, value, source}` per parameter, in
     /// manifest order. Pure: nothing is sampled or appended here.
     pub fn to_fact_records(
@@ -279,6 +287,28 @@ impl RuntimeConfigManifest {
                         _ => continue,
                     };
                     row.entry(key.clone()).or_insert(scalar);
+                }
+                // Fail Loud: the `variable` of every `note` link (each ignored environment
+                // override of `env_overrides`, `env_override_ignored`) is named in the row, in
+                // link order and comma-separated, so the startup record never drops one.
+                let noted = subsystem
+                    .outcome
+                    .causes()
+                    .iter()
+                    .filter(|link| {
+                        link.relation().as_str() == crate::outcome::CauseRelation::Note.as_str()
+                    })
+                    .filter_map(|link| {
+                        link.outcome()
+                            .value(NOTED_VARIABLE_KEY)
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .collect::<Vec<_>>();
+                if !noted.is_empty() {
+                    row.insert(
+                        CONFIG_SUBSYSTEM_IGNORED_VARIABLES_FIELD.to_owned(),
+                        FactScalar::String(noted.join(",")),
+                    );
                 }
                 row
             })

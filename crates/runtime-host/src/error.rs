@@ -366,6 +366,13 @@ impl RuntimeHostError {
         self
     }
 
+    /// Whether the error's producer attached values to its outcome
+    /// ([`Self::with_outcome_values`]): the outcome is then more than its code and operation, and
+    /// a record that carries only those does not carry the failure (ledger revision 3).
+    pub(crate) fn has_outcome_values(&self) -> bool {
+        self.lifecycle.outcome_values.is_some()
+    }
+
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
         let fatal = error.is_fatal();
         Self::artifact_as(error, fatal)

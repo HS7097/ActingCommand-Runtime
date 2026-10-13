@@ -414,6 +414,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
                         } else {
                             None
                         },
+                        failure_severe: false,
                         scheduling_disposition: if failed { None } else { Some(disposition) },
                         task_timing: None,
                     },
@@ -695,6 +696,7 @@ fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> Pr
                 final_page: Some("fixture/final".to_owned()),
                 executed_steps: Some(1),
                 outcome: None,
+                failure_severe: false,
                 scheduling_disposition: Some(disposition),
                 task_timing: None,
             },

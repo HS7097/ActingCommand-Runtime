@@ -26,6 +26,7 @@ use actingcommand_contract::{
     CONFIG_PARAMETERS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
     PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
+    scheduled_failure_code,
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
@@ -127,9 +128,17 @@ impl Snapshot<'_> {
         Ok(events)
     }
 
-    /// The run's terminal failure code and the native detail of its lifecycle failure record
-    /// of that code (or of `fallback_code` when the run has no terminal).
-    fn run_failure(&self, run_id: Option<RunId>, fallback_code: &str) -> (Option<String>, Value) {
+    /// The run's `task.failed` terminal (its failure's spelling and the record's severity,
+    /// which is that failure's category) and the native detail of its lifecycle failure record
+    /// of that spelling (or of `fallback_code` when the run has no terminal). A failure is
+    /// spelled as the policy spells it (coordinator ruling 7): its code, or for
+    /// `outcome_relay_unregistered` the original spelling it keeps as `raw_code`, as the report
+    /// showed it before ledger revision 3.
+    fn run_failure(
+        &self,
+        run_id: Option<RunId>,
+        fallback_code: &str,
+    ) -> (Option<(String, EventSeverity)>, Value) {
         let Some(run_id) = run_id else {
             return (None, Value::Null);
         };
@@ -147,12 +156,14 @@ impl Snapshot<'_> {
                     TaskSemanticFact::TerminalCommitted {
                         outcome: Some(outcome),
                         ..
-                    } => Some(outcome.code().as_str().to_owned()),
+                    } => Some((scheduled_failure_code(outcome), event.severity())),
                     _ => None,
                 },
                 _ => None,
             });
-        let code = terminal.clone().unwrap_or_else(|| fallback_code.to_owned());
+        let code = terminal
+            .as_ref()
+            .map_or(fallback_code, |(spelling, _)| spelling.as_str());
         let detail = self
             .ledger
             .query(&by_run(EventType::RuntimeFailed))
@@ -163,7 +174,7 @@ impl Snapshot<'_> {
                 // its native detail the `raw_text` of that outcome's direct foreign link.
                 EventPayload::Runtime(RuntimePayload::Failed(payload))
                     if payload.lifecycle_failure().is_some()
-                        && payload.outcome().code().as_str() == code =>
+                        && scheduled_failure_code(payload.outcome()) == code =>
                 {
                     payload.outcome().causes().iter().find_map(|link| {
                         link.outcome()
@@ -418,6 +429,9 @@ pub fn suspension_report(
             |identity| identity.base.clone(),
         );
         let (terminal, detail) = snapshot.run_failure(current_run, &base);
+        let failure_spelling = terminal
+            .as_ref()
+            .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
         if failure.disposition == PolicyFailureDisposition::PausedTask {
             let procedure_ref = procedure_refs.get(task_id);
             if procedure_ref.is_none() {
@@ -490,15 +504,21 @@ pub fn suspension_report(
                     "run_id": previous_run.as_ref().map(identifier_text),
                 })
             });
+            // Coordinator ruling 6: the severity of the run's failure terminal, which is its
+            // failure's category. The execution record carries no outcome (until A2-P), so its
+            // own severity is its event type's category; it stands in only without a terminal.
+            let severity = terminal
+                .as_ref()
+                .map_or(latest.severity, |(_, severity)| *severity);
             suspended.push(json!({
                 "task_id": task_id,
                 "instance_id": instance_id,
                 "procedure_ref": procedure_ref,
                 "error_code": failure.error_code,
-                "failure_code": terminal.as_deref().unwrap_or(&base),
+                "failure_code": failure_spelling,
                 "consecutive_same_error": failure.consecutive_same_error,
                 "effective_class": wire(&failure.effective_class),
-                "severity": wire(&latest.severity),
+                "severity": wire(&severity),
                 "paused": paused,
                 "previous": previous_json,
                 "step": step,
@@ -537,7 +557,7 @@ pub fn suspension_report(
             "task_id": task_id,
             "instance_id": instance_id,
             "error_code": failure.error_code,
-            "failure_code": terminal.as_deref().unwrap_or(&base),
+            "failure_code": failure_spelling,
             "step": snapshot.step(current_run, terminal.is_some())?,
             "latest": {
                 "execution_sequence": latest.sequence,

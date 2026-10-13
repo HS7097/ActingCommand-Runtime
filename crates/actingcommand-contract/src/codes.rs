@@ -611,7 +611,6 @@ crate::outcome_codes! {
         ConfigManifestSubsystemsTooMany => "config_manifest_subsystems_too_many": error / none,
         ConfigManifestParametersTooMany => "config_manifest_parameters_too_many": error / none,
         InvalidConfigSubsystemName => "invalid_config_subsystem_name": error / none,
-        InvalidConfigSubsystemReason => "invalid_config_subsystem_reason": error / none,
         InvalidConfigParameterKey => "invalid_config_parameter_key": error / none,
         RuntimeFactSchemaVersionMismatch => "runtime_fact_schema_version_mismatch": error / none,
         RuntimeFactSnapshotPartInvalid => "runtime_fact_snapshot_part_invalid": error / none,

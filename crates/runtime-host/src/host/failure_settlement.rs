@@ -214,15 +214,12 @@ impl HostShared {
             (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
         };
         let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game);
-        // R25-2: an adb backend failure of a linear task that did not poison the run is
-        // recoverable and rerun only.
+        // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
+        // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
+        // rule in where the failure arose, so the startup recovery and the ledger read the same
+        // class (Workflow #378 A3 ruling 9).
         let rerun_only_backend =
             RERUN_ONLY_BACKEND_FAILURES.contains(&code.as_str()) && !failure.poison_runtime;
-        let class = if rerun_only_backend {
-            PolicyFailureClass::Recoverable
-        } else {
-            class
-        };
         let detail = failure_detail_fingerprint(
             failure
                 .error

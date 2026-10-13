@@ -2667,11 +2667,44 @@ pub struct PolicyFailureRecord {
     pub perf_context: Box<PerformanceContext>,
 }
 
-/// Whether a failed scheduled run is `Severe` for the policy (Workflow #378 A3, model section
-/// 8.1). Before ledger revision 3 the class was read from the task terminal's severity
-/// (`fatal`); a severity is now its record's category, so the class comes from this list of
-/// the codes whose task terminals the Runtime recorded `fatal` at the model's pin, never from
-/// the category. B4 reviews the list with the policy.
+/// The policy class of a failed scheduled run from its task terminal (Workflow #378 A3, model
+/// section 8.1; coordinator ruling 9, 2026-10-13): `Severe` when the failure point judged the
+/// failure severe (`TerminalCommitted.failure_severe`) or its code is one the Runtime only ever
+/// raises as fatal ([`is_severe_policy_failure`]), otherwise `Recoverable`. Before ledger
+/// revision 3 the class was read from the terminal's severity (`fatal`); a severity is now its
+/// record's category. The live settlement, the startup recovery and the ledger's re-derivation
+/// all take the class from here, so they agree.
+pub fn scheduled_failure_class(
+    code: &crate::outcome::CodeStr,
+    failure_severe: bool,
+) -> PolicyFailureClass {
+    if failure_severe || is_severe_policy_failure(code) {
+        PolicyFailureClass::Severe
+    } else {
+        PolicyFailureClass::Recoverable
+    }
+}
+
+/// The policy failure code of a failed run's terminal outcome (Workflow #378 A3; coordinator
+/// ruling 7, 2026-10-13): the outcome's code, except for a relayed spelling the embedded catalog
+/// does not register (`outcome_relay_unregistered`), whose spelling the outcome keeps as
+/// `raw_code`, so distinct failures keep distinct failure identities and streaks. The live
+/// settlement, the startup recovery and the ledger's re-derivation all take it from here.
+pub fn scheduled_failure_code(outcome: &Outcome) -> String {
+    if outcome.is(ContractCode::OutcomeRelayUnregistered)
+        && let Some(spelling) = outcome
+            .value("raw_code")
+            .and_then(serde_json::Value::as_str)
+    {
+        return spelling.to_owned();
+    }
+    outcome.code().as_str().to_owned()
+}
+
+/// Whether a failed scheduled run's code is one the Runtime only ever raises as fatal, so its
+/// run is `Severe` whatever the failure point judged (Workflow #378 A3, model section 8.1): the
+/// static list of the codes whose task terminals the Runtime recorded `fatal` at the model's
+/// pin and that no error raises as nonfatal. B4 reviews the list with the policy.
 pub fn is_severe_policy_failure(code: &crate::outcome::CodeStr) -> bool {
     severe_policy_failure_codes().contains(&code.as_str())
 }
@@ -3709,6 +3742,15 @@ pub enum TaskSemanticFact {
         executed_steps: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<Outcome>,
+        /// The failure point's own verdict that this failure must pause the task: the run
+        /// poisoned the Runtime or its error was fatal, except a non-poisoning
+        /// `input_backend_operation_failed` or `application_backend_operation_failed` of a
+        /// `linear_steps` main package (rerun only, R25-2). A first capture the host makes
+        /// nonfatal (ADB baseline lost, a stale kept session) is not severe. Only a failed
+        /// terminal sets it. The policy class of a failed scheduled run follows it
+        /// ([`scheduled_failure_class`]; Workflow #378 A3, model section 8.1).
+        #[serde(default, skip_serializing_if = "is_false")]
+        failure_severe: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduling_disposition: Option<SchedulingDisposition>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4558,11 +4600,18 @@ impl TaskSemanticFact {
                 final_page,
                 executed_steps,
                 outcome,
+                failure_severe,
                 scheduling_disposition,
                 task_timing,
             } => {
                 if let Some(timing) = task_timing {
                     timing.validate()?;
+                }
+                if *failure_severe && *task_result != TaskOutcome::Failure {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskTerminal,
+                        "failure_severe",
+                    ));
                 }
                 if executed_steps.is_some_and(|steps| steps > 1_000)
                     || (*task_result == TaskOutcome::Success && executed_steps.is_none())

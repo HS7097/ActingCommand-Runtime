@@ -135,17 +135,20 @@ Exactly one JSON object is written to stdout on both outcomes.
 ```
 
 `config_manifest` for a zero-instance configuration that names only
-`bind_host`, `bind_port` and the salt (the parameter list is shortened here to
-one entry per group; the real object carries every key listed below):
+`bind_host`, `bind_port` and the salt, with no `ACTINGCOMMAND_*` variable set
+(the parameter list is shortened here to one entry per group; the real object
+carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"reason":"flag absent"},{"name":"agent_dispatcher","enabled":false,"reason":"section absent"},{"name":"governance","enabled":true,"reason":"declarative_identity; allowed_clients=any"},{"name":"policy_driver","enabled":false,"reason":"section absent"},{"name":"vision_provider","enabled":false,"reason":"section absent"},{"name":"device_diagnostic","enabled":true,"reason":"always on; mode shadow"},{"name":"performance_monitor","enabled":true,"reason":"sample interval 2000 ms (default)"},{"name":"mumu_discovery","enabled":false,"reason":"no instance bound by instance_index or instance_name"},{"name":"emulator_control","enabled":false,"reason":"no discovery-bound instance"},{"name":"runtime_fact_snapshot","enabled":true,"reason":"rides the performance monitor thread"},{"name":"env_overrides","enabled":false,"reason":"flag absent"}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
-configuration. Omission reports an enabled subsystem with reason `flag absent`
-and a `true` parameter from `default`. Explicit `false` reports a disabled
-subsystem with reason `configured off` and a `false` parameter from `explicit`.
+configuration. Omission reports an enabled subsystem with the outcome
+`config_subsystem_flag_absent` and a `true` parameter from `default`. Explicit
+`false` reports a disabled subsystem with `config_subsystem_configured_off` and
+a `false` parameter from `explicit`. Explicit `true` reports
+`config_subsystem_configured`.
 When enabled, the frame cleaner (Workflow #375 R5d, `contracts/ledger-store.md`,
 "Frame cleaner") removes due frames and moves error and Lab frames into
 `<state root>\kept\` within 2 s of the start: its first sweep covers every
@@ -238,26 +241,64 @@ revision.
 - `config_manifest` is the in-memory runtime configuration manifest exactly
   as `assemble` hands it to the host (`RuntimeConfigManifest`, see
   `contracts/runtime-fact-store.md`, "Producers"); at startup the daemon
-  records the same content as the program facts `config.subsystems` and
+  records it as the program facts `config.subsystems` and
   `config.parameters`, which `actingctl facts --program` returns whole and
   `actingctl status --config` returns on their own. Printing it here has no
   side effect.
-  - `subsystems` (`name`, `enabled`, `reason`): `frame_retention` (the
-    `frame_retention_enabled` flag), `agent_dispatcher` (section present),
-    `governance` (always on; the reason is `declarative_identity;
-    allowed_clients=<n>` with the size of the effective allow-list, or
-    `declarative_identity; allowed_clients=any` without a `governance` section,
-    see "Governance"), `policy_driver` (`policy`
-    section present), `vision_provider` (`vision` section present),
-    `device_diagnostic` (always on; the reason carries the mode),
-    `performance_monitor` (always on with the default sample interval),
-    `mumu_discovery` and `emulator_control` (on only when at least one
-    instance is bound by `instance_index` or `instance_name`; the reason
-    carries the count), `runtime_fact_snapshot` (rides the performance monitor
-    thread), `env_overrides` (on only when `allow_env_overrides` is `true`; the
-    reason is `configured`, `configured off` or `flag absent`, followed when the
-    flag is off by `; ` and every `env_override_ignored:<VAR>` warning joined
-    with `, `, see "Environment overrides").
+  - `subsystems` (`name`, `enabled`, `outcome`): `outcome` says why the
+    subsystem is on or off, as a registered code (ledger revision 3, Workflow
+    #378 A3; it replaces the former prose `reason`, and the schema version stays
+    `v1`). It is an outcome in record form, `{ code, category, values, causes }`:
+    `category` is `info` for every code below, `values` is always present (`{}`
+    when empty) and `causes` only when the outcome has links. The codes:
+    - `config_subsystem_configured`: the flag is `true` or the section is
+      present.
+    - `config_subsystem_configured_off`: the flag is `false`.
+    - `config_subsystem_flag_absent`: the file does not name the flag, so its
+      default applies.
+    - `config_subsystem_section_absent`: the file has no section for the
+      subsystem.
+    - `config_subsystem_always_on`: the Runtime always runs the subsystem.
+    - `config_subsystem_discovery_bound`: at least one instance is bound by
+      `instance_index` or `instance_name`; the value `count` is how many.
+    - `config_subsystem_discovery_unbound`: no instance is bound that way.
+
+    The subsystems, in this order:
+    - `frame_retention`: the `frame_retention_enabled` flag
+      (`config_subsystem_configured`, `config_subsystem_configured_off` or
+      `config_subsystem_flag_absent`).
+    - `agent_dispatcher`: its section (`config_subsystem_configured` or
+      `config_subsystem_section_absent`).
+    - `governance`: always on (`config_subsystem_always_on`). With a
+      `governance` section the value `count` is the size of the effective
+      allow-list; without one there is no `count` (any well-formed card is
+      accepted). See "Governance".
+    - `policy_driver` (the `policy` section) and `vision_provider` (the
+      `vision` section): `config_subsystem_configured` or
+      `config_subsystem_section_absent`.
+    - `device_diagnostic` and `performance_monitor`: always on
+      (`config_subsystem_always_on`). The mode and the sample interval are the
+      parameters `device_diagnostic_mode` and
+      `performance_monitor.sample_interval_ms`.
+    - `mumu_discovery` and `emulator_control`: on only when at least one
+      instance is bound by `instance_index` or `instance_name`
+      (`config_subsystem_discovery_bound` with `count`, else
+      `config_subsystem_discovery_unbound`).
+    - `runtime_fact_snapshot`: always on (`config_subsystem_always_on`); it
+      rides the performance monitor thread.
+    - `env_overrides`: on only when `allow_env_overrides` is `true`
+      (`config_subsystem_configured`, `config_subsystem_configured_off` or
+      `config_subsystem_flag_absent`). When the flag is off, the outcome
+      carries one `note` link per ignored variable: the outcome
+      `env_override_ignored` (category `warning`) with the value `variable`.
+      See "Environment overrides".
+
+    The `config.subsystems` program fact holds one row per subsystem: `name`,
+    `enabled`, `code` (the outcome's code) and each scalar value of the
+    outcome under its own key (`count` where present). A row carries no links;
+    instead the `env_overrides` row names the `variable` of each `note` link
+    under `ignored_variables`, comma-separated in link order, so an ignored
+    variable is never silent.
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
     `frame_retention_enabled`, `frame_retention_failed_run_successes`,
@@ -628,15 +669,18 @@ list names: it is the card the daemon's policy driver declares on its own
 (User, Ui) connection before it records the configured `catalog_approval_ids`
 and revokes the approvals of superseded catalogs.
 Without the section any well-formed card is accepted. The effective list is the
-manifest parameter `governance.allowed_clients` and its size is in the
-`governance` subsystem reason (see `config_manifest`).
+manifest parameter `governance.allowed_clients`. Its size is the value `count`
+of the `governance` subsystem's outcome, present only with the section (see
+`config_manifest`).
 
 ```json
 {"governance":{"allowed_clients":["ui"]}}
 ```
 
-gives the parameter value `actingd-policy-driver,ui` (`explicit`) and the reason
-`declarative_identity; allowed_clients=2`.
+gives the parameter value `actingd-policy-driver,ui` (`explicit`) and the
+`governance` subsystem outcome
+`{"code":"config_subsystem_always_on","category":"info","values":{"count":2}}`,
+so its `config.subsystems` row carries `count` `2`.
 
 ## Environment overrides
 
@@ -676,14 +720,26 @@ per-instance `*_local_path`, then the injected variable (flag on only), then
 discovery or the bundled tool. `PATH`, `ProgramFiles`, `ProgramFiles(x86)`
 and `SystemRoot` stay discovery sources and are not governed by the flag.
 
-The flag is never silent. When it is off (absent or `false`), every variable
-above that is set is ignored and reported as `env_override_ignored:<VAR>`: in
-this command's `warnings` array and, at startup, in the reason of the
-`env_overrides` manifest subsystem, which the host records as the
-`config.subsystems` program fact (no `provider.startup_observed` kind carries
-a warning). The variable's value is never printed. When the flag is `true`
-nothing is ignored and `warnings` is empty; a bad injected value fails where
-it is used (for example `mumu_root_unresolved` below, or the backend open).
+When the flag is off (absent or `false`), every variable above that is set is
+ignored and reported. This command's `warnings` array lists it as
+`env_override_ignored:<VAR>`. The `env_overrides` manifest subsystem's outcome
+carries it as a `note` link, here and in the manifest startup hands to the
+host:
+
+```json
+{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{},"causes":[{"code":"env_override_ignored","category":"warning","relation":"note","values":{"variable":"ACTINGCOMMAND_ADB_PATH"}}]}}
+```
+
+The host records the manifest as the `config.subsystems` program fact. Its
+rows keep the code and the scalar values but no links (ledger revision 3,
+Workflow #378 A3), so the `env_overrides` row names every ignored variable
+under `ignored_variables`, comma-separated in the order above, for example
+`"ignored_variables":"ACTINGCOMMAND_ADB_PATH"`. The flag is never silent: an
+ignored variable is named both here and in the ledger. No
+`provider.startup_observed` kind carries a warning. The variable's value is
+never printed. When the flag is `true` nothing is ignored and `warnings` is
+empty; a bad injected value fails where it is used (for example
+`mumu_root_unresolved` below, or the backend open).
 
 ## Discovery-bound instances
 
@@ -840,13 +896,16 @@ three shapes:
   `mumu_discovery` is appended to `not_checked`. This is not a check failure:
   `status` stays `ok` and the exit code `0`; startup runs this resolution only
   when an instance is discovery-bound (`contracts/provider-startup.md`).
-  `message` is the resolver's own message. `reason` follows the order of a
-  startup discovery refusal's native code: the resolver's resolution reason
-  (`installation_absent`, `installation_ambiguous`, `candidate_absent`,
-  `candidate_outside_root`, `registry_entry_invalid`,
+  `message` is the resolver's own message. `reason` is the resolver's
+  resolution reason (`installation_absent`, `installation_ambiguous`,
+  `candidate_absent`, `candidate_outside_root`, `registry_entry_invalid`,
   `registry_source_unavailable`), else its diagnostic `<category>.<stage>`
   (for example `native.mumu_manager.registry`), else `device_error` (for
-  example a root path that cannot be canonicalized).
+  example a root path that cannot be canonicalized). Only the resolution
+  reason matches what a startup discovery refusal records. Since ledger
+  revision 3 (Workflow #378 A3) startup records `provider_native_failed` in
+  place of the other two, with the value `device_category` when the device
+  error has a category. Workflow #378 A2-R aligns this field.
 
 ```json
 {"mumu_root":null,"mumu_root_unresolved":{"reason":"installation_absent","message":"no MuMu installation was found: configure mumu_root, set ACTINGCOMMAND_NEMU_FOLDER, start MuMu, or install it at a registered or vendor path"}}

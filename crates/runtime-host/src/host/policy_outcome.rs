@@ -1207,6 +1207,7 @@ impl HostShared {
         let TaskSemanticFact::TerminalCommitted {
             task_result: TaskOutcome::Failure,
             outcome: Some(outcome),
+            failure_severe,
             ..
         } = payload.fact()
         else {
@@ -1226,11 +1227,12 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        // Ledger revision 3 (model section 8.1): the class is the terminal outcome's code on the
-        // contract's severe list, no longer the terminal's severity (now its category).
+        // Ledger revision 3 (model section 8.1): the code and the class come from the terminal
+        // through the contract's shared functions, as the startup recovery and the ledger read
+        // them, no longer from the terminal's severity (now its category).
         Ok(PolicyExecutionInput::Failed {
-            error_code: outcome.code().as_str().to_owned(),
-            class: policy_failure_class(outcome.code()),
+            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+            class: actingcommand_contract::scheduled_failure_class(outcome.code(), *failure_severe),
         })
     }
 
@@ -1996,6 +1998,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     let TaskSemanticFact::TerminalCommitted {
                         task_result: TaskOutcome::Failure,
                         outcome: Some(outcome),
+                        failure_severe,
                         ..
                     } = payload.fact()
                     else {
@@ -2008,11 +2011,15 @@ fn reconcile_scheduled_policy_outcomes_for(
                         recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
                     (
                         terminal.timestamp_unix_ms(),
-                        // Ledger revision 3 (model section 8.1): the class is the outcome's code
-                        // on the contract's severe list, not the terminal's severity.
+                        // Ledger revision 3 (model section 8.1): the code and the class come
+                        // from the terminal through the contract's shared functions, as the live
+                        // settlement and the ledger read them.
                         PolicyExecutionInput::Failed {
-                            error_code: outcome.code().as_str().to_owned(),
-                            class: policy_failure_class(outcome.code()),
+                            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+                            class: actingcommand_contract::scheduled_failure_class(
+                                outcome.code(),
+                                *failure_severe,
+                            ),
                         },
                         runtime_ms,
                     )
@@ -2661,17 +2668,5 @@ fn policy_execution_severity(data: &PolicyExecutionEventData) -> EventSeverity {
             EventSeverity::Warning
         }
         actingcommand_contract::PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
-    }
-}
-
-/// The policy class of a failed scheduled run from its task terminal's outcome code (ledger
-/// revision 3, model section 8.1): `Severe` for the codes on the contract's list of the
-/// failures whose terminals were recorded `fatal`, otherwise `Recoverable`. A terminal's
-/// severity is its outcome's category now, so it no longer decides the class.
-fn policy_failure_class(code: &actingcommand_contract::outcome::CodeStr) -> PolicyFailureClass {
-    if actingcommand_contract::is_severe_policy_failure(code) {
-        PolicyFailureClass::Severe
-    } else {
-        PolicyFailureClass::Recoverable
     }
 }

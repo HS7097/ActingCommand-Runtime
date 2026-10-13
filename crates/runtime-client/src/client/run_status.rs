@@ -105,7 +105,9 @@ pub struct ContainedRunStatus {
 }
 
 /// A run's terminal as `actingcommand.run-status.v1` shows it. `failure_code` is the code of the
-/// terminal's committed outcome (ledger revision 3), spelled as before.
+/// terminal's committed outcome (ledger revision 3). A relayed spelling the catalog does not
+/// register was committed as `outcome_relay_unregistered`, and that is the code this member
+/// reads; the original spelling (a token) stays in that outcome's `raw_code` value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainedRunTerminal {
     pub outcome: TaskOutcome,

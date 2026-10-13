@@ -586,11 +586,13 @@ pub(super) struct RequestFailure {
 }
 
 /// The original task failure of a run, kept while a cleanup failure replaces its error: its
-/// outcome is the run's terminal outcome (ledger revision 3). Its former severity only fed the
-/// terminal's severity, which is now its outcome's category.
+/// outcome is the run's terminal outcome (ledger revision 3), and `severe` is the verdict where
+/// it arose that it must pause the task (its error was fatal there; the terminal's
+/// `failure_severe`, which the policy class follows; Workflow #378 A3 ruling 9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TaskFailureEvidence {
     pub(super) outcome: actingcommand_contract::outcome::Outcome,
+    pub(super) severe: bool,
 }
 
 pub(super) struct ActionFailure {
@@ -706,6 +708,7 @@ mod request_failure_tests {
                     actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
                 )
                 .operation(crate::codes::HostLocation::RunContainedTaskCapture),
+                severe: false,
             }),
         };
 
@@ -724,6 +727,7 @@ mod request_failure_tests {
                     actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
                 )
                 .operation(crate::codes::HostLocation::RunContainedTaskCapture),
+                severe: false,
             })
         );
     }
@@ -752,6 +756,7 @@ impl ActionFailure {
     pub(super) fn backend(error: RuntimeHostError) -> Self {
         let task_failure = Some(Box::new(TaskFailureEvidence {
             outcome: error.outcome(),
+            severe: error.is_fatal(),
         }));
         Self {
             diagnostic: DiagnosticCode::BackendOperationFailed,

@@ -1159,6 +1159,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                 final_page: Some("neutral/end".into()),
                 executed_steps: Some(7),
                 outcome: None,
+                failure_severe: false,
                 scheduling_disposition: None,
                 task_timing: None,
             },

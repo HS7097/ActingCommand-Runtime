@@ -455,6 +455,7 @@ pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> Request
     }
     let evidence = TaskFailureEvidence {
         outcome: error.outcome(),
+        severe: false,
     };
     let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
     failure.task_failure = Some(evidence);

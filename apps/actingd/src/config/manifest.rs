@@ -470,8 +470,9 @@ const fn flag_state(declared: Option<bool>) -> ActingdCode {
 /// `env_overrides` (Workflow #318 cfg3): enabled only when the file allows the
 /// `ACTINGCOMMAND_*` fallbacks. The outcome names the flag's state and, when it is off,
 /// carries every set variable as a `note` link of `env_override_ignored`: the startup record
-/// of the warnings `check-config` prints.
-fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSubsystem {
+/// of the warnings `check-config` prints. The `config.subsystems` row names those variables
+/// under `ignored_variables`, so an ignored override is never silent.
+pub(crate) fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSubsystem {
     let outcome = super::env_override_warnings(ignored)
         .into_iter()
         .fold(Outcome::new(flag_state(declared)), |outcome, warning| {

@@ -579,7 +579,11 @@ fn mumu_root_report(
             None,
         ),
         Err(error) => {
-            // The code order of a provider startup discovery refusal.
+            // Only the resolution reason is what a provider startup discovery refusal records.
+            // The other two no longer mirror provider startup: since ledger revision 3 it
+            // records `provider_native_failed` with `device_category` instead of the dynamic
+            // `<category>.<stage>` spelling and the `device_error` fallback. Workflow #378 A2-R
+            // aligns this v1 field.
             let reason = error
                 .nemu_resolution_context()
                 .map(|context| context.reason().as_str().to_owned())

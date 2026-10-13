@@ -757,9 +757,10 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
 #[test]
 fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() {
     let mut recovered_task_failure_code = None;
-    // Ledger revision 3 (#378 A3): a failed run's class comes from its failure's code
-    // (`is_severe_policy_failure`), never from the terminal's severity, which is now the
-    // code's category. Scheduling keeps today's classes (model section 8.1; coordinator ruling
+    // Ledger revision 3 (#378 A3): a failed run's class comes from its terminal through
+    // `scheduled_failure_class` (the failure point's `failure_severe` verdict, or an
+    // always-severe code), never from the terminal's severity, which is now the code's
+    // category. Scheduling keeps today's classes (model section 8.1; coordinator ruling 9,
     // 2026-10-13): a transient device failure is Recoverable, a fatal one Severe.
     for (case, expected_terminal, expected_class) in [
         ("success", Some(EventType::TaskCompleted), None),

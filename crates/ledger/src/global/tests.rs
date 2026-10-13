@@ -27,9 +27,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-/// A registered code that `is_severe_policy_failure` does not list: a recoverable failure.
+/// A registered code that `is_severe_policy_failure` does not list: with `failure_severe`
+/// false, a recoverable failure.
 const RECOVERABLE_FAILURE_CODE: &str = "capture_failed";
-/// A registered code that `is_severe_policy_failure` lists: a severe failure.
+/// A registered code that `is_severe_policy_failure` lists: a severe failure whatever
+/// `failure_severe` says.
 const SEVERE_FAILURE_CODE: &str = "execution_kernel_closed";
 
 fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
@@ -394,9 +396,10 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         observed_at_unix_ms: 1_752_147_200_400,
         outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 50 },
     };
-    // Ledger revision 3 (Workflow #378 A3): the class of a failed run is read from its terminal's
-    // outcome code (`is_severe_policy_failure`), so the fixture names a registered recoverable
-    // code and a registered severe one.
+    // Ledger revision 3 (Workflow #378 A3): the class of a failed run is read from its terminal
+    // (`scheduled_failure_class`: `failure_severe`, else an always-severe code); the terminals
+    // here are not `failure_severe`, so the fixture names a registered recoverable code and a
+    // registered always-severe one.
     let policy_failure = |class, runtime_ms| PolicyFailureRecord {
         error_code: if class == PolicyFailureClass::Recoverable {
             RECOVERABLE_FAILURE_CODE
@@ -532,6 +535,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
                     outcome: None,
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -554,6 +558,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
                     outcome: None,
+                    failure_severe: false,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
                             "mapped-result",
@@ -582,6 +587,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: Some("home".to_owned()),
                     executed_steps: Some(0),
                     outcome: None,
+                    failure_severe: false,
                     scheduling_disposition: Some(
                         SchedulingDisposition::new(
                             "mapped-result",
@@ -610,6 +616,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: Some(0),
                     outcome: Some(Outcome::relayed(RECOVERABLE_FAILURE_CODE)),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -632,6 +639,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: Some(0),
                     outcome: Some(Outcome::relayed(SEVERE_FAILURE_CODE)),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -656,6 +664,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: Some(0),
                     outcome: Some(Outcome::relayed(RECOVERABLE_FAILURE_CODE)),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },

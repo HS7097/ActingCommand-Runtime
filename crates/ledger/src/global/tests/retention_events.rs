@@ -317,6 +317,7 @@ impl<'r> RetentionEvents<'r> {
                     final_page: None,
                     executed_steps: Some(0),
                     outcome: failure_code.map(Outcome::relayed),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
