@@ -471,7 +471,10 @@ unconfirmed failure; the instance's policy availability is withheld, a policy di
 refused with that code, and its routine claims wait. The lease sweep hands the fence to a ladder
 admitted as every ladder is (trigger `stage: resource_fence` with the unconfirmed failure's code
 and no run, task or preparation), whose claim waits for the instance's key; a ladder already
-holding or waiting for the instance decides instead. Its return-home rung is skipped
+holding or waiting for the instance decides instead. A fence that manual work met (the
+instance's key held by a direct task run, a client lease, an application or input command or a
+Lab operation) starts no ladder and waits for a person at once (M387 B1: the ladder exists for
+the routine). Its return-home rung is skipped
 (`resource_fence`): it never prepares the instance again. The application restart rung, after
 its stop, prepares the instance again on the key; the emulator restart rung prepares it in its
 readiness wait. Only a preparation whose self-check passes proves the close and lifts the fence

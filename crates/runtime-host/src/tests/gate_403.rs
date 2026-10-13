@@ -2,16 +2,19 @@
 
 //! Workflow #403 (approved 2026-10-13): an unconfirmed close of one instance's own resources
 //! fences only that instance, hands it to the recovery ladder and waits for a person when the
-//! ladder ends without proving the close; a whole-Runtime fatal stays for shared things. Every
-//! wait returns as soon as what it waits for is recorded; the bound only stops a broken run.
+//! ladder ends without proving the close; a whole-Runtime fatal stays for shared things. A fence
+//! that manual work met starts no ladder (M387 B1). Every wait returns as soon as what it waits
+//! for is recorded; the bound only stops a broken run.
 
-use super::instance_workers::{phases, rung_outcomes, wait_for_ladder_end};
+use super::instance_workers::{
+    admit_ladder_run, ladder_setup, phases, rung_outcomes, wait_for_ladder_end,
+};
 use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     FactPayload, InstanceResourceFence, RecoveryLadderOutcome, RecoveryRung, RecoveryRungOutcome,
-    RecoveryTriggerStage, RuntimeLifecyclePhase, RuntimePayload,
+    RecoveryTriggerStage, RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseScope,
 };
 use actingcommand_device::DeviceResourceQuiescence;
 
@@ -23,6 +26,12 @@ const OTHER_ALIAS: &str = "fence.instance.b";
 /// are gone: the effect is uncertain and the close unconfirmed.
 fn unconfirmed_application_failure() -> DeviceError {
     DeviceError::fatal("synthetic application command left its child unconfirmed")
+        .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1)
+}
+
+/// An input whose adb command ends without confirming that its child is gone.
+fn unconfirmed_input_failure() -> DeviceError {
+    DeviceError::fatal("synthetic input command left its child unconfirmed")
         .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1)
 }
 
@@ -102,11 +111,11 @@ fn status_fence(host: &RuntimeHost, instance_alias: &str) -> Option<InstanceReso
         .cloned()
 }
 
-/// Asserts that `outcome` is the fence of `instance` caused by the application command's
-/// unconfirmed failure.
-fn assert_application_fence(
+/// Asserts that `outcome` is the fence of `instance` caused by the unconfirmed failure `cause`.
+fn assert_fence(
     outcome: &actingcommand_contract::outcome::Outcome,
     instance: InstanceId,
+    cause: &str,
 ) {
     assert_eq!(
         outcome.value("instance_id"),
@@ -114,19 +123,59 @@ fn assert_application_fence(
         "{outcome:?}"
     );
     assert!(
-        outcome
-            .codes()
-            .iter()
-            .any(|code| code.as_str() == SharedCode::ApplicationBackendOperationFailed.as_str()),
+        outcome.codes().iter().any(|code| code.as_str() == cause),
         "the fence names the unconfirmed failure: {outcome:?}"
     );
+}
+
+/// Whether any recovery ladder started.
+fn ladder_started(events: &[PersistedEvent]) -> bool {
+    phases(events)
+        .iter()
+        .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+}
+
+/// `actingctl resume` of `instance_alias`: the self-check its reconnect made.
+fn resume_selfcheck(
+    host: &RuntimeHost,
+    instance_alias: &str,
+) -> actingcommand_contract::SchedulingResumeSelfCheck {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::ResumeScheduling {
+                    scope: SchedulingPauseScope::Instance {
+                        instance_alias: instance_alias.to_owned(),
+                    },
+                    expected: None,
+                },
+            ),
+            ConnectionId::new(191).expect("connection"),
+        )
+        .expect("resume receipt");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let Some(RuntimeResult::SchedulingResumed {
+        selfcheck: Some(selfcheck),
+        ..
+    }) = receipt.result()
+    else {
+        panic!("an instance resume with its self-check: {receipt:?}");
+    };
+    selfcheck.clone()
 }
 
 /// Workflow #403 (the 10-13 incident's shape): an application command on instance A ends with an
 /// unconfirmed close while instance B has queued work. A is fenced with
 /// `instance_resources_fenced`, recorded once and caused by the command's failure; the command
 /// fails without a fatal projection; B's queued run is dispatched and completes; the Runtime has
-/// no fatal state and answers; its status shows A's fence and none for B.
+/// no fatal state and answers; its status shows A's fence and none for B. The command is a
+/// person's manual work, so the fence starts no ladder and A waits for a person (M387 B1).
 #[test]
 fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_runs() {
     let root = TempDir::new().expect("tempdir");
@@ -222,47 +271,150 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
     };
     assert_eq!(record.severity(), EventSeverity::Error);
     assert_eq!(record.links().instance_id(), Some(&fenced));
-    assert_application_fence(outcome, fenced);
+    assert_fence(
+        outcome,
+        fenced,
+        SharedCode::ApplicationBackendOperationFailed.as_str(),
+    );
     let fence = status_fence(&host, FENCED_ALIAS).expect("A's fence in status");
     assert_eq!(
         fence.cause.as_str(),
         SharedCode::ApplicationBackendOperationFailed.as_str()
     );
     assert_eq!(status_fence(&host, OTHER_ALIAS), None);
-    // With no rung that can prove the close (no startup package, no emulator control), the
-    // fence's ladder ends unproven and A waits for a person; the Runtime still runs.
-    wait_until(WAIT, || {
-        status_fence(&host, FENCED_ALIAS).is_some_and(|fence| fence.awaiting_person)
-    });
+    assert!(fence.awaiting_person, "{fence:?}");
+    assert!(
+        !ladder_started(&all_events(&host)),
+        "a manual fence starts no ladder"
+    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(holder);
     host.close().expect("close host");
 }
 
-/// A held fenced instance `FENCED` (the policy fixture's instance, so its availability is gated
-/// on its self-check) with a bound device endpoint and the neutral startup package; its opens
-/// pass a preparation's self-check.
-fn fenced_ladder_host(root: &TempDir, state: &Arc<FakeState>) -> (RuntimeHost, InstanceId) {
+/// Workflow #403, M387 B1 (coordinator ruling on #738): a direct task run (CLI, console or MCP)
+/// whose input ends with an unconfirmed close fences its instance and starts no ladder; status
+/// says it waits for a person. A person's resume lifts the fence only once its reconnect's
+/// self-check passes: a resume whose self-check fails leaves it fenced, the next one, which
+/// passes, lifts it with one record naming that preparation.
+#[test]
+fn gate_a_direct_run_fence_starts_no_ladder_and_a_passing_resume_lifts_it() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let (package, expected) = super::gate_369s5::direct_run_package(&root, &state);
+    let fenced = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
+        Arc::new(FakeProvider::one(FENCED_ALIAS, fenced, Arc::clone(&state))),
+    )
+    .expect("runtime host");
+    *state.input_error_once.lock().expect("one-shot input error") =
+        Some(unconfirmed_input_failure());
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            FENCED_ALIAS,
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package, expected).expect("task request"),
+        ),
+    );
+
+    let receipt = host
+        .process_request_for_test(&run, ConnectionId::new(186).expect("connection"))
+        .expect("run receipt");
+
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
+    let projection = receipt.error_projection().expect("the run's failure");
+    assert!(!projection.fatal, "{projection:?}");
+    assert_eq!(
+        projection.host_code(),
+        Some(HostCode::InstanceResourcesFenced.as_str())
+    );
+    let fence = status_fence(&host, FENCED_ALIAS).expect("the fence in status");
+    assert!(fence.awaiting_person, "{fence:?}");
+    assert_eq!(
+        fence.cause.as_str(),
+        SharedCode::InputBackendOperationFailed.as_str()
+    );
+    let events = all_events(&host);
+    let fences = fence_records(&events);
+    let [(_, outcome)] = fences.as_slice() else {
+        panic!("one fence record: {fences:#?}");
+    };
+    assert_fence(
+        outcome,
+        fenced,
+        SharedCode::InputBackendOperationFailed.as_str(),
+    );
+    assert!(
+        !ladder_started(&events),
+        "a direct-run fence starts no ladder"
+    );
+
+    // The fake's opens report no passed native open: the resume's self-check fails.
+    let failed = resume_selfcheck(&host, FENCED_ALIAS);
+    assert!(!(failed.capture.ok && failed.touch.ok), "{failed:?}");
+    assert!(
+        status_fence(&host, FENCED_ALIAS).is_some_and(|fence| fence.awaiting_person),
+        "a failing self-check leaves the fence"
+    );
+    assert!(lift_records(&all_events(&host)).is_empty());
+
+    state.observed_open.store(true, Ordering::Release);
+    let passed = resume_selfcheck(&host, FENCED_ALIAS);
+    assert!(
+        passed.capture.ok && passed.touch.ok && passed.failure_code.is_none(),
+        "{passed:?}"
+    );
+    assert_eq!(status_fence(&host, FENCED_ALIAS), None);
+    let events = all_events(&host);
+    let lifts = lift_records(&events);
+    let [(_, lifted_instance, preparation)] = lifts.as_slice() else {
+        panic!("one lift record: {lifts:#?}");
+    };
+    assert_eq!(*lifted_instance, fenced);
+    let proof = events
+        .iter()
+        .find(|event| event.sequence() == preparation.sequence)
+        .expect("the proving preparation");
+    assert!(matches!(
+        phases(std::slice::from_ref(proof))
+            .first()
+            .map(|(_, phase)| phase.clone()),
+        Some(RuntimeLifecyclePhase::InstancePreparationFinished {
+            stage: RecoveryTriggerStage::ConnectionPreparation,
+            outcome: None,
+            ..
+        })
+    ));
+    assert!(!ladder_started(&events));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// The policy fixture's instance (its availability gated on its self-check) with a bound device
+/// endpoint, the neutral startup package and a scheduled run admitted (`ladder_setup`,
+/// `admit_ladder_run`); its opens pass a preparation's self-check. The scheduled run's first input
+/// ends with an unconfirmed close.
+fn scheduled_fence_host(
+    root: &TempDir,
+    state: &Arc<FakeState>,
+) -> (
+    RuntimeHost,
+    InstanceId,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+) {
     state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
     state.observed_open.store(true, Ordering::Release);
-    let package = neutral_contained_task_package(true);
-    let package_path = root.path().join("fence-startup-package.zip");
-    fs::write(&package_path, &package).expect("write startup package");
-    let startup = ContainedTaskRequest::new(
-        package_path.to_string_lossy().into_owned(),
-        format!("{:x}", Sha256::digest(&package)),
-    )
-    .and_then(|request| request.with_response_deadline_ms(60_000))
-    .expect("startup package request");
+    let (host_config, request) = ladder_setup(root.path());
     let instance = instance_id();
     let host = RuntimeHost::start(
-        config(root).with_startup_packages(BTreeMap::from([(
-            POLICY_INSTANCE_ALIAS.to_owned(),
-            startup,
-        )])),
+        host_config,
         Arc::new(
             FakeProvider::from_entries([(
                 POLICY_INSTANCE_ALIAS.to_owned(),
@@ -273,7 +425,24 @@ fn fenced_ladder_host(root: &TempDir, state: &Arc<FakeState>) -> (RuntimeHost, I
         ),
     )
     .expect("runtime host");
-    (host, instance)
+    let context = admit_ladder_run(&host, &request);
+    *state.input_error_once.lock().expect("one-shot input error") =
+        Some(unconfirmed_input_failure());
+    (host, instance, context, request)
+}
+
+/// Runs the admitted scheduled run: its input's unconfirmed close fences the instance and the
+/// run fails non-fatally with the fence's code.
+fn fail_scheduled_run(
+    host: &RuntimeHost,
+    context: &PolicyRunContext,
+    request: &ContainedTaskRequest,
+) {
+    let error = host
+        .run_scheduled_contained_task(context, request)
+        .expect_err("the scheduled run fails");
+    assert!(!error.is_fatal(), "{error:?}");
+    assert_eq!(error.code(), HostCode::InstanceResourcesFenced.as_str());
 }
 
 /// The instance's policy availability (`session.instance.available`) in each publication, in
@@ -301,27 +470,17 @@ fn availability_publications(events: &[PersistedEvent]) -> Vec<(u64, bool)> {
         .collect()
 }
 
-/// Workflow #403: the ladder proves the close. A's application command ends unconfirmed and A
-/// is fenced; its ladder skips the return-home rung (it cannot prove a close), restarts the
-/// application and prepares A again, and that preparation's passing self-check lifts the fence
-/// with one record that names it. A's availability, withdrawn by the fence, follows its
-/// self-check again, and status shows no fence: A schedules again.
+/// Workflow #403: the ladder proves the close. A scheduled run's input on A ends unconfirmed
+/// and A is fenced; the fence's ladder skips the return-home rung (it cannot prove a close),
+/// restarts the application and prepares A again, and that preparation's passing self-check
+/// lifts the fence with one record that names it. A's availability, withdrawn by the fence,
+/// follows its self-check again, and status shows no fence: A schedules again.
 #[test]
 fn gate_a_ladder_whose_re_preparation_passes_lifts_the_fence() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let (host, instance) = fenced_ladder_host(&root, &state);
-    *state.application_error.lock().expect("application error") =
-        Some(unconfirmed_application_failure());
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let receipt = host
-        .process_request_for_test(
-            &application_stop(&ids, POLICY_INSTANCE_ALIAS),
-            ConnectionId::new(183).expect("connection"),
-        )
-        .expect("application receipt");
-    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
-    assert!(!receipt.error_projection().expect("failure").fatal);
+    let (host, instance, context, request) = scheduled_fence_host(&root, &state);
+    fail_scheduled_run(&host, &context, &request);
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
     let events = all_events(&host);
@@ -329,7 +488,11 @@ fn gate_a_ladder_whose_re_preparation_passes_lifts_the_fence() {
     let [(fenced, outcome)] = fences.as_slice() else {
         panic!("one fence record: {fences:#?}");
     };
-    assert_application_fence(outcome, instance);
+    assert_fence(
+        outcome,
+        instance,
+        SharedCode::InputBackendOperationFailed.as_str(),
+    );
     let trigger = phases(&events)
         .into_iter()
         .find_map(|(_, phase)| match phase {
@@ -340,7 +503,7 @@ fn gate_a_ladder_whose_re_preparation_passes_lifts_the_fence() {
     assert_eq!(trigger.stage, RecoveryTriggerStage::ResourceFence);
     assert_eq!(
         trigger.failure_code.as_str(),
-        SharedCode::ApplicationBackendOperationFailed.as_str()
+        SharedCode::InputBackendOperationFailed.as_str()
     );
     assert_eq!(
         rung_outcomes(&events),
@@ -400,30 +563,18 @@ fn gate_a_ladder_whose_re_preparation_passes_lifts_the_fence() {
     host.close().expect("close host");
 }
 
-/// Workflow #403: the ladder ends without proof. A's re-preparation after the application
-/// restart fails its self-check (A's input does not open), so the rung fails, the emulator rung
-/// is skipped and the climb is exhausted. A stays fenced, with no lift record, and status says
-/// it waits for a person; the Runtime runs.
+/// Workflow #403: the ladder ends without proof. A scheduled run's input on A ends unconfirmed
+/// and A is fenced; after the fence's application restart, A's re-preparation fails its
+/// self-check (its opens report no passed native open), so the rung fails, the emulator rung is
+/// skipped and the climb is exhausted. A stays fenced, with no lift record, and status says it
+/// waits for a person; the Runtime runs.
 #[test]
 fn gate_a_ladder_that_cannot_prove_the_close_leaves_the_instance_waiting_for_a_person() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let (host, instance) = fenced_ladder_host(&root, &state);
-    *state.input_open_error.lock().expect("input open error") = Some(
-        DeviceError::transient("synthetic adb shell timeout")
-            .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1),
-    );
-    *state.application_error.lock().expect("application error") =
-        Some(unconfirmed_application_failure());
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let receipt = host
-        .process_request_for_test(
-            &application_stop(&ids, POLICY_INSTANCE_ALIAS),
-            ConnectionId::new(184).expect("connection"),
-        )
-        .expect("application receipt");
-    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
-    assert!(!receipt.error_projection().expect("failure").fatal);
+    let (host, instance, context, request) = scheduled_fence_host(&root, &state);
+    state.observed_open.store(false, Ordering::Release);
+    fail_scheduled_run(&host, &context, &request);
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
     let events = all_events(&host);
@@ -431,7 +582,11 @@ fn gate_a_ladder_that_cannot_prove_the_close_leaves_the_instance_waiting_for_a_p
     let [(_, outcome)] = fences.as_slice() else {
         panic!("one fence record: {fences:#?}");
     };
-    assert_application_fence(outcome, instance);
+    assert_fence(
+        outcome,
+        instance,
+        SharedCode::InputBackendOperationFailed.as_str(),
+    );
     assert_eq!(
         rung_outcomes(&events),
         vec![
@@ -472,7 +627,7 @@ fn gate_a_ladder_that_cannot_prove_the_close_leaves_the_instance_waiting_for_a_p
     assert!(fence.awaiting_person, "{fence:?}");
     assert_eq!(
         fence.cause.as_str(),
-        SharedCode::ApplicationBackendOperationFailed.as_str()
+        SharedCode::InputBackendOperationFailed.as_str()
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");

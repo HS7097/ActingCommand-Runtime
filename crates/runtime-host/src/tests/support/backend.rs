@@ -24,6 +24,9 @@ pub(super) struct FakeState {
     close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_input: AtomicBool,
     input_error: std::sync::Mutex<Option<DeviceError>>,
+    // Workflow #403: the error the next input returns, taken once, so one input can end with an
+    // unconfirmed close while later ones succeed.
+    input_error_once: std::sync::Mutex<Option<DeviceError>>,
     block_input: AtomicBool,
     input_started: AtomicBool,
     capture_open_count: AtomicUsize,
@@ -125,6 +128,15 @@ impl FakeBackend {
         }
         if let Some(error) = self.state.input_error.lock().expect("input error").as_ref() {
             return Err(error.clone());
+        }
+        if let Some(error) = self
+            .state
+            .input_error_once
+            .lock()
+            .expect("one-shot input error")
+            .take()
+        {
+            return Err(error);
         }
         if self.state.fail_input.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected backend failure")

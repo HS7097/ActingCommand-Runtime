@@ -546,6 +546,13 @@ impl HostShared {
         links: EventLinksDraft,
     ) -> RuntimeHostResult<ExecutionKernelError> {
         if primary.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
+            // Workflow #403: the caller fences the instance; the input's own step ends once its
+            // write authority is back (a write still in flight keeps the whole-Runtime
+            // retention, `fenced_step_not_reclaimed`).
+            if step.is_some() {
+                self.finish_destructive_input(step, connection_id)
+                    .map_err(|failure| *failure.error)?;
+            }
             return Ok(primary);
         }
         let close_result: RuntimeHostResult<Result<(), ExecutionKernelError>> = (|| {

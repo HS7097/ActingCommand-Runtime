@@ -8,8 +8,11 @@
 //! claims until the fence is handed on. The lease sweep hands every new fence to a recovery
 //! ladder admitted as every ladder is (`resource_fence` trigger), or, when none may start, to a
 //! person at once; a ladder that ends with the instance still fenced leaves it waiting for a
-//! person. Only a preparation of the instance whose self-check passes proves the close and
-//! lifts the fence (`instance_resources_fence_lifted`): the ladder's re-preparation after an
+//! person. A fence that manual work met (a direct task run, a client lease, an application or
+//! input command, a Lab operation: the instance's key held by a person's claim) starts no ladder
+//! and waits for a person at once (M387 B1, Alice 10-10: the ladder exists for the routine).
+//! Only a preparation of the instance whose self-check passes proves the close and lifts the
+//! fence (`instance_resources_fence_lifted`): the ladder's re-preparation after an
 //! application or emulator restart, or a person's resume, emulator start or restart, or
 //! self-check. The kernel forgets its record of the unconfirmed close once the instance is
 //! fenced, so that such a preparation can open a fresh session, and the owner journal keeps
@@ -25,6 +28,7 @@ use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::identifier_text;
 use actingcommand_contract::InstanceResourceFence;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
+use std::collections::btree_map::Entry;
 
 /// Where a fence stands.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +76,18 @@ pub(super) fn resource_fence_error(
     .with_outcome_values(|outcome| outcome.instance_id(identifier_text(&instance_id)));
     error.lifecycle.instance_id = Some(instance_id);
     error
+}
+
+/// M387 B1: whether a key of `kind` is held by a person's manual work (a direct task run, a
+/// client lease, an application or input command, a Lab operation), whose fence starts no ladder.
+fn manual_claim(kind: ClaimKind) -> bool {
+    matches!(
+        kind,
+        ClaimKind::DirectTaskRun
+            | ClaimKind::ClientLease
+            | ClaimKind::InputLifecycle
+            | ClaimKind::LabOperation
+    )
 }
 
 /// The receipt projection of a fence that `error` caused: the kind of failure it was (an open,
@@ -151,19 +167,25 @@ impl HostShared {
             return self.retain_unconfirmed_owner(error, links);
         };
         let since_unix_ms = self.clock.sample()?.unix_ms;
-        let newly = {
-            let mut fences = lock(&self.resource_fences, HostLocation::FenceInstanceResources)?;
-            if fences.contains_key(&instance_id) {
-                false
-            } else {
-                fences.insert(
-                    instance_id,
-                    ResourceFence {
-                        cause: error.outcome().code().clone(),
-                        since_unix_ms,
-                        stage: FenceStage::Pending,
+        // M387 B1: manual work that met the fence starts no ladder; its instance waits for a
+        // person at once.
+        let manual = lock(&self.scheduler, HostLocation::FenceInstanceResources)?
+            .active_lease(instance_id)
+            .is_some_and(|lease| manual_claim(lease.kind()));
+        let newly = match lock(&self.resource_fences, HostLocation::FenceInstanceResources)?
+            .entry(instance_id)
+        {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(vacant) => {
+                vacant.insert(ResourceFence {
+                    cause: error.outcome().code().clone(),
+                    since_unix_ms,
+                    stage: if manual {
+                        FenceStage::Person
+                    } else {
+                        FenceStage::Pending
                     },
-                );
+                });
                 true
             }
         };

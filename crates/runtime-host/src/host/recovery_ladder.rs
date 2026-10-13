@@ -1381,7 +1381,7 @@ impl HostShared {
                         EventLinksDraft::default(),
                     )?
                 {
-                    failure.error = Box::new(fence);
+                    *failure.error = fence;
                     failure.poison_runtime = false;
                 }
                 if failure.poison_runtime || failure.error.is_fatal() {
