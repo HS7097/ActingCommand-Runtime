@@ -335,6 +335,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
 | The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
+| Each `gate_id` and `term_id` is a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`), the form of the `rule_id` a selection reason carries (`InvalidValue`). | `/gates/<j>/gate_id`, `/scoring/<k>/term_id` | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
 | Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
@@ -430,7 +431,7 @@ it was cancelled or paused during the capture, the record fails its own validati
 append fails), the task still fails with the original error and its code, on a manual and on
 a scheduled run alike. The host records the refusal when it happens, before the run's terminal
 events: one `runtime.failed` lifecycle record linked to the run, with stage
-`runtime.lifecycle.selection_record` and the refusal's own code and detail. The runtime is
+`runtime_lifecycle_selection_record` and the refusal's own code and detail. The runtime is
 poisoned when the refusal poisons it. Only when the ledger refuses that record as well does the
 host join the refusal to the run's failure as the related failure `selection_record` in its
 native detail, and poison the runtime. A capture failure its runtime cannot classify forbids
@@ -477,7 +478,7 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `input_sha256` | The evaluator's canonical identity of candidates, facts and instant, `sha256:<hex>`. |
 | `outcome`, `outcome_key`, `selected[]` | The decision, its resource-declared key and the chosen candidate IDs. |
 | `verdicts[]` | One breakdown per evaluated candidate: status, score, rank, gates, terms, reasons. |
-| `reasons[]` | The decision's reason chain, `{code, detail}`. |
+| `reasons[]` | The decision's reason chain, each reason's outcome (`code`, `category`, `values`; Workflow #378 A2-P). |
 | `confirmation` | How the confirmation frame compared, below. |
 
 `confirmation` is one of
@@ -511,7 +512,7 @@ and the evaluator is unchanged.
 | `TaskSelectionGateOutcome` | `GateOutcome` | tagged by `kind`: `passed`, `failed`, `unknown_substituted{reason, passes}`, `unknown_dropped{reason}` |
 | `TaskSelectionTermResult` | `TermResult` | `term_id`, `outcome`, `weight_milli`, `contribution_milli` |
 | `TaskSelectionTermOutcome` | `TermOutcome` | tagged by `kind`: `scored{transformed_milli}`, `unknown_substituted{reason, transformed_milli}`, `unknown_dropped{reason}` |
-| `PolicyReasonRecord` | `DecisionReason` | `code`, `detail` |
+| `PolicyReasonRecord` | `DecisionReason` | the reason's `outcome` (`code`, `category`, `values`); the `detail` is not recorded |
 
 The record takes the remaining decision fields under its own names: `policy_id` and
 `policy_sha256` into `policy`, `candidate_layout_id` as `layout_id`, `evaluated_at_unix_ms` as

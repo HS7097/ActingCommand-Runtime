@@ -78,7 +78,7 @@ impl MonitorRegistry {
                             error.record_outcome(),
                             actingcommand_contract::DiagnosticDetailDraft::new(
                                 "monitor_registry",
-                                "runtime.monitor.restore",
+                                HostLocation::RuntimeMonitorRestore,
                                 "runtime",
                                 error.operation(),
                             ),
@@ -882,7 +882,7 @@ mod tests {
             };
             let detail = failure.detail().expect("original monitor cause");
             assert_eq!(detail.category(), "monitor_registry");
-            assert_eq!(detail.stage(), "runtime.monitor.restore");
+            assert_eq!(detail.stage(), "runtime_monitor_restore");
             // Ledger revision 3: the original cause is the record's outcome; a detail carries
             // no message and no sensitivity, so a record without foreign text is internal.
             assert_eq!(failure.outcome().code().as_str(), "monitor_record_invalid");

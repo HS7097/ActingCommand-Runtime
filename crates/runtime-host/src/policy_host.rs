@@ -12,7 +12,7 @@ pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
 use crate::codes::HostLocation;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome, VocabularyToken};
 use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
 
@@ -39,11 +39,12 @@ use actingcommand_contract::{
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    CompletedActivityWindow, DecisionReason, DecisionReasonChain, DispatchIntent,
-    DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
-    InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS,
-    PolicyEvaluation, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, compile_catalog, evaluate_with_immediate_retries,
+    CompletedActivityWindow, DecisionReason, DecisionReasonChain, DetectionSuggestion,
+    DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources,
+    EvaluationTime, InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK,
+    MAX_TASK_LAST_DURATION_MS, PolicyEvaluation, SchedulingDecisionState, ScopeSelector,
+    TaskDecision, TaskRuntimeSnapshot, TaskTerminalState, compile_catalog,
+    evaluate_with_immediate_retries,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -246,7 +247,7 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) sampled_at_monotonic_ms: u64,
     /// Workflow #191 ps1: the deferral code of an operator scheduling pause covering the
     /// instance alias, if any.
-    pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<&'static str>,
+    pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<HostCode>,
     /// Workflow #369 W-1: what the instance's one queue shows as the cycle starts, if anything
     /// keeps a dispatch from it.
     pub(crate) instance_occupancy: &'a dyn Fn(&str) -> Option<InstanceOccupancy>,
@@ -705,10 +706,11 @@ fn eligibility_verdict(decision: &TaskDecision, in_flight: bool) -> EligibilityV
     }
     let waiting = match decision.state {
         SchedulingDecisionState::Eligible | SchedulingDecisionState::Selected => true,
-        SchedulingDecisionState::Deferred => decision
-            .reasons
-            .iter()
-            .any(|reason| reason.code == actingcommand_policy::PolicyCode::ScoreDeferred.as_str()),
+        SchedulingDecisionState::Deferred => decision.reasons.iter().any(|reason| {
+            reason
+                .outcome
+                .is(actingcommand_policy::PolicyCode::ScoreDeferred)
+        }),
         SchedulingDecisionState::Blocked => false,
     };
     if waiting && !in_flight {
@@ -1407,7 +1409,7 @@ impl PolicyHost {
                 // `ResumeScheduling` lifts it.
                 (Some(code), _) => Ok(CandidateEligibility::Deferred {
                     reason: DecisionReason {
-                        code: code.to_owned(),
+                        outcome: Outcome::new(code),
                         detail: "Runtime scheduling paused by the operator".to_owned(),
                     },
                     next_wake_unix_ms: None,
@@ -1417,7 +1419,10 @@ impl PolicyHost {
                 (None, Some(InstanceOccupancy::Held { holder_kind, count })) => {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            code: HostCode::DispatchInstanceHeld.as_str().to_owned(),
+                            outcome: Outcome::new(HostCode::DispatchInstanceHeld)
+                                .instance_id(intent.instance_id.as_str())
+                                .holder_kind(crate::error::ClaimKindToken(holder_kind))
+                                .count(count),
                             detail: format!("holder_kind={} count={count}", holder_kind.as_str()),
                         },
                         next_wake_unix_ms: None,
@@ -1427,7 +1432,9 @@ impl PolicyHost {
                 (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => {
                     Ok(CandidateEligibility::Deferred {
                         reason: DecisionReason {
-                            code: HostCode::DispatchInstanceCooldown.as_str().to_owned(),
+                            outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
+                                .instance_id(intent.instance_id.as_str())
+                                .next_eligible_unix_ms(until_unix_ms),
                             detail: format!("next_eligible_unix_ms={until_unix_ms}"),
                         },
                         next_wake_unix_ms: Some(until_unix_ms),
@@ -1445,11 +1452,8 @@ impl PolicyHost {
                         deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
-                                // Coordinator ruling 7 (acceptance H-L6): an unregistered
-                                // relayed spelling defers under its `raw_code`.
-                                code: actingcommand_contract::scheduled_failure_code(
-                                    &rejection.outcome,
-                                ),
+                                // The denial's own outcome: its host code with its values.
+                                outcome: rejection.outcome.clone(),
                                 detail: format!(
                                     "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
                                     rejection.budget, rejection.next_eligible_unix_ms
@@ -1615,7 +1619,9 @@ impl PolicyHost {
             ));
         }
         if reason_chain.reasons.iter().any(|reason| {
-            reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+            reason
+                .outcome
+                .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
         }) {
             self.control
                 .validate_immediate_retry(&active.compiled, intent, context.now_unix_ms)?;
@@ -1706,9 +1712,13 @@ impl PolicyHost {
         )
     }
 
-    /// Workflow #336 L6: the failure code and dispatch of a pair's latest failed execution,
-    /// while no success has followed it.
-    pub(crate) fn latest_failure(&self, task_id: &str, instance_id: &str) -> Option<(&str, &str)> {
+    /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
+    /// latest failed execution, while no success has followed it.
+    pub(crate) fn latest_failure(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<(Option<&str>, &str)> {
         self.control.latest_failure(task_id, instance_id)
     }
 
@@ -1739,7 +1749,9 @@ impl PolicyHost {
             intent,
             admission,
             reason_chain.reasons.iter().any(|reason| {
-                reason.code == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+                reason
+                    .outcome
+                    .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
             }),
         )?;
         // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
@@ -2614,8 +2626,9 @@ impl PolicyHost {
                         &intent,
                         &admission,
                         dispatch.data.reasons.iter().any(|reason| {
-                            reason.code
-                                == actingcommand_policy::PolicyCode::FailureRetryImmediate.as_str()
+                            reason
+                                .0
+                                .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
                         }),
                     )?;
                     dispatch.admission = Some(admission);
@@ -3067,7 +3080,7 @@ fn preview_detection_planning_signals(
                 instance_id: instance_id.to_owned(),
                 task_id: Some(decision.task_id.clone()),
                 kind,
-                fact_code: format!("{}.{}", suggestion.fact_key, suggestion.reason),
+                outcome: detection_outcome(suggestion)?,
                 observed_at_unix_ms: now_unix_ms,
                 detection_budget: Some(budget),
             };
@@ -3076,6 +3089,55 @@ fn preview_detection_planning_signals(
         }
     }
     Ok(signals)
+}
+
+/// The outcome of a detection planning signal (Workflow #378 A2-P): `planning_fact_unknown`
+/// with the suggestion's fact key and its reason as a token of the vocabulary `unknown_reason`.
+/// A reason the vocabulary does not list is a broken invariant of the policy evaluator.
+fn detection_outcome(suggestion: &DetectionSuggestion) -> RuntimeHostResult<Outcome> {
+    let token = UNKNOWN_REASON_TOKENS
+        .iter()
+        .copied()
+        .find(|token| *token == suggestion.reason)
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyDetectionReasonUnknown,
+                HostLocation::PlanPolicyDetection,
+            )
+        })?;
+    Ok(Outcome::new(HostCode::PlanningFactUnknown)
+        .fact_key(suggestion.fact_key.as_str())
+        .unknown_reason(UnknownReasonToken(token)))
+}
+
+/// The tokens of the catalog vocabulary `unknown_reason`.
+const UNKNOWN_REASON_TOKENS: [&str; 13] = [
+    "fact_missing",
+    "fact_expired",
+    "fact_stale",
+    "fact_low_confidence",
+    "fact_not_scalar",
+    // The vocabulary token shares the registered code's spelling.
+    SharedCode::TypeMismatch.as_str(),
+    "field_missing",
+    "resource_observation_missing",
+    "lookup_miss",
+    "dependency_state_missing",
+    "outcome_missing",
+    "outcome_expired",
+    "resource_outcome_missing",
+];
+
+/// A token of the catalog vocabulary `unknown_reason`.
+#[derive(Clone, Copy)]
+struct UnknownReasonToken(&'static str);
+
+impl VocabularyToken for UnknownReasonToken {
+    const VOCABULARY: &'static str = "unknown_reason";
+
+    fn token(self) -> &'static str {
+        self.0
+    }
 }
 
 fn matching_activity_profile<'a>(
@@ -3156,13 +3218,7 @@ fn event_data(
         package_digest: payload.package_digest().to_owned(),
         procedure_binding_digest: payload.procedure_binding_digest().to_owned(),
         reason_chain_id: payload.reason_chain_id().to_owned(),
-        reasons: payload
-            .reasons()
-            .iter()
-            .map(|reason| PolicyReasonRecord {
-                code: reason.code.clone(),
-            })
-            .collect(),
+        reasons: payload.reasons().to_vec(),
         catalog_hash: payload.catalog_hash().to_owned(),
         catalog_version: payload.catalog_version(),
         input_ledger_position: payload.input_ledger_position(),
@@ -3199,9 +3255,7 @@ fn dispatch_event_data(
         reasons: reason_chain
             .reasons
             .iter()
-            .map(|reason| PolicyReasonRecord {
-                code: reason.code.clone(),
-            })
+            .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
             .collect(),
         catalog_hash: intent.catalog_hash.clone(),
         catalog_version: intent.catalog_version,
@@ -3487,13 +3541,8 @@ fn execution_input_matches(outcome: &PolicyExecutionOutcome, input: &PolicyExecu
         (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Succeeded) => {
             failure.reported_success
         }
-        (
-            PolicyExecutionOutcome::Failed { failure },
-            PolicyExecutionInput::Failed { error_code, class },
-        ) => {
-            !failure.reported_success
-                && failure.error_code == *error_code
-                && failure.original_class == *class
+        (PolicyExecutionOutcome::Failed { failure }, PolicyExecutionInput::Failed { .. }) => {
+            !failure.reported_success && input.names_failure(failure)
         }
         _ => false,
     }

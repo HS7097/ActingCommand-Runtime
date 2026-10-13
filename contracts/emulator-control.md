@@ -87,26 +87,26 @@ before). After `stop` nothing reopens it; it opens on its next use.
 
 - Dispatches `MuMuManager.exe control -v <index> launch | shutdown` (no console window),
   bounded by `MUMU_MANAGER_CONTROL_TIMEOUT` = 60 s. A `restart` reaching it is refused before
-  any vendor command with the device stage `mumu_manager.restart_refused` (effect
+  any vendor command with the device stage `mumu_manager_restart_refused` (effect
   `not_performed`); the host never passes one (Workflow #381 B, coordinator answer D4). The vendor documents only the
   syntax: no return value, exit code, JSON or blocking behaviour. A non-zero exit
-  (`mumu_manager.control_exit`; the exit code equals `errcode` when an envelope is present) or
+  (`mumu_manager_control_exit`; the exit code equals `errcode` when an envelope is present) or
   an `{"errcode","errmsg"}` envelope with `errcode != 0` and exit 0
-  (`mumu_manager.control_errcode`) is a typed failure carrying the exit code and a bounded
+  (`mumu_manager_control_errcode`) is a typed failure carrying the exit code and a bounded
   (<= 1 KiB, control characters other than `\n` `\r` `\t` stripped) stdout+stderr summary.
   `{"errcode": 0, "errmsg": ""}` with exit 0 is the success acknowledgment (observed, below)
   and the readiness wait proceeds; an `errcode` of `0` is never read as a failure by any
-  `MuMuManager` reader. A spawn failure is `mumu_manager.run`; an expired 60 s bound is
-  `mumu_manager.timeout`.
+  `MuMuManager` reader. A spawn failure is `mumu_manager_run`; an expired 60 s bound is
+  `mumu_manager_timeout`.
 - Then polls `info -v <index>` every 1 s, each poll bounded by `MUMU_MANAGER_COMMAND_TIMEOUT`
   = 10 s, through the lax reader `read_instance_state` (`InstanceState`): the flat and the map
   shape are both accepted, `adb_port` and `player_state` may be absent (a stopped instance
   has neither), the booleans and a consistent `index` are required, `launch_err_code` /
   `launch_err_msg` default to `0` / empty when absent. A poll whose 10 s bound expires
-  (`mumu_manager.timeout`, observed while stopping) is no observation yet: the loop keeps
+  (`mumu_manager_timeout`, observed while stopping) is no observation yet: the loop keeps
   polling until the action deadline. Only an envelope with `errcode != 0`
-  (`mumu_manager.errcode` / `.entry` / `.exit`), a shape or other typed reader failure
-  (`.shape`, `.decode`, `.json`, `.output_bound`, `.run`) or `launch_err_code != 0` ends the
+  (`mumu_manager_errcode` / `_entry` / `_exit`), a shape or other typed reader failure
+  (`_shape`, `_decode`, `_json`, `_output_bound`, `_run`) or `launch_err_code != 0` ends the
   wait early.
 - Success: `start` when `is_process_started && is_android_started && adb_port != 0`; `stop`
   when `!is_process_started` and no vendor device process of the instance is left (below).
@@ -125,9 +125,9 @@ before). After `stop` nothing reopens it; it opens on its next use.
   `device_process_present` (`false`, or `unknown`); a failed stop carries `true` when its last
   listing still showed the device process, `unknown` otherwise. A stop's worst case is 60 s
   (`control`) + 120 s (wait) + 10 s (last poll) + 10 s (last listing) = 200 s.
-- Failure: `launch_err_code != 0` (`mumu_manager.launch_error`, carrying `launch_err_msg` in the
+- Failure: `launch_err_code != 0` (`mumu_manager_launch_error`, carrying `launch_err_msg` in the
   summary), an `info` refusal (its existing typed stages, an expired poll excepted) or the
-  deadline (`mumu_manager.wait_timeout`, carrying the last observed state, or `no observation`
+  deadline (`mumu_manager_wait_timeout`, carrying the last observed state, or `no observation`
   when every poll expired, and the count of expired polls).
 - `player_state` is undocumented: it is recorded opaquely and never branched on.
 - The hidden `api` subcommand is never dispatched.
@@ -143,7 +143,7 @@ the Stop with `MUMU_MANAGER_STATE_WAIT_STOP`, the Start with `MUMU_MANAGER_STATE
 the vendor's `restart` verb is never dispatched (the 10-09 incident: the vendor's self-restart
 of its shell was lost when that shell's own shutdown hung, and the instance stayed stopped).
 
-- The Start follows a confirmed Stop, or a Stop that ended in `mumu_manager.wait_timeout`. After
+- The Start follows a confirmed Stop, or a Stop that ended in `mumu_manager_wait_timeout`. After
   any other Stop failure (`control_exit`, `control_errcode`, `run`, `launch_error` and every
   other stage) no Start is dispatched.
 - A restart succeeds only when both phases are confirmed; it then ends exactly as a successful
@@ -201,7 +201,7 @@ receipt state `denied`):
 Explicit entries and fixture instances are never pending. The registry keeps one last typed
 guard so nothing can bypass the host checks: `open_input`, `open_capture` and
 `control_application` on a pending entry fail with a device error at stage
-`adb.endpoint_pending` (category `protocol`).
+`adb_endpoint_pending` (category `protocol`).
 
 Emulator control itself works on a pending instance: its claim, the fence and the close-before
 step do not require a bound endpoint (Workflow #369 Q-2a). After a successful Start (a `start`, or a restart's Start phase), still
@@ -264,9 +264,9 @@ represents that instance from then on; older events keep the port they were reco
 
 The registry (`ExecutionBackendRegistry::control_instance`) serves discovery-bound entries only,
 using the `MuMuManager.exe` path carried on the `DiscoveredInstanceBinding`; an explicit entry
-refuses with `emulator_control.unavailable` (host code `emulator_control_unavailable`,
+refuses with `emulator_control_binding` (host code `emulator_control_unavailable`,
 `invalid_request`, `denied`), a fixture instance likewise, and a provider without a control
-surface keeps the trait default `emulator_control.unsupported`
+surface keeps the trait default `emulator_control_support`
 (`emulator_control_unsupported`). No device session is opened or touched by the registry path.
 
 ## Event shape
@@ -296,8 +296,9 @@ Every request is recorded intent -> result, all linked to the instance:
    `raw_os_error` = the tool exit code, `native_detail` = the bounded vendor output
    (Sensitive) and a primary detail `{category, stage, backend: mumu_manager, operation:
    control_instance}` declared Sensitive, where `stage` is the typed step
-   (`mumu_manager.control_exit`, `.control_errcode`, `.launch_error`, `.wait_timeout`, `.run`,
-   `.timeout`, `.path`, an `info` reader stage, `emulator_control.unavailable`, `.unsupported`).
+   (`mumu_manager_control_exit`, `_control_errcode`, `_launch_error`, `_wait_timeout`, `_run`,
+   `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
+   `emulator_control_support`).
    The primary detail's message carries `key=value` tokens: the stage, exit status, elapsed
    time and last state of the failure, and for a stop `device_process_present`.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
@@ -305,7 +306,8 @@ Every request is recorded intent -> result, all linked to the instance:
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
    `emulator_restart_start_failed` the primary detail's stage, the exit code and the native
    detail are the failing phase's, and the message carries the tokens `restart_phase=stop|start`,
-   `stop_result=confirmed|<the Stop's device stage, last part>`, `stop_elapsed_ms`,
+   `stop_result=confirmed|<the token the host's stop-result table gives the Stop's stage>`
+   (vocabulary `emulator_stop_result`, Workflow #378 A2-P), `stop_elapsed_ms`,
    `start_dispatched`, `start_elapsed_ms` (when the Start ran), `process_started`,
    `android_started`, `adb_port_present` (the last state, when known: the Start's success, or
    the state read after the failing phase, or its last observation), `device_process_present`
@@ -416,7 +418,7 @@ that belongs to emulator control:
 
 A scheduled (policy) contained task run on a physical instance whose
 `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`
-for `outcome_relay_unregistered`, `scheduled_failure_code`) is `contained_task_page_unknown`, any
+for `outcome_relay_unregistered`, `scheduled_failure_code_str`) is `contained_task_page_unknown`, any
 `contained_task_recovery_*` code or any `contained_task_home_recovery_*` code (entry recovery /
 return home failed, for example `contained_task_home_recovery_persistently_non_home`) starts a
 recovery ladder for the instance, unless the
@@ -722,7 +724,7 @@ discover_instances}` is a controlled template declared Sensitive. Host operation
 
 | Provider refusal | Host code | Projection | Receipt |
 | --- | --- | --- | --- |
-| `instance_discovery_unavailable`, stage `instance_discovery.unsupported` (no discovery surface) | `instance_discovery_unavailable` | `invalid_request` | `denied` |
+| `instance_discovery_unavailable`, stage `instance_discovery_unsupported` (no discovery surface) | `instance_discovery_unavailable` | `invalid_request` | `denied` |
 | `instance_discovery_unavailable`, any other stage (no install, tool spawn, exit, timeout, decode, JSON) | `instance_discovery_unavailable` | `backend_operation_failed` | `failed` |
 | `mumu_manager_version_unsupported` | `mumu_manager_version_unsupported` | `backend_operation_failed` | `failed` |
 | An answer the contract refuses (duplicate index, empty or over-long name) | `instance_discovery_unavailable` | `backend_operation_failed` | `failed` |

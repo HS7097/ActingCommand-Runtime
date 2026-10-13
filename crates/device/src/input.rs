@@ -93,11 +93,11 @@ pub fn segmented_swipe_capability_error() -> DeviceError {
     DeviceError::fatal("selected input backend does not support segmented swipe")
         .with_diagnostic(
             crate::DeviceErrorCategory::Protocol,
-            "input.segmented_swipe.capability",
+            crate::codes::DeviceStage::InputSegmentedSwipeCapability.location(),
         )
         .with_diagnostic_context(
             "input_backend",
-            crate::DeviceLocation::SegmentedSwipe.as_str(),
+            crate::DeviceLocation::SegmentedSwipe,
             crate::DeviceErrorSensitivity::Internal,
         )
         .with_diagnostic_message(

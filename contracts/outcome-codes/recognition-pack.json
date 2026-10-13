@@ -260,6 +260,132 @@
       "description": "The exact score map of a template target that declares unique was not complete within the search limit timeout_ms (Workflow #396 REC-2). An evaluation error: the target never passes on a partial search.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recognition_pack_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition pack's package or target declaration is invalid, or a recognition evaluation failed without a more specific code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_target_unsupported": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition target declares semantics this build cannot evaluate.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A recognition target needs a vision provider that is not configured.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The vision provider failed while a recognition target was evaluated.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_provider_response_invalid": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The vision provider answered a recognition target's request with an invalid response.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ocr_region_unresolved": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An OCR target's region could not be resolved on the frame: its anchor did not match, or the region lies outside the frame.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recognition_pack_text_read_refused": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A text read refused to conclude because its read budget ran out; the error's own outcome names the budget.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

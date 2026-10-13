@@ -667,6 +667,49 @@ fn event_type_category(event_type: EventType) -> Option<crate::outcome::Category
     categories.get(token.as_str()?).copied()
 }
 
+/// An event type is a token of the catalog vocabulary `event_type` (Workflow #378 A2-P, M378
+/// section 2.1): the value `event_type` names one, for example the type of a rejected
+/// performance event.
+impl crate::outcome::VocabularyToken for EventType {
+    const VOCABULARY: &'static str = "event_type";
+
+    /// The type's serde spelling, as the catalog this build embeds lists it. The guard (G7)
+    /// keeps the vocabulary equal to the serde spellings, so a type the catalog does not list
+    /// is a build defect: it panics, naming the type, as [`EventType::category`] does.
+    fn token(self) -> &'static str {
+        event_type_token(self).unwrap_or_else(|| {
+            panic!("the embedded outcome catalog does not list the event type {self:?}")
+        })
+    }
+}
+
+/// The catalog token of an event type: the catalog's own `&'static` spelling whose serde
+/// reading is the type.
+fn event_type_token(event_type: EventType) -> Option<&'static str> {
+    use std::sync::OnceLock;
+    static TOKENS: OnceLock<Vec<(EventType, &'static str)>> = OnceLock::new();
+    let tokens = TOKENS.get_or_init(|| {
+        let catalog = crate::outcome::catalog_json()
+            .unwrap_or_else(|error| panic!("the embedded outcome catalog does not parse: {error}"));
+        catalog
+            .pointer("/vocabularies/event_type/tokens")
+            .and_then(serde_json::Value::as_object)
+            .expect("the embedded outcome catalog lists the event_type vocabulary")
+            .keys()
+            .filter_map(|token| {
+                let event_type =
+                    serde_json::from_value::<EventType>(serde_json::Value::String(token.clone()))
+                        .ok()?;
+                Some((event_type, token.as_str()))
+            })
+            .collect()
+    });
+    tokens
+        .iter()
+        .find(|(listed, _)| *listed == event_type)
+        .map(|(_, token)| *token)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventSource {

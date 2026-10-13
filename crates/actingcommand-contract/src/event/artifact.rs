@@ -221,23 +221,23 @@ pub struct TaskDiagnosticTargetFailure {
     pub cause: TaskDiagnosticRecognitionError,
 }
 
-/// A recognition error: its severity and code as the recognition pack names them (A2-P
-/// registers these spellings); its text is not persisted (ledger revision 3).
+/// A recognition error: its outcome, region, timing and sample; its text is not persisted
+/// (ledger revision 3), and its category replaces the copied severity (Workflow #378 A2-P,
+/// M378 section 8.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDiagnosticRecognitionError {
-    pub severity: String,
-    pub code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Box<crate::OcrRegionEvidence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<super::TemplateMatchTimingObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<Box<TaskDiagnosticSampleData>>,
-    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude
-    /// (`text_read_budget_exceeded`, `text_read_blocks_truncated`); absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<crate::outcome::Outcome>,
+    /// The error's outcome: the registered outcome of an evaluation that refused to conclude
+    /// (Workflow #396 REC-1 `text_read_budget_exceeded`, `text_read_blocks_truncated`; REC-2
+    /// `target_match_search_incomplete`), else the recognition pack's registered code of the
+    /// error (`recognition_pack_invalid`, `ocr_region_unresolved`, ...).
+    pub outcome: crate::outcome::Outcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

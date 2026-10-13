@@ -105,7 +105,8 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
         .with_cause(Some(cause));
         let detail = DiagnosticDetailDraft::new(
             "runtime_lifecycle",
-            "runtime.lifecycle.session_close",
+            actingcommand_contract::outcome::Location::relayed("runtime_lifecycle_session_close")
+                .expect("registered stage"),
             "runtime_host",
             operation,
         );
@@ -228,7 +229,10 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
             Outcome::relayed("capture_backend_close_failed"),
             DiagnosticDetailDraft::new(
                 "runtime_lifecycle",
-                "runtime.lifecycle.session_close",
+                actingcommand_contract::outcome::Location::relayed(
+                    "runtime_lifecycle_session_close",
+                )
+                .expect("registered stage"),
                 "runtime_host",
                 "close_execution_session",
             ),
@@ -618,7 +622,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             Outcome::relayed(code),
             DiagnosticDetailDraft::new(
                 "fixture_category",
-                "fixture.stage",
+                crate::LedgerLocation::AppendEvent.location(),
                 "fixture_backend",
                 "fixture_operation",
             ),
@@ -1517,7 +1521,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     let damaged_tree = tree_bytes(state_root);
     let damaged = evidence(0, None, 1024);
     assert!(!damaged.failures.is_empty());
-    assert!(damaged.gaps.contains(&"artifact_verification_failed"));
+    assert!(damaged.gaps.contains(&"artifact_unverifiable"));
     assert_eq!(tree_bytes(state_root), damaged_tree);
     fs::write(before.path(), saved_frame).unwrap();
     append_bytes(&latest_segment(&ledger_root), b"damaged-tail");

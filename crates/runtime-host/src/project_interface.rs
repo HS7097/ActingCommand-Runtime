@@ -364,7 +364,7 @@ fn project_decision(decision: PolicyDispatchProjection) -> ProjectDecisionView {
             .data
             .reasons
             .into_iter()
-            .map(|reason| reason.code)
+            .map(|reason| reason.0.code().as_str().to_owned())
             .collect(),
         urgency_milli: decision.data.urgency_milli,
     }

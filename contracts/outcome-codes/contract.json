@@ -15968,6 +15968,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operation several owners name with one meaning (contract-owned, A2a D3): read suspension config."
+    },
+    "instance_discovery_unsupported": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of an instance discovery refusal: the execution backend provider has no discovery surface (the kernel's default and the host's registry emit it)."
+    },
+    "application_foreground_unsupported": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a foreground application observation refusal: the execution backend provider has no ADB baseline (the kernel's default and the host's fixture emit it)."
+    },
+    "resource_declaration_prepare": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a resource declaration rejection: preparing the contained task's declared resources."
     }
   }
 }

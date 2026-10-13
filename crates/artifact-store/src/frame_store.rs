@@ -346,9 +346,14 @@ impl MemoryBudget {
 #[allow(dead_code)]
 pub enum RecognitionState {
     Pending,
-    Matched { page_id: String },
+    Matched {
+        page_id: String,
+    },
     CompletedNoMatch,
-    Failed { reason: String },
+    /// Recognition failed; `code` is the failure's registered code (Workflow #378 A2-P).
+    Failed {
+        code: Code,
+    },
 }
 
 impl RecognitionState {
@@ -392,7 +397,7 @@ impl RecognitionState {
             Self::Pending => json!({"state": "pending"}),
             Self::Matched { page_id } => json!({"state": "matched", "page_id": page_id}),
             Self::CompletedNoMatch => json!({"state": "completed_no_match"}),
-            Self::Failed { reason } => json!({"state": "failed", "reason": reason}),
+            Self::Failed { code } => json!({"state": "failed", "reason": code.as_str()}),
         }
     }
 }
@@ -1701,13 +1706,7 @@ fn estimate_entry(input: &FrameStoreFrameInput) -> CliOutcome<ResidentEstimate> 
             .recognition_state
             .page_id()
             .map(string_capacity_bytes)
-            .unwrap_or(0)
-        + match &input.recognition_state {
-            RecognitionState::Failed { reason } => string_capacity_bytes(reason),
-            RecognitionState::Pending
-            | RecognitionState::Matched { .. }
-            | RecognitionState::CompletedNoMatch => 0,
-        };
+            .unwrap_or(0);
     let thumbnail = (THUMB_WIDTH * THUMB_HEIGHT) as u64;
     let encoder_workspace = input
         .frame
@@ -1917,7 +1916,8 @@ mod tests {
             1,
             10,
             RecognitionState::Failed {
-                reason: "synthetic failure".to_string(),
+                code: actingcommand_contract::codes::SharedCode::ContainedTaskRecognitionFailed
+                    .code(),
             },
             "initial",
         );
@@ -1926,7 +1926,8 @@ mod tests {
             2,
             10,
             RecognitionState::Failed {
-                reason: "synthetic failure".to_string(),
+                code: actingcommand_contract::codes::SharedCode::ContainedTaskRecognitionFailed
+                    .code(),
             },
             "page_wait",
         );

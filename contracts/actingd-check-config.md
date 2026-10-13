@@ -109,7 +109,7 @@ reported as described, but nothing uses them until they are retired.
   count again. One failure more than `retry_limit` in a row writes
   `policy_monitor_retries_exhausted` (error, the same values without `retry_after_ms`) and
   stops the daemon with that request's failure, as before: `runtime.failed` at stage
-  `runtime.lifecycle.policy_monitor` and the `FATAL actingd: monitor:` line. `0` retries
+  `runtime_lifecycle_policy_monitor` and the `FATAL actingd: monitor:` line. `0` retries
   nothing.
 - `retry_backoff_ms` (default `1000`, range `1..=600000`) and `retry_backoff_max_ms` (default
   `30000`, range `retry_backoff_ms..=600000`; when absent, at least `retry_backoff_ms`): the
@@ -121,7 +121,7 @@ Every other failure of the monitor's request stops the daemon at once, as before
 a connection that reaches a Runtime other than the one the daemon hosts (another owner epoch
 or process id in the runtime info file): `policy_monitor_runtime_identity_changed`. Dropping
 the timed-out connection may make the Runtime record its own `runtime.failed` (stage
-`runtime.ipc.request_read`) when its late answer finds the connection closed. A value outside
+`runtime_ipc_request_read`) when its late answer finds the connection closed. A value outside
 its range fails with `policy_monitor_config_invalid`, stage `assemble`; unknown fields are
 refused as everywhere else. With a `policy` section the manifest carries
 `policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
@@ -941,7 +941,7 @@ three shapes:
   resolution reason (`installation_absent`, `installation_ambiguous`,
   `candidate_absent`, `candidate_outside_root`, `registry_entry_invalid`,
   `registry_source_unavailable`), else its diagnostic `<category>.<stage>`
-  (for example `native.mumu_manager.registry`), else `device_error` (for
+  (for example `native.mumu_manager_registry`), else `device_error` (for
   example a root path that cannot be canonicalized). Only the resolution
   reason matches what a startup discovery refusal records. Since ledger
   revision 3 (Workflow #378 A3) startup records `provider_native_failed` in

@@ -78,10 +78,17 @@ pub struct RecognitionPackDiagnosticsResponse {
     pub unsupported_targets: Vec<UnsupportedRecognitionTargetResponse>,
 }
 
+/// A template target with recognition semantics this build cannot evaluate (Workflow #378
+/// A2-P: typed members replace the English `reason`).
 #[derive(Debug, Clone, Serialize)]
 pub struct UnsupportedRecognitionTargetResponse {
     pub id: String,
-    pub reason: String,
+    /// The declared matching method in the pack spelling (`rgb_count`, `hsv_count`), when it
+    /// is not `ncc`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<actingcommand_recognition_pack::RecognitionMethod>,
+    /// Whether the target declares a mask.
+    pub mask: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

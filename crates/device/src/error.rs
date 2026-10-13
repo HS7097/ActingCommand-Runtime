@@ -3,6 +3,7 @@
 use crate::{AdbInputBoundsContext, NemuConfiguredAdbClass, NemuResolutionContext};
 use actingcommand_contract::ResourceDispositionScope;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::Location;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -449,11 +450,11 @@ impl DeviceErrorCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceErrorDiagnostic {
     category: DeviceErrorCategory,
-    stage: &'static str,
+    stage: Location,
 }
 
 impl DeviceErrorDiagnostic {
-    pub const fn new(category: DeviceErrorCategory, stage: &'static str) -> Self {
+    pub const fn new(category: DeviceErrorCategory, stage: Location) -> Self {
         Self { category, stage }
     }
 
@@ -461,7 +462,7 @@ impl DeviceErrorDiagnostic {
         self.category
     }
 
-    pub const fn stage(self) -> &'static str {
+    pub const fn stage(self) -> Location {
         self.stage
     }
 }
@@ -469,7 +470,7 @@ impl DeviceErrorDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceErrorContext {
     backend: String,
-    operation: String,
+    operation: Location,
     declared_sensitivity: DeviceErrorSensitivity,
 }
 
@@ -478,8 +479,8 @@ impl DeviceErrorContext {
         &self.backend
     }
 
-    pub fn operation(&self) -> &str {
-        &self.operation
+    pub const fn operation(&self) -> Location {
+        self.operation
     }
 
     pub const fn declared_sensitivity(&self) -> DeviceErrorSensitivity {
@@ -779,8 +780,12 @@ impl DeviceError {
         }
     }
 
-    pub fn with_diagnostic(mut self, category: DeviceErrorCategory, stage: &'static str) -> Self {
-        self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
+    pub fn with_diagnostic(
+        mut self,
+        category: DeviceErrorCategory,
+        stage: impl Into<Location>,
+    ) -> Self {
+        self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage.into()));
         self
     }
 
@@ -1114,10 +1119,10 @@ impl DeviceError {
     pub fn with_diagnostic_if_absent(
         mut self,
         category: DeviceErrorCategory,
-        stage: &'static str,
+        stage: impl Into<Location>,
     ) -> Self {
         if self.diagnostic.is_none() {
-            self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
+            self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage.into()));
         }
         self
     }
@@ -1125,7 +1130,7 @@ impl DeviceError {
     pub fn with_diagnostic_context(
         mut self,
         backend: impl Into<String>,
-        operation: impl Into<String>,
+        operation: impl Into<Location>,
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
         self.context = Some(Box::new(DeviceErrorContext {
@@ -1139,7 +1144,7 @@ impl DeviceError {
     pub fn with_diagnostic_context_if_absent(
         mut self,
         backend: impl Into<String>,
-        operation: impl Into<String>,
+        operation: impl Into<Location>,
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
         if self.context.is_none() {

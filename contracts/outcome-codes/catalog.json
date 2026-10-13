@@ -1577,6 +1577,14 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "event_type": {
+      "type": "vocab:event_type",
+      "description": "A ledger event type, for example the type of a performance event the contract rejected."
+    },
+    "resource_target_id": {
+      "type": "token",
+      "description": "The id of a resource target in an instance's resource-targets document."
+      },
     "argument": {
       "type": "name",
       "description": "The name of a command-line flag or of an MCP tool or request argument, as given."
@@ -2508,6 +2516,18 @@
         },
         "lookup_miss": {
           "description": "No lookup entry covers the value and the transform declares no default."
+        },
+        "dependency_state_missing": {
+          "description": "No terminal state is recorded for the task a predicate depends on."
+        },
+        "outcome_missing": {
+          "description": "No result is recorded under the task's outcome key."
+        },
+        "outcome_expired": {
+          "description": "The result recorded under the task's outcome key has expired."
+        },
+        "resource_outcome_missing": {
+          "description": "No result is recorded for the resource a pool reads from a task's outcome."
         }
       }
     },
@@ -4242,64 +4262,64 @@
       }
     },
     "emulator_stop_result": {
-      "description": "How the Stop phase of an emulator restart ended: confirmed, or the device stage it failed at (the stage's last part).",
+      "description": "How the Stop phase of an emulator restart ended: confirmed, or the token the host's stop-result table gives the stage the Stop failed at.",
       "tokens": {
         "confirmed": {
           "description": "The Stop was confirmed."
         },
         "control": {
-          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager.control)."
+          "description": "The Stop failed without a device diagnostic, at the default control stage (mumu_manager_control)."
         },
         "control_exit": {
-          "description": "The shutdown command exited non-zero (mumu_manager.control_exit)."
+          "description": "The shutdown command exited non-zero (mumu_manager_control_exit)."
         },
         "control_errcode": {
-          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager.control_errcode)."
+          "description": "The shutdown command answered an errcode envelope with errcode not 0 (mumu_manager_control_errcode)."
         },
         "launch_error": {
-          "description": "info reported launch_err_code not 0 (mumu_manager.launch_error)."
+          "description": "info reported launch_err_code not 0 (mumu_manager_launch_error)."
         },
         "wait_timeout": {
-          "description": "The readiness wait for the stopped state expired (mumu_manager.wait_timeout)."
+          "description": "The readiness wait for the stopped state expired (mumu_manager_wait_timeout)."
         },
         "run": {
-          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager.run)."
+          "description": "MuMuManager could not be started, or a poll could not run (mumu_manager_run)."
         },
         "timeout": {
-          "description": "The shutdown command passed its bound (mumu_manager.timeout)."
+          "description": "The shutdown command passed its bound (mumu_manager_timeout)."
         },
         "path": {
-          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager.path)."
+          "description": "The MuMuManager path is not valid UTF-8 (mumu_manager_path)."
         },
         "errcode": {
-          "description": "An info poll answered an errcode envelope (mumu_manager.errcode)."
+          "description": "An info poll answered an errcode envelope (mumu_manager_errcode)."
         },
         "entry": {
-          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager.entry)."
+          "description": "An info poll's instance entry carried an errcode envelope (mumu_manager_entry)."
         },
         "exit": {
-          "description": "An info poll exited non-zero (mumu_manager.exit)."
+          "description": "An info poll exited non-zero (mumu_manager_exit)."
         },
         "shape": {
-          "description": "An info poll answered an unexpected shape (mumu_manager.shape)."
+          "description": "An info poll answered an unexpected shape (mumu_manager_shape)."
         },
         "decode": {
-          "description": "An info poll's output is not UTF-8 (mumu_manager.decode)."
+          "description": "An info poll's output is not UTF-8 (mumu_manager_decode)."
         },
         "json": {
-          "description": "An info poll's output is not JSON (mumu_manager.json)."
+          "description": "An info poll's output is not JSON (mumu_manager_json)."
         },
         "output_bound": {
-          "description": "An info poll's output passed its bound (mumu_manager.output_bound)."
+          "description": "An info poll's output passed its bound (mumu_manager_output_bound)."
         },
         "unavailable": {
-          "description": "The instance has no MuMuManager binding (emulator_control.unavailable)."
+          "description": "The instance has no MuMuManager binding (emulator_control_binding)."
         },
         "unsupported": {
-          "description": "The provider has no instance control (emulator_control.unsupported)."
+          "description": "The provider has no instance control (emulator_control_support)."
         },
         "unregistered": {
-          "description": "The instance is not registered with the provider (emulator_control.unregistered)."
+          "description": "The instance is not registered with the provider (emulator_control_registration)."
         }
       }
     },
@@ -7488,6 +7508,12 @@
     ],
     "interrupt_": [
       "runtime-host"
+    ],
+    "environment_value_": [
+      "execution-kernel"
+    ],
+    "recognition_pack_": [
+      "recognition-pack"
     ],
     "instances_": [
       "actingctl"

@@ -1011,7 +1011,8 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                     expected_class.expect("failure class"),
                     "{case}: today's class"
                 );
-                assert_eq!(failure.error_code, code.as_str());
+                assert_eq!(failure.outcome.code(), code);
+                assert_eq!(failure.failure_identity, None);
                 match &recovered_task_failure_code {
                     Some(expected) => assert_eq!(
                         code, expected,
@@ -1021,7 +1022,11 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                 }
             }
             ("lease-expired", PolicyExecutionOutcome::Failed { failure }) => {
-                assert_eq!(failure.error_code, "policy_settlement_interrupted");
+                assert_eq!(
+                    failure.outcome.code().as_str(),
+                    "policy_settlement_interrupted"
+                );
+                assert_eq!(failure.failure_identity, None);
                 assert_eq!(failure.original_class, PolicyFailureClass::Severe);
                 assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
                 assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);

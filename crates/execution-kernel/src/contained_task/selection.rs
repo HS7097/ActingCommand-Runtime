@@ -530,14 +530,12 @@ fn record_outcome(outcome: &SelectionOutcome) -> Result<TaskSelectionOutcome, Co
     }
 }
 
-/// The record's reason chain (ledger revision 3): each reason's code; the evaluator's English
-/// `detail` stays out of the record.
+/// The record's reason chain (ledger revision 3): each reason's outcome, its code with its
+/// values; the evaluator's English `detail` stays out of the record.
 fn record_reasons(reasons: &[DecisionReason]) -> Vec<PolicyReasonRecord> {
     reasons
         .iter()
-        .map(|reason| PolicyReasonRecord {
-            code: reason.code.clone(),
-        })
+        .map(|reason| PolicyReasonRecord(reason.outcome.clone()))
         .collect()
 }
 

@@ -5,7 +5,7 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
-use actingcommand_contract::outcome::Location;
+use actingcommand_contract::outcome::{Location, Outcome};
 
 /// Every `ArtifactVerified` reference read so far, in ledger order (Workflow #317 item C).
 /// The first read after start reads every verified event; each later read starts after the
@@ -650,7 +650,7 @@ impl HostShared {
                     instance.goal_id.as_str(),
                     instance.instance_id.as_str(),
                     actingcommand_contract::PolicyPlanningSignalKind::FeasibilityRed,
-                    "strategic.feasibility_red",
+                    HostCode::StrategicFeasibilityRed,
                 ));
             }
             if instance.shortfall.is_some_and(|shortfall| shortfall > 0)
@@ -660,12 +660,12 @@ impl HostShared {
                     instance.goal_id.as_str(),
                     instance.instance_id.as_str(),
                     actingcommand_contract::PolicyPlanningSignalKind::TimelineReached,
-                    "strategic.timeline_reached",
+                    HostCode::StrategicTimelineReached,
                 ));
             }
         }
         signals.sort_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)));
-        for (goal_id, instance_id, kind, fact_code) in signals {
+        for (goal_id, instance_id, kind, code) in signals {
             let identity =
                 serde_json::to_vec(&(report.report_id(), goal_id, instance_id, kind.as_str()))
                     .map_err(|_| {
@@ -680,7 +680,7 @@ impl HostShared {
                 instance_id: instance_id.to_owned(),
                 task_id: None,
                 kind,
-                fact_code: fact_code.to_owned(),
+                outcome: Outcome::new(code),
                 observed_at_unix_ms: report.as_of_unix_ms(),
                 detection_budget: None,
             })?;

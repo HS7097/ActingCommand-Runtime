@@ -67,15 +67,18 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         let primary_text =
             "child_operation=screen_size; source_error=private synthetic input failure";
         let primary = DeviceError::transient(primary_text)
-            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                actingcommand_device::codes::DeviceStage::AdbInputBoundsValidate.location(),
+            )
             .with_diagnostic_context(
                 "adb_shell_input",
                 if open_failure {
-                    "bounds_validate"
+                    actingcommand_device::codes::DeviceLocation::BoundsValidate
                 } else if contained {
-                    "tap"
+                    actingcommand_device::codes::DeviceLocation::InputTap
                 } else {
-                    "reset"
+                    actingcommand_device::codes::DeviceLocation::InputReset
                 },
                 DeviceErrorSensitivity::Sensitive,
             )
@@ -217,7 +220,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         };
         let detail = outcome.detail().expect("primary detail");
         assert_eq!(detail.category(), "protocol");
-        assert_eq!(detail.stage(), "adb.input.bounds_validate");
+        assert_eq!(detail.stage(), "adb_input_bounds_validate");
         assert_eq!(detail.backend(), "adb_shell_input");
         // Ledger revision 3 (#378 A3): a failed close is the outcome's `cleanup` link.
         assert_eq!(
@@ -332,10 +335,13 @@ fn input_failure_persists_adb_bounds_context() {
             .to_owned();
         *state.input_error.lock().expect("input error") = Some(
             error
-                .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    actingcommand_device::codes::DeviceStage::AdbInputBoundsValidate.location(),
+                )
                 .with_diagnostic_context(
                     "adb_shell_input",
-                    "tap",
+                    actingcommand_device::codes::DeviceLocation::InputTap,
                     DeviceErrorSensitivity::Sensitive,
                 ),
         );
@@ -454,9 +460,9 @@ fn input_failure_persists_adb_bounds_context() {
             assert!(!full.contains(&expected_message));
         }
         assert_eq!(detail.category(), "protocol");
-        assert_eq!(detail.stage(), "adb.input.bounds_validate");
+        assert_eq!(detail.stage(), "adb_input_bounds_validate");
         assert_eq!(detail.backend(), "adb_shell_input");
-        assert_eq!(detail.operation(), "tap");
+        assert_eq!(detail.operation(), "input_tap");
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 0);
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
@@ -524,9 +530,9 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
         .diagnostic_detail()
         .expect("kernel input detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.input.operation");
+    assert_eq!(detail.stage().as_str(), "device_registry_input_operation");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation(), "reset");
+    assert_eq!(detail.operation(), "input_reset");
     // Ledger revision 3 (#378 A3): the device's text left the detail; it is the error's native
     // detail, recorded as a sensitive foreign `raw_text`.
     let native = kernel_error.native_detail().expect("device text");
@@ -644,9 +650,9 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     };
     let detail = outcome.detail().expect("stored input diagnostic detail");
     assert_eq!(detail.category(), "native");
-    assert_eq!(detail.stage(), "device_registry.input.operation");
+    assert_eq!(detail.stage(), "device_registry_input_operation");
     assert_eq!(detail.backend(), "adb_shell_input");
-    assert_eq!(detail.operation(), "reset");
+    assert_eq!(detail.operation(), "input_reset");
     let device_text = outcome_with_raw_text(outcome.outcome(), "injected backend failure")
         .expect("device text on a foreign link");
     assert_eq!(

@@ -633,11 +633,10 @@ impl GlobalLedgerError {
         }
     }
 
-    /// A fatal failure that relays another ledger failure's code, or names an operation the
-    /// failing input supplies (a contract field name). Both stay spelled as they came: a ledger
-    /// failure's code can be a transaction work code of the runtime host until slice A2b types
-    /// those, and a field-named operation carries data, which slice A2-P splits into a fixed
-    /// location and a value (Workflow #378).
+    /// A fatal failure that relays another ledger failure's code and operation, spelled as they
+    /// came: a transaction work error's code and operation can be the runtime host's until the
+    /// ledger and host channels take `Code` and `Location` together (the A2b/A2c merge
+    /// follow-up, Workflow #378).
     pub(crate) fn relayed_fatal(
         relayed_code: &'static str,
         relayed_operation: &'static str,

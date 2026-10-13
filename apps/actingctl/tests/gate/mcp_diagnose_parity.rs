@@ -242,7 +242,7 @@ impl Ledger {
                 ALIAS_A,
                 POLICY_TASK,
                 PolicyExecutionOutcome::Failed {
-                    failure: policy_failure(PAGE_UNKNOWN.as_str(), false),
+                    failure: policy_failure(PAGE_UNKNOWN, false),
                 },
             ),
         );
@@ -262,7 +262,7 @@ impl Ledger {
                 ALIAS_B,
                 POLICY_TASK,
                 PolicyExecutionOutcome::Failed {
-                    failure: policy_failure(PAGE_UNKNOWN.as_str(), true),
+                    failure: policy_failure(PAGE_UNKNOWN, true),
                 },
             ),
         );
@@ -329,7 +329,8 @@ impl Ledger {
                 Outcome::relayed(RELAYED_RUNTIME_CODE),
                 DiagnosticDetailDraft::new(
                     "runtime_lifecycle",
-                    "runtime.lifecycle.session_close",
+                    actingcommand_runtime_host::HostLocation::RuntimeLifecycleSessionClose
+                        .location(),
                     "runtime_host",
                     "close_execution_session",
                 ),
@@ -525,14 +526,15 @@ fn policy_execution(alias: &str, task: &str, outcome: PolicyExecutionOutcome) ->
 }
 
 /// A failure the policy recorded: recoverable and continuing, or severe and pausing the task.
-fn policy_failure(error_code: &str, paused: bool) -> PolicyFailureRecord {
+fn policy_failure(failure: SharedCode, paused: bool) -> PolicyFailureRecord {
     let class = if paused {
         PolicyFailureClass::Severe
     } else {
         PolicyFailureClass::Recoverable
     };
     PolicyFailureRecord {
-        error_code: error_code.to_owned(),
+        outcome: Outcome::new(failure),
+        failure_identity: None,
         reported_success: false,
         original_class: class,
         effective_class: class,
@@ -706,9 +708,7 @@ fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventDat
         package_digest: placeholder('a').into(),
         procedure_binding_digest: placeholder('b'),
         reason_chain_id: "reasons.diag.scheduled".to_owned(),
-        reasons: vec![PolicyReasonRecord {
-            code: "scheduled".to_owned(),
-        }],
+        reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],
         catalog_hash: placeholder('c'),
         catalog_version: 1,
         input_ledger_position: 1,

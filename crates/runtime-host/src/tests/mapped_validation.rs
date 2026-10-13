@@ -351,7 +351,8 @@ fn duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch() {
     let PolicyExecutionOutcome::Failed { failure } = execution_outcomes[0] else {
         panic!("duplicate evidence may only record a failed execution outcome")
     };
-    assert_eq!(failure.error_code, error.code());
+    assert_eq!(failure.outcome.code().as_str(), error.code());
+    assert_eq!(failure.failure_identity, None);
     drop(client);
     host.close().expect("close runtime host");
 }

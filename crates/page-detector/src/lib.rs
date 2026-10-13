@@ -172,7 +172,9 @@ pub struct PageOutcome {
     pub result: PageDetectorResult<PageEvaluation>,
 }
 
+/// Its serde spelling is the registered code it names (Workflow #378 A2-P).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PageUnexecutedReason {
     BatchValidationFailed,
     BatchTerminated,

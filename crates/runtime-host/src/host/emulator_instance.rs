@@ -73,8 +73,10 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
-use actingcommand_contract::outcome::{Outcome, VocabularyToken};
+use actingcommand_contract::outcome::{Location, Outcome, VocabularyToken};
 use actingcommand_contract::{CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, FactValue};
+use actingcommand_device::codes::DeviceStage;
+use actingcommand_execution_kernel::ExecutionKernelLocation;
 
 /// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (ledger
 /// revision 3: the `restart_phase` value of a failed restart's outcome).
@@ -101,40 +103,65 @@ impl VocabularyToken for StopResultToken {
     }
 }
 
-/// The tokens of the vocabulary `emulator_stop_result`: `confirmed`, or the last part of the
-/// device stage a Stop failed at.
-const STOP_RESULT_TOKENS: [&str; 19] = [
-    "confirmed",
-    // The default stage `mumu_manager.control` of a failure without a device diagnostic
-    // (acceptance H-L7).
-    "control",
-    "control_exit",
-    "control_errcode",
-    "launch_error",
-    "wait_timeout",
-    "run",
-    "timeout",
-    "path",
-    "errcode",
-    "entry",
-    "exit",
-    "shape",
-    "decode",
-    "json",
-    "output_bound",
-    "unavailable",
-    "unsupported",
-    "unregistered",
+/// The `stop_result` of a confirmed Stop.
+const STOP_RESULT_CONFIRMED: StopResultToken = StopResultToken("confirmed");
+
+/// The other tokens of the vocabulary `emulator_stop_result`: the stage a Stop failed at, and
+/// the token its result takes (Workflow #378 A2-P: an explicit table, where the token was the
+/// last part of a dotted stage).
+const STOP_RESULT_STAGES: [(Location, &str); 18] = [
+    // The default stage of a failure without a device diagnostic (acceptance H-L7).
+    (HostLocation::MumuManagerControl.location(), "control"),
+    (
+        DeviceStage::MumuManagerControlExit.location(),
+        "control_exit",
+    ),
+    (
+        DeviceStage::MumuManagerControlErrcode.location(),
+        "control_errcode",
+    ),
+    (
+        DeviceStage::MumuManagerLaunchError.location(),
+        "launch_error",
+    ),
+    (
+        DeviceStage::MumuManagerWaitTimeout.location(),
+        "wait_timeout",
+    ),
+    (DeviceStage::MumuManagerRun.location(), "run"),
+    (DeviceStage::MumuManagerTimeout.location(), "timeout"),
+    (DeviceStage::MumuManagerPath.location(), "path"),
+    (DeviceStage::MumuManagerErrcode.location(), "errcode"),
+    (DeviceStage::MumuManagerEntry.location(), "entry"),
+    (DeviceStage::MumuManagerExit.location(), "exit"),
+    (DeviceStage::MumuManagerShape.location(), "shape"),
+    (DeviceStage::MumuManagerDecode.location(), "decode"),
+    (DeviceStage::MumuManagerJson.location(), "json"),
+    (
+        DeviceStage::MumuManagerOutputBound.location(),
+        "output_bound",
+    ),
+    (
+        HostLocation::EmulatorControlBinding.location(),
+        "unavailable",
+    ),
+    (
+        ExecutionKernelLocation::EmulatorControlSupport.location(),
+        "unsupported",
+    ),
+    (
+        HostLocation::EmulatorControlRegistration.location(),
+        "unregistered",
+    ),
 ];
 
-/// The vocabulary token of a Stop's result; `None` for a stage part the vocabulary does not
+/// The vocabulary token of the stage a Stop failed at; `None` for a stage the table does not
 /// list, which the outcome then leaves out.
-fn stop_result_token(result: &str) -> Option<StopResultToken> {
-    STOP_RESULT_TOKENS
+fn stop_result_token(stage: Location) -> Option<StopResultToken> {
+    STOP_RESULT_STAGES
         .iter()
-        .find(|token| **token == result)
-        .copied()
-        .map(StopResultToken)
+        .find(|(location, _)| *location == stage)
+        .map(|&(_, token)| StopResultToken(token))
 }
 
 /// A Stop's process check as a token of the catalog vocabulary `device_process_presence`.
@@ -155,7 +182,7 @@ const CONTROL_OPERATION: ContractLocation = ContractLocation::ControlEmulatorIns
 /// it, `client.rs`).
 const EMULATOR_CONTROL_CLAIM_WAIT_MS: u64 = 5_000;
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
-/// The provider control's readiness wait expired (`mumu_manager.wait_timeout`).
+/// The provider control's readiness wait expired (`mumu_manager_wait_timeout`).
 pub(super) const EMULATOR_CONTROL_WAIT_TIMEOUT: &str =
     HostCode::EmulatorControlWaitTimeout.as_str();
 /// Every other failure of the provider control once it was dispatched or refused by the tool.
@@ -371,7 +398,7 @@ enum StartAfterStop<'a> {
 struct RestartReport<'a> {
     code: HostCode,
     phase: &'static str,
-    stop_result: &'a str,
+    stop_result: Option<StopResultToken>,
     stop_ms: u64,
     start_ms: Option<u64>,
     state: Option<ObservedState>,
@@ -385,13 +412,15 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The device stage's last part, the `stop_result` token of a failed Stop.
-fn stage_token(failure: &EmulatorControlFailure) -> &str {
-    let stage = failure
+/// The stage a provider control failed at: its device diagnostic's, else the default
+/// `mumu_manager_control` (acceptance H-L7).
+fn failure_stage(failure: &EmulatorControlFailure) -> Location {
+    failure
         .error
         .diagnostic()
-        .map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
-    stage.rsplit_once('.').map_or(stage, |(_, token)| token)
+        .map_or(HostLocation::MumuManagerControl.location(), |diagnostic| {
+            diagnostic.stage()
+        })
 }
 
 /// The canonical spelling of an instance id, for an outcome's `instance_id` value.
@@ -682,7 +711,7 @@ impl HostShared {
                     let report = RestartReport {
                         code: HostCode::EmulatorRestartStartFailed,
                         phase: "start",
-                        stop_result: "confirmed",
+                        stop_result: Some(STOP_RESULT_CONFIRMED),
                         stop_ms,
                         start_ms: Some(start_ms),
                         state: ObservedState::after(&wrapped.provider),
@@ -1208,7 +1237,7 @@ impl HostShared {
         let report = RestartReport {
             code: HostCode::EmulatorRestartStopFailed,
             phase: "stop",
-            stop_result: stage_token(&stop.provider.failure),
+            stop_result: stop_result_token(failure_stage(&stop.provider.failure)),
             stop_ms,
             start_ms,
             state,
@@ -1234,7 +1263,7 @@ impl HostShared {
     ) -> RequestFailure {
         let provider = &report.failure.provider;
         let diagnostic = provider.failure.error.diagnostic();
-        let stage = diagnostic.map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
+        let stage = failure_stage(&provider.failure);
         let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
         // Ledger revision 3: the report's tokens are the outcome's values and the failing
         // phase's control code its `caused_by` link (they were the detail's message).
@@ -1291,7 +1320,7 @@ impl HostShared {
                     .stop_elapsed_ms(stop_elapsed_ms),
                 DiagnosticDetailDraft::new(
                     "emulator_control",
-                    "mumu_manager.process_list",
+                    HostLocation::MumuManagerProcessList,
                     "mumu_manager",
                     ContractLocation::ControlInstance.as_str(),
                 ),
@@ -1641,29 +1670,34 @@ fn emulator_control_error(
     instance_id: InstanceId,
 ) -> (RuntimeHostError, RuntimeReceiptState, EffectDisposition) {
     let diagnostic = failure.error.diagnostic();
-    let stage = diagnostic.map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
+    let stage = failure_stage(failure);
     let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
-    let (code, runtime_code, state) = match stage {
-        "emulator_control.unavailable" | "emulator_control.unregistered" => (
+    let (code, runtime_code, state) = if stage == HostLocation::EmulatorControlBinding.location()
+        || stage == HostLocation::EmulatorControlRegistration.location()
+    {
+        (
             HostCode::EmulatorControlUnavailable,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
-        ),
-        "emulator_control.unsupported" => (
+        )
+    } else if stage == ExecutionKernelLocation::EmulatorControlSupport.location() {
+        (
             HostCode::EmulatorControlUnsupported,
             RuntimeErrorCode::InvalidRequest,
             RuntimeReceiptState::Denied,
-        ),
-        "mumu_manager.wait_timeout" => (
+        )
+    } else if stage == DeviceStage::MumuManagerWaitTimeout.location() {
+        (
             HostCode::EmulatorControlWaitTimeout,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
-        ),
-        _ => (
+        )
+    } else {
+        (
             HostCode::EmulatorControlFailed,
             RuntimeErrorCode::BackendOperationFailed,
             RuntimeReceiptState::Failed,
-        ),
+        )
     };
     // Once the vendor command has run, its effect on the emulator is not known.
     let effect = if failure.exit_code.is_some() {
@@ -1726,7 +1760,7 @@ fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outco
         .stop_elapsed_ms(report.stop_ms)
         .start_dispatched(report.start_ms.is_some())
         .device_process_present(ProcessPresenceToken(report.device_process_present));
-    let outcome = match stop_result_token(report.stop_result) {
+    let outcome = match report.stop_result {
         Some(token) => outcome.stop_result(token),
         None => outcome,
     };

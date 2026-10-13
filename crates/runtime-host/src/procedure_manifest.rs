@@ -34,13 +34,16 @@ impl ProcedureBinding {
         let procedure_ref = procedure_ref.into();
         let package_digest = package_digest.into();
         let operation_id = operation_id.into();
-        validate_token(&procedure_ref, "procedure_ref")?;
-        validate_token(&operation_id, "operation_id")?;
+        validate_token(&procedure_ref)?;
+        validate_token(&operation_id)?;
         package_digest.validate().map_err(|_| {
-            field_refusal(SharedCode::ProcedurePackageDigestInvalid, "package_digest")
+            manifest_fatal(
+                SharedCode::ProcedurePackageDigestInvalid,
+                HostLocation::BindProcedure,
+            )
         })?;
         for yield_point in &yield_points {
-            validate_token(yield_point, "yield_point")?;
+            validate_token(yield_point)?;
         }
         let binding_digest = binding_digest(
             &procedure_ref,
@@ -283,27 +286,18 @@ fn bound_decision_id(decision_id: &str, binding_digest: &str) -> RuntimeHostResu
     Ok(format!("decision:{:x}", Sha256::digest(bytes)))
 }
 
-/// A binding refusal whose operation names the refused field (`procedure_ref`, `package_digest`,
-/// `operation_id`, `yield_point`): data carried as a location, which A2-P moves into a value under
-/// a registered operation. Until then the field name travels as a relayed spelling.
-fn field_refusal(code: impl Into<Code>, field_operation: &'static str) -> RuntimeHostError {
-    RuntimeHostError::relayed_fatal(
-        code.into().as_str(),
-        field_operation,
-        RuntimeErrorCode::RuntimeFatal,
-    )
-}
-
-fn validate_token(value: &str, field_operation: &'static str) -> RuntimeHostResult<()> {
+/// A binding's token refusal, under the binding's operation (Workflow #378 A2-P: the operation
+/// was the refused field's name, data carried as a location; no caller records which field).
+fn validate_token(value: &str) -> RuntimeHostResult<()> {
     if value.is_empty()
         || value.len() > MAX_PROCEDURE_TOKEN_BYTES
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
-        return Err(field_refusal(
+        return Err(manifest_fatal(
             HostCode::ProcedureManifestTokenInvalid,
-            field_operation,
+            HostLocation::BindProcedure,
         ));
     }
     Ok(())
