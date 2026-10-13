@@ -149,7 +149,10 @@ fn adb_exit_failure(stderr: &str) -> DeviceError {
     })
 }
 
-/// A scheduler-shaped step witness for driving the device-effect commands directly.
+/// A scheduler-shaped step witness for driving the device-effect commands directly. Test-only
+/// like the kernel's `step_witness`: the fenced-write issuer guard admits no production caller of
+/// the bridge outside the scheduler.
+#[cfg(test)]
 fn witness() -> FencedWrite {
     let issuer = actingcommand_contract::IdentifierIssuer::new().expect("ids");
     actingcommand_contract::issue_fenced_write(
