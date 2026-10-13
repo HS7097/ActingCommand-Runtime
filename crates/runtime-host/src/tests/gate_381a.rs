@@ -2,10 +2,13 @@
 
 //! Workflow #381 A, test plan H-1 (R2, R3′) and the coordinator's #672 ruling on the two
 //! timeouts (R5′): installation control of a held start while it prepares, through the
-//! held-start checkpoints (HOST-I3). Every wait returns as soon as its message arrives;
-//! `GATE_WAIT` only bounds a broken run.
+//! held-start checkpoints (HOST-I3). INST-1 (Workflow #390): a held start's preparation
+//! self-checks. Every wait returns as soon as its message arrives; `GATE_WAIT` only bounds a
+//! broken run.
 
 use super::*;
+use crate::codes::HostCode;
+use actingcommand_contract::codes::DeviceSelfCheckFailure;
 use actingcommand_contract::{
     FactScalar, InstallHeldStartup, InstallTransitionAction, InstallTransitionPhase,
     InstallTransitionTicket, RuntimeErrorProjection, RuntimeInfo, RuntimePayload,
@@ -39,6 +42,15 @@ struct HeldStart {
 
 impl HeldStart {
     fn spawn(root: &Path, held_timeout_ms: u64) -> Self {
+        Self::spawn_with(
+            root,
+            held_timeout_ms,
+            FakeProvider::from_entries(Vec::new()),
+        )
+    }
+
+    /// A held start of `provider`'s instances.
+    fn spawn_with(root: &Path, held_timeout_ms: u64, provider: FakeProvider) -> Self {
         let (checkpoint_sender, checkpoints) = mpsc::channel();
         let (commands, command_receiver) = mpsc::channel::<AtPreparing>();
         let (head_sender, heads) = mpsc::channel();
@@ -87,7 +99,7 @@ impl HeldStart {
                 RuntimeHostConfig::new(start_root, SALT)
                     .with_install_held(start_held)
                     .with_preparation_test_hook(hook),
-                Arc::new(FakeProvider::from_entries(Vec::new())),
+                Arc::new(provider),
             ));
         });
         Self {
@@ -494,6 +506,186 @@ fn gate_an_accepted_shutdown_of_a_held_start_ends_it_as_a_formal_stop() {
         stopped
             .complete_message()
             .starts_with("runtime host error install_startup_shut_down during install_transition"),
+        "FATAL line: {}",
+        stopped.complete_message()
+    );
+}
+
+/// A device that does not answer: its input open fails as an `adb shell` that timed out, and
+/// every resource it opened was closed.
+fn unreachable_device() -> Arc<FakeState> {
+    let state = Arc::new(FakeState::default());
+    state.observed_open.store(true, Ordering::Release);
+    *state.input_open_error.lock().expect("input open error") = Some(
+        DeviceError::transient("synthetic adb shell timeout")
+            .with_resource_summary(actingcommand_device::DeviceResourceQuiescence::Confirmed, 1),
+    );
+    state
+}
+
+/// A device that answers: its opens pass the self-check.
+fn reachable_device() -> Arc<FakeState> {
+    let state = Arc::new(FakeState::default());
+    state.observed_open.store(true, Ordering::Release);
+    state
+}
+
+/// INST-1 (Workflow #390, FCM D-01; the 10-11 install on board #71): a held start whose
+/// preparation reaches one device and not the other goes on. Only the unreachable instance is
+/// unavailable, under one explicit `install_preparation_instance_unavailable` (warning, stage
+/// `install_release`) that names its self-check failure as `cause=<code>`; the reachable
+/// instance has no failure record, the transition is released and the Runtime runs.
+#[test]
+fn gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on() {
+    let root = TempDir::new().expect("tempdir");
+    let reachable = instance_id();
+    let unreachable = instance_id();
+    let start = HeldStart::spawn_with(
+        root.path(),
+        HELD_TIMEOUT_MS,
+        FakeProvider::from_entries([
+            ("device.reachable".to_owned(), reachable, reachable_device()),
+            (
+                "device.unreachable".to_owned(),
+                unreachable,
+                unreachable_device(),
+            ),
+        ])
+        .with_device_endpoints(),
+    );
+    start.reached(PreparationCheckpoint::Held);
+    let installer = start.release(RELEASE_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Preparing);
+    start.go_on(AtPreparing::Continue);
+    let started = start.finish();
+    drop(installer);
+    let host = started.unwrap_or_else(|error| {
+        panic!(
+            "one unreachable device stopped the whole start: {}",
+            error.complete_message()
+        )
+    });
+
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let failures = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFailed),
+            ..EventQuery::default()
+        })
+        .expect("lifecycle failures");
+    let facts = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::RuntimeFactRecorded),
+            ..EventQuery::default()
+        })
+        .expect("runtime facts");
+    host.close().expect("close the started Runtime");
+
+    let lifecycle = failures
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload
+                .lifecycle_failure()
+                .map(|failure| (event.severity(), failure)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let unavailable = lifecycle
+        .iter()
+        .filter(|(_, failure)| {
+            failure.code() == HostCode::InstallPreparationInstanceUnavailable.as_str()
+        })
+        .map(|(severity, failure)| {
+            (
+                *severity,
+                failure.stage().to_owned(),
+                failure.instance_id(),
+                failure
+                    .native_detail()
+                    .map(|detail| detail.text().to_owned()),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unavailable,
+        [(
+            EventSeverity::Warning,
+            "runtime.lifecycle.install_release".to_owned(),
+            Some(unreachable),
+            Some(format!(
+                "cause={}",
+                DeviceSelfCheckFailure::InputBackendOpenFailed.as_str()
+            )),
+        )],
+        "the unreachable instance's explicit code"
+    );
+    assert!(
+        lifecycle
+            .iter()
+            .all(|(_, failure)| failure.instance_id() != Some(reachable)),
+        "the reachable instance has a failure record"
+    );
+    let last_status = facts
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::FactRecorded(payload))
+                if payload.record().key == "host.install_transition" =>
+            {
+                match &payload.record().value {
+                    ContractFactValue::RecordList(rows) => rows.first().cloned(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .next_back()
+        .expect("the transition's status fact");
+    assert_eq!(
+        (last_status.get("phase"), last_status.get("failure_code")),
+        (Some(&FactScalar::String("released".to_owned())), None),
+        "the transition's last status: {last_status:?}"
+    );
+}
+
+/// INST-1 (Workflow #390, FCM D-01): when the new build reaches no device, the held start still
+/// ends as a whole under `install_preparation_selfcheck_failed` (operation
+/// `install_transition`), as before.
+#[test]
+fn gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let start = HeldStart::spawn_with(
+        root.path(),
+        HELD_TIMEOUT_MS,
+        FakeProvider::from_entries([
+            (
+                "device.first".to_owned(),
+                instance_id(),
+                unreachable_device(),
+            ),
+            (
+                "device.second".to_owned(),
+                instance_id(),
+                unreachable_device(),
+            ),
+        ])
+        .with_device_endpoints(),
+    );
+    start.reached(PreparationCheckpoint::Held);
+    let installer = start.release(RELEASE_TIMEOUT_MS);
+    start.reached(PreparationCheckpoint::Preparing);
+    start.go_on(AtPreparing::Continue);
+    let ended = start.finish();
+    drop(installer);
+
+    let stopped = ended
+        .err()
+        .expect("a start that reached no device ends with an error");
+    assert_eq!(
+        (stopped.code(), stopped.operation()),
+        (
+            HostCode::InstallPreparationSelfcheckFailed.as_str(),
+            "install_transition"
+        ),
         "FATAL line: {}",
         stopped.complete_message()
     );

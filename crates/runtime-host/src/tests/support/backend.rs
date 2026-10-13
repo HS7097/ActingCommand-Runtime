@@ -461,6 +461,8 @@ struct FakeEntry {
 
 const FAKE_EMULATOR_INDEX: u16 = 0;
 const FAKE_EMULATOR_ADB_PORT: u16 = 16384;
+/// INST-1 (Workflow #390): the first neutral port of `FakeProvider::with_device_endpoints`.
+const FAKE_DEVICE_ADB_PORT_BASE: u16 = 15000;
 
 /// Workflow #369 review C-2: the discovery-bound fake instance, bound to `adb_port` while
 /// running and pending while stopped (`None`).
@@ -510,6 +512,9 @@ pub(super) struct FakeProvider {
     provenance: ExecutionBackendProvenance,
     vision_provider: Option<Arc<dyn VisionProvider>>,
     resolved_override: Option<Arc<std::sync::Mutex<ResolvedExecutionInstance>>>,
+    // INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
+    // own (`with_device_endpoints`).
+    device_endpoints: bool,
 }
 
 impl FakeProvider {
@@ -529,7 +534,16 @@ impl FakeProvider {
             provenance: ExecutionBackendProvenance::PhysicalDevice,
             vision_provider: None,
             resolved_override: None,
+            device_endpoints: false,
         }
+    }
+
+    /// INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
+    /// own (one neutral port per entry, in alias order), as configured instances do, so a
+    /// start prepares and self-checks each of them (`device_self_checked`).
+    fn with_device_endpoints(mut self) -> Self {
+        self.device_endpoints = true;
+        self
     }
 
     fn fixture_simulation(mut self) -> Self {
@@ -622,6 +636,21 @@ impl ExecutionBackendProvider for FakeProvider {
             );
         }
         Some(match self.provenance {
+            ExecutionBackendProvenance::PhysicalDevice if self.device_endpoints => {
+                let index = self
+                    .entries
+                    .keys()
+                    .position(|alias| alias == instance_alias)
+                    .and_then(|index| u16::try_from(index).ok())
+                    .expect("a registered fake entry");
+                let adb_port = FAKE_DEVICE_ADB_PORT_BASE + index;
+                ResolvedExecutionInstance::new(entry.instance_id, format!("127.0.0.1:{adb_port}"))
+                    .with_adb_endpoint(actingcommand_execution_kernel::ResolvedAdbEndpoint::new(
+                        "127.0.0.1",
+                        adb_port,
+                        false,
+                    ))
+            }
             ExecutionBackendProvenance::PhysicalDevice => {
                 ResolvedExecutionInstance::new(entry.instance_id, "127.0.0.1:16384")
             }
