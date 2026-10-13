@@ -4413,9 +4413,10 @@ impl RuntimeErrorProjection {
 
     /// The projection a denied or failed receipt's outcome carries (Workflow #378 A4): its
     /// Runtime error code is the `runtime_code` value, or the top code when that is a Runtime
-    /// error code itself; `None` when neither names one. A receipt written in codes mode withholds
-    /// the data values, so `host_halted` reads as false and the holder and `retry_after_ms` as
-    /// absent.
+    /// error code itself; `None` when neither names one. `fatal` is `host_halted` as sent, which
+    /// every denied or failed receipt carries in every detail mode (coordinator ruling A-M1). A
+    /// receipt written in codes mode withholds the other data values, so the holder and
+    /// `retry_after_ms` read as absent.
     pub fn from_receipt_outcome(outcome: &Outcome) -> Option<Self> {
         let code = match outcome.value(RUNTIME_CODE_KEY) {
             Some(value) => runtime_error_code(value.as_str()?)?,
@@ -4443,6 +4444,13 @@ impl RuntimeErrorProjection {
         }
         Some(projection)
     }
+}
+
+/// A receipt's outcome envelope for `detail`. Codes mode withholds the data values (model section
+/// 4.3) except a denied or failed receipt's `host_halted`, which travels in every detail mode
+/// (Workflow #378 A4, coordinator ruling A-M1): the client's own fatal handling runs on it.
+fn receipt_envelope(outcome: &Outcome, detail: Detail) -> OutcomeEnvelope {
+    OutcomeEnvelope::keeping_top_values(outcome, detail, &[HOST_HALTED_KEY])
 }
 
 /// The registered Runtime error code a received spelling names, if any.
@@ -4844,11 +4852,15 @@ fn receipt_state_outcome(
 }
 
 impl RuntimeReceipt {
+    /// Turns a material read's receipt into a failure after its reply was measured: `outcome` is
+    /// the host's failure as the receipt outcome (Workflow #378 A4, coordinator ruling A-M2), and
+    /// tops the receipt as [`Self::failure`]'s does.
     pub fn fail_material_read(
         &mut self,
         state: RuntimeMaterialReadState,
         limit: Option<RuntimeMaterialReadLimit>,
         failure: RuntimeMaterialReadFailure,
+        outcome: Outcome,
     ) -> RuntimeContractResult<()> {
         let Some(RuntimeResult::MaterialRead { result }) = &mut self.result else {
             return Err(RuntimeContractError::new(
@@ -4860,20 +4872,23 @@ impl RuntimeReceipt {
                 RuntimeContractCode::MaterialReadFailureAlreadyRecorded,
             ));
         }
-        let outcome = failure.error.receipt_outcome(None, None);
         result.chunk = None;
         result.state = state;
         result.limit = limit;
         result.failure = Some(failure);
         self.state = result.receipt_state();
-        self.outcome = OutcomeEnvelope::new(&outcome, self.outcome.detail());
+        self.outcome = receipt_envelope(&outcome, self.outcome.detail());
         self.validate()
     }
 
+    /// A material read's receipt. A read that failed carries `failure_outcome`, the host's
+    /// failure as the receipt outcome, on top (Workflow #378 A4, coordinator ruling A-M2); one
+    /// that did not fail carries none.
     pub fn material_read(
         request: &RuntimeRequest,
         terminal: Option<TerminalEvent>,
         result: Box<RuntimeMaterialReadResult>,
+        failure_outcome: Option<Outcome>,
     ) -> RuntimeContractResult<Self> {
         if !matches!(request.operation(), RuntimeOperation::ReadMaterial { request } if request.as_ref() == &result.request)
         {
@@ -4882,9 +4897,14 @@ impl RuntimeReceipt {
             ));
         }
         let state = result.receipt_state();
-        let outcome = match &result.failure {
-            Some(failure) => failure.error.receipt_outcome(None, None),
-            None => receipt_state_outcome(request, state)?,
+        let outcome = match (&result.failure, failure_outcome) {
+            (Some(_), Some(outcome)) => outcome,
+            (None, None) => receipt_state_outcome(request, state)?,
+            _ => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidReceiptOutcome,
+                ));
+            }
         };
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
@@ -4902,20 +4922,26 @@ impl RuntimeReceipt {
         Ok(receipt)
     }
 
+    /// A contained Lab operation's receipt. An operation that failed carries `failure_outcome`,
+    /// the host's failure as the receipt outcome, on top (Workflow #378 A4, coordinator ruling
+    /// A-M2); one that did not fail carries none.
     pub fn contained_lab_operation(
         request: &RuntimeRequest,
         terminal: TerminalEvent,
         operation: Box<ContainedLabOperationResult>,
+        failure_outcome: Option<Outcome>,
     ) -> RuntimeContractResult<Self> {
-        let (state, outcome) = match &operation.record.failure {
-            Some(failure) => (
-                RuntimeReceiptState::Failed,
-                failure.error.receipt_outcome(None, None),
-            ),
-            None => (
+        let (state, outcome) = match (&operation.record.failure, failure_outcome) {
+            (Some(_), Some(outcome)) => (RuntimeReceiptState::Failed, outcome),
+            (None, None) => (
                 RuntimeReceiptState::Completed,
                 receipt_state_outcome(request, RuntimeReceiptState::Completed)?,
             ),
+            _ => {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidReceiptOutcome,
+                ));
+            }
         };
         let receipt = Self {
             schema_version: RUNTIME_RECEIPT_SCHEMA_VERSION.to_string(),
@@ -5000,7 +5026,7 @@ impl RuntimeReceipt {
     pub fn for_request_detail(mut self, request: &RuntimeRequest) -> Self {
         let detail = request.receipt_detail();
         if detail != self.outcome.detail() {
-            self.outcome = OutcomeEnvelope::new(self.outcome.outcome(), detail);
+            self.outcome = receipt_envelope(self.outcome.outcome(), detail);
         }
         self
     }

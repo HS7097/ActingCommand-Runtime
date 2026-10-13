@@ -234,6 +234,7 @@ impl HostShared {
             });
             Ok(())
         })();
+        let mut failure_outcome = None;
         if let Err(error) = work {
             // Workflow #375 R5b: an artifact-store failure of the read never marks the Runtime
             // fatal. A file that does not exist (a frame deleted by hand) reads as `Missing`
@@ -336,6 +337,8 @@ impl HostShared {
             result.limit = limit;
             result.chunk = None;
             result.failure = Some(material_failure(&error));
+            // Workflow #378 A4 (coordinator ruling A-M2): the host's failure tops the receipt.
+            failure_outcome = Some(error.receipt_outcome());
         }
         result
             .validate()
@@ -346,6 +349,7 @@ impl HostShared {
             result: RuntimeResult::MaterialRead {
                 result: Box::new(result),
             },
+            failure_outcome,
         })
     }
 
@@ -418,6 +422,7 @@ impl HostShared {
                     RuntimeMaterialReadState::NotProvided,
                     Some(limit),
                     material_failure(&error),
+                    error.receipt_outcome(),
                 )
                 .map_err(|_| receipt_error())?;
             body = self.encode_material_reply(request, &receipt)?;

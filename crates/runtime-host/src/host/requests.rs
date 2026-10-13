@@ -180,6 +180,7 @@ impl HostShared {
                 result: RuntimeResult::Health {
                     owner_epoch: self.owner_epoch,
                 },
+                failure_outcome: None,
             }),
             RuntimeOperation::Status => self.control_plane_status(validated),
             RuntimeOperation::DiscoverInstances => self.discover_instances(validated),
@@ -239,6 +240,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result,
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::ConfigureMonitor {
@@ -461,6 +463,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result: RuntimeResult::FactPublished { event_id },
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::PublishFacts { observation } => {
@@ -482,6 +485,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result: RuntimeResult::FactPublished { event_id },
+                    failure_outcome: None,
                 })
             }
             RuntimeOperation::QueryEvents {
@@ -621,13 +625,14 @@ impl OperationSuccess {
     fn into_receipt(self, request: &RuntimeRequest) -> RuntimeHostResult<RuntimeReceipt> {
         match self.result {
             RuntimeResult::MaterialRead { result } => {
-                RuntimeReceipt::material_read(request, self.terminal, result)
+                RuntimeReceipt::material_read(request, self.terminal, result, self.failure_outcome)
             }
             RuntimeResult::ContainedLabOperation { operation } => {
                 RuntimeReceipt::contained_lab_operation(
                     request,
                     self.terminal.ok_or_else(receipt_error)?,
                     operation,
+                    self.failure_outcome,
                 )
             }
             result => RuntimeReceipt::success(request, self.state, self.terminal, result),

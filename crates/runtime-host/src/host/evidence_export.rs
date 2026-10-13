@@ -35,6 +35,7 @@ impl HostShared {
                     result: RuntimeResult::EvidenceExportCompleted {
                         summary: Box::new(completed.summary.clone()),
                     },
+                    failure_outcome: None,
                 });
             }
             return Err(RequestFailure::request(
@@ -238,6 +239,7 @@ impl HostShared {
             result: RuntimeResult::EvidenceExportCompleted {
                 summary: Box::new(summary),
             },
+            failure_outcome: None,
         })
     }
 

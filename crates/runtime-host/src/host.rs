@@ -4023,6 +4023,10 @@ struct OperationSuccess {
     state: RuntimeReceiptState,
     terminal: Option<TerminalEvent>,
     result: RuntimeResult,
+    /// The host's failure behind a result that records one (a material read, a contained Lab
+    /// operation), as its receipt outcome: it tops the receipt (Workflow #378 A4, coordinator
+    /// ruling A-M2). `None` for every other result.
+    failure_outcome: Option<actingcommand_contract::outcome::Outcome>,
 }
 
 impl HostShared {

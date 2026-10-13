@@ -100,7 +100,8 @@ fn a4_a_request_the_contract_refuses_carries_the_refusal_code() {
 
 /// The console's requests (`source: ui`) get the outcome's registered names only, every other
 /// source the full outcome, and a request's `detail` overrides its class default (model section
-/// 7.1). Codes mode still names the Runtime error code.
+/// 7.1). Codes mode still names the Runtime error code, and the refusal's `host_halted` travels
+/// in every detail mode (coordinator ruling A-M1).
 #[test]
 fn a4_the_receipt_outcome_leaves_with_the_detail_its_request_asks_for() {
     let root = TempDir::new().expect("tempdir");
@@ -144,7 +145,8 @@ fn a4_the_receipt_outcome_leaves_with_the_detail_its_request_asks_for() {
         let values = match detail {
             Detail::Codes => json!({
                 "operation": "cancel_contained_task",
-                "runtime_code": "invalid_request"
+                "runtime_code": "invalid_request",
+                "host_halted": false
             }),
             Detail::Full => json!({
                 "operation": "cancel_contained_task",

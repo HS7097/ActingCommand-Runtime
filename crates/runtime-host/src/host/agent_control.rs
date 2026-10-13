@@ -81,6 +81,7 @@ impl HostShared {
             result: RuntimeResult::AgentSessionOpened {
                 context: Box::new(context),
             },
+            failure_outcome: None,
         })
     }
 
@@ -129,6 +130,7 @@ impl HostShared {
             result: RuntimeResult::AgentSessionObserved {
                 context: Box::new(context),
             },
+            failure_outcome: None,
         })
     }
 
@@ -148,6 +150,7 @@ impl HostShared {
             result: RuntimeResult::AgentSessionObserved {
                 context: Box::new(context),
             },
+            failure_outcome: None,
         })
     }
 
@@ -176,6 +179,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: None,
                     result: RuntimeResult::AgentResponseRecorded { status },
+                    failure_outcome: None,
                 });
             }
             AgentResponsePreparation::Retry(data) => {
@@ -208,6 +212,7 @@ impl HostShared {
             result: RuntimeResult::AgentResponseRecorded {
                 status: data.status().clone(),
             },
+            failure_outcome: None,
         })
     }
 

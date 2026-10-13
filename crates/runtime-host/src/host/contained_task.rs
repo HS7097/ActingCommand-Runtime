@@ -4759,6 +4759,7 @@ impl HostShared {
                             },
                         },
                     },
+                    failure_outcome: None,
                 });
             }
         }
@@ -4777,6 +4778,7 @@ impl HostShared {
                 task_request_id,
                 status,
             },
+            failure_outcome: None,
         })
     }
 
@@ -5873,6 +5875,7 @@ impl HostShared {
                             reason,
                             lease_terminal: Some(ContainedTaskLeaseTerminal::Released),
                         },
+                        failure_outcome: None,
                     });
                 }
                 let task_failure = if scheduled {
@@ -6168,6 +6171,7 @@ impl HostShared {
                     final_page: outcome.final_page,
                     executed_steps: outcome.executed_steps,
                 },
+                failure_outcome: None,
             }),
             Err(failure) => Err(self.cleanup_composite_failure_with_run_links(
                 request,
@@ -6748,6 +6752,7 @@ impl HostShared {
                         ))
                     })?,
                 },
+                failure_outcome: None,
             })),
             TaskOutcome::Cancelled => Ok(Some(OperationSuccess {
                 state: RuntimeReceiptState::Cancelled,
@@ -6762,6 +6767,7 @@ impl HostShared {
                     ),
                     lease_terminal: lease_disposition,
                 },
+                failure_outcome: None,
             })),
             TaskOutcome::Failure => Err(RequestFailure::request(
                 RuntimeHostError::request(

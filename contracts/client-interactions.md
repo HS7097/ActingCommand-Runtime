@@ -242,11 +242,17 @@ A Denied/Failed receipt carries its refusal or failure: the host's closed failur
 `runtime_code` (the `RuntimeErrorCode`), `operation` (where the host failed, a registered
 location), `host_halted` (the v1 `fatal`), `holder_id` and `lease_id` (the v1
 `current_holder_id`/`current_lease_id`) and `retry_after_ms`; a refusal without a more specific
-code has the `RuntimeErrorCode` itself on top. `RuntimeReceipt::error_projection()` reads the
+code has the `RuntimeErrorCode` itself on top. A failed material read and a failed contained Lab
+operation carry the host's failure on top the same way, with the values its code declares. A
+consumer judges a refusal by the receipt's `state` (`denied` or `failed`); the outcome's category
+only says how bad it is, and a refusal may be topped by a `warning` or `info` code (for example
+`material_read_missing`, `dispatch_instance_held`). `RuntimeReceipt::error_projection()` reads the
 projection back from the outcome. Request v4 (`actingcommand.runtime.request.v4`) adds the
 optional `detail` (`codes` or `full`); without it a request whose `source` is `ui` gets codes only
-(the outcome's codes, locations and vocabulary tokens; `host_halted`, the holder and
-`retry_after_ms` are withheld) and every other source the full outcome. The host filters once,
+(the outcome's codes, locations and vocabulary tokens; the holder and `retry_after_ms` are
+withheld) and every other source the full outcome. `host_halted` is never withheld: every
+Denied/Failed receipt carries it in both modes, and the client reads it as sent for its own fatal
+handling (coordinator ruling A-M1). The host filters once,
 where the receipt leaves; `RuntimeClientConfig::with_detail` asks for one detail on every
 request of a session. `RuntimeClientError::host_failure()` returns the receipt outcome's top code
 and its `operation`, and `RuntimeClientError::outcome()` puts the receipt's outcome on top, else

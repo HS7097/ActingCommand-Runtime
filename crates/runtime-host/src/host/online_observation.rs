@@ -266,6 +266,7 @@ impl HostShared {
             result: RuntimeResult::ContainedPageObserved {
                 observation: Box::new(observation),
             },
+            failure_outcome: None,
         })
     }
 

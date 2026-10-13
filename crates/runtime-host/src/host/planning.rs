@@ -200,6 +200,7 @@ impl HostShared {
                 result: RuntimeResult::StrategicPlanPrepared {
                     plan: Box::new(plan),
                 },
+                failure_outcome: None,
             })
             .map_err(planning_request_failure);
         self.record_planning_result(
@@ -259,6 +260,7 @@ impl HostShared {
                 result: RuntimeResult::PolicyForwardProjected {
                     projection: Box::new(projection),
                 },
+                failure_outcome: None,
             })
         })();
         self.record_planning_result(
@@ -327,6 +329,7 @@ impl HostShared {
             result: RuntimeResult::PredictiveMaintenanceAssessed {
                 assessment: Box::new(assessment),
             },
+            failure_outcome: None,
         })
     }
 
@@ -359,6 +362,7 @@ impl HostShared {
             result: RuntimeResult::ProposalEvaluated {
                 preview: prepared.preview().clone(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -474,6 +478,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::ProposalPromoted { promotion },
+            failure_outcome: None,
         })
     }
 

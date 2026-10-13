@@ -190,13 +190,15 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?;
             return Err(RequestFailure::poison_without_terminal(error));
         };
+        // Workflow #378 A4 (part B L1): a refusal of the step's lease names it.
+        let lease_id = witness.token().lease_id();
         lock(&self.scheduler, HostLocation::FinishDestructiveInput)?
             .finish_destructive_step(witness, connection_id)
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    HostLocation::FinishDestructiveInput,
-                    &error,
-                ))
+                RequestFailure::poison_without_terminal(
+                    RuntimeHostError::scheduler(HostLocation::FinishDestructiveInput, &error)
+                        .naming_lease(lease_id),
+                )
             })
     }
 
@@ -325,10 +327,13 @@ impl HostShared {
             lock(&self.scheduler, HostLocation::BeginDestructiveResourceClose)?
                 .begin_resource_close(token, connection_id, self.monotonic_ms()?)
                 .map_err(|error| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                        HostLocation::BeginDestructiveResourceClose,
-                        &error,
-                    ))
+                    RequestFailure::poison_without_terminal(
+                        RuntimeHostError::scheduler(
+                            HostLocation::BeginDestructiveResourceClose,
+                            &error,
+                        )
+                        .naming_lease(token.lease_id()),
+                    )
                 })?,
         );
 
@@ -765,6 +770,7 @@ impl HostShared {
                 instance_alias: instance_alias.to_owned(),
                 selfcheck,
             },
+            failure_outcome: None,
         })
     }
 

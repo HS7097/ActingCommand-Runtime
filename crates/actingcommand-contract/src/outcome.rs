@@ -1448,6 +1448,25 @@ impl OutcomeEnvelope {
         }
     }
 
+    /// [`Self::new`], where codes mode keeps the top's values named in `kept` as well. Workflow
+    /// #378 A4 (coordinator ruling A-M1): a denied or failed receipt's `host_halted` travels in
+    /// every detail mode, because its client's own fatal handling runs on it.
+    pub(crate) fn keeping_top_values(outcome: &Outcome, detail: Detail, kept: &[&str]) -> Self {
+        let mut envelope = Self::new(outcome, detail);
+        if detail == Detail::Codes {
+            for key in kept {
+                if let Some(value) = outcome.inner.values.get(*key) {
+                    envelope
+                        .outcome
+                        .inner
+                        .values
+                        .insert((*key).to_owned(), value.clone());
+                }
+            }
+        }
+        envelope
+    }
+
     pub fn outcome(&self) -> &Outcome {
         &self.outcome
     }

@@ -3212,8 +3212,9 @@ fn a4_request_v4_names_its_receipt_detail_or_takes_its_class_default() {
 }
 
 /// Codes mode keeps the registered names (the code, the operation, the Runtime error code) and
-/// withholds the data values; it is filtered once, where the receipt leaves, and the projection
-/// read back still names the Runtime error code.
+/// withholds the data values, except `host_halted`, which every denied or failed receipt carries
+/// in every detail mode (coordinator ruling A-M1); it is filtered once, where the receipt leaves,
+/// and a halted refusal reads back as fatal with its Runtime error code.
 #[test]
 fn a4_codes_mode_keeps_the_registered_names_and_withholds_the_data() {
     use crate::codes::ContractLocation;
@@ -3248,11 +3249,13 @@ fn a4_codes_mode_keeps_the_registered_names_and_withholds_the_data() {
         serde_json::Value::Object(codes.outcome().values().clone()),
         serde_json::json!({
             "operation": "cancel_contained_task",
-            "runtime_code": "invalid_request"
+            "runtime_code": "invalid_request",
+            "host_halted": true
         })
     );
     let wire = serde_json::to_value(&codes).expect("codes receipt JSON");
     assert_eq!(wire["outcome"]["detail"], "codes");
+    assert_eq!(wire["outcome"]["values"]["host_halted"], true);
     let decoded: RuntimeReceipt = serde_json::from_value(wire).expect("codes receipt decodes");
     decoded.validate().expect("codes receipt validates");
     assert_eq!(decoded, codes);
@@ -3260,7 +3263,7 @@ fn a4_codes_mode_keeps_the_registered_names_and_withholds_the_data() {
         decoded.error_projection(),
         Some(RuntimeErrorProjection::new(
             RuntimeErrorCode::InvalidRequest,
-            false
+            true
         ))
     );
     assert_eq!(full.error_projection(), Some(refusal));

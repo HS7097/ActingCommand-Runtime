@@ -79,8 +79,8 @@ fn queued_wait_cap_ms(context: &QueuedRequestContext) -> Option<u64> {
     }
 }
 
-/// A queue wait refused at its cap (Workflow #378 A4): the catalog entry of
-/// `lease_queue_expired` requires the cap as `timeout_ms`.
+/// A queue wait refused at its cap (Workflow #378 A4): `lease_queue_expired` names the cap as
+/// `timeout_ms` (optional in its catalog entry since A3; a Runtime-internal claim has none).
 fn naming_queue_cap(error: RuntimeHostError, timeout_ms: Option<u64>) -> RuntimeHostError {
     match timeout_ms {
         Some(timeout_ms) => error.with_outcome_values(|outcome| outcome.timeout_ms(timeout_ms)),
@@ -271,6 +271,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Admitted,
                     terminal: Some(terminal),
                     result: RuntimeResult::LeaseGranted { token },
+                    failure_outcome: None,
                 });
             }
             QueueAdmissionDecision::Lease(preparation) => {
@@ -317,6 +318,7 @@ impl HostShared {
                 result: RuntimeResult::LeaseQueued {
                     status: queued_status(&queued)?,
                 },
+                failure_outcome: None,
             });
         }
         self.append_lease_requested(request, &resolved)?;
@@ -346,6 +348,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Admitted,
                     terminal: Some(terminal(&transferred)),
                     result: RuntimeResult::LeaseGranted { token },
+                    failure_outcome: None,
                 });
             }
         }
@@ -355,6 +358,7 @@ impl HostShared {
             result: RuntimeResult::LeaseQueued {
                 status: queued_status(&queued)?,
             },
+            failure_outcome: None,
         })
     }
 
@@ -444,6 +448,7 @@ impl HostShared {
                     request_id: queued_request_id,
                     instance_id,
                 },
+                failure_outcome: None,
             })),
         }
     }
@@ -489,6 +494,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Admitted,
                     terminal: Some(terminal),
                     result: RuntimeResult::LeaseGranted { token },
+                    failure_outcome: None,
                 })
             }
             Ok(QueuePoll::Pending(queued)) => Ok(OperationSuccess {
@@ -502,6 +508,7 @@ impl HostShared {
                         ))
                     })?,
                 },
+                failure_outcome: None,
             }),
             Err(SchedulerError::QueueExpired) => {
                 let context = context.ok_or_else(|| {
@@ -635,6 +642,7 @@ impl HostShared {
                 request_id: queued_request_id,
                 instance_id: cancelled.queued().instance_id(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -1321,6 +1329,7 @@ impl HostShared {
                 result: RuntimeResult::LeaseGranted {
                     token: preparation.token().clone(),
                 },
+                failure_outcome: None,
             });
         }
         self.append_lease_requested(request, resolved)?;
@@ -1540,6 +1549,7 @@ impl HostShared {
                 state: RuntimeReceiptState::Completed,
                 terminal: Some(terminal),
                 result: RuntimeResult::LeaseRenewed { token: renewed },
+                failure_outcome: None,
             });
         }
         let instance_guard = self.instance_guard(token.instance_id())?;
@@ -1662,6 +1672,7 @@ impl HostShared {
                     instance_id: released.token.instance_id(),
                     lease_id: released.token.lease_id(),
                 },
+                failure_outcome: None,
             });
         }
         let resolved = self.validated_instance(request, token, connection_id)?;
@@ -1682,10 +1693,10 @@ impl HostShared {
                 self.monotonic_ms()?,
             )
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    HostLocation::PrepareReleaseTransfer,
-                    &error,
-                ))
+                RequestFailure::poison_without_terminal(
+                    RuntimeHostError::scheduler(HostLocation::PrepareReleaseTransfer, &error)
+                        .naming_lease(token.lease_id()),
+                )
             })?;
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         match transfer {
@@ -1853,10 +1864,10 @@ impl HostShared {
                 self.monotonic_ms()?,
             )
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
-                    HostLocation::PreparePreemptedTransfer,
-                    &error,
-                ))
+                RequestFailure::poison_without_terminal(
+                    RuntimeHostError::scheduler(HostLocation::PreparePreemptedTransfer, &error)
+                        .naming_lease(token.lease_id()),
+                )
             })?;
         match transfer {
             TransferPreparation::NoCandidate => Ok(false),
@@ -1991,6 +2002,7 @@ impl HostShared {
                 instance_id: token.instance_id(),
                 lease_id: token.lease_id(),
             },
+            failure_outcome: None,
         })
     }
 
@@ -2434,7 +2446,8 @@ impl HostShared {
                     return Err(RuntimeHostError::scheduler(
                         HostLocation::PrepareCleanupTransfer,
                         &error,
-                    ));
+                    )
+                    .naming_lease(token.lease_id()));
                 }
             };
             match transfer {
@@ -3343,6 +3356,7 @@ impl HostShared {
                     state,
                     terminal: Some(terminal),
                     result: result_builder(receipt.into_value()),
+                    failure_outcome: None,
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => Err(RequestFailure {

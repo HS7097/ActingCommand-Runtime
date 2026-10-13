@@ -399,6 +399,7 @@ impl HostShared {
                         state: RuntimeReceiptState::Completed,
                         terminal: Some(terminal(receipt.outcome())),
                         result: RuntimeResult::InputCommitted { action_id },
+                        failure_outcome: None,
                     },
                     selection,
                 ))
@@ -652,6 +653,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: Some(terminal(receipt.outcome())),
                     result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
+                    failure_outcome: None,
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
@@ -775,6 +777,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: Some(terminal(release)),
                     result: RuntimeResult::SafeResetCompleted { action_id },
+                    failure_outcome: None,
                 }))
             }
             ([], []) => Err(safe_reset_replay_denied(
@@ -846,6 +849,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: released.terminal,
             result: RuntimeResult::SafeResetCompleted { action_id },
+            failure_outcome: None,
         })
     }
 
@@ -908,6 +912,7 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: Some(terminal(release)),
                     result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
+                    failure_outcome: None,
                 }))
             }
             ([], []) => Err(application_replay_denied(
@@ -976,6 +981,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: released.terminal,
             result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
+            failure_outcome: None,
         })
     }
 }

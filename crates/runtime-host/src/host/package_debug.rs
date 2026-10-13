@@ -168,6 +168,7 @@ impl HostShared {
             result: RuntimeResult::PackageDebugCompleted {
                 summary: context.package_summary,
             },
+            failure_outcome: None,
         })
     }
 }

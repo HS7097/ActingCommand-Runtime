@@ -435,9 +435,9 @@ impl RuntimeHostError {
         self.projection.with_receipt_values(self.outcome())
     }
 
-    /// This refusal naming the lease it refused (Workflow #378 A4): the catalog entries of
-    /// `lease_expired` and `lease_missing` require `lease_id`. An error with any other code is
-    /// returned as it is.
+    /// This refusal naming the lease it refused (Workflow #378 A4): `lease_expired` and
+    /// `lease_missing` carry it as `lease_id` wherever the token is in scope. An error with any
+    /// other code is returned as it is.
     pub(crate) fn naming_lease(self, lease_id: actingcommand_contract::LeaseId) -> Self {
         if !spelled(
             self.code(),

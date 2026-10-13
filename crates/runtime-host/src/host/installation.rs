@@ -322,6 +322,7 @@ impl HostShared {
                 state: RuntimeReceiptState::Admitted,
                 terminal: Some(terminal(&event)),
                 result: RuntimeResult::ShutdownAccepted { target },
+                failure_outcome: None,
             })
         } else {
             Err(RequestFailure::request(
@@ -632,6 +633,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: None,
             result: RuntimeResult::InstallTransition { status },
+            failure_outcome: None,
         })
     }
 

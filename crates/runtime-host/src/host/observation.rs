@@ -110,6 +110,7 @@ impl HostShared {
             result: RuntimeResult::ReadonlyObservationCompleted {
                 observation: completed.observation,
             },
+            failure_outcome: None,
         })
     }
 
@@ -175,6 +176,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&terminal_event)),
             result: RuntimeResult::CaptureSequenceCompleted { sequence },
+            failure_outcome: None,
         })
     }
 

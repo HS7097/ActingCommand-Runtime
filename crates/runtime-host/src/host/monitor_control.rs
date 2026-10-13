@@ -148,6 +148,7 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
             result: result(change.status.clone()),
+            failure_outcome: None,
         })
     }
 
