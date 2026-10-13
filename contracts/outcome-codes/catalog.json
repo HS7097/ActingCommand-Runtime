@@ -1516,6 +1516,10 @@
     "ladder_class": {
       "type": "vocab:ladder_class",
       "description": "A ladder class carried as a value, for example the class a recovery-ladder trigger matched by."
+    },
+    "device_state_probe": {
+      "type": "vocab:device_state_probe",
+      "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     }
   },
   "vocabularies": {
@@ -4306,6 +4310,36 @@
         },
         "none": {
           "description": "7. Not applicable: a success or an info, a Runtime-internal invariant, a refused request or contract value, a client error or a configuration error."
+        }
+      }
+    },
+    "device_state_probe": {
+      "description": "A device-state read of a handset (model-398 section 7.1).",
+      "source": {
+        "file": "crates/device/src/device_state.rs",
+        "enum": "DeviceStateProbe"
+      },
+      "tokens": {
+        "power": {
+          "description": "dumpsys power: the wakefulness."
+        },
+        "keyguard": {
+          "description": "dumpsys window policy: the keyguard section."
+        },
+        "battery": {
+          "description": "dumpsys battery."
+        },
+        "thermal": {
+          "description": "dumpsys thermalservice: the thermal status."
+        },
+        "foreground": {
+          "description": "The foreground query (dumpsys activity activities)."
+        },
+        "home": {
+          "description": "cmd package resolve-activity for the home intent."
+        },
+        "settings": {
+          "description": "settings get of a screen-timeout setting."
         }
       }
     }

@@ -371,4 +371,6 @@ outcome_keys! {
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
     ladder_class: vocab(ladder_class),
+    // Workflow #398 RD-5a: the device-state read of a handset that failed.
+    device_state_probe: vocab(device_state_probe),
 }

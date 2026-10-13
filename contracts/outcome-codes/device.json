@@ -322,6 +322,70 @@
       "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "device_state_unreadable": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_state_probe": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A device-state read of a handset (model-398 section 7.1) failed, or its answer has a shape the parser does not know; device_state_probe names the read. When adb answered, the foreign_adb_error link keeps adb's failure output or the answer that could not be read; when adb could not run or did not finish there is no link. The state is never guessed.",
+      "common_causes": "The phone left adb (unplugged, offline, unauthorized); the phone vendor prints another dumpsys format than the parser knows.",
+      "handling": "Check the device link; for an unknown shape, add a neutral sample of the new format to the parser."
+    },
+    "device_wake_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The handset's screen was still not awake after one KEYCODE_WAKEUP and the configured settle time (device_state.wake_settle_ms). The run does not start and no other input is sent.",
+      "common_causes": "The settle time is shorter than the phone needs to turn the screen on; the wake key failed.",
+      "handling": "Raise device_state.wake_settle_ms, or check the phone."
+    },
+    "device_keyguard_dismiss_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard without a credential still showed on the handset after one wm dismiss-keyguard and the settle time. The run does not start.",
+      "common_causes": "The phone does not dismiss its keyguard from the shell.",
+      "handling": "Set device_state.keyguard_insecure to wait, or remove the keyguard on the phone."
+    },
+    "device_locked": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
+      "common_causes": "The phone locked itself after its screen timeout.",
+      "handling": "Unlock the phone."
     }
   },
   "locations": {
