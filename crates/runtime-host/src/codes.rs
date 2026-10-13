@@ -162,6 +162,20 @@ actingcommand_contract::outcome_codes! {
         /// rung's `recovery_rung_finished` outcome).
         RecoveryRungSkippedResourceFence => "recovery_rung_skipped_resource_fence": info / none,
         // Workflow #403 end
+        // Workflow #387 D1c begin
+        /// Info. A ladder skipped a rung before the start rung its trigger item names (the
+        /// rung's `recovery_rung_finished` outcome; M387 §4.1).
+        RecoveryRungSkippedBeforeStartRung => "recovery_rung_skipped_before_start_rung": info / none,
+        /// Info. A ladder skipped a rung whose entry the device-state gate holds (a locked
+        /// screen, heat, a low battery, a device in use; the rung's `recovery_rung_finished`
+        /// outcome). The skip reason is registered with D1c (M398 §6.4); RD-5 emits it.
+        RecoveryRungSkippedDeviceNotReady => "recovery_rung_skipped_device_not_ready": info / none,
+        /// Error. A run's navigation recovery chain ran out without reaching its entry page (keys
+        /// `count`, the steps run; caused by the last locate's code; Workflow #373 M-373 §5, §9).
+        /// Registered with D1c for its default trigger item `navigation_exhausted` (M-373 §15
+        /// ruling 1); NAV-5 emits it.
+        ContainedTaskNavigationRecoveryExhausted => "contained_task_navigation_recovery_exhausted": error / pack_logic_mismatch,
+        // Workflow #387 D1c end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -2016,6 +2030,11 @@ actingcommand_contract::outcome_locations! {
         MaterialReadDeadlineCompute => "material_read_deadline_compute",
         MaterialReadLengthConvert => "material_read_length_convert",
         EffectiveConfigurationSizeCheck => "effective_configuration_size_check",
+        // Workflow #387 D1c: direction ①'s count on the append path and its admission by the
+        // lease sweep; the record of a code the catalog does not list.
+        RecoveryStabilityCount => "recovery_stability_count",
+        RecoveryStabilityAdmission => "recovery_stability_admission",
+        RecoveryUnclassifiedNote => "recovery_unclassified_note",
     }
 }
 

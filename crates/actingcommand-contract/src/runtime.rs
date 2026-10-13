@@ -1317,8 +1317,10 @@ pub struct InstanceResourcePackage {
 }
 
 /// The stuck-recovery ladder settings of an instance (slice #316-B4): `enabled` is its
-/// `stuck_recovery` (default `true`), `cooldown_secs` its `stuck_recovery_cooldown_secs`
-/// (default 600, `1..=86400`): at most one ladder per instance per cool-down window.
+/// `stuck_recovery`, `cooldown_secs` its `stuck_recovery_cooldown_secs` (`1..=86400`): at most
+/// one ladder per instance per cool-down window. Workflow #387 D1c (M387 §2.1 row 18b): there is
+/// no code default; an instance that names neither takes the `recovery_ladder` section's
+/// `enabled` and `cooldown_secs` in effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstanceStuckRecovery {
     pub enabled: bool,
@@ -1326,7 +1328,6 @@ pub struct InstanceStuckRecovery {
 }
 
 impl InstanceStuckRecovery {
-    pub const DEFAULT_COOLDOWN_SECS: u32 = 600;
     pub const MAX_COOLDOWN_SECS: u32 = 86_400;
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
@@ -1336,15 +1337,6 @@ impl InstanceStuckRecovery {
             ));
         }
         Ok(())
-    }
-}
-
-impl Default for InstanceStuckRecovery {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            cooldown_secs: Self::DEFAULT_COOLDOWN_SECS,
-        }
     }
 }
 

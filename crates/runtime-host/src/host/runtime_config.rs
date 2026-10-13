@@ -20,8 +20,8 @@ use actingcommand_contract::{
     InstanceStuckRecovery, config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
-    AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, RestoreNote, STUCK_RECOVERY,
-    STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
+    AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, RestoreNote,
+    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 
 impl HostShared {
@@ -244,6 +244,10 @@ impl HostShared {
             config, settings, ..
         } = applied;
         *lock(&self.runtime_config, ConfigHostLocation::ConfigureSettings)? = config;
+        // Workflow #387 D1c (§5.8): the next trigger, admission and renewal read the new values;
+        // a ladder already admitted keeps its snapshot (§4.7).
+        self.refresh_ladder_config()
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
@@ -252,18 +256,24 @@ impl HostShared {
         })
     }
 
-    /// The stuck-recovery settings the ladder reads for one instance now: those actingd
-    /// assembled, with the values in effect of the instance's two per-instance keys over them,
-    /// an instruction value included (Workflow #387 D1b, §5.5 `settable`).
+    /// The stuck-recovery settings the ladder reads for one instance now: the values in effect
+    /// of the instance's two per-instance keys, an instruction value included (Workflow #387
+    /// D1b, §5.5 `settable`), whose defaults are the `recovery_ladder` section's `enabled` and
+    /// `cooldown_secs` in effect (D1c, §2.1 row 18b). An instance the configuration does not
+    /// carry takes the settings it was started with, or `ladder`'s.
     pub(super) fn instance_stuck_recovery(
         &self,
         instance_id: InstanceId,
+        ladder: &LadderConfig,
     ) -> RuntimeHostResult<InstanceStuckRecovery> {
-        let mut settings = self
-            .stuck_recovery()?
-            .get(&instance_id)
-            .copied()
-            .unwrap_or_default();
+        let mut settings =
+            self.stuck_recovery()?
+                .get(&instance_id)
+                .copied()
+                .unwrap_or(InstanceStuckRecovery {
+                    enabled: ladder.enabled,
+                    cooldown_secs: ladder.cooldown_secs,
+                });
         let instance = identity_text(&instance_id, ConfigHostLocation::ReadRuntimeConfig)?;
         let invalid = || value_type_invalid(ConfigHostLocation::ReadRuntimeConfig);
         let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
@@ -283,13 +293,74 @@ impl HostShared {
     }
 
     /// The facts of other crates the configuration's whole-section checks read (§5.3): the
-    /// scheduler's heartbeat bound in effect.
+    /// scheduler's heartbeat bound in effect and the device layer's bounds (Workflow #387 D1c).
     fn config_check(&self) -> RuntimeHostResult<CheckContext> {
         let maximum_client_heartbeat_interval_ms =
             lock(&self.scheduler, ConfigHostLocation::ReadRuntimeConfig)?
                 .config()
                 .maximum_client_heartbeat_interval_ms;
-        Ok(CheckContext::new(maximum_client_heartbeat_interval_ms))
+        Ok(CheckContext::new(
+            maximum_client_heartbeat_interval_ms,
+            super::recovery_ladder::recovery_ladder_device_bounds(),
+        ))
+    }
+
+    /// Workflow #387 D1c: the `recovery_ladder` section in effect, read and checked once per
+    /// change of the configuration. A ladder takes the one in effect when it is admitted as
+    /// its snapshot (§4.7).
+    pub(super) fn ladder_config(&self) -> RuntimeHostResult<Arc<LadderConfig>> {
+        if let Some(config) = lock(
+            &self.recovery_ladder_config,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .as_ref()
+        {
+            return Ok(Arc::clone(config));
+        }
+        self.refresh_ladder_config()
+    }
+
+    /// Workflow #387 D1c: reads the `recovery_ladder` section again (at start and after every
+    /// change of the configuration) and hands it to direction ①'s counter. The section passed
+    /// its whole-section check when it was assembled or changed, so a refusal here is an
+    /// invariant breach.
+    pub(super) fn refresh_ladder_config(&self) -> RuntimeHostResult<Arc<LadderConfig>> {
+        let context = self.config_check()?;
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .recovery_ladder(&context)
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        let config = Arc::new(config);
+        *lock(
+            &self.recovery_ladder_config,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )? = Some(Arc::clone(&config));
+        lock(
+            &self.stability_counter,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .configure(Arc::clone(&config));
+        Ok(config)
+    }
+
+    /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, read at every renewal.
+    pub(super) fn renewal_slack_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .renewal_slack_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
     }
 
     /// Records one configuration fact, observed now and strictly after the stored record of its

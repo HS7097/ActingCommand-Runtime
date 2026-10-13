@@ -1113,6 +1113,66 @@ fn n6_9_end_run_ends_the_run_escalated_after_its_handler() {
     assert_eq!(ladders, 0, "a direct run starts no ladder");
 }
 
+/// N6-9, the ladder half NAV-6 left to Workflow #387 D1c (coordinator ruling 2): a scheduled
+/// run that ends `end_run` ends with `contained_task_interrupt_escalated`, class
+/// `pack_logic_mismatch`, so its failed lease end starts the ladder by the default trigger item
+/// `pack_logic` (M387 §3.3, §7.1; M373 §9.4).
+#[test]
+fn n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = notice_root(temp.path(), json!("end_run"), 1);
+    let (host_config, request) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &away_to_home());
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let context = super::instance_workers::admit_ladder_run(&host, &request);
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert!(!error.is_fatal(), "{}", error.code());
+    super::instance_workers::wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let triggers = super::instance_workers::phases(&events)
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, .. } => Some(trigger),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    host.close().expect("close runtime host");
+    let [trigger] = triggers.as_slice() else {
+        panic!("one ladder: {triggers:?}");
+    };
+    assert_eq!(
+        trigger.stage,
+        actingcommand_contract::RecoveryTriggerStage::Task
+    );
+    assert!(trigger.run_id.is_some(), "the failed run's ladder");
+    assert_eq!(
+        trigger.failure_code.as_str(),
+        "contained_task_interrupt_escalated"
+    );
+    assert_eq!(trigger.rule.as_deref(), Some("pack_logic"));
+    assert_eq!(
+        trigger.matched,
+        Some(actingcommand_contract::RecoveryTriggerMatch::Class {
+            ladder_class: actingcommand_contract::outcome::LadderClass::PackLogicMismatch
+        })
+    );
+}
+
 /// N6-10: `then: {run}`: after the handler the named package runs as a layer too, and then the
 /// run checks its page again.
 #[test]

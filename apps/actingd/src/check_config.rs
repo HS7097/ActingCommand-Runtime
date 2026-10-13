@@ -399,13 +399,19 @@ fn summarize(
                     "expected_sha256": request.expected_sha256(),
                 })
             });
-            // The effective stuck-recovery ladder settings (slice #316-B4).
+            // The effective stuck-recovery ladder settings (slice #316-B4): the instance's own,
+            // or the `recovery_ladder` section's (Workflow #387 D1c).
             let stuck_recovery = checked
                 .host
                 .stuck_recovery()
                 .get(&alias)
                 .copied()
-                .unwrap_or_default();
+                .ok_or_else(|| {
+                    registered(
+                        SharedCode::ExecutionBackendRegistryIncomplete,
+                        ActingdLocation::ConfigValidate,
+                    )
+                })?;
             if let Some(key) = checked.deferred.get(&alias) {
                 // Bound at startup by one MuMuManager discovery run; nothing is spawned here.
                 return Ok(json!({

@@ -270,7 +270,6 @@ actingcommand_contract::outcome_locations! {
         DebugReleaseLease => "debug_release_lease",
         DiscoverRuntime => "discover_runtime",
         CreateRequest => "create_request",
-        ConnectionPreparation => "connection_preparation",
         RunContainedLabOperation => "run_contained_lab_operation",
         VerifyLabOperation => "verify_lab_operation",
         VerifyContainedLabOperation => "verify_contained_lab_operation",

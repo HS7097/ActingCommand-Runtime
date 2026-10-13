@@ -165,7 +165,11 @@ impl HostShared {
                         trigger,
                     )
                 }),
-            None => self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure),
+            // Workflow #387 D1c (B1): a direct run's failed end queues the ladder its trigger
+            // admits once its key is released, only under `rules.direct_runs = trigger`.
+            None => self
+                .cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure)
+                .and_then(|()| self.ladder_after_direct_run(request, &token)),
         };
         match cleanup {
             Ok(()) => failure,
@@ -1049,13 +1053,12 @@ impl HostShared {
         };
         let open_failed = matches!(opened, Some(Err(_)));
         // Device acquisition errors can be fatal to that backend without being owner/ledger
-        // failures. Only typed ordinary acquisition failures with confirmed temporary-resource
-        // disposal qualify; invalid parameter/configuration observations never qualify.
+        // failures. Only ordinary acquisition failures with confirmed temporary-resource
+        // disposal qualify; invalid parameter/configuration observations never qualify. Which
+        // codes then start a ladder is the `recovery_ladder` configuration's (Workflow #387 D1c,
+        // M387 §3.5: the default trigger item `preparation_backend`).
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
-            actingcommand_contract::is_preparation_recovery_trigger(
-                &actingcommand_contract::outcome::CodeStr::from(error.code()),
-            )
-                && error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
+            error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
                 && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
                     "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))
                 && !error.failure_context().backend_open_observations().iter().any(|observation|
@@ -1160,6 +1163,11 @@ impl HostShared {
         if selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none() {
             self.lift_resource_fence(instance_id, event, links)?;
         }
+        // Workflow #369-1: a recovery readiness wait retries a failed preparation the
+        // preparation rule calls recoverable; Workflow #387 D1c: that rule is the configured
+        // trigger items of a connection preparation.
+        let recoverable =
+            recoverable && self.preparation_retryable(selfcheck.failure_code.as_deref())?;
         // Workflow #369 H-1: a dedicated lease was released above, so a daemon-start
         // preparation's ladder waits as a claim and the pump grants it on the free instance. On
         // a held key the ladder goes back to the key's holder, whose release hands it the key.

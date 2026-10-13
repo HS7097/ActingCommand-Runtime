@@ -206,10 +206,18 @@ fn ladder_fixture_with(
 /// the scheduled package as the procedure's primary and as the instance's startup package) and
 /// the scheduled run's request, which binds the return-home package.
 pub(super) fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequest) {
-    let package = neutral_contained_task_package(true);
+    ladder_setup_with_package(root, &neutral_contained_task_package(true))
+}
+
+/// `ladder_setup` with `package` as the scheduled package and the instance's startup package
+/// (Workflow #387 D1c: a scheduled run of NAV-6's run package, N6-9's ladder half).
+pub(super) fn ladder_setup_with_package(
+    root: &Path,
+    package: &[u8],
+) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package_path = root.join("physical-scheduled-task.zip");
-    fs::write(&package_path, &package).expect("write scheduled package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    fs::write(&package_path, package).expect("write scheduled package");
+    let package_sha256 = format!("{:x}", Sha256::digest(package));
     let return_home = neutral_non_home_start_contained_task_package(true);
     let return_home_path = root.join("return-home.zip");
     fs::write(&return_home_path, &return_home).expect("write return-home package");
@@ -222,7 +230,7 @@ pub(super) fn ladder_setup(root: &Path) -> (RuntimeHostConfig, ContainedTaskRequ
     let host_config = RuntimeHostConfig::new(root, b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_procedure_manifest(procedure_manifest_with_primary(
-            &package,
+            package,
             vec!["after_observation".to_owned()],
         ))
         .with_io_timeout(Duration::from_millis(500))
@@ -274,9 +282,12 @@ impl LadderRun {
             .host
             .run_scheduled_contained_task(&self.context, &self.request)
             .expect_err("the scheduled run fails");
+        // Workflow #387 D1c: a code the default trigger item `pack_logic` matches by its class.
         assert!(
             !error.is_fatal()
-                && actingcommand_contract::is_stuck_recovery_trigger(&received_code(error.code())),
+                && actingcommand_runtime_config::ladder_class_of(
+                    received_code(error.code()).as_str()
+                ) == Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch),
             "a stuck-recovery trigger: {}",
             error.code()
         );
@@ -805,9 +816,11 @@ fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_sta
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
-    assert!(actingcommand_contract::is_stuck_recovery_trigger(
-        &received_code(error.code())
-    ));
+    // Workflow #387 D1c: a code the default trigger item `pack_logic` matches by its class.
+    assert_eq!(
+        actingcommand_runtime_config::ladder_class_of(received_code(error.code()).as_str()),
+        Some(actingcommand_contract::outcome::LadderClass::PackLogicMismatch)
+    );
     wait_for_rung_three_start(&ladder_state);
     assert_eq!(
         host.schedule_startup_package_for_test(STARTUP_ALIAS)

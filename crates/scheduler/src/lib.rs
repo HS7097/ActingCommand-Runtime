@@ -1333,6 +1333,22 @@ impl SeedScheduler {
         first_eligible(state, gate, now_monotonic_ms).map(|position| state.queue[position].kind)
     }
 
+    /// Workflow #387 D1c: the request of the entry [`Self::grant_candidate`] names, so that the
+    /// host can hold a ladder claim back until performance control releases its instance.
+    pub fn grant_candidate_request(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+        now_monotonic_ms: u64,
+    ) -> Option<RequestId> {
+        let state = self.instances.get(&instance_id)?;
+        if state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return None;
+        }
+        first_eligible(state, gate, now_monotonic_ms)
+            .map(|position| state.queue[position].request_id)
+    }
+
     /// Workflow #369 Q-4: prepares the pump's grant of the first eligible entry on a free
     /// instance, with that entry's TTL. `None` when there is nothing to grant.
     pub fn prepare_queued_grant(

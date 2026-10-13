@@ -145,6 +145,7 @@
       "layer": "config",
       "uncertain": false,
       "values": {
+        "raw_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -152,9 +153,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The recovery ladder met a code the embedded catalog does not list and read it as ladder class none. D1c, which emits it, fixes its values (the code met) and its layer.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The recovery ladder met a code the embedded catalog does not list and read it as ladder class none (raw_code is its spelling); recorded once per process and code. No trigger item matches it by class.",
+      "common_causes": "A code a newer component emits that this build's catalog does not list yet.",
+      "handling": "Update the Runtime; to start a ladder on the code, list it in a trigger item's codes once the catalog has it."
     },
     "recovery_ladder_config_invalid": {
       "category": "error",
@@ -164,6 +165,7 @@
       "uncertain": false,
       "values": {
         "config_key": "required",
+        "config_value_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -171,9 +173,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The recovery_ladder section breaks a rule; startup and check-config refuse the configuration, an instruction is refused as config_value_invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The recovery_ladder section breaks a rule of its whole-section check (config_key names the key, config_value_problem the rule); startup and check-config refuse the configuration. The same values sent by a ConfigureSettings instruction are refused as config_value_invalid with the same key and problem, and the Runtime keeps its configuration.",
+      "common_causes": "Two trigger items with one id, a stage no item may name, a code or class the catalog does not list, count and window_ms on the wrong item, a start rung beyond the rungs, a rung bound below the device layer's, or a claim TTL or bound beyond the longest renewal.",
+      "handling": "Fix the key config_key names as config_value_problem says, then commit the configuration again."
     }
   }
 }

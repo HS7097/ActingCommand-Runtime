@@ -112,31 +112,36 @@ fn d1_m2_a_file_naming_one_key_makes_it_explicit_and_leaves_the_rest_default() {
             {"instance_id": INSTANCE_A, "alias": "node.a", "stuck_recovery": false},
         ],
     });
-    let parameters = render_parameters(
-        mechanism_rows(),
-        &instances,
-        &json!({}),
-        &file,
-        &code_default,
-    )
-    .expect("the per-instance section resolves");
-    assert_eq!(parameters.len(), 4, "{parameters:?}");
+    // Workflow #387 D1c: a per-instance key the file does not name takes the `recovery_ladder`
+    // section's value in effect (§5.5 `section:`), here the defaults file's.
+    let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults file parses");
+    let parameters = render_parameters(&mechanism_rows(), &instances, &defaults, &file, &|_| None)
+        .expect("the sections resolve");
+    let per_instance = parameters
+        .iter()
+        .filter(|parameter| {
+            find_row(&parameter.key).is_some_and(|(_, instance)| instance.is_some())
+        })
+        .count();
+    assert_eq!(per_instance, 4, "{parameters:?}");
     let named = parameter(&parameters, &instance_key(INSTANCE_A, STUCK_RECOVERY));
     assert_eq!(named.value, FactScalar::Boolean(false));
     assert_eq!(named.source, ConfigParameterSource::Explicit);
     assert!(named.settable);
+    let section_enabled = parameter(&parameters, recovery_ladder::ENABLED)
+        .value
+        .clone();
+    let section_cooldown = parameter(&parameters, recovery_ladder::COOLDOWN_SECS)
+        .value
+        .clone();
     for (instance, member, value) in [
         (
             INSTANCE_A,
             STUCK_RECOVERY_COOLDOWN_SECS,
-            FactScalar::Integer(600),
+            section_cooldown.clone(),
         ),
-        (INSTANCE_B, STUCK_RECOVERY, FactScalar::Boolean(true)),
-        (
-            INSTANCE_B,
-            STUCK_RECOVERY_COOLDOWN_SECS,
-            FactScalar::Integer(600),
-        ),
+        (INSTANCE_B, STUCK_RECOVERY, section_enabled),
+        (INSTANCE_B, STUCK_RECOVERY_COOLDOWN_SECS, section_cooldown),
     ] {
         let unnamed = parameter(&parameters, &instance_key(instance, member));
         assert_eq!(unnamed.value, value, "{instance} {member}");

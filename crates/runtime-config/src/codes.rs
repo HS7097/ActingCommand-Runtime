@@ -27,10 +27,12 @@ actingcommand_contract::outcome_codes! {
         /// can no longer be changed while running, or its value is no longer valid (key
         /// `config_key`; D1b).
         ConfigOverrideDropped => "config_override_dropped": warning / none,
-        /// Error. The `recovery_ladder` section breaks a rule (key `config_key`; D1c emits it).
+        /// Error. The `recovery_ladder` section breaks a rule at start or in `check-config`
+        /// (keys `config_key`, and `config_value_problem` saying which rule; D1c). The same
+        /// values sent by an instruction are refused as `config_value_invalid`.
         RecoveryLadderConfigInvalid => "recovery_ladder_config_invalid": error / none,
-        /// Warning. The recovery ladder met a code the embedded catalog does not list (D1c
-        /// emits it and fixes its values).
+        /// Warning. The recovery ladder met a code the embedded catalog does not list and read
+        /// it as class `none`; once per process and code (key `raw_code`, the spelling; D1c).
         RecoveryLadderCodeUnclassified => "recovery_ladder_code_unclassified": warning / none,
         /// Error. A host blackout entry of the configuration breaks a rule (keys `field`, and
         /// `blackout_id` when the entry has one; registered by SR-0, parsed in this crate by
@@ -47,5 +49,30 @@ actingcommand_contract::outcome_vocabulary! {
         OutOfRange => "out_of_range",
         SectionCheck => "section_check",
         RepeatedKey => "repeated_key",
+        /// Workflow #387 D1c: two trigger items share an id.
+        DuplicateId => "duplicate_id",
+        /// A trigger item names no stage, a stage twice, or a stage no trigger item may name.
+        StageNotAllowed => "stage_not_allowed",
+        /// A trigger item names neither classes nor codes.
+        MatchMissing => "match_missing",
+        /// A code, a code prefix or a class the catalog does not list.
+        CodeUnknown => "code_unknown",
+        /// A code the catalog lists as retired (its `replaced_by` names the successor).
+        CodeRetired => "code_retired",
+        /// `count` and `window_ms` missing or zero on a stability-warnings item, or present on
+        /// any other.
+        BurstInvalid => "burst_invalid",
+        /// A start rung beyond the configured rungs.
+        StartRungOutOfRange => "start_rung_out_of_range",
+        /// No rung or more than three, an action twice or unknown, or a member of another
+        /// action.
+        RungsInvalid => "rungs_invalid",
+        /// A rung's bound below the device layer's own bound or outside its allowed range.
+        BoundOutOfRange => "bound_out_of_range",
+        /// A rung's bound with the hold margin beyond the longest renewal a claim is granted.
+        RenewalCapExceeded => "renewal_cap_exceeded",
+        /// A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or
+        /// below the hold margin.
+        ClaimTtlOutOfRange => "claim_ttl_out_of_range",
     }
 }

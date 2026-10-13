@@ -3685,14 +3685,6 @@
       "since": "0.12.0",
       "description": "A runtime client operation: create request."
     },
-    "connection_preparation": {
-      "owner": "runtime-client",
-      "layer": "client",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client operation: connection preparation."
-    },
     "run_contained_lab_operation": {
       "owner": "runtime-client",
       "layer": "client",

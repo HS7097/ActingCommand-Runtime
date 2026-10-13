@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::host_claims::{HostClaimWork, HostKey};
-use super::recovery_ladder::{LADDER_CLAIM_TTL_MS, LadderTrigger, PendingRecoveryLadder};
+use super::recovery_ladder::{LadderTrigger, PendingRecoveryLadder};
 use super::resource_close::LeaseDeviceEnd;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -2059,8 +2059,11 @@ impl HostShared {
             Some(trigger) => self.ladder_at_lease_end(request, &resolved, trigger)?,
             None => None,
         };
-        // `Some` after this: an admitted ladder that found no key to hand on.
+        // `Some` after this: an admitted ladder that found no key to hand on, or one that waits
+        // in the queue (Workflow #387 D1c: it waits for performance release, §3.7, or behind
+        // another ladder, B3).
         let waiting = match ladder {
+            Some(ladder) if !ladder.hands_off() => Some(ladder),
             Some(ladder) => match self.hand_off_to_ladder(
                 token,
                 connection_id,
@@ -2140,7 +2143,7 @@ impl HostShared {
                 connection_id: claim_connection,
                 kind: ClaimKind::Ladder,
                 priority: actingcommand_contract::LeasePriority::High,
-                lease_ttl_ms: LADDER_CLAIM_TTL_MS,
+                lease_ttl_ms: ladder.claim_ttl_ms(),
             },
             gate,
             self.monotonic_ms()?,
@@ -3467,6 +3470,12 @@ impl HostShared {
         if kind.takes_admission_checks() && self.performance_control_withholds(instance_id)? {
             return Ok(());
         }
+        // Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item starts it after
+        // performance release waits, as a routine claim does, until the instance is released;
+        // every other ladder claim passes as before.
+        if kind == ClaimKind::Ladder && self.ladder_awaits_release(instance_id, gate)? {
+            return Ok(());
+        }
         if waits_for_business_capacity(kind) {
             match self.admit_capacity() {
                 Ok(_) => {}
@@ -3530,6 +3539,46 @@ impl HostShared {
         self.remove_queued_context(request_id, context.connection_id)
             .map_err(|failure| *failure.error)?;
         self.deliver_claim_grant(&context, &token)
+    }
+
+    /// Workflow #387 D1c (M387 §3.7): whether the ladder claim the pump would grant on
+    /// `instance_id` waits for performance release while the instance is not released.
+    fn ladder_awaits_release(
+        &self,
+        instance_id: InstanceId,
+        gate: ClaimGate,
+    ) -> RuntimeHostResult<bool> {
+        let Some(request_id) = lock(&self.scheduler, HostLocation::ReadQueueGrantCandidate)?
+            .grant_candidate_request(instance_id, gate, self.monotonic_ms()?)
+        else {
+            return Ok(false);
+        };
+        self.ladder_claim_awaits_release(request_id, instance_id)
+    }
+
+    /// Workflow #387 D1c (M387 §3.7): whether the ladder claim of `request_id`, whose work is
+    /// registered, waits for performance release while `instance_id` is not released.
+    fn ladder_claim_awaits_release(
+        &self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<bool> {
+        let awaits = matches!(
+            lock(&self.host_claim_work, HostLocation::TakeHostClaimWork)?.get(&request_id),
+            Some(HostClaimWork::RecoveryLadder(ladder)) if ladder.awaits_performance_release()
+        );
+        Ok(awaits && !self.performance_released(instance_id)?)
+    }
+
+    /// Workflow #387 D1c (M387 §3.7): whether performance control releases `instance_id`: until
+    /// P-s gives it a dispatch share, while its directive asks for neither suspension nor
+    /// shutdown.
+    pub(super) fn performance_released(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if self.performance_hold_for_test.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        Ok(!self.performance_control_withholds(instance_id)?)
     }
 
     /// Review L4: whether the instance's performance-control directive withholds a new lease of
@@ -3770,11 +3819,18 @@ impl HostShared {
                 }
                 Err(_) => false,
             };
+        // Workflow #387 D1c (M387 §3.7): a ladder claim whose trigger item starts it after
+        // performance release is queued, not granted at once, while its instance is not
+        // released; the pump grants it after the release.
+        let awaits_release = claim.kind == ClaimKind::Ladder
+            && self
+                .ladder_claim_awaits_release(request.request_id, instance_id)
+                .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = self.try_lock_admission(&instance_guard, instance_id)?;
         let order_lock = self.queue_order_lock(instance_id)?;
         let order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
-        if admission.is_some() && capacity_free {
+        if admission.is_some() && capacity_free && !awaits_release {
             let preparation = lock(&self.scheduler, HostLocation::PrepareHostClaim)?
                 .prepare_claim_acquire(request, gate, self.monotonic_ms()?);
             match preparation {

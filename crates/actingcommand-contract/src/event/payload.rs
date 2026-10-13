@@ -1800,11 +1800,17 @@ pub enum RuntimeLifecyclePhase {
         instance_id: InstanceId,
     },
     /// Stuck-recovery ladder (slice #316-B4), linked to the instance and the trigger run's
-    /// correlation id: the ladder was started for the trigger terminal, with its fixed rung
-    /// plan (`pending` or `skipped` with a reason).
+    /// correlation id: the ladder was started for the trigger, with its rung plan in the
+    /// configured order (`pending` or `skipped` with a reason). Workflow #387 D1c (M387 §4.7,
+    /// §6.1): `config_digest` is the SHA-256 of the `recovery_ladder` configuration the ladder
+    /// climbs by, taken when it was admitted; `profile` names the ladder profile whose rungs it
+    /// climbs (M398 §6.4), absent while only the section's own `rungs` exist.
     RecoveryLadderStarted {
         trigger: RecoveryLadderTrigger,
         rungs: Vec<RecoveryRungPlan>,
+        config_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
     },
     /// One rung ended; `run_id` names the rung's own contained task run when it ran one.
     /// A failed or skipped rung's `outcome` is why (ledger revision 3; was `reason`).
@@ -1850,9 +1856,13 @@ pub enum RuntimeLifecyclePhase {
         outcome: Option<Outcome>,
     },
     /// A trigger inside the cool-down window, or while a ladder runs, started nothing.
+    /// Workflow #387 D1c (M387 §4.5): `rule` names the trigger item that matched, absent for a
+    /// resource fence's ladder.
     RecoveryLadderSuppressed {
         reason: RecoveryLadderSuppression,
         until_unix_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
     },
     /// Startup recovery of the runtime fact store (Workflow #308 5d-1) passed over an
     /// incomplete `runtime.fact_snapshot` set: `parts_found` of its `parts` were in the ledger.

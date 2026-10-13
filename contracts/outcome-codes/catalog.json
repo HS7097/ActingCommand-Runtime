@@ -4612,6 +4612,39 @@
         },
         "repeated_key": {
           "description": "The request names the key more than once."
+        },
+        "duplicate_id": {
+          "description": "Two trigger items of recovery_ladder.triggers share an id (Workflow #387 D1c)."
+        },
+        "stage_not_allowed": {
+          "description": "A trigger item names no stage, a stage twice, or a stage no item may name (recovery_preparation, resource_fence)."
+        },
+        "match_missing": {
+          "description": "A trigger item names neither classes nor codes."
+        },
+        "code_unknown": {
+          "description": "A code, a code prefix or a ladder class the catalog does not list."
+        },
+        "code_retired": {
+          "description": "A code the catalog lists as retired; its replaced_by names the successor."
+        },
+        "burst_invalid": {
+          "description": "count and window_ms missing or zero on a stability_warnings item, or present on another."
+        },
+        "start_rung_out_of_range": {
+          "description": "A start rung beyond the configured rungs."
+        },
+        "rungs_invalid": {
+          "description": "No rung or more than three, an action twice or unknown, or a member of another action."
+        },
+        "bound_out_of_range": {
+          "description": "A rung's bound below the device layer's own bound or outside its allowed range."
+        },
+        "renewal_cap_exceeded": {
+          "description": "A rung's bound and the hold margin beyond the longest renewal a claim is granted."
+        },
+        "claim_ttl_out_of_range": {
+          "description": "A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or below the hold margin."
         }
       }
     },

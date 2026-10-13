@@ -6,9 +6,11 @@
 //! row; a start restores the rows by the "later change wins" rule of §12 question 3.
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
-use crate::instance;
-use crate::table::{INSTANCE_SECTION, KeyRange, KeyRow, find_row};
+use crate::defaults::shipped_scalar;
+use crate::recovery_ladder::LadderConfig;
+use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
+use crate::{host_claims, instance, recovery_ladder};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
@@ -34,20 +36,36 @@ pub const OVERRIDE_REQUEST_ID: &str = "request_id";
 /// The row field naming the channel the instruction came through (written from U-2 on).
 pub const OVERRIDE_CHANNEL: &str = "channel";
 
+/// The device layer's own bounds of the steps a recovery ladder's rungs take (M387 §4.2), in
+/// milliseconds: a rung configured shorter than the device would time out every time, so the
+/// `recovery_ladder` check refuses it. Device facts, not ladder values (Workflow #387 D1c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceBounds {
+    /// Stopping the instance's assigned application (an ADB application command).
+    pub application_stop_ms: u64,
+    /// An emulator Stop through the control owner, its readiness wait included.
+    pub emulator_stop_ms: u64,
+    /// An emulator Start through the control owner, its readiness wait included.
+    pub emulator_start_ms: u64,
+}
+
 /// Facts of other crates a whole-section check reads (§5.1, §5.3): the caller fills them in,
-/// so this crate depends on neither the scheduler nor the device layer. D1c adds the device
-/// layer's control bounds with the first check that reads them.
+/// so this crate depends on neither the scheduler nor the device layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CheckContext {
     /// `scheduler.maximum_client_heartbeat_interval_ms` in effect (§4.3).
     pub maximum_client_heartbeat_interval_ms: u64,
+    /// Workflow #387 D1c (D1b deviation 14): the device layer's bounds the `recovery_ladder`
+    /// check reads (§4.2).
+    pub device: DeviceBounds,
 }
 
 impl CheckContext {
-    pub const fn new(maximum_client_heartbeat_interval_ms: u64) -> Self {
+    pub const fn new(maximum_client_heartbeat_interval_ms: u64, device: DeviceBounds) -> Self {
         Self {
             maximum_client_heartbeat_interval_ms,
+            device,
         }
     }
 }
@@ -74,9 +92,31 @@ impl ConfigFailure {
 
     /// `config_value_invalid` for `config_key`, for `problem`.
     pub fn invalid_value(config_key: impl Into<String>, problem: ConfigValueProblem) -> Self {
+        Self::with_problem(ConfigCode::ConfigValueInvalid, config_key, problem)
+    }
+
+    /// `code` for `config_key`, for `problem`.
+    pub fn with_problem(
+        code: ConfigCode,
+        config_key: impl Into<String>,
+        problem: ConfigValueProblem,
+    ) -> Self {
         Self {
             problem: Some(problem),
-            ..Self::new(ConfigCode::ConfigValueInvalid, config_key)
+            ..Self::new(code, config_key)
+        }
+    }
+
+    /// The failure as an instruction meets it (M387 §5.6): a section's broken rule refuses the
+    /// whole request as `config_value_invalid`, keeping its key and why.
+    fn into_instruction(self) -> Self {
+        match self.code {
+            ConfigCode::RecoveryLadderConfigInvalid => Self {
+                code: ConfigCode::ConfigValueInvalid,
+                problem: self.problem.or(Some(ConfigValueProblem::SectionCheck)),
+                ..self
+            },
+            _ => self,
         }
     }
 
@@ -149,23 +189,6 @@ struct Setting {
 }
 
 impl Setting {
-    fn effective(&self) -> (&FactScalar, ConfigParameterSource) {
-        match &self.instruction {
-            Some(instruction) => (&instruction.value, ConfigParameterSource::Instruction),
-            None => (&self.file_value, self.file_source),
-        }
-    }
-
-    fn parameter(&self) -> ConfigParameter {
-        let (value, source) = self.effective();
-        ConfigParameter {
-            key: self.key.clone(),
-            value: value.clone(),
-            source,
-            settable: self.row.settable.is_settable(),
-        }
-    }
-
     /// The canonical JSON of the file-layer value.
     fn file_json(&self) -> Option<String> {
         scalar_json(self.row.value_type, &self.file_value).map(|value| canonical_json(&value))
@@ -249,13 +272,63 @@ impl EffectiveConfig {
     pub fn manifest(&self) -> RuntimeConfigManifest {
         RuntimeConfigManifest {
             subsystems: self.subsystems.clone(),
-            parameters: self.settings.iter().map(Setting::parameter).collect(),
+            parameters: self
+                .settings
+                .iter()
+                .map(|setting| self.parameter(setting))
+                .collect(),
+        }
+    }
+
+    /// A setting's value in effect and its source: its instruction value; otherwise, for a key
+    /// whose default is a section-level key and that the file does not name, that key's
+    /// instruction value (Workflow #387 D1c, §5.5 `section:` takes the section key's value in
+    /// effect); otherwise its file-layer value.
+    fn effective<'a>(&'a self, setting: &'a Setting) -> (&'a FactScalar, ConfigParameterSource) {
+        if let Some(instruction) = &setting.instruction {
+            return (&instruction.value, ConfigParameterSource::Instruction);
+        }
+        if setting.file_source == ConfigParameterSource::Default
+            && let DefaultSource::Section(section_key) = setting.row.default
+            && let Some(instruction) = self
+                .setting(section_key)
+                .and_then(|section| section.instruction.as_ref())
+        {
+            return (&instruction.value, ConfigParameterSource::Default);
+        }
+        (&setting.file_value, setting.file_source)
+    }
+
+    fn parameter(&self, setting: &Setting) -> ConfigParameter {
+        let (value, source) = self.effective(setting);
+        ConfigParameter {
+            key: setting.key.clone(),
+            value: value.clone(),
+            source,
+            settable: setting.row.settable.is_settable(),
         }
     }
 
     /// The effective value of `key`, when the configuration has the key.
     pub fn value(&self, key: &str) -> Option<&FactScalar> {
-        self.setting(key).map(|setting| setting.effective().0)
+        self.setting(key).map(|setting| self.effective(setting).0)
+    }
+
+    /// The effective value of `key`, or the defaults file's when the configuration does not
+    /// carry the key (a host started without actingd's manifest; §5.2: the lowest layer).
+    fn value_or_shipped(&self, key: &str) -> Option<FactScalar> {
+        self.value(key).cloned().or_else(|| shipped_scalar(key))
+    }
+
+    /// Workflow #387 D1c: the `recovery_ladder` section in effect, read and checked whole
+    /// (§5.3) with the facts of other crates in `context`.
+    pub fn recovery_ladder(&self, context: &CheckContext) -> Result<LadderConfig, ConfigFailure> {
+        LadderConfig::parse(&|key: &str| self.value_or_shipped(key), context)
+    }
+
+    /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, in milliseconds.
+    pub fn renewal_slack_ms(&self) -> Result<u64, ConfigFailure> {
+        host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
     /// The instruction value of `key`, when one is in effect.
@@ -321,15 +394,25 @@ impl EffectiveConfig {
                 }
             };
             sections.insert(config_parameter_section(&change.key).to_owned());
+            // A key whose default is the changed one changes with it (§5.5 `section:`).
+            for row in rows() {
+                if matches!(row.default, DefaultSource::Section(key) if key == change.key) {
+                    sections.insert(match row.name {
+                        KeyName::PerInstance(_) => INSTANCE_SECTION.to_owned(),
+                        KeyName::Exact(name) => config_parameter_section(name).to_owned(),
+                    });
+                }
+            }
         }
-        next.check_sections(&sections, context)?;
+        next.check_sections(&sections, context)
+            .map_err(ConfigFailure::into_instruction)?;
         let settings = changes
             .iter()
             .map(|change| {
                 let setting = next.setting(&change.key).ok_or_else(|| {
                     ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
                 })?;
-                let (value, source) = setting.effective();
+                let (value, source) = next.effective(setting);
                 Ok(ConfiguredSetting {
                     key: change.key.clone(),
                     value: value.clone(),
@@ -345,13 +428,19 @@ impl EffectiveConfig {
     }
 
     /// The whole-section checks of `sections` against the values in effect (§5.3), with the
-    /// facts of other crates in `context`. D1b: each instance of the per-instance section, which
-    /// reads none of them.
+    /// facts of other crates in `context`: the `recovery_ladder` section whole (D1c), the
+    /// `host_claims` slack (D1c) and each instance of the per-instance section (D1b).
     fn check_sections(
         &self,
         sections: &BTreeSet<String>,
-        _context: &CheckContext,
+        context: &CheckContext,
     ) -> Result<(), ConfigFailure> {
+        if sections.contains(recovery_ladder::SECTION) {
+            self.recovery_ladder(context)?;
+        }
+        if sections.contains(host_claims::SECTION) {
+            self.renewal_slack_ms()?;
+        }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());
         }

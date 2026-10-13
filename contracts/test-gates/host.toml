@@ -459,3 +459,28 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_387_d1b::d1_m7_clear_returns_a_key_to_its_file_value_and_source",
 ]
 incident = ["#387"]
+
+# The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
+[[gate]]
+key = "53"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ladder_tests::d1_l4_a_broken_rule_is_refused_at_start_and_the_same_values_by_an_instruction",
+    "actingcommand-runtime-config::lib::ladder_tests::d1_l4_the_shipped_defaults_pass_the_check_and_name_the_model_s_order",
+    "actingcommand-runtime-config::lib::ladder_tests::d1_l9_the_default_trigger_items_name_listed_codes_and_match_no_scheduling_or_sampling_code",
+    "actingcommand-runtime-config::lib::ladder_tests::e3_g3_the_screen_disagrees_with_the_pack_codes_reach_pack_logic_and_sampling_codes_nothing",
+    "actingcommand-runtime-config::lib::ladder_tests::rb_h3_rung_three_s_bounds_are_the_configuration_s",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::d1_l1_each_trigger_stage_keeps_its_links_and_how_it_matched",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::d1_l1_a_rung_plan_has_one_to_three_distinct_actions_and_a_reason_exactly_when_skipped",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::d1_l1_a_started_ladder_names_its_configuration_digest_and_an_optional_profile",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::d1_l1_preparation_suppression_and_end_records_keep_their_rules",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l8_each_of_the_five_rules_changes_its_behaviour_with_its_value",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::h4_g6_direction_one_starts_at_the_configured_count_within_the_configured_window",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l5_direction_one_counts_routine_warnings_and_errors_only",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1c::h4_g6_g7_a_routine_failure_climbs_by_the_configured_trigger_item_and_rungs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1c::d1_l2_d1_l3_a_ladder_that_waits_for_release_climbs_by_the_configuration_it_was_admitted_with",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1c::d1_l4_a_broken_ladder_value_by_instruction_is_refused_whole_and_the_runtime_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
+]
+incident = ["#387"]

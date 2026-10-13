@@ -224,9 +224,11 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(root.path(), SALT).with_stuck_recovery(BTreeMap::from([(
             ALIAS.to_owned(),
+            // The ladder is off; any cool-down in range (Workflow #387 D1c retired the code
+            // default).
             InstanceStuckRecovery {
                 enabled: false,
-                cooldown_secs: InstanceStuckRecovery::DEFAULT_COOLDOWN_SECS,
+                cooldown_secs: InstanceStuckRecovery::MAX_COOLDOWN_SECS,
             },
         )])),
         Arc::new(ScriptedEmulator {

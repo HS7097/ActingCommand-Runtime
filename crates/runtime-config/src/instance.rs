@@ -2,16 +2,17 @@
 
 //! The per-instance section (Workflow #387 model v1.2 §5.5): `instance.<instance id>.<member>`,
 //! in the file the member of the `instances[]` entry with that `instance_id`. D1b hangs the two
-//! existing stuck-recovery members here, settable while the Runtime runs; their defaults stay in
-//! code until D1c's `recovery_ladder` section gives them `section:` defaults (§5.5).
+//! existing stuck-recovery members here, settable while the Runtime runs; D1c gives them the
+//! `recovery_ladder` section's `enabled` and `cooldown_secs` in effect as their defaults (§5.5
+//! `section:`, §2.1 row 18b).
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
+use crate::recovery_ladder;
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
 };
 use actingcommand_contract::{FactScalar, InstanceStuckRecovery};
-use serde_json::Value;
 
 /// The member that turns the stuck-recovery ladder on or off for one instance.
 pub const STUCK_RECOVERY: &str = "stuck_recovery";
@@ -24,7 +25,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         file_path: FilePath::InstanceMember,
         value_type: ValueType::Boolean,
         range: KeyRange::Any,
-        default: DefaultSource::Code,
+        default: DefaultSource::Section(recovery_ladder::ENABLED),
         settable: Settable::Yes,
         reader: "D1c",
         since: "0.12.0",
@@ -37,25 +38,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
             min: 1,
             max: InstanceStuckRecovery::MAX_COOLDOWN_SECS as i64,
         },
-        default: DefaultSource::Code,
+        default: DefaultSource::Section(recovery_ladder::COOLDOWN_SECS),
         settable: Settable::Yes,
         reader: "D1c",
         since: "0.12.0",
     },
 ];
-
-/// The code default of a per-instance row (`default = code`): the contract's
-/// `InstanceStuckRecovery` default until D1c moves it into the `recovery_ladder` section.
-pub fn code_default(row: &KeyRow) -> Option<Value> {
-    let defaults = InstanceStuckRecovery::default();
-    match row.name {
-        KeyName::PerInstance(STUCK_RECOVERY) => Some(Value::Bool(defaults.enabled)),
-        KeyName::PerInstance(STUCK_RECOVERY_COOLDOWN_SECS) => {
-            Some(Value::from(defaults.cooldown_secs))
-        }
-        _ => None,
-    }
-}
 
 /// The whole-section check of one instance (§5.3): its two members together form valid
 /// stuck-recovery settings. A member the section does not carry is not checked.

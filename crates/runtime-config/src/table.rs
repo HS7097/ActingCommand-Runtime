@@ -5,7 +5,7 @@
 //! instruction may change it while the Runtime runs, which slice reads it and since when. D1b
 //! fixes the format; each section adds its rows in its own file (§5.1).
 
-use crate::{existing, instance};
+use crate::{existing, host_claims, instance, recovery_ladder, standard_packs};
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
 /// `config.parameters` as canonical JSON text, since a fact scalar has no such type (§5.5).
@@ -149,15 +149,34 @@ pub fn assembly_rows() -> &'static [KeyRow] {
     existing::ROWS
 }
 
-/// The rows whose values this crate resolves and renders: file layer, defaults file, section
-/// and code defaults (§5.1). D1b: the per-instance section.
-pub fn mechanism_rows() -> &'static [KeyRow] {
-    instance::ROWS
+/// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
+/// layer, defaults file and section defaults. The section-level keys come before the
+/// per-instance section whose defaults they are.
+fn mechanism_sections() -> [&'static [KeyRow]; 4] {
+    [
+        recovery_ladder::ROWS,
+        host_claims::ROWS,
+        standard_packs::ROWS,
+        instance::ROWS,
+    ]
+}
+
+/// The rows whose values this crate resolves and renders, in manifest order (§5.1): the
+/// `recovery_ladder`, `host_claims` and `standard_packs` sections (D1c), then the per-instance
+/// section (D1b).
+pub fn mechanism_rows() -> Vec<KeyRow> {
+    mechanism_sections()
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
 }
 
 /// Every row of the key table.
 pub fn rows() -> impl Iterator<Item = &'static KeyRow> {
-    assembly_rows().iter().chain(mechanism_rows())
+    assembly_rows()
+        .iter()
+        .chain(mechanism_sections().into_iter().flatten())
 }
 
 /// The row of `key` and, for a per-instance key, the instance id it names.

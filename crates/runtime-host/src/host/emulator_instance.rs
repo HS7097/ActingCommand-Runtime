@@ -63,9 +63,7 @@
 
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
-use super::recovery_ladder::{
-    EMULATOR_START_BOUND_MS, EMULATOR_STOP_BOUND_MS, HOLD_MARGIN_MS, PendingRecoveryLadder,
-};
+use super::recovery_ladder::PendingRecoveryLadder;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -77,6 +75,19 @@ use actingcommand_contract::outcome::{Location, Outcome, VocabularyToken};
 use actingcommand_contract::{CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, FactValue};
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_execution_kernel::ExecutionKernelLocation;
+
+/// Workflow #369 H-4 (S6b): an operator's emulator Stop, its key renewed to this bound and the
+/// margin before the provider step (review L-3; Workflow #381 B, coordinator answer D3): the
+/// control bound 60 s + the readiness wait 120 s + the last `info` poll 10 s + the last process
+/// listing 10 s (F2) + the bounded state read after a failure 10 s (review M3) = 210 s. A
+/// recovery ladder's rung 3 takes its own bounds from the `recovery_ladder` configuration
+/// (Workflow #387 D1c).
+const OPERATOR_STOP_BOUND_MS: u64 = 210_000;
+/// An operator's emulator Start: 60 + 120 + 10 s and the ADB baseline 30 s = 220 s on success; a
+/// failure ends at 60 + 120 + 10 s and the state read 10 s = 200 s.
+const OPERATOR_START_BOUND_MS: u64 = 220_000;
+/// Workflow #369 Q-5 (B1): an operator's hold renews to a step's bound plus this margin.
+const OPERATOR_HOLD_MARGIN_MS: u64 = 5_000;
 
 /// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (ledger
 /// revision 3: the `restart_phase` value of a failed restart's outcome).
@@ -272,7 +283,7 @@ impl ControlMode<'_> {
     fn renew(&mut self, host: &HostShared, bound_ms: u64) -> Result<(), RequestFailure> {
         match self {
             Self::Operator(key) | Self::RestartPhase(key) => {
-                host.renew_host_key(key, bound_ms.saturating_add(HOLD_MARGIN_MS))
+                host.renew_host_key(key, bound_ms.saturating_add(OPERATOR_HOLD_MARGIN_MS))
             }
             Self::Ladder(_) => Ok(()),
         }
@@ -932,9 +943,9 @@ impl HostShared {
         // Workflow #369 H-4 (B1; review L-3): an operator's key is renewed before the provider
         // step, to the Stop's or the Start's bound; a refused renewal ends the hold with its code.
         let provider_bound_ms = if action == EmulatorInstanceAction::Stop {
-            EMULATOR_STOP_BOUND_MS
+            OPERATOR_STOP_BOUND_MS
         } else {
-            EMULATOR_START_BOUND_MS
+            OPERATOR_START_BOUND_MS
         };
         if let Err(refused) = mode.renew(self, provider_bound_ms) {
             return Err(self.renewal_refused(
