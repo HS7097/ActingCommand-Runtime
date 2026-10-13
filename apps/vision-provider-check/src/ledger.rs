@@ -70,5 +70,5 @@ pub(super) fn run(args: impl IntoIterator<Item = String>) -> VisionFfiResult<()>
 }
 
 fn error(error: impl std::fmt::Display) -> VisionFfiError {
-    VisionFfiError::fatal("vision-provider-check", error.to_string())
+    VisionFfiError::fatal("vision_provider_check", error.to_string())
 }

@@ -1400,7 +1400,7 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
     let profile = crate::EmulatorCapabilityProfile::new(
         "neutral.fixture",
         crate::EmulatorVersionEvidence::Unavailable {
-            reason: "not probed".to_owned(),
+            reason: crate::EmulatorVersionUnavailableReason::NotProbed,
         },
         crate::EmulatorCapability::ALL
             .into_iter()
@@ -1430,7 +1430,7 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
         ("/backend_provenance", serde_json::json!("unknown")),
         ("/capabilities/schema_version", serde_json::json!("unknown")),
         ("/capabilities/provider_id", serde_json::json!("Invalid")),
-        ("/capabilities/version/reason", serde_json::json!("")),
+        ("/capabilities/version/reason", serde_json::json!("unknown")),
         (
             "/capabilities/capabilities/input_tap/capability",
             serde_json::json!("input_swipe"),

@@ -30,6 +30,34 @@ actingcommand_contract::outcome_codes! {
         // target's `failure`; a search past its limit is an evaluation error.
         TargetMatchNotUnique => "target_match_not_unique": error / pack_logic_mismatch,
         TargetMatchSearchIncomplete => "target_match_search_incomplete": error / budget_or_permission,
+        /// Error. A recognition pack refused its package or a target declaration
+        /// (`RecognitionPackErrorCode::InvalidPackage`).
+        /// Workflow #378 A2-P.
+        RecognitionPackInvalid => "recognition_pack_invalid": error / declaration_error,
+        /// Error. A recognition target uses semantics this build cannot evaluate
+        /// (`RecognitionPackErrorCode::UnsupportedTarget`).
+        /// Workflow #378 A2-P.
+        RecognitionPackTargetUnsupported => "recognition_pack_target_unsupported": error / declaration_error,
+        /// Error. A recognition target needs a vision provider that is not configured
+        /// (`RecognitionPackErrorCode::VisionProviderMissing`).
+        /// Workflow #378 A2-P.
+        RecognitionPackProviderMissing => "recognition_pack_provider_missing": error / declaration_error,
+        /// Error. The vision provider failed while evaluating a recognition target
+        /// (`RecognitionPackErrorCode::VisionProviderFailure`).
+        /// Workflow #378 A2-P.
+        RecognitionPackProviderFailed => "recognition_pack_provider_failed": error / environment_fault,
+        /// Error. The vision provider answered with a response the recognition pack refuses
+        /// (`RecognitionPackErrorCode::VisionProviderInvalidResponse`).
+        /// Workflow #378 A2-P.
+        RecognitionPackProviderResponseInvalid => "recognition_pack_provider_response_invalid": error / environment_fault,
+        /// Error. An OCR target's region could not be resolved on the frame: its anchor did not
+        /// match or the region left the frame (`RecognitionPackErrorCode::RegionUnresolved`).
+        /// Workflow #378 A2-P.
+        OcrRegionUnresolved => "ocr_region_unresolved": error / pack_logic_mismatch,
+        /// Error. A text read refused to conclude; its own outcome says why
+        /// (`RecognitionPackErrorCode::TextReadRefused`, Workflow #396 REC-1).
+        /// Workflow #378 A2-P.
+        RecognitionPackTextReadRefused => "recognition_pack_text_read_refused": error / budget_or_permission,
     }
 }
 

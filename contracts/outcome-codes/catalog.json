@@ -1540,6 +1540,10 @@
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
+    },
+    "event_type": {
+      "type": "vocab:event_type",
+      "description": "A ledger event type, for example the type of a performance event the contract rejected."
     }
   },
   "vocabularies": {
@@ -7195,6 +7199,12 @@
     ],
     "scrcpy_": [
       "device"
+    ],
+    "environment_value_": [
+      "execution-kernel"
+    ],
+    "recognition_pack_": [
+      "recognition-pack"
     ]
   },
   "fragments": {

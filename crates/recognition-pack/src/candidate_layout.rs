@@ -23,9 +23,9 @@ use crate::{
     CandidateIdentityTemplate, CandidateSampleVariant, PackPoint, PackRect, PackRegion,
     RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
     RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
-    TargetKind, TemplateEvaluation, TemplateRelativeRegion, primitive_error, rect_is_within,
-    reject_unknown_fields, resolve_template_relative_region, target_region, template_message,
-    unsupported_template_reason, validate_rect_shape, validate_region_within_coordinate_space,
+    TargetKind, TemplateEvaluation, TemplateRelativeRegion, UnsupportedRecognitionTarget,
+    primitive_error, rect_is_within, reject_unknown_fields, resolve_template_relative_region,
+    target_region, template_message, validate_rect_shape, validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -840,9 +840,9 @@ impl SceneEvaluation<'_> {
                 "instance anchor '{target_id}' is not a template target"
             )));
         };
-        if let Some(reason) = unsupported_template_reason(target) {
+        if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
             return Err(RecognitionPackError::fatal(format!(
-                "template target '{}' uses unsupported recognition semantics: {reason}",
+                "template target '{}' uses unsupported recognition semantics: {unsupported}",
                 target.id
             )));
         }

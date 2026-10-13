@@ -193,7 +193,7 @@ mod tests {
 
     fn unavailable_version() -> EmulatorVersionEvidence {
         EmulatorVersionEvidence::Unavailable {
-            reason: "offline fake has no vendor version".to_string(),
+            reason: EmulatorVersionUnavailableReason::NotProbed,
         }
     }
 

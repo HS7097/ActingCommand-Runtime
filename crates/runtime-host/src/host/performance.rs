@@ -3,7 +3,7 @@
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::events::is_sanitization_failure;
-use crate::performance::rejected_event_code;
+use crate::performance::rejected_event_outcome;
 use crate::planning::collect_maintenance_evidence;
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_policy::assess_predictive_maintenance;
@@ -311,9 +311,9 @@ impl HostShared {
         Ok(ObservationAppend::Recorded)
     }
 
-    /// The dropped event is visible as `perf.monitor_degraded` carrying the contract's
-    /// sanitization code and the rejected event type; a degraded event that fails itself is
-    /// fatal as before.
+    /// The dropped event is visible as `perf.monitor_degraded` whose outcome is
+    /// `performance_event_rejected` with the rejected event type, caused by the contract's
+    /// sanitization outcome; a degraded event that fails itself is fatal as before.
     fn degrade_performance_monitor(
         &self,
         rejected: EventType,
@@ -324,8 +324,8 @@ impl HostShared {
             if !performance.counters_enabled() {
                 return Err(rejection);
             }
-            let code = rejected_event_code(rejection.code(), rejected)?;
-            performance.record_monitor_failure(unix_ms_now()?, &code, None)?
+            let failure = rejected_event_outcome(&rejection, rejected);
+            performance.record_monitor_failure(unix_ms_now()?, failure, None)?
         };
         for event in &tick.events {
             if let ObservationAppend::Rejected(error) = self.record_performance_event(event)? {
@@ -405,7 +405,7 @@ impl HostShared {
                 )?
                 .record_monitor_failure(
                     event.timestamp_unix_ms(),
-                    error.code(),
+                    error.outcome(),
                     Some(*event.event_id()),
                 )?;
                 tick.events

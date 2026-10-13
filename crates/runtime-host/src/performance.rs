@@ -8,6 +8,7 @@ use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::outcome::Location;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ActionId, AuditInput, EventId, EventSeverity, EventType, FrameId, MAX_LEDGER_SAMPLE_WINDOW_NS,
     PerformanceCapacitySample, PerformanceContext, PerformanceControlEventData,
@@ -666,7 +667,7 @@ impl PerformanceMonitor {
             Ok(sample) => self.ingest_system_sample(raw_system_sample(sample)),
             Err(code) => self.ingest_monitor_failure(
                 observed_at_unix_ms,
-                code.as_str(),
+                Outcome::new(code),
                 host_metrics(),
                 MonitorFailureDomain::Sampler,
             ),
@@ -1205,10 +1206,11 @@ impl PerformanceMonitor {
         Ok(())
     }
 
+    /// Degrades the pipeline monitor for one failure, `failure` being its outcome.
     pub(crate) fn record_monitor_failure(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &str,
+        failure: Outcome,
         related_event_id: Option<EventId>,
     ) -> RuntimeHostResult<PerformanceTick> {
         if let Some(event_id) = related_event_id {
@@ -1216,7 +1218,7 @@ impl PerformanceMonitor {
         }
         self.ingest_monitor_failure(
             observed_at_unix_ms,
-            code,
+            failure,
             pipeline_metrics(),
             MonitorFailureDomain::Pipeline,
         )
@@ -1408,7 +1410,7 @@ impl PerformanceMonitor {
     fn ingest_monitor_failure(
         &mut self,
         observed_at_unix_ms: u64,
-        code: &str,
+        failure: Outcome,
         unavailable_metrics: Vec<PerformanceMetric>,
         domain: MonitorFailureDomain,
     ) -> RuntimeHostResult<PerformanceTick> {
@@ -1419,7 +1421,6 @@ impl PerformanceMonitor {
             )
         })?;
         if observed_at_unix_ms == 0
-            || !valid_error_code(code)
             || unavailable_metrics.is_empty()
             || unavailable_metrics
                 .iter()
@@ -1456,9 +1457,8 @@ impl PerformanceMonitor {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms,
                     health: PerformanceMonitorHealth::Degraded,
-                    // Ledger revision 3: the failure is the record's outcome; a code of the
-                    // dynamic family `<code>.<event_type>` stays visible as its relayed spelling.
-                    outcome: Some(actingcommand_contract::outcome::Outcome::relayed(code)),
+                    // Ledger revision 3: the failure is the record's outcome.
+                    outcome: Some(failure),
                     consecutive_failures: *consecutive_failures,
                     terminal,
                     unavailable_metrics,
@@ -2199,27 +2199,17 @@ fn valid_process_label(pid: u32, label: &str) -> bool {
     pid > 0 && !label.is_empty() && label.len() <= 260 && !label.chars().any(char::is_control)
 }
 
-/// The monitor failure code of a contract-rejected observation event:
-/// `<contract code>.<event type>`, e.g. `invalid_performance_pressure_time.perf.pressure_ended`.
-pub(crate) fn rejected_event_code(code: &str, event_type: EventType) -> RuntimeHostResult<String> {
-    let event_type = serde_json::to_value(event_type)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| {
-            performance_fatal(
-                HostCode::PerformanceEventTypeEncodeFailed,
-                HostLocation::RecordPerformanceMonitorFailure,
-            )
-        })?;
-    Ok(format!("{code}.{event_type}"))
-}
-
-fn valid_error_code(code: &str) -> bool {
-    !code.is_empty()
-        && code.len() <= 128
-        && code
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+/// The monitor failure of an observation event the contract rejected (Workflow #378 A2-P;
+/// was the spelling `<contract code>.<event type>`): `performance_event_rejected` with the
+/// rejected event type, caused by the rejection's own outcome (the contract's sanitization
+/// code, for example `invalid_performance_pressure_time`, with its operation).
+pub(crate) fn rejected_event_outcome(
+    rejection: &RuntimeHostError,
+    event_type: EventType,
+) -> Outcome {
+    Outcome::new(HostCode::PerformanceEventRejected)
+        .event_type(event_type)
+        .caused_by(rejection.outcome())
 }
 
 fn all_metrics() -> Vec<PerformanceMetric> {
@@ -3174,7 +3164,7 @@ mod tests {
             })
             .expect_err("missing capture start");
         let degraded = monitor
-            .record_monitor_failure(2_000, error.code(), Some(event_id))
+            .record_monitor_failure(2_000, error.outcome(), Some(event_id))
             .expect("degraded monitor");
         assert!(matches!(
             degraded.events.as_slice(),
@@ -3196,7 +3186,11 @@ mod tests {
         let mut monitor = monitor(vec![Ok(sample(1_000, 2_000))]);
         monitor.tick(1_000).expect("host sample");
         let degraded = monitor
-            .record_monitor_failure(2_000, "performance_pipeline_start_missing", None)
+            .record_monitor_failure(
+                2_000,
+                Outcome::new(HostCode::PerformancePipelineStartMissing),
+                None,
+            )
             .expect("degraded monitor");
         assert!(matches!(
             degraded.events.as_slice(),

@@ -7390,11 +7390,12 @@
       "uncertain": false,
       "values": {},
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports performance event type encode failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #378 A2-P). The rejected event type of a performance observation event could not be spelled into the monitor failure code <code>.<event type>. Since 0.12.0 the failure is performance_event_rejected with the event type as the value event_type, which needs no encoding.",
+      "common_causes": "None known: an event type always had a spelling.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "performance_frame_gap_missing": {
       "category": "error",
@@ -14039,6 +14040,22 @@
       "description": "A session.pack.schedule record breaks the pack schedule rules (field points at the offending member): its value is not a record_list of package_id, from_unix_ms, until_unix_ms and schedulable rows, a row ends at or before it starts, or two rows of one package overlap. The publication request is refused. Not fatal.",
       "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
       "handling": "Write the scope's whole list again with non-overlapping rows."
+    },
+    "performance_event_rejected": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_type": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A performance observation event that contract sanitization refused was dropped, and the performance monitor degraded instead of ending the Runtime; the refusal is the caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

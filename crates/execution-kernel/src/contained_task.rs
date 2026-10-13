@@ -1808,6 +1808,41 @@ pub enum ContainedTaskGuardOutcome {
     },
 }
 
+/// Which guard evaluation a runtime records (Workflow #378 A2-P; was a string reason). It is
+/// not serialised: a runtime records its [`Self::phase`] and, for a guard target that was not
+/// evaluated, the outcome of its [`Self::unexecuted_code`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainedTaskGuardEvaluation {
+    /// One sample of a sampled target evaluation.
+    CandidateSample,
+    /// The operation's guard target was evaluated.
+    Evaluated,
+    /// The operation declares `unguarded_trusted_coordinate`, so no guard target is evaluated.
+    TrustedCoordinate,
+    /// The observed page is not the guard's page, so the guard target is not evaluated.
+    PageMismatch,
+}
+
+impl ContainedTaskGuardEvaluation {
+    /// The diagnostic phase the evaluation is recorded under.
+    pub const fn phase(self) -> &'static str {
+        match self {
+            Self::CandidateSample => "candidate_sample",
+            Self::Evaluated | Self::TrustedCoordinate | Self::PageMismatch => "guard",
+        }
+    }
+
+    /// Why the guard target was not evaluated: a code for the two evaluations that evaluate no
+    /// target, `None` for the two that evaluate one.
+    pub const fn unexecuted_code(self) -> Option<Code> {
+        match self {
+            Self::CandidateSample | Self::Evaluated => None,
+            Self::TrustedCoordinate => Some(ExecutionKernelCode::ContainedTaskGuardSkipped.code()),
+            Self::PageMismatch => Some(ExecutionKernelCode::ContainedTaskGuardPageMismatch.code()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainedTaskRuntimeErrorClass {
     Nonfatal,
@@ -1911,7 +1946,7 @@ pub trait ContainedTaskRuntime {
         &mut self,
         _target_id: Option<&str>,
         _result: Option<&actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>>,
-        _reason: &'static str,
+        _evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -1928,7 +1963,11 @@ pub trait ContainedTaskRuntime {
         result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
         _timing: ContainedTaskEvaluationTiming,
     ) -> Result<(), Self::Error> {
-        self.record_guard_evaluation(Some(target_id), Some(result), "candidate_sample")
+        self.record_guard_evaluation(
+            Some(target_id),
+            Some(result),
+            ContainedTaskGuardEvaluation::CandidateSample,
+        )
     }
 
     fn record_ocr_evaluation(
@@ -7041,7 +7080,11 @@ impl TaskOperation {
     > {
         if self.unguarded_trusted_coordinate {
             runtime
-                .record_guard_evaluation(None, None, "trusted_coordinate")
+                .record_guard_evaluation(
+                    None,
+                    None,
+                    ContainedTaskGuardEvaluation::TrustedCoordinate,
+                )
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Ok((ContainedTaskGuardOutcome::TrustedCoordinate, None));
         }
@@ -7050,7 +7093,11 @@ impl TaskOperation {
         })?;
         if !crate::page_anchor_matches(&control.game, &observation.page_label, &guard.page_id) {
             runtime
-                .record_guard_evaluation(Some(&guard.target_id), None, "page_mismatch")
+                .record_guard_evaluation(
+                    Some(&guard.target_id),
+                    None,
+                    ContainedTaskGuardEvaluation::PageMismatch,
+                )
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Err(ContainedTaskError::with_detail(
                 ExecutionKernelCode::ContainedTaskGuardRefused.code(),
@@ -7135,7 +7182,11 @@ impl TaskOperation {
             return Err(ContainedTaskRunError::Boundary(error));
         }
         runtime
-            .record_guard_evaluation(Some(&guard.target_id), Some(&result), "evaluated")
+            .record_guard_evaluation(
+                Some(&guard.target_id),
+                Some(&result),
+                ContainedTaskGuardEvaluation::Evaluated,
+            )
             .map_err(ContainedTaskRunError::Boundary)?;
         let target = result.map_err(|error| {
             // Workflow #396 REC-1: a text read that refused to conclude names its code as

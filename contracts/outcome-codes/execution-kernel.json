@@ -2493,6 +2493,62 @@
       "description": "A task package's cost_commit declaration breaks a rule (field points at the member): step_id is not a step of the task, after_ms is 0 or longer than the task timeout, or the package's maintenance use is recognition. check-config reports it.",
       "common_causes": "A typo in step_id; an after_ms copied from another task; a recognition maintenance package that declares cost_commit.",
       "handling": "Fix the declaration in the resource repository and replace the package."
+    },
+    "contained_task_guard_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task operation declares unguarded_trusted_coordinate, so no guard target was evaluated before its input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_guard_page_mismatch": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task operation's guard target was not evaluated because the observed page is not the guard's page.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "environment_value_low_confidence": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An environment detection result's value has a confidence below the declared minimum.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "environment_value_expired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An environment detection result's value is older than its declared lifetime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

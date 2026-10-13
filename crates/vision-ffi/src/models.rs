@@ -33,7 +33,7 @@ pub const ONNXRUNTIME_LIBRARY: &str = "onnxruntime.dll";
 pub const ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY: &str = "onnxruntime_providers_shared.dll";
 pub const ONNXRUNTIME_CUDA_PROVIDER_LIBRARY: &str = "onnxruntime_providers_cuda.dll";
 
-const MODULE: &str = "vision-models";
+const MODULE: &str = "vision_models";
 const MAX_DESCRIPTION_BYTES: u64 = 64 * 1024;
 const MAX_MODEL_NAME_BYTES: usize = 255;
 const MAX_DESCRIPTION_LANGUAGES: usize = 64;

@@ -53,7 +53,8 @@ pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageVal
                     .iter()
                     .map(|target| UnsupportedRecognitionTargetResponse {
                         id: target.id.clone(),
-                        reason: target.reason.clone(),
+                        method: target.method,
+                        mask: target.mask,
                     })
                     .collect(),
             })
