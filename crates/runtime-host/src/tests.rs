@@ -100,6 +100,7 @@ include!("tests/support/vision.rs");
 mod agent_sessions;
 mod approvals;
 mod capture_failure;
+mod capture_floor;
 mod capture_sequence;
 mod client_events;
 mod clock_slot_report;

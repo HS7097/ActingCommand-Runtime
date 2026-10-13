@@ -43,6 +43,25 @@ No upstream automation source code has been copied into this repository as part 
 - Redistribution: redistributed by the owner's decision (Workflow #337, 2026-10-03). Android SDK License section 3.4 forbids copying or redistributing the SDK except where a third-party license requires otherwise; section 3.5 places components released under an open-source license only under that license. This records the owner's decision; it is not a legal opinion.
 - Purpose: the adb `actingd` uses by default from an install root (see `external-tools/NOTICE.md`, "ADB version boundary").
 
+## Embedded in the Runtime executable, not committed
+
+### scrcpy server 5.0.1
+
+- Upstream: the scrcpy server by Genymobile and Romain Vimont, release v5.0.1 (`Copyright (C) 2018 Genymobile`, `Copyright (C) 2018-2026 Romain Vimont`).
+- Source URL: https://github.com/Genymobile/scrcpy/releases/download/v5.0.1/scrcpy-server-v5.0.1 (the official versioned release asset; no other source).
+- Verification: the Windows exact-SHA build downloads the asset and fails unless it has the pinned size (733930 bytes) and the official SHA-256 (`764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`, published as `PREBUILT_SERVER_SHA256` in the release's `install_release.sh` and reported by GitHub for the asset). `crates/device/build.rs` checks the same pin again and embeds the file; the device crate checks the embedded bytes against the pin before every push to a device. The pin is `components."scrcpy-server-5.0.1"` in `scripts/windows-tools/windows-tool-sources.v1.json`. Nothing of it is committed to this repository.
+- License: Apache-2.0 (https://github.com/Genymobile/scrcpy/blob/v5.0.1/LICENSE). The Runtime artifact's `RELEASE-NOTES.md` carries the notice.
+- Redistribution: bundled with the Runtime by the owner's decision (#402 ruling, 2026-10-13). This records the owner's decision; it is not a legal opinion.
+- Purpose: the `scrcpy` capture backend for real devices (#402 RD-3). The Runtime pushes it to the device's `/data/local/tmp` and starts it with its control and audio channels off and no option that changes a device setting; it never runs on this machine.
+
+### OpenH264 (compiled from source)
+
+- Upstream: Cisco's OpenH264 (`Copyright (c) 2013, Cisco Systems`), at commit `4a2615fac570c6ca1ed4f157b9fdab9466edfd80` of https://github.com/cisco/openh264 as bundled by the `openh264-sys2` 0.9.8 crate, with the Rust wrapper `openh264` 0.9.8 (https://github.com/ralfbiedert/openh264-rs, Ralf Biedert and contributors).
+- Crate checksums (crates.io SHA-256, also in `Cargo.lock`): `openh264` 0.9.8 `fcc9071a0b5f9c501ddd01066c2600d922cc799dc450a52975222bcda7755a08`; `openh264-sys2` 0.9.8 `6ada29a4cadc13d4d326737af87c13e224210d7d99fe47594e9f3f9b0102fd70`.
+- License: BSD-2-Clause (OpenH264, `openh264` and `openh264-sys2`). The Runtime artifact's `RELEASE-NOTES.md` reproduces the notice and conditions.
+- Build: the crates' default `source` feature compiles the bundled C++ source with the MSVC toolchain into `actingcommand-actingd.exe`; no prebuilt OpenH264 binary is downloaded or loaded. Built from source, it does not carry the patent licence Cisco attaches to its own binaries.
+- Purpose: decoding the scrcpy server's H.264 stream (only H.264 is used).
+
 ## Reviewed but not bundled OCR/NN dependencies
 
 ### FastDeploy / PPOCR

@@ -169,6 +169,7 @@ impl ExecutionKernel {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             None,
+            None,
             registration_guard,
             memory,
         )
@@ -185,6 +186,7 @@ impl ExecutionKernel {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             frame_id,
+            None,
             registration_guard,
             memory,
         )
@@ -201,23 +203,27 @@ impl ExecutionKernel {
         self.capture_frame_retained_with_geometry_session_and_registration_guard(
             instance_alias,
             None,
+            None,
             registration_guard,
             memory,
         )
     }
 
-    /// Carries the producing session and the pending input frame identity together.
+    /// Carries the producing session and the pending input frame identity together. `floor`
+    /// (#398 R1 §5.2, RD-3i) is the bound the frame must meet: after an input, that input's
+    /// completion; while polling, the sequence of the frame delivered last.
     pub fn capture_frame_retained_with_geometry_session_and_registration_guard<G>(
         &self,
         instance_alias: &str,
         frame_id: Option<FrameId>,
+        floor: Option<actingcommand_device::CaptureFloor>,
         registration_guard: G,
         memory: actingcommand_device::FrameMemoryBudget,
     ) -> ExecutionKernelResult<(Frame, CaptureGeometrySessionRef)> {
         let session = self.session(instance_alias)?;
         drop(registration_guard);
         let frame = session
-            .capture_frame_retained(frame_id, Some(memory))
+            .capture_frame_retained(frame_id, Some(memory), floor)
             .map_err(|error| error.with_instance_id(session.resolved().instance_id()))?;
         let reference = CaptureGeometrySessionRef {
             instance_id: session.resolved().instance_id(),

@@ -14,8 +14,8 @@ use actingcommand_contract::{
     digest_named,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceSerial,
-    DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
+    DeviceSerial, DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
     TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_execution_kernel::{
@@ -1838,7 +1838,17 @@ impl InstanceConfig {
         ) {
             return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
+        // #398 R1 §5.1 (RD-3i): scrcpy is selectable on a real device only.
+        if !capture_requested.allowed_on(self.device_kind()) {
+            return Err(ActingdCode::DeviceConfigInvalid.code());
+        }
         Ok((requested, capture_requested))
+    }
+
+    /// #398 R1 §3.1: the instance's device kind. RD-1b adds the key `device.kind`; until then
+    /// every configured instance is an emulator.
+    fn device_kind(&self) -> DeviceKind {
+        DeviceKind::Emulator
     }
 
     fn device_backend(self) -> Result<InstanceSpec, Code> {
@@ -2744,6 +2754,36 @@ mod tests {
         assert_eq!(
             config.assemble().err().map(Code::as_str),
             Some("capture_backend_must_be_explicit")
+        );
+    }
+
+    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance is refused as
+    /// `device_config_invalid` (every configured instance is an emulator until RD-1b adds
+    /// `device.kind`).
+    #[test]
+    fn scrcpy_capture_on_an_emulator_instance_is_refused() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "node.a",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "touch_backend": "maatouch",
+                "capture_backend": "scrcpy"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err().map(Code::as_str),
+            Some(ActingdCode::DeviceConfigInvalid.as_str())
         );
     }
 

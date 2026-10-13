@@ -73,6 +73,14 @@ pub(super) struct FakeState {
     // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
     // self-check passes (`fake_opened_backend`).
     observed_open: AtomicBool,
+    // #398 R1 RD-3i: with `stream_capture` every frame carries a stream stamp whose sequence is
+    // its capture number; each capture records the floor it was given, and each completed input
+    // records when it completed and how many captures came before it. A capture after an input
+    // fails with `capture_error_after_input` when one is set.
+    stream_capture: AtomicBool,
+    capture_floors: std::sync::Mutex<Vec<Option<actingcommand_device::CaptureFloor>>>,
+    inputs_completed: std::sync::Mutex<Vec<(Instant, usize)>>,
+    capture_error_after_input: std::sync::Mutex<Option<DeviceError>>,
 }
 
 impl FakeState {
@@ -128,6 +136,14 @@ impl FakeBackend {
                 ));
         }
         self.state.input_count.fetch_add(1, Ordering::AcqRel);
+        self.state
+            .inputs_completed
+            .lock()
+            .expect("completed inputs")
+            .push((
+                Instant::now(),
+                self.state.capture_count.load(Ordering::Acquire),
+            ));
         Ok(())
     }
 }
@@ -348,6 +364,36 @@ impl CaptureBackend for FakeCapture {
             .expect("capture selection")
             .clone()
             .map(Arc::new);
+        Ok(frame)
+    }
+
+    fn capture_fresh(
+        &mut self,
+        floor: Option<actingcommand_device::CaptureFloor>,
+    ) -> DeviceResult<Frame> {
+        self.state
+            .capture_floors
+            .lock()
+            .expect("capture floors")
+            .push(floor);
+        if self.state.input_count.load(Ordering::Acquire) > 0
+            && let Some(error) = self
+                .state
+                .capture_error_after_input
+                .lock()
+                .expect("capture error after input")
+                .clone()
+        {
+            return Err(error);
+        }
+        let mut frame = self.capture_timed()?;
+        if self.state.stream_capture.load(Ordering::Acquire) {
+            frame.stream = Some(actingcommand_device::FrameStreamStamp {
+                sequence: self.state.capture_count.load(Ordering::Acquire) as u64,
+                device_pts_us: 0,
+                received_at: Instant::now(),
+            });
+        }
         Ok(frame)
     }
 

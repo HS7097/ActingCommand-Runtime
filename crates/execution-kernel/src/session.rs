@@ -208,6 +208,8 @@ enum SessionCommand {
     Capture {
         frame_id: Option<FrameId>,
         memory: Option<actingcommand_device::FrameMemoryBudget>,
+        /// #398 R1 §5.2 (RD-3i): the floor the captured frame must meet.
+        floor: Option<actingcommand_device::CaptureFloor>,
         response: SyncSender<ExecutionKernelResult<Frame>>,
     },
     OpenBackends {
@@ -509,13 +511,14 @@ impl ExecutionSession {
     }
 
     pub(crate) fn capture_retained(&self) -> ExecutionKernelResult<Frame> {
-        self.capture_frame_retained(None, None)
+        self.capture_frame_retained(None, None, None)
     }
 
     pub(crate) fn capture_frame_retained(
         &self,
         frame_id: Option<FrameId>,
         memory: Option<actingcommand_device::FrameMemoryBudget>,
+        floor: Option<actingcommand_device::CaptureFloor>,
     ) -> ExecutionKernelResult<Frame> {
         let mut state =
             self.lock_state(ExecutionKernelCode::ExecutionSessionStatePoisoned.code())?;
@@ -530,6 +533,7 @@ impl ExecutionSession {
             .send(SessionCommand::Capture {
                 frame_id,
                 memory,
+                floor,
                 response,
             })
             .map_err(|_| {
@@ -1065,6 +1069,7 @@ fn run_session(
             SessionCommand::Capture {
                 frame_id,
                 memory,
+                floor,
                 response,
             } => {
                 pending_frame = None;
@@ -1074,6 +1079,7 @@ fn run_session(
                     &instance_alias,
                     backends,
                     memory.as_ref(),
+                    floor,
                 )
                 .map(|mut frame| {
                     for observation in &mut frame.backend_open_observations {
@@ -1789,6 +1795,7 @@ fn execute_capture(
     instance_alias: &str,
     backends: &mut SessionBackends,
     memory: Option<&actingcommand_device::FrameMemoryBudget>,
+    floor: Option<actingcommand_device::CaptureFloor>,
 ) -> ExecutionKernelResult<Frame> {
     let mut observations = backends.prepare(provider, instance_alias, memory)?;
     let mut execute = || -> ExecutionKernelResult<Frame> {
@@ -1825,7 +1832,9 @@ fn execute_capture(
                 ));
             }
         };
-        let captured = backend.capture_timed();
+        // #398 R1 §5.2 (RD-3i): a snapshot backend meets any floor (`capture_fresh` is its
+        // `capture_timed`); a stream backend delivers only a frame newer than the floor.
+        let captured = backend.capture_fresh(floor);
         // These reports have not left this Capture request. A reused session has
         // no new open occurrence, so its historical report is never rewritten.
         for observation in &mut observations {
@@ -1921,7 +1930,7 @@ fn open_backends(
     }
     if capture_opens {
         before_open(&observations)?;
-        match execute_capture(provider, instance_alias, backends, Some(memory)) {
+        match execute_capture(provider, instance_alias, backends, Some(memory), None) {
             Ok(mut frame) => observations.append(&mut frame.backend_open_observations),
             Err(error) => return Err(error.with_backend_open_observations(&observations)),
         }
