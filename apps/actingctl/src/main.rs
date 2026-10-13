@@ -23,6 +23,10 @@ mod material_export;
 mod observe_export;
 // End of MCP-5a.
 
+// Workflow #389 MCP-3: `runs` (MCP `ac_runs`); it uses MCP-5a's instance selector above.
+mod run_list;
+// End of MCP-3.
+
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -79,6 +83,11 @@ fn main() -> ExitCode {
     // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
     // before `Invocation::parse`; `observe` without `--export` is unchanged.
     if let Some(exit) = observe_export::dispatch(&arguments) {
+        return exit;
+    }
+    // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
+    // `Invocation::parse`.
+    if let Some(exit) = run_list::dispatch(&arguments) {
         return exit;
     }
     match run(arguments) {
