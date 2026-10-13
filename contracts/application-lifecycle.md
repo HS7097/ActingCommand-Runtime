@@ -190,24 +190,22 @@ Behaviour (`contracts/emulator-control.md`, "Startup package hook"): only a succ
 (the host waits up to 30 s for adbd after the vendor reports `running`;
 `emulator_control_adb_not_ready` otherwise); the control request appends one
 `runtime.lifecycle_observed` (phase `startup_package_scheduled`, the locator in the audit
-path, a fresh causation id), queues the package's claim while it still holds the instance's
-admission guard (Workflow #369 H-6), and returns `startup_package: scheduled`; the claim is
-granted when the control lets the guard go, and the instance's worker then runs the package
-on the claim's key as an ordinary contained task under that causation id, with self-minted
-request and correlation ids, the claim's holder and synthesized connection, origin
-`(Agent, Adapter)`, hash admission, no lease of its own and the full `task.*` chain. A
-configured package is always invoked; no configuration, `stop`, a failed action, or an
+path, a fresh causation id), hands the instance's key to the package's claim as it releases
+the key, through the scheduling gate (Workflow #369 H-4, S6b; under a scheduling pause the
+claim waits until the resume), and returns `startup_package: scheduled`; the instance's worker
+then runs the package on the claim's key as an ordinary contained task under that causation
+id, with self-minted request and correlation ids, the claim's holder and synthesized
+connection, origin `(Agent, Adapter)`, hash admission, no lease of its own and the full
+`task.*` chain. A configured package is always invoked; no configuration, `stop`, a failed action, or an
 instance found already running at daemon startup pull nothing.
 
 The package runs only after ADB is ready: the worker probes the ADB baseline once more
 before admission, and a failed probe is `startup_package_adb_not_ready`
 (`backend_operation_failed`), recorded before the run; the claim's key is then released. Typed admission codes:
-`startup_package_missing` (a ZIP locator that does not open), `startup_package_admission_failed`
-(every other admission refusal; the underlying `contained_task_package_*` code is the related
-failure). For a digest-named content-directory locator (Workflow #288) a missing or
-unreadable directory is also `startup_package_admission_failed`, with the loader's code as the
-related failure (for example `content_directory_missing` or
-`content_directory_digest_mismatch`). Both are `package_invalid`; all three are recorded
+`startup_package_missing` (a locator that does not exist, the loader's
+`content_directory_missing`), `startup_package_admission_failed` (every other admission
+refusal, with the loader's code as the related failure). Workflow #336 PKG-S1: every locator
+is read by its path and no digest is compared. Both are `package_invalid`; all three are recorded
 before the run as `runtime.failed`
 (category `startup_package`, stage `operation_cleanup`) under the instance and the causation
 id. Failures after admission are the ordinary contained task failures (`task.failed`, lease

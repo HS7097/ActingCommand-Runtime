@@ -20,15 +20,14 @@ use actingcommand_artifact_store::{
     ArtifactWriteContext, ArtifactWriteRequest, try_artifact_delete_guard,
 };
 use actingcommand_contract::{
-    ArtifactEvictionDisposition, ArtifactEvictionIo, ArtifactId, ArtifactIssuePolicy, ArtifactKind,
-    ArtifactLinksDraft, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
-    ArtifactProducer, ArtifactRedactionState, ArtifactRetentionFact, ArtifactRetentionIdentity,
-    AuditInput, CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft,
-    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
-    FRAME_RETENTION_POLICY_VERSION, FailedRunRetentionPolicy, IdentifierIssuer, IssuedInstanceId,
-    OriginModule, OwnerEpoch, OwnerResourceDisposition, ProjectedArtifactReference,
-    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft,
-    SanitizedEventDraft, TerminalEvent,
+    ArtifactEvictionDisposition, ArtifactId, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft,
+    ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord, ArtifactProducer,
+    ArtifactRedactionState, ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput,
+    CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
+    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION,
+    FailedRunRetentionPolicy, IdentifierIssuer, IssuedInstanceId, OriginModule, OwnerEpoch,
+    OwnerResourceDisposition, ProjectedArtifactReference, ResourceQuiescence, RetentionClass,
+    RuntimeLifecyclePhase, RuntimePayloadDraft, SanitizedEventDraft, TerminalEvent,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_host::{
@@ -67,7 +66,7 @@ fn state_database(root: &Path) -> Arc<RuntimeDatabase> {
 }
 
 /// A formal root: State tables, the formal ledger marker and the writer, as acsetup leaves it.
-fn formal_root(root: &Path) -> (Arc<RuntimeDatabase>, GlobalLedger) {
+pub(super) fn formal_root(root: &Path) -> (Arc<RuntimeDatabase>, GlobalLedger) {
     let database = state_database(root);
     let limits = MaintenanceLimits::default();
     let maintenance =
@@ -95,7 +94,7 @@ fn reopen(database: &Arc<RuntimeDatabase>, timing: &mut LedgerOpenTiming) -> Glo
     .expect("the writer opens without reading material")
 }
 
-fn material_store(root: &Path) -> ArtifactStore {
+pub(super) fn material_store(root: &Path) -> ArtifactStore {
     let artifacts = ArtifactStore::open(root).expect("artifact owner");
     let mut admission = GlobalLedgerSink::new(None);
     admission.capacity_root = Some(artifacts.root().to_path_buf());
@@ -149,11 +148,11 @@ impl ArtifactEventSink for Sink<'_> {
 /// One frame captured with no run and no lease in its own owner epoch, which a quiescence
 /// records before the frame, closed by a later confirmed quiescence of its instance (the shape
 /// of an actingctl readonly observe).
-struct Capture {
-    reference: ProjectedArtifactReference,
-    material: PathBuf,
+pub(super) struct Capture {
+    pub(super) reference: ProjectedArtifactReference,
+    pub(super) material: PathBuf,
     /// The frame's `artifact.verified` event.
-    verified: TerminalEvent,
+    pub(super) verified: TerminalEvent,
 }
 
 fn append(ledger: &GlobalLedger, draft: SanitizedEventDraft) -> PersistedEvent {
@@ -197,7 +196,7 @@ fn quiescence(
     append(ledger, draft);
 }
 
-fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Capture {
+pub(super) fn capture(ledger: &GlobalLedger, artifacts: &ArtifactStore, bytes: &[u8]) -> Capture {
     let ids = IdentifierIssuer::new().expect("issuer");
     let owner = *ids.mint_owner_epoch().expect("owner").transport();
     let instance = ids.mint_instance_id().expect("instance");
@@ -353,9 +352,9 @@ fn finish_failed(ledger: &GlobalLedger, permit: Box<ArtifactEvictionPermit>) {
         WriterCommand::FinishArtifactEviction {
             permit,
             disposition: ArtifactEvictionDisposition::Failed,
-            io: Some(ArtifactEvictionIo::from_io(&std::io::Error::from(
-                std::io::ErrorKind::PermissionDenied,
-            ))),
+            outcome: Some(actingcommand_contract::artifact_eviction_io_outcome(
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            )),
             response,
         },
         LedgerLocation::FinishArtifactEviction.location(),

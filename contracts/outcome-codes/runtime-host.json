@@ -115,7 +115,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. Until slice A2 turns it into a caused_by link, the latched failure is carried as the tokens cause=<code> cause_operation=<operation> on the FATAL line, in the transition's status fact and in the lifecycle failure's detail. A restart may succeed, so the watchdog considers a start.",
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. The latched failure is the outcome's caused_by link in the ledger (ledger revision 3), and the tokens cause=<code> cause_operation=<operation> on the FATAL line and in the transition's status fact. A restart may succeed, so the watchdog considers a start.",
       "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
       "handling": "TBD"
     },
@@ -165,7 +165,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "failure_code": "required",
+        "failure_code": "optional",
         "instance_id": "required",
         "lease_id": "optional",
         "task_id": "required",
@@ -395,7 +395,7 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "optional",
         "stop_elapsed_ms": "required",
-        "stop_result": "required",
+        "stop_result": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -403,7 +403,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart (a Stop phase and then a Start phase under one instance admission guard) whose Stop was not confirmed: the provider's shutdown failed (stop_result names the device stage) or its readiness wait expired (stop_result wait_timeout). After an expired wait the Start phase still runs (start_dispatched true); after any other Stop failure it does not. The restart fails whatever its Start did, and the record carries the last observed state; it is the request's one failure record and its receipt terminal, written after the Start phase when one ran. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The vendor's shutdown of the instance hung, for example its device process stayed after Android stopped (device_process_present true), or MuMuManager refused the shutdown.",
       "handling": "TBD"
     },
@@ -422,7 +422,7 @@
         "start_dispatched": "required",
         "start_elapsed_ms": "required",
         "stop_elapsed_ms": "required",
-        "stop_result": "required",
+        "stop_result": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -430,7 +430,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. Until slice A2 turns it into a caused_by link, the control failure behind it is carried as the token cause=<code>, emulator_control_wait_timeout or emulator_control_failed.",
+      "description": "An operator emulator restart whose Stop phase was confirmed and whose Start phase failed: the provider's launch failed or its readiness wait expired. The state read after the failure is applied (a stopped instance is pending, with device.connected false) and carried on the record, which is the request's one failure record and its receipt terminal. The control failure behind it (emulator_control_wait_timeout or emulator_control_failed) is the outcome's caused_by link (ledger revision 3); stop_result is left out when the device stage's last part is not a token of its vocabulary.",
       "common_causes": "The instance did not boot within the start's readiness wait, or MuMuManager refused the launch.",
       "handling": "TBD"
     },
@@ -530,6 +530,22 @@
       "description": "A policy dispatch selected for a task on an instance (task_id, alias) serves a clock occurrence (occurrence_unix_ms) from before the activity window it was selected in opened (window_start_unix_ms); for a daily-limited task it uses the new day's budget for an earlier slot. first_run is true when the pair had no earlier dispatch; next_occurrence_unix_ms is the next clock occurrence, so a reader can tell whether the run still served this occurrence. Recorded once, at the first cycle that selects the pair for that occurrence, as a goal_missed planning signal whose signal_id is signal:clock_slot:owed:<sha256 of task, alias and occurrence>.",
       "common_causes": "The slot fell while the activity window was closed or the Runtime was not running; a gate held the slot back the day before; a catalog was activated with new task ids outside the window.",
       "handling": "Nothing to repair for a single owed run. Owed runs every morning together with refusals of the day's own slot mean that the slot's daily budget is displaced: gate the slot with its own timeline window or move it to the window start."
+    },
+    "install_preparation_instance_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. The self-check's failure is the outcome's caused_by link, for example input_backend_open_failed (ledger revision 3). When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
+      "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
+      "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
     },
     "action_id_issue_failed": {
       "category": "error",
@@ -3207,11 +3223,13 @@
         "host_halted": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry aspect mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "contained_task_geometry_frame_display_mismatch",
+      "description": "Retired (Workflow #392 DA-A). A contained task's first frame was not 16:9, or its aspect ratio differed from the logical display it was captured from, and the run was refused before any input. Since 0.12.0 the frame's own aspect ratio is recorded and never refused; the remaining mismatch is contained_task_geometry_frame_display_mismatch.",
+      "common_causes": "A device or emulator display that is not 16:9, or a capture backend whose frame did not match its display.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_geometry_budget_unavailable": {
       "category": "error",
@@ -3228,6 +3246,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task geometry budget unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_geometry_frame_display_mismatch": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A contained task's frame and the logical display it was captured from have different aspect ratios (the task geometry conclusion aspect_mismatch, reason frame_and_logical_display_differ), so the run is refused before any input. The frame's own aspect ratio is never checked (Workflow #392 DA-A): any ratio is recorded in the instance's display facts and passes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3354,6 +3386,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task geometry unknown.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_home_recovery_binding_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host reports contained task home recovery binding invalid: the return-home binding's package path or hash does not form a valid contained task request (formerly the unregistered spelling contained_task_home_recovery_binding_invalid).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -3804,96 +3850,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task outcome terminal page missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package metadata failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_open_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_read_failed": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package read failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "contained_task_package_size_invalid": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports contained task package size invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -5013,60 +4969,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_file_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_file_too_large": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package file too large.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_instance_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -5082,24 +4984,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package instance invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_metadata_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package metadata failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -5121,24 +5005,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "debug_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "debug_package_path_not_absolute": {
       "category": "error",
       "ladder_class": "none",
@@ -5154,24 +5020,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports debug package path not absolute.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "debug_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports debug package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -5416,6 +5264,12 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -5452,6 +5306,12 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -6773,7 +6633,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports install preparation selfcheck failed.",
+      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1). When some prepared instance passed, the start goes on instead and each failed instance is recorded as install_preparation_instance_unavailable.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8793,24 +8653,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "observation_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation hash invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "observation_package_deadline_overflow": {
       "category": "error",
       "ladder_class": "none",
@@ -8826,60 +8668,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports observation package deadline overflow.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_limit_exceeded": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package limit exceeded.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "observation_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports observation package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -15816,24 +15604,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "saved_ocr_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package hash invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "saved_ocr_package_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -15849,60 +15619,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports saved ocr package invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_limit": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package limit.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_open_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "saved_ocr_package_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports saved ocr package read failed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17353,6 +17069,12 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -17371,6 +17093,12 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "adb_port_present": "optional",
+        "android_started": "optional",
+        "device_process_present": "optional",
+        "elapsed_ms": "optional",
+        "exit_code": "optional",
+        "process_started": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -17433,6 +17161,132 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operator's scheduling pause of the instance defers the dispatch.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_recovery_package": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its return_home rung: the failed run bound no recovery package and no return-home package is configured for its game and server (the rung's recovery_rung_finished outcome; formerly the reason no_recovery_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_startup_package": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its application_restart rung: the instance has no startup package (the rung's recovery_rung_finished outcome; formerly the reason no_startup_package).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_no_emulator_control": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped its emulator_restart rung: the instance has no emulator control (the rung's recovery_rung_finished outcome; formerly the reason no_emulator_control).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_capture_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's capture channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason capture_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_input_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's input channel is known to be unavailable (the rung's recovery_rung_finished outcome; formerly the reason input_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_rung_skipped_adb_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder skipped a rung because the instance's ADB baseline does not answer (the rung's recovery_rung_finished outcome; formerly the reason adb_unavailable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "session_timeout": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An agent session reached its deadline without a response: the Runtime answers it NeedsHuman with this code as the response code (formerly the unregistered spelling session_timeout).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_exhausted": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A stuck-recovery ladder ran out of rungs after the rungs that ran failed on their own (or every rung was skipped); the recovery_ladder_finished record's outcome, caused by the last failed rung's outcome when one failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_interrupted": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A holding interruption (shutdown, a lost key, an install drain, a closed admission, a pause drain or a key renewal refusal) ended a stuck-recovery ladder's climb; the outcome of the recovery_ladder_finished record and of the recovery_rung_finished record of the rung it ended, caused by the interruption.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19741,6 +19595,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
     },
+    "hand_off_to_claim": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand off to claim."
+    },
     "hand_off_to_ladder": {
       "owner": "runtime-host",
       "layer": "host",
@@ -20421,6 +20283,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: open owner file."
     },
+    "open_policy_wakes": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: open the host's business notifications that wake the policy driver (Workflow #383 AO-7)."
+    },
     "open_recovery_ladder_window": {
       "owner": "runtime-host",
       "layer": "host",
@@ -20564,6 +20434,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: prepare application resources."
+    },
+    "prepare_claim_hand_off": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: prepare claim hand off."
     },
     "prepare_cleanup_transfer": {
       "owner": "runtime-host",
@@ -21269,6 +21147,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read due monitors."
     },
+    "read_emulator_control_claim_ttl": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read emulator control claim ttl."
+    },
     "read_execution_close_result": {
       "owner": "runtime-host",
       "layer": "host",
@@ -21485,14 +21371,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read lab operation cleanup lease."
     },
-    "read_lab_operation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read lab operation package."
-    },
     "read_lab_operation_run": {
       "owner": "runtime-host",
       "layer": "host",
@@ -21548,14 +21426,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read monitor status."
-    },
-    "read_observation_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: read observation package."
     },
     "read_observed_binding": {
       "owner": "runtime-host",
@@ -24068,6 +23938,166 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Recording a scheduled dispatch's diagnostic failure record."
+    },
+    "runtime_lifecycle_install_drain": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an install transition's drain (formerly runtime.lifecycle.install_drain)."
+    },
+    "runtime_lifecycle_install_held": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a held install start (formerly runtime.lifecycle.install_held)."
+    },
+    "runtime_lifecycle_install_release": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a released install start preparing (formerly runtime.lifecycle.install_release)."
+    },
+    "runtime_lifecycle_policy_initialization": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy initialization (formerly runtime.lifecycle.policy_initialization)."
+    },
+    "runtime_lifecycle_policy_monitor": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy monitor (formerly runtime.lifecycle.policy_monitor)."
+    },
+    "runtime_lifecycle_policy_forward": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy forward projection (formerly runtime.lifecycle.policy_forward)."
+    },
+    "runtime_lifecycle_strategic_report": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a strategic report (formerly runtime.lifecycle.strategic_report)."
+    },
+    "runtime_lifecycle_session_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an execution session's close (formerly runtime.lifecycle.session_close)."
+    },
+    "runtime_lifecycle_connection_preparation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a step of a physical instance's connection preparation (formerly runtime.lifecycle.connection_preparation)."
+    },
+    "runtime_lifecycle_operation_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: an operation's cleanup or its failure's own record (formerly runtime.lifecycle.operation_cleanup)."
+    },
+    "runtime_lifecycle_connection_cleanup": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a client connection's cleanup (formerly runtime.lifecycle.connection_cleanup)."
+    },
+    "runtime_lifecycle_shutdown_join": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: joining the Runtime's threads at shutdown (formerly runtime.lifecycle.shutdown_join)."
+    },
+    "runtime_lifecycle_info_file_removal": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: removing the Runtime's info file (formerly runtime.lifecycle.info_file_removal)."
+    },
+    "runtime_lifecycle_retained_reference": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a retained Runtime reference at close (formerly runtime.lifecycle.retained_reference)."
+    },
+    "runtime_lifecycle_host_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the Runtime host's close (formerly runtime.lifecycle.host_close)."
+    },
+    "runtime_lifecycle_policy_driver": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy driver (formerly runtime.lifecycle.policy_driver)."
+    },
+    "runtime_lifecycle_policy_control": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: policy control (formerly runtime.lifecycle.policy_control)."
+    },
+    "runtime_lifecycle_policy_bootstrap": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: the policy bootstrap (formerly runtime.lifecycle.policy_bootstrap)."
+    },
+    "runtime_lifecycle_selection_record": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: a select step's record that could not be written after the confirmation capture ended the run (formerly runtime.lifecycle.selection_record)."
+    },
+    "runtime_lifecycle_shutdown_requested": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime lifecycle failure stage: recording the shutdown_requested lifecycle phase as the Runtime host closes (formerly runtime.lifecycle.shutdown_requested)."
     }
   }
 }

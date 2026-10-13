@@ -160,12 +160,27 @@ impl HostShared {
                 Some(detail) => format!("{error}: {detail}"),
                 None => error.to_string(),
             };
-            // A declared prefix beyond the authenticated source head is an invalid prefix.
+            // A declared prefix beyond the authenticated source head is an invalid prefix. Ledger
+            // revision 3: the ledger's refusal is the failure's `caused_by` link, not its text.
             match error.code() {
                 code if code
                     == actingcommand_ledger::LedgerCode::LedgerPrefixBeyondHead.as_str() =>
                 {
-                    source_error(HostCode::SavedSourceIncomplete, detail)
+                    let cause = actingcommand_contract::outcome::Outcome::new(
+                        actingcommand_ledger::LedgerCode::LedgerPrefixBeyondHead,
+                    );
+                    let cause =
+                        match actingcommand_contract::outcome::Location::relayed(error.operation())
+                        {
+                            Some(operation) => cause.operation(operation),
+                            None => cause,
+                        };
+                    RuntimeHostError::request(
+                        HostCode::SavedSourceIncomplete,
+                        ContractLocation::RecognizeArtifact,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_caused_by(cause)
                 }
                 relayed => relayed_source_error(relayed, detail),
             }
@@ -223,59 +238,23 @@ impl HostShared {
         })?;
         let png_read = png_started.elapsed();
         let package_started = Instant::now();
-        let bundle = if input.expected_sha256.is_directory_source() {
-            let provider = self.execution()?.vision_provider().ok_or_else(|| {
-                source_error(
-                    HostCode::SavedOcrProviderUnavailable,
-                    "Runtime OCR provider is not configured",
-                )
-            })?;
-            ExternallyVerifiedBundle::load_path(
-                "saved_artifact_ocr",
-                Path::new(&input.package_path),
-                &input.expected_sha256,
-                false,
-                Some(provider),
-                deadline,
+        // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is recorded
+        // and compared with nothing.
+        let provider = self.execution()?.vision_provider().ok_or_else(|| {
+            source_error(
+                HostCode::SavedOcrProviderUnavailable,
+                "Runtime OCR provider is not configured",
             )
-            .map_err(|error| source_error(HostCode::SavedOcrPackageInvalid, error))?
-        } else {
-            let package = fs::File::open(&input.package_path)
-                .map_err(|error| source_error(HostCode::SavedOcrPackageOpenFailed, error))?;
-            let mut bytes = Vec::new();
-            package
-                .take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| source_error(HostCode::SavedOcrPackageReadFailed, error))?;
-            if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-                return Err(source_error(
-                    HostCode::SavedOcrPackageLimit,
-                    "compressed package limit exceeded",
-                ));
-            }
-            let expected = ExternalExpectedSha256::parse_hex(
-                input.expected_sha256.legacy_sha256().ok_or_else(|| {
-                    source_error(
-                        HostCode::SavedOcrPackageHashInvalid,
-                        "legacy package identity missing",
-                    )
-                })?,
-            )
-            .map_err(|error| source_error(HostCode::SavedOcrPackageHashInvalid, error))?;
-            let provider = self.execution()?.vision_provider().ok_or_else(|| {
-                source_error(
-                    HostCode::SavedOcrProviderUnavailable,
-                    "Runtime OCR provider is not configured",
-                )
-            })?;
-            ExternallyVerifiedBundle::load_with_vision_provider(
-                "saved_artifact_ocr",
-                &bytes,
-                expected,
-                provider,
-            )
-            .map_err(|error| source_error(HostCode::SavedOcrPackageInvalid, error))?
-        };
+        })?;
+        let bundle = ExternallyVerifiedBundle::load_path(
+            "saved_artifact_ocr",
+            Path::new(&input.package_path),
+            &input.expected_sha256,
+            false,
+            Some(provider),
+            deadline,
+        )
+        .map_err(|error| source_error(HostCode::SavedOcrPackageInvalid, error))?;
         let package_load = package_started.elapsed();
         check_deadline(deadline)?;
         let ocr_started = Instant::now();
@@ -584,8 +563,8 @@ fn unavailable_source_artifact(
             HostCode::SavedSourceArtifactEvicted,
             recorded(
                 proof
-                    .outcome
-                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+                    .terminal_event
+                    .map_or(proof.intent.sequence, |terminal| terminal.sequence),
             ),
         ),
         Some(actingcommand_ledger::ArtifactAvailability::PendingEviction(proof)) => source_error(
@@ -596,8 +575,8 @@ fn unavailable_source_artifact(
             HostCode::SavedSourceArtifactEvictionFailed,
             recorded(
                 proof
-                    .outcome
-                    .map_or(proof.intent.sequence, |outcome| outcome.sequence),
+                    .terminal_event
+                    .map_or(proof.intent.sequence, |terminal| terminal.sequence),
             ),
         ),
         _ => relayed_source_error(

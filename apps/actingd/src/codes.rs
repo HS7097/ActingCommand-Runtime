@@ -11,8 +11,6 @@ actingcommand_contract::outcome_codes! {
     pub enum ActingdCode {
         ConfigUnavailable => "config_unavailable": error / none,
         ConfigSizeInvalid => "config_size_invalid": error / none,
-        ConfigReadFailed => "config_read_failed": error / none,
-        ConfigDecodeFailed => "config_decode_failed": error / none,
         InstallProviderRetired => "install_provider_retired": error / none,
         MaintenanceConfigInvalid => "maintenance_config_invalid": error / none,
         GovernanceCapabilityRetired => "governance_capability_retired": error / none,
@@ -74,6 +72,9 @@ actingcommand_contract::outcome_codes! {
         CaptureBackendInvalid => "capture_backend_invalid": error / none,
         TouchBackendMustBeExplicit => "touch_backend_must_be_explicit": error / none,
         CaptureBackendMustBeExplicit => "capture_backend_must_be_explicit": error / none,
+        /// #398 R1 §5.1 (RD-3i): an instance's device fields do not fit its device kind, for
+        /// example `capture_backend: scrcpy` on an emulator.
+        DeviceConfigInvalid => "device_config_invalid": error / none,
         NemuAppIndexInvalid => "nemu_app_index_invalid": error / none,
         NemuPairedInputConfigurationMissing => "nemu_paired_input_configuration_missing": error / none,
         InstanceRegistrationInvalid => "instance_registration_invalid": error / none,
@@ -147,6 +148,19 @@ actingcommand_contract::outcome_codes! {
         PolicyMonitorRetriesExhausted => "policy_monitor_retries_exhausted": error / none,
         PolicyMonitorRuntimeIdentityChanged => "policy_monitor_runtime_identity_changed": error / none,
         PolicyMonitorConfigInvalid => "policy_monitor_config_invalid": error / none,
+        // Workflow #378 A3 (ledger revision 3): a provider startup failure of the device layer
+        // that names no registered code of its own (was the dynamic `<category>.<stage>`
+        // spelling and its `device_error` fallback).
+        ProviderNativeFailed => "provider_native_failed": error / none,
+        // Workflow #378 A3: why the configuration manifest reports a subsystem on or off (the
+        // `outcome` of a `config.subsystems` entry; was the prose `reason`).
+        ConfigSubsystemConfigured => "config_subsystem_configured": info / none,
+        ConfigSubsystemConfiguredOff => "config_subsystem_configured_off": info / none,
+        ConfigSubsystemFlagAbsent => "config_subsystem_flag_absent": info / none,
+        ConfigSubsystemSectionAbsent => "config_subsystem_section_absent": info / none,
+        ConfigSubsystemAlwaysOn => "config_subsystem_always_on": info / none,
+        ConfigSubsystemDiscoveryBound => "config_subsystem_discovery_bound": info / none,
+        ConfigSubsystemDiscoveryUnbound => "config_subsystem_discovery_unbound": info / none,
     }
 }
 

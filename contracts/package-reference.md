@@ -47,22 +47,34 @@ source-tree reference with `source_tree_loader_retired`.
 
 ## Content-directory admission
 
-The locator names a local directory, typically named by its own digest, or a content
-container file (`<digest>.zip` or `<digest>.json`, see "Containers"). The locator itself is
-canonicalized first (links above it are resolved); every entry inside a directory is read
-without following links, and a container file is opened without following a link.
-Admission runs in this order under one deadline:
+Workflow #336 PKG-S1 (option 丙): a package is admitted by its path, structurally. Neither a
+digest of the package nor a pin inside it (a legacy manifest's per-file hashes, a select
+step's `policy.sha256`, an OCR dictionary's or truth set's `sha256`) is computed or compared,
+and no name is read as an identity. The path alone chooses the reading:
 
-1. The reference is validated and the locator must be absolute.
-2. If the last segment of the locator, or of its canonical form, has the digest form
-   (64 lowercase hex digits), or is a digest-form stem followed by `.zip` or `.json` (ASCII
-   case-insensitive), and that digest differs from the reference,
-   `content_directory_name_mismatch` is returned before any file is read. A locator with
-   any other name is verified only against the explicit reference.
-3. The content is read into memory exactly once, as a table of `/`-separated relative paths
+| Path | Reading |
+|---|---|
+| a directory | the content directory, a source package |
+| `*.json` | the single JSON container, a source package |
+| `*.zip` without `resources/manifest.json` | the ZIP container, a source package |
+| `*.zip` holding `resources/manifest.json` | an assembled (legacy) package, expanded as it is |
+
+A source package never holds `resources/manifest.json` (`source_contains_derived_output`),
+so the two kinds of ZIP are never confused. The locator itself is canonicalized first (links
+above it are resolved); every entry inside a directory is read without following links, and
+a file is opened without following a link. Admission runs in this order under one deadline:
+
+1. The locator must be absolute. The caller's reference (a request's, a configuration's or a
+   Lab flag's) is recorded on the admitted package as the caller gave it and compared with
+   nothing: from PKG-S1 to PKG-S4 the fields that still carry a package digest (the
+   `package_sha256` of `PackageAdmitted` and of the entry-recovery facts, the Lab evidence's
+   expected and actual package references, `PackageDebugSummary.verified_sha256`) hold that
+   given value, not a verified one; PKG-S2 and PKG-S4 delete them. A Git source-tree
+   reference is refused (`source_tree_loader_retired`).
+2. The content is read into memory exactly once, as a table of `/`-separated relative paths
    and their bytes. A directory contributes every regular file at any depth; empty
-   directories do not contribute. A regular file is a content container, read whole and
-   expanded by the extension of the locator ("Containers"). Anything else fails
+   directories do not contribute. A regular file is read whole and treated by its extension
+   (the table above, and "Containers"). Anything else fails
    `content_directory_not_directory`. Links, junctions and every other reparse point,
    including cloud placeholders, fail with `content_directory_link_or_type`. A relative
    path in a directory must be UTF-8 (`content_directory_path_encoding`). Every entry, from
@@ -73,12 +85,15 @@ Admission runs in this order under one deadline:
    `version https://git-lfs.github.com/spec/v1` fails with
    `content_directory_lfs_pointer`. The existing file count, per-file, total and
    resident limits apply, and nesting is limited to 64 segments.
-4. The digest of those bytes is compared in constant time with the reference.
-   `content_directory_digest_mismatch` reports the expected and actual digests and the
-   file count. No JSON has been parsed at this point.
-5. The same snapshot is assembled in memory ("In-memory assembly" and the
-   self-contained layout below) and issued with the content-directory reference.
-   Nothing is read from disk afterwards.
+3. A directory's file identity (its volume and file index) is read before and after the
+   read; if they differ, the directory was replaced while it was read (for example by the
+   two renames of an in-place package update) and admission fails
+   `content_directory_changed_during_read`, so a table read part from the old directory and
+   part from the new one is never admitted (D16). A container or an assembled ZIP is read as
+   one file and needs no such check.
+4. The same snapshot is assembled in memory ("In-memory assembly" and the
+   self-contained layout below) and issued with the recorded reference. Nothing is read
+   from disk afterwards.
 
 The digest `content-directory.v1` is the lowercase hex SHA-256 of the line
 `actingcommand.package.content-directory.v1` followed by one line per file,
@@ -86,8 +101,10 @@ The digest `content-directory.v1` is the lowercase hex SHA-256 of the line
 UTF-8 bytes of the `/`-separated relative path; every line ends with `\n`. Raw bytes are
 hashed: line endings, byte-order marks, alternate data streams, timestamps and
 attributes are neither normalized nor included, and paths are not Unicode-normalized.
-`actingcommand_contract::content_directory_digest` is the single implementation. The
-same value can be recomputed with coreutils (Git Bash or Linux):
+`actingcommand_contract::content_directory_digest` is the single implementation; no
+admission computes it (Workflow #336 PKG-S1), only the authoring and recording tools that
+still name a package by it. The same value can be recomputed with coreutils (Git Bash or
+Linux):
 
 ```sh
 cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n'; find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -b | sed 's/ \*/  /'; } | sha256sum -b | cut -c1-64
@@ -95,9 +112,8 @@ cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n
 
 ## Containers
 
-Workflow #336: the same content can be held by three containers. All three use the one
-content-directory reference above and the one digest; the container is chosen by the
-locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
+Workflow #336: the same content can be held by three containers. All three have the one
+content-directory digest; the container is chosen by the locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
 is recorded nowhere: references, requests and ledger records are unchanged. A Lab recording's
 `record stop` writes its package as `<D>.zip` or `<D>.json` in these containers
 (`lab-recording.md`, "Container and digest").
@@ -123,8 +139,9 @@ ZIP rules:
   no leading `/` (`content_zip_entry_invalid`, the rule of ZIP package entries).
 - Entry names are paths from the archive root (`control.json`, not `<D>/control.json`): zip
   the directory's contents, not the directory itself. Windows Explorer "Send to > Compressed
-  (zipped) folder" and `Compress-Archive -Path <D>` add a top-level `<D>/` and fail with
-  `content_directory_digest_mismatch`; `Compress-Archive -Path <D>\* -DestinationPath <D>.zip`
+  (zipped) folder" and `Compress-Archive -Path <D>` add a top-level `<D>/`, and the package
+  then has no `control.json` at its root and fails admission;
+  `Compress-Archive -Path <D>\* -DestinationPath <D>.zip`
   or Python `shutil.make_archive(<out>, "zip", root_dir=<D>)` put the entries at the root.
 - A symbolic link or any other non-regular entry fails `content_zip_entry_invalid`.
 - An archive that cannot be read, an encrypted entry, an unsupported compression method or
@@ -162,11 +179,10 @@ objects so that the bytes, and the digest, never depend on how a serializer writ
 `actingcommand_pack_containment::expand_content_container` expands container bytes in
 memory under these rules; `Containment::load_content_entries` (and its
 `ExternallyVerifiedBundle` and `PreparedContainedTask` wrappers) admits such a table as
-admission of a read locator does from step 3 on, entry rules and digest comparison included,
-so a container can be checked before it is written. An instance's `resource_package` and
-`startup_package` (`contracts/actingd-check-config.md`) do not take containers: a file there
-is still a ZIP package identified by the SHA-256 of the file itself, so a container file
-there is refused as an invalid package.
+admission of a read locator does from step 2 on, entry rules included (and, like every
+admission, compares no digest), so a container can be checked before it is written. Since
+Workflow #336 PKG-S1 an instance's `resource_package` and `startup_package`
+(`contracts/actingd-check-config.md`) are read by their path like every other locator.
 
 A Runtime from before Workflow #336 refuses a container file with
 `content_directory_not_directory`, and its configuration check refuses a procedure binding
@@ -223,7 +239,7 @@ longer lists it as an accepted package reference.
 
 ## In-memory assembly
 
-Only after the entire snapshot is verified may it be parsed. The same in-memory bytes
+Only after the entire snapshot is read may it be parsed. The same in-memory bytes
 feed the pure parser owned by `pack-containment::source` and the normal reference
 closure/recognition/navigation validation. The entry execution document also uses the
 existing `canonical_task` transformation (including inferred guards and canonical click
@@ -243,18 +259,18 @@ The bundle contains `control.json` with the existing Lab control fields, and:
   their declared local paths inside this tree.
 - Optional `resources/navigation/<game>.<server>.projection.json` source annotations.
 
-Recognition pack/pages, navigation, operation index, primitives and the dependency
-hash index are derived only in memory. A source tree containing those generated output
+Recognition pack/pages, navigation, operation index, primitives and the derived manifest
+(only its `entry_task_id`, no file hashes since Workflow #336 PKG-S1) are derived only in
+memory. A source tree containing those generated output
 paths is rejected. All operations and shared dependencies in the self-contained bundle
 are parsed together; references to missing resources fail before any input.
 
 ## Content-directory tools and the bundle index
 
 `actinglab package digest --package <directory>` reads the directory with the loader's own
-snapshot (the rules of "Content-directory admission" without the name comparison), computes
-its content-directory reference and then admits the directory in full against that
-reference, so a digest-form name that differs from the content fails
-`content_directory_name_mismatch`. `--package` may equally name a content container file
+snapshot (the rules of "Content-directory admission"), computes its content-directory
+reference and then admits the directory in full by its path. `--package` may equally name a
+content container file
 (`.zip` or `.json`, "Containers"): the same content prints the same reference whichever
 container holds it. It prints `reference` (the object above), the
 `package_id`, `server` and `entry_task_id` stated by `control.json`, `file_count` and
@@ -337,9 +353,10 @@ duplicate uses or roles and missing references fail explicitly. There are at mos
 many entries as packs. `BundleIndex::validate()` dispatches the version-specific
 structural validation; the v2 type continues to reject v3.
 
-`PreparedContainedTask::describe_path(instance_label, locator, expected, deadline)` in
-execution-kernel admits actual material through hash verification and Containment's
-metadata-only capability, performs the same task preparation as Runtime and returns a
+`PreparedContainedTask::describe_path(instance_label, locator, recorded, deadline)` in
+execution-kernel admits actual material by its path through Containment's metadata-only
+capability (Workflow #336 PKG-S1: `recorded` is recorded on the descriptor and compared
+with nothing), performs the same task preparation as Runtime and returns a
 read-only `TaskPackageDescriptor`. It returns no runnable task and performs no provider
 inference. The descriptor exposes the actual package/task identity, package reference,
 mode, game, server, resolution, declared prerequisite, resolved linear entry page,
@@ -348,7 +365,9 @@ callers must treat its identity/qualification as unknown, never infer it from pa
 application names or index labels. This does not prove execution or recognition results.
 
 `validate_bundle_maintenance(&index, &descriptors)` checks that the admitted material set
-matches every indexed identity, task, server and content digest, then checks each use and
+matches every indexed identity `(package_id, server, entry_task_id)` and the index's game;
+the index's digests are compared with nothing (Workflow #336 PKG-S1). It then checks each use
+and
 complete prerequisite chain against the bindings supplied by the declaration. Startup
 uses ordinary task admission and rejects resource readings through
 `PreparedContainedTask::startup_incompatibility`, the same predicate used by Host before
@@ -391,7 +410,9 @@ independent evidence ZIP hash.
 Runtime requests, prepared observations, effective configuration, task/recovery facts,
 Lab results and `EvidencePackage` carry the complete reference. `scheduled_execution`
 uses its existing `package_path` locator and the procedure binding's typed
-`package_digest`; admission and execution compare that same reference. Git source-tree
+`package_digest`; the run's identity check compares the request's reference with the
+binding's until PKG-S3, and admission records it and compares it with nothing (Workflow
+#336 PKG-S1). Git source-tree
 and content-directory binding fingerprints hash the canonical tuple of binding version,
 procedure alias, complete reference, operation ID and ordered yield points. ZIP bindings
 keep the original tuple.

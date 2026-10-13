@@ -3,8 +3,9 @@
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
+use crate::failure_identity::identifier_text;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Location;
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 
 #[derive(Clone, Copy)]
 pub(super) enum PolicyOutcomeCacheUpdate<'a> {
@@ -316,19 +317,21 @@ impl HostShared {
                 OriginModule::Runtime,
                 EventActor::Runtime,
                 run_links(self.events.action_id()?),
+                // Ledger revision 3: the record's outcome names the run it settles; the former
+                // `code=` message is not recorded.
                 RuntimePayloadDraft::failed(
                     DiagnosticCode::RuntimeDiagnostic,
                     EffectDisposition::NotPerformed,
+                    Outcome::new(HostCode::PolicySettlementReleaseRecovered)
+                        .operation(OPERATION)
+                        .instance_id(identifier_text(instance_id))
+                        .lease_id(identifier_text(lease_id))
+                        .task_id(identifier_text(task_id)),
                     DiagnosticDetailDraft::new(
                         "policy_settlement",
                         RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
                         "runtime_host",
                         OPERATION.as_str(),
-                        format!(
-                            "code={}",
-                            HostCode::PolicySettlementReleaseRecovered.as_str()
-                        ),
-                        Sensitivity::Internal,
                     ),
                     AuditInput::new(),
                 ),
@@ -365,10 +368,7 @@ impl HostShared {
                 &decision_id,
                 through,
                 EventSeverity::Warning,
-                format!(
-                    "code={}",
-                    HostCode::PolicySettlementDispatchLeftOpen.as_str()
-                ),
+                Outcome::new(HostCode::PolicySettlementDispatchLeftOpen),
                 OPERATION,
             )?;
         }
@@ -395,11 +395,18 @@ impl HostShared {
             .map_err(|_| ledger_error(OPERATION))?;
         let reason = HostCode::PolicySettlementDispatchUnsettled.code();
         for dispatch in unsettled {
+            // The refusal's code is the outcome's `failure_code`; a spelling the catalog does
+            // not register stays visible as its `caused_by` link instead.
+            let outcome = Outcome::new(reason);
+            let outcome = match Code::relayed(dispatch.cause) {
+                Some(cause) => outcome.failure_code(cause),
+                None => outcome.caused_by(Outcome::relayed(dispatch.cause)),
+            };
             let instance_id = self.record_scheduled_dispatch_diagnostic(
                 &dispatch.decision_id,
                 through,
                 EventSeverity::Error,
-                format!("code={reason} failure_code={}", dispatch.cause),
+                outcome,
                 OPERATION,
             )?;
             let alias = lock(
@@ -415,14 +422,15 @@ impl HostShared {
         Ok(())
     }
 
-    /// Records `message` once at `severity` under the run links of the dispatch
-    /// `decision_id` (with its lease when it has one grant); returns the run's instance.
+    /// Records `outcome` once at `severity` under the run links of the dispatch `decision_id`
+    /// (with its lease when it has one grant), adding the operation and the run's instance, task
+    /// and lease (ledger revision 3); returns the run's instance.
     fn record_scheduled_dispatch_diagnostic(
         &self,
         decision_id: &str,
         through: u64,
         severity: EventSeverity,
-        message: String,
+        outcome: Outcome,
         operation: impl Into<Location>,
     ) -> RuntimeHostResult<InstanceId> {
         let operation: Location = operation.into();
@@ -476,6 +484,14 @@ impl HostShared {
             [grant] => grant.links().lease_id().copied(),
             _ => None,
         };
+        let outcome = outcome
+            .operation(operation)
+            .instance_id(identifier_text(instance_id))
+            .task_id(identifier_text(task_id));
+        let outcome = match &lease_id {
+            Some(lease_id) => outcome.lease_id(identifier_text(lease_id)),
+            None => outcome,
+        };
         let request = super::contained_task::recovery_request_identity(
             *request_id,
             *correlation_id,
@@ -511,13 +527,12 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                outcome,
                 DiagnosticDetailDraft::new(
                     "policy_settlement",
                     RuntimeLifecycleFailureStage::PolicyInitialization.as_str(),
                     "runtime_host",
                     operation.as_str(),
-                    message,
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),
@@ -811,7 +826,7 @@ impl HostShared {
             PolicyOutcomeCacheUpdate::Commit(
                 authoritative_outcome
                     .as_ref()
-                    .map(SchedulingOutcomeProjection::outcome),
+                    .map(SchedulingOutcomeProjection::scheduling_result),
             ),
         )?;
         // Workflow #336 L6: the run's resolution is no longer needed once it is recorded.
@@ -829,14 +844,17 @@ impl HostShared {
                         RuntimeErrorCode::RuntimeFatal,
                     ));
                 }
-                SchedulingOutcomeProjection::new(settlement_position, projection.outcome().clone())
-                    .map_err(|_| {
-                        RuntimeHostError::fatal(
-                            HostCode::PolicyRecomputeProjectionInvalid,
-                            HostLocation::CompleteScheduledPolicyRun,
-                            RuntimeErrorCode::RuntimeFatal,
-                        )
-                    })
+                SchedulingOutcomeProjection::new(
+                    settlement_position,
+                    projection.scheduling_result().clone(),
+                )
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        HostCode::PolicyRecomputeProjectionInvalid,
+                        HostLocation::CompleteScheduledPolicyRun,
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })
             })
             .transpose()?;
         Ok((execution, authoritative_outcome))
@@ -965,8 +983,8 @@ impl HostShared {
                 }
             })?;
         if projection.ledger_position() < terminal.sequence
-            || projection.outcome().identity() != &identity
-            || !expected_keys.contains(projection.outcome().disposition().outcome_key())
+            || projection.scheduling_result().identity() != &identity
+            || !expected_keys.contains(projection.scheduling_result().disposition().outcome_key())
         {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeProjectionMismatch,
@@ -1038,13 +1056,12 @@ impl HostShared {
                 None => RuntimePayloadDraft::failed(
                     DiagnosticCode::RuntimeDiagnostic,
                     EffectDisposition::Indeterminate,
+                    error.record_outcome(),
                     DiagnosticDetailDraft::new(
                         "policy_driver",
                         RuntimeLifecycleFailureStage::PolicyDriver.as_str(),
                         "runtime_host",
                         error.operation(),
-                        error.code(),
-                        Sensitivity::Internal,
                     ),
                     AuditInput::new(),
                 ),
@@ -1180,17 +1197,6 @@ impl HostShared {
                 ));
             }
         };
-        let class = match task_failure.severity() {
-            EventSeverity::Warning => PolicyFailureClass::Recoverable,
-            EventSeverity::Fatal => PolicyFailureClass::Severe,
-            EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
-                return Err(RuntimeHostError::fatal(
-                    HostCode::PolicyRunFailureSeverityAmbiguous,
-                    HostLocation::CompleteScheduledPolicyFailure,
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-        };
         let EventPayload::Task(TaskPayload::Semantic(payload)) = task_failure.payload() else {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunFailureTerminalInvalid,
@@ -1199,8 +1205,9 @@ impl HostShared {
             ));
         };
         let TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Failure,
-            failure_code: Some(code),
+            task_result: TaskOutcome::Failure,
+            outcome: Some(outcome),
+            failure_severe,
             ..
         } = payload.fact()
         else {
@@ -1220,9 +1227,12 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
+        // Ledger revision 3 (model section 8.1): the code and the class come from the terminal
+        // through the contract's shared functions, as the startup recovery and the ledger read
+        // them, no longer from the terminal's severity (now its category).
         Ok(PolicyExecutionInput::Failed {
-            error_code: code.clone(),
-            class,
+            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+            class: actingcommand_contract::scheduled_failure_class(outcome.code(), *failure_severe),
         })
     }
 
@@ -1281,11 +1291,12 @@ impl HostShared {
                 if matches!(
                     payload.fact(),
                     TaskSemanticFact::TerminalCommitted {
+                        task_result,
                         outcome,
-                        failure_code,
                         ..
-                    } if *outcome == expected_outcome
-                        && failure_code.as_deref() == expected_failure_code
+                    } if *task_result == expected_outcome
+                        && outcome.as_ref().map(|outcome| outcome.code().as_str())
+                            == expected_failure_code
                 )
         );
         if !terminal_matches
@@ -1659,8 +1670,8 @@ pub(super) struct StartSettlement {
 /// Workflow #369 E3 (#670 safety net): a dispatch the start could not settle.
 pub(super) struct UnsettledDispatch {
     pub(super) decision_id: String,
-    /// The code of the refusal.
-    pub(super) cause: String,
+    /// The code of the refusal, as the host or the ledger relays it.
+    pub(super) cause: &'static str,
 }
 
 /// The refusals of one run's recovered settlement that the start records instead of failing
@@ -1720,7 +1731,7 @@ pub(super) fn reconcile_policy_dispatches(
                 policy.quarantine_dispatch(&decision_id);
                 start.unsettled.push(UnsettledDispatch {
                     decision_id,
-                    cause: error.code().to_owned(),
+                    cause: error.code(),
                 });
                 continue;
             }
@@ -1977,16 +1988,6 @@ fn reconcile_scheduled_policy_outcomes_for(
                     )
                 }
                 [terminal] if terminal.event_type() == EventType::TaskFailed => {
-                    let class = match terminal.severity() {
-                        EventSeverity::Warning => PolicyFailureClass::Recoverable,
-                        EventSeverity::Fatal => PolicyFailureClass::Severe,
-                        EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
-                            return Err(policy_admission_fatal(
-                                HostCode::PolicyRunFailureSeverityAmbiguous,
-                                HostLocation::ReconcilePolicyOutcomes,
-                            ));
-                        }
-                    };
                     let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload()
                     else {
                         return Err(policy_admission_fatal(
@@ -1995,8 +1996,9 @@ fn reconcile_scheduled_policy_outcomes_for(
                         ));
                     };
                     let TaskSemanticFact::TerminalCommitted {
-                        outcome: TaskOutcome::Failure,
-                        failure_code: Some(error_code),
+                        task_result: TaskOutcome::Failure,
+                        outcome: Some(outcome),
+                        failure_severe,
                         ..
                     } = payload.fact()
                     else {
@@ -2009,9 +2011,15 @@ fn reconcile_scheduled_policy_outcomes_for(
                         recovered_scheduled_task_runtime_ms(ledger, through, terminal)?;
                     (
                         terminal.timestamp_unix_ms(),
+                        // Ledger revision 3 (model section 8.1): the code and the class come
+                        // from the terminal through the contract's shared functions, as the live
+                        // settlement and the ledger read them.
                         PolicyExecutionInput::Failed {
-                            error_code: error_code.clone(),
-                            class,
+                            error_code: actingcommand_contract::scheduled_failure_code(outcome),
+                            class: actingcommand_contract::scheduled_failure_class(
+                                outcome.code(),
+                                *failure_severe,
+                            ),
                         },
                         runtime_ms,
                     )
@@ -2092,7 +2100,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                     policy.quarantine_dispatch(&decision_id);
                     start.unsettled.push(UnsettledDispatch {
                         decision_id,
-                        cause: error.code().to_owned(),
+                        cause: error.code(),
                     });
                 }
                 _ => return Err(error),
@@ -2266,8 +2274,8 @@ pub(super) fn recover_authoritative_policy_outcomes(
             ));
         };
         let TaskSemanticFact::TerminalCommitted {
-            outcome: TaskOutcome::Success,
-            failure_code: None,
+            task_result: TaskOutcome::Success,
+            outcome: None,
             scheduling_disposition: Some(_),
             ..
         } = payload.fact()
@@ -2305,7 +2313,7 @@ pub(super) fn recover_authoritative_policy_outcomes(
         let projected = ledger
             .project_scheduling_outcomes(identity, ledger_position)
             .map_err(|_| ledger_error(HostLocation::RecoverPolicySchedulingOutcomes))?;
-        insert_authoritative_policy_outcome(&mut outcomes, projected.outcome().clone())?;
+        insert_authoritative_policy_outcome(&mut outcomes, projected.scheduling_result().clone())?;
     }
     Ok(outcomes)
 }

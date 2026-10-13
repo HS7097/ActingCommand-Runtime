@@ -258,6 +258,91 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "platform_tools_dir=$outDir"
 
+      - name: Fetch and verify the scrcpy server
+        id: scrcpy_server
+        shell: pwsh
+        run: |
+          # #402 RD-3: the official scrcpy release asset at its versioned URL is the only source
+          # (no other host, no cache, no fallback). Its size and SHA-256 are checked against
+          # windows-tool-sources.v1.json. The verified file is named in ACTINGCOMMAND_SCRCPY_SERVER
+          # for the build, where crates/device/build.rs checks it against the same pin again and
+          # embeds it in actingcommand-actingd.exe. Nothing is executed here. Only network errors
+          # and non-200 responses are retried; a mismatch never is.
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content -LiteralPath 'scripts/windows-tools/windows-tool-sources.v1.json' -Raw |
+            ConvertFrom-Json -Depth 100).components.'scrcpy-server-5.0.1'
+          $artifacts = @($pin.artifacts)
+          if ($artifacts.Count -ne 1) {
+            throw "scrcpy_server_content_invalid: the pin must list exactly one artifact, it lists $($artifacts.Count)"
+          }
+          $artifact = $artifacts[0]
+          $url = [string]$artifact.url
+          $size = [long]$artifact.size
+          $pinnedSha256 = [string]$artifact.sha256
+          $version = [regex]::Escape([string]$pin.version)
+          if ($url -cnotmatch "\Ahttps://github\.com/Genymobile/scrcpy/releases/download/v$version/scrcpy-server-v$version\z") {
+            throw "scrcpy_server_source_unavailable: the pinned URL is not the official release asset: $url"
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'actingcommand-scrcpy-server'
+          New-Item -ItemType Directory -Path $root | Out-Null
+
+          # 1. Download: same URL each time (GitHub redirects release assets to its asset host),
+          #    5 minutes per attempt, at most 3 attempts.
+          $handler = [Net.Http.HttpClientHandler]::new()
+          $client = [Net.Http.HttpClient]::new($handler)
+          $client.Timeout = [TimeSpan]::FromMinutes(5)
+          $bytes = $null
+          try {
+            for ($attempt = 1; $attempt -le 3 -and $null -eq $bytes; $attempt++) {
+              if ($attempt -gt 1) {
+                Start-Sleep -Seconds (10 * ($attempt - 1))
+              }
+              try {
+                $response = $client.GetAsync($url).GetAwaiter().GetResult()
+              } catch {
+                Write-Host "scrcpy server attempt $attempt/3: GET $url failed: $($_.Exception.GetBaseException().Message)"
+                continue
+              }
+              try {
+                $status = [int]$response.StatusCode
+                $final = $response.RequestMessage.RequestUri
+                Write-Host "scrcpy server attempt $attempt/3: GET $url -> HTTP $status from $($final.Host)"
+                if ($status -ne 200) {
+                  continue
+                }
+                if ($final.Scheme -cne 'https' -or
+                    ($final.Host -cne 'github.com' -and
+                     -not $final.Host.EndsWith('.githubusercontent.com', [StringComparison]::Ordinal))) {
+                  throw "scrcpy_server_source_unavailable: the release asset was served from an unexpected host: $($final.Host)"
+                }
+                $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+              } finally {
+                $response.Dispose()
+              }
+            }
+          } finally {
+            $client.Dispose()
+            $handler.Dispose()
+          }
+          if ($null -eq $bytes) {
+            throw "scrcpy_server_source_unavailable: no HTTP 200 response from $url in 3 attempts"
+          }
+
+          # 2. Size and the official SHA-256 the pin records.
+          if ($bytes.LongLength -ne $size) {
+            throw "scrcpy_server_digest_mismatch: received $($bytes.LongLength) bytes, the pin says $size"
+          }
+          $sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          if ($sha256 -cne $pinnedSha256) {
+            throw "scrcpy_server_digest_mismatch: SHA-256 expected $pinnedSha256 (pin), actual $sha256"
+          }
+          $path = Join-Path $root ([IO.Path]::GetFileName([string]$artifact.relative_path))
+          [IO.File]::WriteAllBytes($path, $bytes)
+          Write-Host "scrcpy server v$($pin.version): $($bytes.LongLength) bytes, SHA-256 $sha256 (pin)"
+
+          # 3. The build embeds exactly this file (crates/device/build.rs).
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ACTINGCOMMAND_SCRCPY_SERVER=$path"
+
       - name: Configure stable MSVC Rust toolchain
         shell: pwsh
         run: |

@@ -506,9 +506,7 @@ impl HostShared {
                         HostLocation::VerifyProposalReports,
                         RuntimeErrorCode::InvalidRequest,
                     )
-                    // Workflow #378 A4: the receipt's outcome names the report.
-                    .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
-                    .with_native_detail(format!("artifact_id={artifact_id}")),
+                    .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)),
                 ));
             }
         }
@@ -727,9 +725,7 @@ impl HostShared {
                     HostLocation::VerifyStrategicEvidence,
                     RuntimeErrorCode::InvalidRequest,
                 )
-                // Workflow #378 A4: the receipt's outcome names the evidence frame.
-                .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
-                .with_native_detail(format!("artifact_id={artifact_id}")));
+                .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)));
             }
             pointers.push(strategic_evidence_pointer(reference)?);
         }
@@ -774,9 +770,7 @@ impl HostShared {
                     HostLocation::ReadStrategicReport,
                     RuntimeErrorCode::InvalidRequest,
                 )
-                // Workflow #378 A4: the receipt's outcome names the stored report.
-                .with_outcome_values(|outcome| outcome.artifact_id(&artifact_id))
-                .with_native_detail(format!("artifact_id={artifact_id}")));
+                .with_outcome_values(|outcome| outcome.artifact_id(artifact_id)));
             };
             if stored != bytes {
                 return Err(RuntimeHostError::fatal(

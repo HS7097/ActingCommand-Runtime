@@ -14,13 +14,15 @@
 //! (`cleanup_scheduled_failure_with_run_links`, to which only the policy-run path passes a
 //! `LadderTrigger`). An admitted ladder turns that end into a transfer of the key to the
 //! ladder's claim, so nothing can take the instance between the failure and the climb. A
-//! preparation's ladder is queued as a claim after the preparation released its lease. Either
-//! way the ladder climbs on its instance's worker (`host_claims`) and holds the key from its
-//! first rung to its end (H-3): rung runs run on its token, each after the ladder queued its
-//! own continuation, to which the run's release hands the key back; the ladder renews before
-//! every step whose bound exceeds what is left; at every step it checks that it still holds
-//! the key and that no pause, capacity refusal, drain or shutdown ends the climb; and it
-//! releases once.
+//! daemon-start preparation's ladder is queued as a claim after the preparation released its
+//! dedicated lease; after a preparation on a held key (an emulator start or restart, a resume's
+//! reconnect, a self-check), the key's release hands the key straight to the ladder's claim
+//! (`release_to_preparation_ladder`). Either way the ladder climbs on its instance's worker
+//! (`host_claims`) and holds the key from its first rung to its end (H-3): rung runs run on its
+//! token, each after the ladder queued its own continuation, to which the run's release hands
+//! the key back; the ladder renews before every step whose bound exceeds what is left; at every
+//! step it checks that it still holds the key and that no pause, capacity refusal, drain or
+//! shutdown ends the climb; and it releases once.
 //!
 //! The rungs, in this fixed order, are existing work under the instance's key:
 //! `return_home` runs the failed run's bound recovery package as a standalone contained task
@@ -48,7 +50,8 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
-use actingcommand_contract::outcome::Code;
+use crate::failure_identity::identifier_text;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
     EmulatorInstanceAction, HolderId, InstanceStuckRecovery, IssuedCausationId,
@@ -73,20 +76,21 @@ const RECOVERY_READINESS_BACKOFF: [Duration; 3] = [
 /// (Workflow #369 H-3, review2 L7) the scheduling pause.
 const RECOVERY_READINESS_POLL: Duration = Duration::from_millis(500);
 /// Workflow #369 Q-5 (B1): a hold renews to a step's bound plus this margin.
-const HOLD_MARGIN_MS: u64 = 5_000;
+pub(super) const HOLD_MARGIN_MS: u64 = 5_000;
 /// Workflow #369 H-1, H-3: the TTL a ladder claim, and each continuation, is granted with; the
 /// ladder renews before every longer step.
 pub(super) const LADDER_CLAIM_TTL_MS: u64 = 120_000;
 /// Rung 2's bound before its startup run: the entry's ADB probe (30 s) and the application
 /// stop (60 s, an ADB application command).
 const APPLICATION_RESTART_ENTRY_BOUND_MS: u64 = 90_000;
-/// Rung 3's Stop (review L-3; Workflow #381 B, coordinator answer D3): the control bound
-/// 60 s + the readiness wait 120 s + the last `info` poll 10 s + the last process listing 10 s
-/// (F2) + the bounded state read after a failure 10 s (review M3) = 210 s.
-const EMULATOR_STOP_BOUND_MS: u64 = 210_000;
-/// Rung 3's Start: 60 + 120 + 10 s and the ADB baseline 30 s = 220 s on success; a failure ends
-/// at 60 + 120 + 10 s and the state read 10 s = 200 s.
-const EMULATOR_START_BOUND_MS: u64 = 220_000;
+/// Rung 3's Stop, and an operator's (H-4, S6b) (review L-3; Workflow #381 B, coordinator
+/// answer D3): the control bound 60 s + the readiness wait 120 s + the last `info` poll 10 s +
+/// the last process listing 10 s (F2) + the bounded state read after a failure 10 s (review M3)
+/// = 210 s.
+pub(super) const EMULATOR_STOP_BOUND_MS: u64 = 210_000;
+/// Rung 3's Start, and an operator's (H-4, S6b): 60 + 120 + 10 s and the ADB baseline 30 s =
+/// 220 s on success; a failure ends at 60 + 120 + 10 s and the state read 10 s = 200 s.
+pub(super) const EMULATOR_START_BOUND_MS: u64 = 220_000;
 
 /// One admitted ladder: its trigger, the facts' links and its claim.
 #[derive(Clone)]
@@ -247,6 +251,8 @@ fn ladder_invariant(code: impl Into<Code>) -> RuntimeHostError {
 impl HostShared {
     /// The summary is appended only after original acquisition disposal and the existing
     /// session close/release path returned. Its event identity is the preparation attempt.
+    /// Returns it with the ladder a failed preparation admitted, which is not queued yet: the
+    /// caller queues it, or hands it the key it holds (`release_to_preparation_ladder`).
     pub(super) fn record_preparation_finished(
         &self,
         instance_id: InstanceId,
@@ -255,7 +261,7 @@ impl HostShared {
         observations: &[actingcommand_device::BackendOpenObservation],
         check: &SchedulingResumeSelfCheck,
         recoverable: bool,
-    ) -> RuntimeHostResult<TerminalEvent> {
+    ) -> RuntimeHostResult<(TerminalEvent, Option<PendingRecoveryLadder>)> {
         let channel = |entry, passed| {
             if passed {
                 return BackendObservationStatus::Passed;
@@ -280,8 +286,11 @@ impl HostShared {
                     }
                 })
         };
+        // Ledger revision 3: the preparation's failure is the record's outcome, the code the
+        // self-check relays; a ladder it starts names that recorded code as its trigger.
+        let preparation_failure = check.failure_code.as_deref().map(Outcome::relayed);
         let event = self.append_event_raw(
-            if check.failure_code.is_some() {
+            if preparation_failure.is_some() {
                 EventSeverity::Warning
             } else {
                 EventSeverity::Info
@@ -296,7 +305,7 @@ impl HostShared {
                     stage,
                     capture: channel(BackendOpenEntry::Capture, check.capture.ok),
                     input: channel(BackendOpenEntry::Input, check.touch.ok),
-                    failure_code: check.failure_code.clone(),
+                    outcome: preparation_failure.clone(),
                 },
                 AuditInput::new(),
             ),
@@ -317,10 +326,10 @@ impl HostShared {
             || stage == RecoveryTriggerStage::RecoveryPreparation
             || self.fatal.is_shutdown_requested()
         {
-            return Ok(event);
+            return Ok((event, None));
         }
-        let Some(failure_code) = &check.failure_code else {
-            return Ok(event);
+        let Some(preparation_failure) = &preparation_failure else {
+            return Ok((event, None));
         };
         let settings = self
             .stuck_recovery()?
@@ -336,7 +345,7 @@ impl HostShared {
         .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderInstanceMissing))?;
         if !settings.enabled || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
         {
-            return Ok(event);
+            return Ok((event, None));
         }
         let issuer = self.events.issuer();
         let request_id = issuer
@@ -359,9 +368,12 @@ impl HostShared {
             causation_id,
             holder_id,
         )?;
-        // Workflow #369 H-1: a preparation's ladder waits as a claim; the preparation released
-        // its lease before this record, so the pump grants it on the free instance.
-        self.queue_recovery_ladder(PendingRecoveryLadder {
+        // Workflow #369 H-1, P1: the admitted ladder goes back to the preparation. After a
+        // daemon-start preparation, whose dedicated lease was released before this record, it
+        // is queued and the pump grants it on the free instance; after a preparation on a held
+        // key (an emulator start or restart, a resume's reconnect, a self-check), the key's
+        // holder hands that key straight to it at its release (`release_to_preparation_ladder`).
+        let pending = PendingRecoveryLadder {
             instance_id,
             instance_alias: resolved.instance_alias,
             trigger: RecoveryLadderTrigger {
@@ -369,7 +381,7 @@ impl HostShared {
                 run_id: None,
                 task_id: None,
                 preparation: Some(event),
-                failure_code: failure_code.clone(),
+                failure_code: preparation_failure.code().clone(),
             },
             recovery: None,
             recovery_configured: None,
@@ -382,8 +394,11 @@ impl HostShared {
             cooldown_ms: u64::from(settings.cooldown_secs) * 1_000,
             claim,
             holder_id,
-        })?;
-        Ok(event)
+        };
+        Ok((
+            event,
+            self.admit_recovery_ladder(&pending)?.then_some(pending),
+        ))
     }
 
     /// Workflow #369 H-1: the ladder claim's own synthetic request.
@@ -490,7 +505,7 @@ impl HostShared {
             .get(&instance_id)
             .copied()
             .unwrap_or_default();
-        if !is_stuck_recovery_trigger(trigger.terminal.failure_code)
+        if !is_stuck_recovery_trigger(&trigger.terminal.failure_code)
             || resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
             || !settings.enabled
         {
@@ -536,7 +551,7 @@ impl HostShared {
                 run_id: Some(*trigger.terminal.run_id.transport()),
                 task_id: Some(*trigger.terminal.task_id.transport()),
                 preparation: None,
-                failure_code: trigger.terminal.failure_code.to_owned(),
+                failure_code: trigger.terminal.failure_code.clone(),
             },
             recovery,
             recovery_configured,
@@ -588,12 +603,66 @@ impl HostShared {
         Ok(false)
     }
 
-    /// Admits a preparation's ladder and queues its claim.
-    fn queue_recovery_ladder(&self, pending: PendingRecoveryLadder) -> RuntimeHostResult<()> {
-        if !self.admit_recovery_ladder(&pending)? {
-            return Ok(());
+    /// Workflow #369 H-1, P1 (review #716 follow-up): the explicit release `request_id` of the
+    /// held key (`token` on `connection_id`) on which a preparation ran that admitted `ladder`.
+    /// The release hands the key straight to the ladder's claim (`release_lease_to_claim`: the
+    /// claim's own `lease.requested` + `scheduler.queued`, then `lease.transferred`, no grant
+    /// of its own), so no claim queued earlier can take the instance first. With no hand-off (a
+    /// pause closed the gate since the admission, or a destructive step is open), the ladder
+    /// waits as a claim and the key is released; a refused hand-off is recorded as a refused
+    /// queueing is, and the key is released.
+    pub(super) fn release_to_preparation_ladder(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        request_id: RequestId,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        ladder: PendingRecoveryLadder,
+    ) -> Result<(), RequestFailure> {
+        let claim_connection =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    HostLocation::BuildLadderConnection,
+                    &error,
+                ))
+            })?;
+        let claim = ladder.claim.clone();
+        let instance_alias = ladder.instance_alias.clone();
+        let handed = self.release_lease_to_claim(
+            request,
+            request_id,
+            token,
+            connection_id,
+            HostClaim {
+                request: &claim,
+                instance_alias: &instance_alias,
+                holder_id: ladder.holder_id,
+                connection_id: claim_connection,
+                kind: ClaimKind::Ladder,
+                priority: LeasePriority::High,
+                lease_ttl_ms: LADDER_CLAIM_TTL_MS,
+            },
+            HostClaimWork::RecoveryLadder(Box::new(ladder.clone())),
+        );
+        match handed {
+            Ok(true) => return Ok(()),
+            Ok(false) => self
+                .enqueue_ladder_claim(ladder)
+                .map_err(RequestFailure::poison_without_terminal)?,
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                return Err(failure);
+            }
+            Err(failure) => self
+                .append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::OperationCleanup,
+                    RuntimeLifecycleFailure::Host(&failure.error),
+                    ladder.links,
+                    None,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?,
         }
-        self.enqueue_ladder_claim(pending)
+        self.release_lease(request, request_id, token, connection_id, None)
+            .map(|_| ())
     }
 
     /// Workflow #369 H-1: queues an admitted ladder's claim (routine, high, no deadline); the
@@ -766,11 +835,19 @@ impl HostShared {
         // Review L6 (#666): the holding interruption that ended the last rung that ran, if one
         // did; a rung that ran and failed on its own clears it.
         let mut last_interruption = None;
+        // The outcome of the last rung that ran and failed: what an exhausted climb ends on.
+        let mut last_failure = None;
         for (rung, skipped) in RecoveryRung::LADDER.into_iter().zip(skipped) {
             // Workflow #369 H-3: the holding check before every rung (so after every rung run
             // but the last one, whose own failure decides the outcome; review L6).
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
-                return self.finish_interrupted_ladder(pending, Some(rung), reason, rungs_tried);
+                return self.finish_interrupted_ladder(
+                    pending,
+                    key,
+                    Some(rung),
+                    reason,
+                    rungs_tried,
+                );
             }
             if let Some(reason) = skipped {
                 self.append_recovery_rung_finished(
@@ -778,7 +855,7 @@ impl HostShared {
                     rung,
                     RecoveryRungOutcome::Skipped,
                     None,
-                    Some(reason.as_str()),
+                    Some(rung_skip_outcome(reason)),
                     None,
                 )?;
                 continue;
@@ -813,8 +890,9 @@ impl HostShared {
                         pending,
                         EventSeverity::Info,
                         RuntimeLifecyclePhase::RecoveryLadderFinished {
-                            outcome: RecoveryLadderOutcome::Recovered,
+                            ladder_result: RecoveryLadderOutcome::Recovered,
                             rungs_tried,
+                            outcome: None,
                         },
                     );
                 }
@@ -831,8 +909,9 @@ impl HostShared {
                         pending,
                         EventSeverity::Info,
                         RuntimeLifecyclePhase::RecoveryLadderFinished {
-                            outcome: RecoveryLadderOutcome::EnvironmentReady,
+                            ladder_result: RecoveryLadderOutcome::EnvironmentReady,
                             rungs_tried,
+                            outcome: None,
                         },
                     );
                 }
@@ -843,18 +922,20 @@ impl HostShared {
                         rung,
                         RecoveryRungOutcome::Skipped,
                         None,
-                        Some(reason.as_str()),
+                        Some(rung_skip_outcome(reason)),
                         None,
                     )?;
                 }
                 RungAttempt::Failed { run_id, reason } => {
                     last_interruption = is_hold_interruption(reason).then_some(reason);
+                    let failure = rung_failure_outcome(pending, key, reason);
+                    last_failure = Some(failure.clone());
                     self.append_recovery_rung_finished(
                         pending,
                         rung,
                         RecoveryRungOutcome::Failed,
                         run_id,
-                        Some(reason),
+                        Some(failure),
                         None,
                     )?;
                 }
@@ -864,14 +945,21 @@ impl HostShared {
         // rungs that ran failed on their own, whatever holds at this moment; it ends at Warning
         // only when the last rung that ran was itself ended by a holding interruption.
         if let Some(reason) = last_interruption {
-            return self.finish_interrupted_ladder(pending, None, reason, rungs_tried);
+            return self.finish_interrupted_ladder(pending, key, None, reason, rungs_tried);
         }
+        // Ledger revision 3: the exhausted climb's outcome (category error) carries the last
+        // failed rung's outcome as its cause; none when every rung was skipped.
+        let exhausted = Outcome::new(HostCode::RecoveryLadderExhausted);
         self.append_recovery_ladder_fact(
             pending,
             EventSeverity::Error,
             RuntimeLifecyclePhase::RecoveryLadderFinished {
-                outcome: RecoveryLadderOutcome::Exhausted,
+                ladder_result: RecoveryLadderOutcome::Exhausted,
                 rungs_tried,
+                outcome: Some(match last_failure {
+                    Some(failure) => exhausted.caused_by(failure),
+                    None => exhausted,
+                }),
             },
         )
     }
@@ -908,6 +996,7 @@ impl HostShared {
     fn finish_interrupted_ladder(
         &self,
         pending: &PendingRecoveryLadder,
+        key: &HostKey,
         rung: Option<RecoveryRung>,
         reason: &'static str,
         rungs_tried: u8,
@@ -918,16 +1007,19 @@ impl HostShared {
                 rung,
                 RecoveryRungOutcome::Failed,
                 None,
-                Some(reason),
+                Some(rung_failure_outcome(pending, key, reason)),
                 None,
             )?;
         }
+        // Ledger revision 3: the interrupted climb's outcome (category warning) carries the
+        // interruption as its cause.
         self.append_recovery_ladder_fact(
             pending,
             EventSeverity::Warning,
             RuntimeLifecyclePhase::RecoveryLadderFinished {
-                outcome: RecoveryLadderOutcome::Exhausted,
+                ladder_result: RecoveryLadderOutcome::Exhausted,
                 rungs_tried,
+                outcome: Some(interrupted(rung_reason_outcome(pending, key, reason))),
             },
         )
     }
@@ -1242,7 +1334,7 @@ impl HostShared {
                 action,
                 pending.request_id,
                 &admission,
-                Some(&key.token),
+                &key.token,
             ) {
                 Ok(driven) => driven,
                 Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
@@ -1627,27 +1719,29 @@ impl HostShared {
         Ok(())
     }
 
+    /// One `recovery_rung_finished` fact: a failed or skipped rung carries why as its outcome
+    /// (ledger revision 3; was the `reason` text).
     fn append_recovery_rung_finished(
         &self,
         pending: &PendingRecoveryLadder,
         rung: RecoveryRung,
-        outcome: RecoveryRungOutcome,
+        rung_result: RecoveryRungOutcome,
         run_id: Option<RunId>,
-        reason: Option<&'static str>,
+        outcome: Option<Outcome>,
         environment: Option<TerminalEvent>,
     ) -> RuntimeHostResult<()> {
         self.append_recovery_ladder_fact(
             pending,
-            if outcome == RecoveryRungOutcome::Failed {
+            if rung_result == RecoveryRungOutcome::Failed {
                 EventSeverity::Warning
             } else {
                 EventSeverity::Info
             },
             RuntimeLifecyclePhase::RecoveryRungFinished {
                 rung,
-                outcome,
+                rung_result,
                 run_id,
-                reason: reason.map(str::to_owned),
+                outcome,
                 environment,
             },
         )
@@ -1669,6 +1763,58 @@ impl HostShared {
         )
         .map(|_| ())
     }
+}
+
+/// The outcome of a failed rung (ledger revision 3): its reason's outcome; a holding
+/// interruption (review L6) is `recovery_ladder_interrupted` (warning) caused by it, so a rung
+/// an interruption ended records no error point, as an interrupted climb does not (review L-7).
+fn rung_failure_outcome(
+    pending: &PendingRecoveryLadder,
+    key: &HostKey,
+    reason: &'static str,
+) -> Outcome {
+    let outcome = rung_reason_outcome(pending, key, reason);
+    if is_hold_interruption(reason) {
+        interrupted(outcome)
+    } else {
+        outcome
+    }
+}
+
+/// `recovery_ladder_interrupted` caused by the holding interruption `cause`.
+fn interrupted(cause: Outcome) -> Outcome {
+    Outcome::new(HostCode::RecoveryLadderInterrupted).caused_by(cause)
+}
+
+/// The outcome of a rung's failure reason: the code it relays, with the instance and lease of
+/// a lost key.
+fn rung_reason_outcome(
+    pending: &PendingRecoveryLadder,
+    key: &HostKey,
+    reason: &'static str,
+) -> Outcome {
+    let outcome = Outcome::relayed(reason);
+    if spelled(reason, &[HostCode::RecoveryLadderKeyLost.code()]) {
+        outcome
+            .instance_id(identifier_text(&pending.instance_id))
+            .lease_id(identifier_text(&key.token.lease_id()))
+    } else {
+        outcome
+    }
+}
+
+/// The outcome of a skipped rung (ledger revision 3): the registered code of its skip reason.
+fn rung_skip_outcome(reason: RecoveryRungSkipReason) -> Outcome {
+    Outcome::new(match reason {
+        RecoveryRungSkipReason::NoRecoveryPackage => HostCode::RecoveryRungSkippedNoRecoveryPackage,
+        RecoveryRungSkipReason::NoStartupPackage => HostCode::RecoveryRungSkippedNoStartupPackage,
+        RecoveryRungSkipReason::NoEmulatorControl => HostCode::RecoveryRungSkippedNoEmulatorControl,
+        RecoveryRungSkipReason::CaptureUnavailable => {
+            HostCode::RecoveryRungSkippedCaptureUnavailable
+        }
+        RecoveryRungSkipReason::InputUnavailable => HostCode::RecoveryRungSkippedInputUnavailable,
+        RecoveryRungSkipReason::AdbUnavailable => HostCode::RecoveryRungSkippedAdbUnavailable,
+    })
 }
 
 /// Review L6 (#666): whether a rung's failure reason ended the rung rather than being its own

@@ -45,7 +45,13 @@ pub use release_source::*;
 
 // Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older readers can no longer read this.
-const FORMAL_FORMAT_VERSION: i64 = 1;
+// Ledger revision 3 (Workflow #378 A3): SQLite format 2 (`user_version` 2).
+const FORMAL_FORMAT_VERSION: i64 = 2;
+/// The format v0.11 wrote (ledger revision 2). A database whose ledger tables exist under it is
+/// refused with `ledger_format_unsupported` after reading only its format and before any ledger
+/// row is read or written, and the Runtime's start refuses it before its owner journal or writer
+/// lock; there is no compatibility path (Workflow #378 A3, model section 8.1).
+const UNSUPPORTED_FORMAT_VERSION: i64 = 1;
 const SCHEMA: &str = "actingcommand.sqlite-ledger.v1";
 const INTEGER_ENCODING: &str = "ordered-u64-v1";
 const EVENT_COLUMNS: &str = "sequence,event_id,timestamp_unix_ms,event_type,severity,sensitivity,origin_source,origin_module,origin_actor,payload_schema,canonical_record,record_sha256,previous_record_sha256,integrity_tag";
@@ -84,6 +90,7 @@ fn verify_transaction_row(
         ));
     }
     let connection = transaction.sql();
+    refuse_unsupported_format(connection)?;
     let meta = read_meta(connection)?;
     let marker = SqliteMarker::parse(&meta)?;
     let expected_format = if marker.state == "ready" {
@@ -405,7 +412,24 @@ fn format_version(connection: &Connection) -> GlobalLedgerResult<i64> {
         .map_err(|error| sql_error(error, LedgerLocation::ReadDatabaseFormat.location()))
 }
 
+/// `ledger_format_unsupported` (fatal): the database holds a format-1 ledger.
+fn unsupported_format() -> GlobalLedgerError {
+    failure(
+        LedgerCode::LedgerFormatUnsupported.code(),
+        LedgerLocation::VerifyDatabaseFormat.location(),
+    )
+}
+
+/// Refuses a format-1 ledger before anything else of the database is read or written.
+fn refuse_unsupported_format(connection: &Connection) -> GlobalLedgerResult<()> {
+    if format_version(connection)? == UNSUPPORTED_FORMAT_VERSION && table_count(connection)? != 0 {
+        return Err(unsupported_format());
+    }
+    Ok(())
+}
+
 fn require_empty_format(connection: &Connection) -> GlobalLedgerResult<()> {
+    refuse_unsupported_format(connection)?;
     if table_count(connection)? != 0 || format_version(connection)? != 0 {
         return Err(failure(
             LedgerCode::LedgerInitializationConflict.code(),
@@ -421,9 +445,34 @@ fn mark_formal_format(connection: &Connection) -> GlobalLedgerResult<()> {
         .map_err(|error| sql_error(error, LedgerLocation::MarkDatabaseFormat.location()))
 }
 
+/// Workflow #378 A3 (acceptance CL-M1): refuses a format-1 ledger under `state_root` before
+/// the Runtime's start writes its owner journal or takes the writer lock. It reads only the
+/// database's `user_version` and its ledger table count, through a read-only open without the
+/// whole-file check; a root without the runtime database is fresh and passes, and nothing is
+/// created.
+pub fn refuse_unsupported_ledger_format(state_root: &std::path::Path) -> GlobalLedgerResult<()> {
+    let present = state_root
+        .join(actingcommand_runtime_database::DATABASE_FILE)
+        .try_exists()
+        .map_err(|error| {
+            GlobalLedgerError::io(
+                LedgerCode::LedgerIo.code(),
+                LedgerLocation::InspectRuntimeLedger.location(),
+                &error,
+            )
+        })?;
+    if !present {
+        return Ok(());
+    }
+    let database = RuntimeDatabase::open_existing_unchecked(state_root)?;
+    let connection = database.connection(LedgerLocation::ReadDatabaseFormat.location())?;
+    refuse_unsupported_format(&connection)
+}
+
 pub(super) fn has_schema(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
     let connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     match (format_version(&connection)?, table_count(&connection)?) {
+        (UNSUPPORTED_FORMAT_VERSION, tables) if tables != 0 => Err(unsupported_format()),
         (0, 0) => Ok(false),
         (0 | FORMAL_FORMAT_VERSION, 4) => Ok(true),
         _ => Err(failure(
@@ -441,6 +490,7 @@ fn authenticated_extent(
 ) -> GlobalLedgerResult<Option<(SqliteMarker, u64)>> {
     let format = format_version(connection)?;
     match (format, table_count(connection)?) {
+        (UNSUPPORTED_FORMAT_VERSION, tables) if tables != 0 => return Err(unsupported_format()),
         (0, 0) => return Ok(None),
         (0 | FORMAL_FORMAT_VERSION, 4) => {}
         _ => {
@@ -528,6 +578,7 @@ pub(super) fn initialize_formal_empty(database: &RuntimeDatabase) -> GlobalLedge
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| sql_error(error, LedgerLocation::BeginRuntimeLedger.location()))?;
     let result = (|| {
+        refuse_unsupported_format(&transaction)?;
         if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
             return Err(failure(
                 LedgerCode::LedgerInitializationConflict.code(),
@@ -648,6 +699,7 @@ pub(super) fn import_source(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| sql_error(error, LedgerLocation::BeginSegmentImport.location()))?;
     let prepared = (|| {
+        refuse_unsupported_format(&transaction)?;
         if table_count(&transaction)? != 0 || format_version(&transaction)? != 0 {
             return Err(failure(
                 LedgerCode::LedgerMigrationConflict.code(),
@@ -793,6 +845,7 @@ impl SqliteLedgerStore {
         let format = {
             let connection =
                 database.connection(LedgerLocation::InspectCandidateFormat.location())?;
+            refuse_unsupported_format(&connection)?;
             format_version(&connection)?
         };
         if format == FORMAL_FORMAT_VERSION {
@@ -1313,6 +1366,11 @@ pub(super) struct SqliteViewSnapshot {
 }
 
 impl SqliteViewSnapshot {
+    /// Workflow #395: see `GlobalLedgerMetadata::set_read_deadline`.
+    pub(super) fn set_read_deadline(&mut self, deadline: Instant) {
+        self.budget = Some(super::evidence::phase_read_budget(self.budget, deadline));
+    }
+
     /// Runtime-only: resolves against the writer's prefix, verified through this snapshot.
     fn resolve_artifact(
         &self,
@@ -1906,6 +1964,7 @@ impl VerifiedPrefix {
         connection: &Connection,
         budget: ReadBudget,
     ) -> GlobalLedgerResult<(Vec<SqlRow>, RawSnapshot)> {
+        refuse_unsupported_format(connection)?;
         views::installed(connection)?;
         let mut bytes = 0;
         let meta = read_meta_with_budget(connection, budget, &mut bytes)?;
@@ -2055,6 +2114,7 @@ fn upgrade_views(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| sql_error(error, LedgerLocation::BeginLedgerViewUpgrade.location()))?;
     let result = (|| {
+        refuse_unsupported_format(&transaction)?;
         if !views::installed(&transaction)? {
             let raw = read_snapshot_connection(&transaction, None)?;
             let VerifiedSnapshotRecords {
@@ -2240,6 +2300,7 @@ fn initialize(database: &RuntimeDatabase, first_use: bool) -> GlobalLedgerResult
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| sql_error(error, LedgerLocation::BeginLedgerSchema.location()))?;
     let result = (|| {
+        refuse_unsupported_format(&transaction)?;
         let tables: i64 = transaction.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('ledger_events','ledger_links','ledger_artifacts','ledger_meta')", [], |row| row.get(0))
         .map_err(|error| sql_error(error, LedgerLocation::InspectLedgerSchema.location()))?;
         match tables {
@@ -2366,6 +2427,7 @@ fn read_prefix_snapshot(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
+    refuse_unsupported_format(&transaction)?;
     views::installed(&transaction)?;
     // The caller found the four ledger tables; their absence now is a fatal inconsistency.
     let Some((marker, head)) = authenticated_extent(database, &transaction)? else {
@@ -2473,6 +2535,7 @@ fn read_selected_rows(
     event_types: &[EventType],
     budget: ReadBudget,
 ) -> GlobalLedgerResult<SelectedRead> {
+    refuse_unsupported_format(connection)?;
     // A different view schema refuses; absent views leave the selection to a table scan.
     views::installed(connection)?;
     let Some((marker, head)) = authenticated_extent(database, connection)? else {
@@ -2784,6 +2847,7 @@ fn read_snapshot_connection(
     connection: &Connection,
     budget: ReadBudget,
 ) -> GlobalLedgerResult<RawSnapshot> {
+    refuse_unsupported_format(connection)?;
     views::installed(connection)?;
     let mut bytes = 0;
     let meta = read_meta_with_budget(connection, budget, &mut bytes)?;

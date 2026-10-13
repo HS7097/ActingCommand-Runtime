@@ -12,8 +12,12 @@ mod held_runtime;
 
 mod emulator_restart;
 mod install_transition;
+mod mcp_events_parity;
 mod mcp_harness;
 mod mcp_instance_alias;
+mod mcp_observe_parity;
+mod mcp_packs;
+mod mcp_runs_parity;
 mod mcp_shell;
 
 #[allow(dead_code)]

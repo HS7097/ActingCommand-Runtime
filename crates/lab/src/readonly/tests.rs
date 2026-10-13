@@ -221,12 +221,13 @@ impl Fixture {
         ];
         write_zip(&zip_path, &files);
         let bytes = std::fs::read(&zip_path).expect("bundle bytes");
-        let expected =
-            crate::ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string())
-                .expect("expected hash");
-        let resources = crate::ExternallyVerifiedBundle::load("readonly_fixture", &bytes, expected)
-            .map(Arc::new)
-            .expect("verified bundle");
+        let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
+            Sha256Hash::digest(&bytes).to_string(),
+        );
+        let resources =
+            crate::ExternallyVerifiedBundle::load("readonly_fixture", &bytes, &recorded)
+                .map(Arc::new)
+                .expect("verified bundle");
         Self { temp, resources }
     }
 

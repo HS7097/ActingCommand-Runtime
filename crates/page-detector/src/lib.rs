@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 mod codes;
+// Workflow #396 REC-1.
+#[cfg(test)]
+mod text_read_tests;
+// Workflow #396 REC-2.
+#[cfg(test)]
+mod unique_tests;
 
 pub use codes::PageDetectorCode;
 
@@ -371,7 +377,11 @@ impl PageDetector {
     }
 
     pub fn validate(&self, evaluator: &RecognitionEvaluator) -> PageDetectorResult<()> {
-        for page in &self.page_set.pages {
+        // Workflow #396 REC-1: one page recognition reads located text for every page of the
+        // set, so the set's reads, each distinct request once, stay within one consumer's
+        // budget; the page whose rule exceeds it is the refused declaration.
+        let mut text_reads = actingcommand_recognition_pack::TextReadCount::default();
+        for (page_index, page) in self.page_set.pages.iter().enumerate() {
             for target_id in page_target_ids(page) {
                 match evaluator.target_kind(target_id).map_err(pack_error)? {
                     TargetKind::Template
@@ -385,6 +395,20 @@ impl PageDetector {
                             "page definition references click-only target: {target_id}"
                         )));
                     }
+                }
+                if let Err(overrun) = evaluator.count_text_reads(&mut text_reads, target_id) {
+                    let mut error = PageDetectorError::fatal(format!(
+                        "page '{}' exceeds the page recognition's text read budget: {}={} limit={}",
+                        page.id, overrun.budget, overrun.used, overrun.limit
+                    ));
+                    error.declaration_issue =
+                        Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                            declaration_file: "recognition.pages.json".to_string(),
+                            field_path: format!("/pages/{page_index}"),
+                            schema_version: Some(self.page_set.schema_version.clone()),
+                            reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                        }));
+                    return Err(error);
                 }
             }
         }
@@ -1254,6 +1278,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Ocr(OcrTarget {
                     id: "fixture/unselected_ocr".to_string(),
@@ -1267,6 +1292,8 @@ mod tests {
                     model_ref: "PP-OCRv6_medium".to_string(),
                     model_sha256: "a".repeat(64),
                     click: None,
+                    locate: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Nn(NnTarget {
                     id: "fixture/unselected_nn".to_string(),
@@ -1889,6 +1916,7 @@ mod tests {
                 rect_move: None,
                 color_check: None,
                 click: None,
+                unique: None,
             }));
         let evaluator = RecognitionEvaluator::new(root.clone(), pack).expect("evaluator");
         let detector = PageDetector::new(PageSet {
@@ -2105,6 +2133,7 @@ mod tests {
                 text: "home".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(0.99),
+                detection: None,
             })
         }
 

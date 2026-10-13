@@ -604,7 +604,10 @@ fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place
             .as_ref()
             .expect("capacity decision");
         decision.validate().expect("valid refusal decision");
-        assert_eq!(decision.outcome, CapacityAdmissionOutcome::HardPressure);
+        assert_eq!(
+            decision.admission_result,
+            CapacityAdmissionOutcome::HardPressure
+        );
         assert_eq!(decision.reason, CapacityAdmissionReason::HardThreshold);
         assert_eq!(decision.owner_epoch, host.runtime_info().owner_epoch());
         assert_eq!(decision.requested_bytes, 0);
@@ -835,7 +838,11 @@ fn policy_final_admission_records_the_actual_control_rejection() {
     };
     let rejection = payload.rejection().expect("original RequestFailure facts");
     assert_eq!(rejection, &failure.policy_rejection());
-    assert_eq!(rejection.operation, "reserve_policy_budget");
+    // Ledger revision 3 (#378 A3): the refusal is the rejection's outcome, its operation a value.
+    assert_eq!(
+        outcome_str(&rejection.outcome, "operation"),
+        Some("reserve_policy_budget")
+    );
     assert_eq!(
         rejection.next_eligible_unix_ms,
         Some((POLICY_NOW_UNIX_MS / 86_400_000 + 1) * 86_400_000)
@@ -1467,16 +1474,24 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
         .expect("the run's runtime failures")
         .into_iter()
         .filter(|event| {
-            let message = match event.payload() {
+            // Ledger revision 3 (#378 A3): the record's outcome names the refusal (its
+            // `failure_code` value or its `caused_by` link) instead of message tokens.
+            let outcome = match event.payload() {
                 EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record)) => {
-                    record.detail().map(|detail| detail.message())
+                    Some(record.outcome())
                 }
                 _ => None,
             };
             event.severity() == EventSeverity::Error
-                && message.is_some_and(|message| {
-                    message.contains("code=policy_settlement_dispatch_unsettled")
-                        && message.contains(&format!("failure_code={cause}"))
+                && outcome.is_some_and(|outcome| {
+                    outcome.code().as_str() == "policy_settlement_dispatch_unsettled"
+                        && (outcome_str(outcome, "failure_code") == Some(cause)
+                            || outcome_links(
+                                outcome,
+                                actingcommand_contract::outcome::CauseRelation::CausedBy,
+                            )
+                            .iter()
+                            .any(|link| link.code().as_str() == cause))
                 })
         })
         .count();
@@ -1689,7 +1704,12 @@ fn an_admission_that_meets_a_holder_is_rejected_held_at_info() {
         panic!("rejection payload");
     };
     assert_eq!(
-        payload.rejection().expect("rejection facts").code,
+        payload
+            .rejection()
+            .expect("rejection facts")
+            .outcome
+            .code()
+            .as_str(),
         "dispatch_instance_held"
     );
     // Review M1: a wait is not a failure. Its key tokens are recorded at Info; no Error
@@ -1769,7 +1789,10 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
         panic!("rejection payload");
     };
     let rejection = payload.rejection().expect("rejection facts");
-    assert_eq!(rejection.code, "dispatch_instance_contended");
+    assert_eq!(
+        rejection.outcome.code().as_str(),
+        "dispatch_instance_contended"
+    );
     assert_eq!(
         rejection.next_eligible_unix_ms,
         Some(intent.prerequisites.evaluated_at_unix_ms + 1_000)
@@ -1780,7 +1803,9 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
             .iter()
             .filter_map(|event| match event.payload() {
                 EventPayload::Policy(PolicyPayload::DispatchRejected(payload)) => {
-                    payload.rejection().map(|rejection| rejection.code.clone())
+                    payload
+                        .rejection()
+                        .map(|rejection| rejection.outcome.code().as_str().to_owned())
                 }
                 _ => None,
             })

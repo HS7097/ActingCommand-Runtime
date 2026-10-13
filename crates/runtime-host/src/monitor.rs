@@ -75,13 +75,12 @@ impl MonitorRegistry {
                         actingcommand_contract::RuntimePayloadDraft::failed(
                             actingcommand_contract::DiagnosticCode::RuntimeDiagnostic,
                             EffectDisposition::NotPerformed,
+                            error.record_outcome(),
                             actingcommand_contract::DiagnosticDetailDraft::new(
                                 "monitor_registry",
                                 "runtime.monitor.restore",
                                 "runtime",
                                 error.operation(),
-                                error.code(),
-                                actingcommand_contract::Sensitivity::Sensitive,
                             ),
                             AuditInput::new(),
                         ),
@@ -884,17 +883,20 @@ mod tests {
             let detail = failure.detail().expect("original monitor cause");
             assert_eq!(detail.category(), "monitor_registry");
             assert_eq!(detail.stage(), "runtime.monitor.restore");
-            assert_eq!(detail.message(), "monitor_record_invalid");
-            assert_eq!(
-                detail.declared_sensitivity(),
-                actingcommand_contract::Sensitivity::Sensitive
-            );
+            // Ledger revision 3: the original cause is the record's outcome; a detail carries
+            // no message and no sensitivity, so a record without foreign text is internal.
+            assert_eq!(failure.outcome().code().as_str(), "monitor_record_invalid");
             assert_eq!(
                 event.payload().sensitivity(),
-                actingcommand_contract::Sensitivity::Sensitive
+                actingcommand_contract::Sensitivity::Internal
             );
-            let public = serde_json::to_string(&event.payload().public_projection()).unwrap();
-            assert!(!public.contains("monitor_record_invalid"));
+            // The public projection carries the outcome codes only.
+            let actingcommand_contract::PublicEventPayload::Runtime(public) =
+                event.payload().public_projection()
+            else {
+                panic!("runtime public projection");
+            };
+            assert_eq!(public.outcome(), Some(&failure.outcome().codes_only()));
         }
         ledger.close().unwrap();
     }

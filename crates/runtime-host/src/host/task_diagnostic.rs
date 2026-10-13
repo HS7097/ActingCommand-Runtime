@@ -2,18 +2,20 @@
 
 use super::*;
 use crate::codes::HostLocation;
-use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     MAX_TASK_DIAGNOSTIC_RECORD_BYTES, OcrRegionRect, TASK_DIAGNOSTIC_SCHEMA_V2,
     TaskDiagnosticArtifactData, TaskDiagnosticColorData, TaskDiagnosticColorDigestData,
     TaskDiagnosticErrorData, TaskDiagnosticHeader, TaskDiagnosticNnData, TaskDiagnosticNnLabel,
     TaskDiagnosticNnLabelData, TaskDiagnosticNnRank, TaskDiagnosticOcrBlock,
     TaskDiagnosticOcrBlockData, TaskDiagnosticOcrData, TaskDiagnosticOcrExecution,
-    TaskDiagnosticPageData, TaskDiagnosticPayload as Payload, TaskDiagnosticRecognitionError,
-    TaskDiagnosticRecord, TaskDiagnosticStepElapsedData, TaskDiagnosticStepStartedData,
-    TaskDiagnosticTargetData, TaskDiagnosticTargetFailure, TaskDiagnosticTargetSource,
-    TaskDiagnosticTemplateData, TaskDiagnosticTerminalData, TaskDiagnosticUnexecutedData,
-    TaskDiagnosticUnexecutedPage, TaskRecordSubphases, TaskTimingResult,
+    TaskDiagnosticOcrLocatedData, TaskDiagnosticPageData, TaskDiagnosticPayload as Payload,
+    TaskDiagnosticRecognitionError, TaskDiagnosticRecord, TaskDiagnosticStepElapsedData,
+    TaskDiagnosticStepStartedData, TaskDiagnosticTargetData, TaskDiagnosticTargetFailure,
+    TaskDiagnosticTargetSource, TaskDiagnosticTemplateData, TaskDiagnosticTerminalData,
+    TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage, TaskDiagnosticUniquenessData,
+    TaskRecordSubphases, TaskTimingResult,
 };
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
 use actingcommand_recognition_pack::{
@@ -95,12 +97,85 @@ fn recognition_error(
                 "VisionProviderInvalidResponse"
             }
             RecognitionPackErrorCode::RegionUnresolved => "RegionUnresolved",
+            RecognitionPackErrorCode::TextReadRefused => "TextReadRefused",
         }
         .to_owned(),
-        message: error.message().to_owned(),
         region: error.region().cloned().map(Box::new),
         timing: error.timing().copied(),
         sample: error.sample().cloned().map(Box::new),
+        outcome: error.outcome().cloned(),
+    }
+}
+
+/// The target row of one evaluation; its OCR, NN, digest and member rows are written
+/// separately.
+fn target_payload(
+    target: &TargetEvaluation,
+    source: TaskDiagnosticTargetSource,
+) -> TaskDiagnosticTargetData {
+    TaskDiagnosticTargetData {
+        id: target.id.clone(),
+        kind: match target.kind {
+            actingcommand_recognition_pack::TargetKind::Template => "template",
+            actingcommand_recognition_pack::TargetKind::Color => "color",
+            actingcommand_recognition_pack::TargetKind::ClickOnly => "click_only",
+            actingcommand_recognition_pack::TargetKind::Ocr => "ocr",
+            actingcommand_recognition_pack::TargetKind::Nn => "nn",
+            actingcommand_recognition_pack::TargetKind::ColorDigest => "color_digest",
+            actingcommand_recognition_pack::TargetKind::Composite => "composite",
+        }
+        .to_owned(),
+        passed: target.passed,
+        template: target.template.map(|value| TaskDiagnosticTemplateData {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+            raw_score: value.raw_score,
+            score: value.score,
+            threshold: value.threshold,
+        }),
+        color: target.color.map(|value| TaskDiagnosticColorData {
+            distance: value.distance,
+            max_distance: value.max_distance,
+            mean: value.mean,
+            expected: value.expected,
+            region: value.region.map(Into::into),
+        }),
+        source,
+        sampling: target.sampling.clone(),
+        failure: target.failure.clone(),
+        uniqueness: target.uniqueness.map(|value| TaskDiagnosticUniquenessData {
+            score_milli: value.score_milli,
+            second_score_milli: value.second_score_milli,
+            margin_milli: value.margin_milli,
+            second_rect: value.second_rect.map(region_rect),
+        }),
+    }
+}
+
+/// The OCR row under a target row.
+fn ocr_payload(ocr: &actingcommand_recognition_pack::OcrEvaluation) -> TaskDiagnosticOcrData {
+    TaskDiagnosticOcrData::Evaluated {
+        region: ocr.region.as_ref().clone(),
+        raw_text: ocr.raw_text.clone(),
+        derived_text: ocr.text.clone(),
+        confidence: ocr.confidence,
+        matched_expected: ocr.matched_expected.clone(),
+        match_mode: match ocr.match_mode {
+            actingcommand_recognition_pack::OcrMatchMode::Exact => "exact",
+            actingcommand_recognition_pack::OcrMatchMode::Contains => "contains",
+        }
+        .to_owned(),
+        block_count: ocr.blocks.len(),
+        located: ocr.located.map(|located| TaskDiagnosticOcrLocatedData {
+            block_index: located.block_index,
+            rect: region_rect(located.rect),
+            confidence_milli: located.confidence_milli,
+            cell_index: located.cell_index,
+            cell_rect: located.cell_rect.map(region_rect),
+            truncated: located.truncated,
+        }),
     }
 }
 
@@ -388,28 +463,27 @@ impl RuntimeContainedTask<'_> {
                 self.diagnostic_page(phase, outcome)?;
             }
             if let Err(error) = results {
+                // Ledger revision 3: the batch failure is the run's recognition failure; the
+                // detector's text is not recorded.
                 self.diagnostic(
                     None,
                     Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
                         phase: phase.to_owned(),
-                        message: error.cause.message().to_owned(),
+                        outcome: Outcome::new(SharedCode::ContainedTaskRecognitionFailed),
                     })),
                 )?;
                 for page in &error.unexecuted {
                     self.diagnostic(
-                    None,
-                    Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
-                        phase: phase.to_owned(),
-                        page: TaskDiagnosticUnexecutedPage {
-                            index: page.index,
-                            page_id: page.page_id.clone(),
-                            reason: match page.reason {
-                                actingcommand_page_detector::PageUnexecutedReason::BatchValidationFailed => "BatchValidationFailed",
-                                actingcommand_page_detector::PageUnexecutedReason::BatchTerminated => "BatchTerminated",
-                            }.to_owned(),
-                        },
-                    }),
-                )?;
+                        None,
+                        Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
+                            phase: phase.to_owned(),
+                            page: TaskDiagnosticUnexecutedPage {
+                                index: page.index,
+                                page_id: page.page_id.clone(),
+                                outcome: Outcome::new(page.reason.code()),
+                            },
+                        }),
+                    )?;
                 }
             }
             Ok(())
@@ -430,7 +504,6 @@ impl RuntimeContainedTask<'_> {
                     index: outcome.index,
                     page_id: page.page_id.clone(),
                     matched: page.matched,
-                    message: page.message.clone(),
                     required_passed: page.required_passed,
                     required_total: page.required_total,
                     any_of_passed: page.any_of_passed,
@@ -447,7 +520,6 @@ impl RuntimeContainedTask<'_> {
                     phase: phase.to_owned(),
                     index: outcome.index,
                     page_id: outcome.page_id.clone(),
-                    error: error.message().to_owned(),
                     failed_target: error.failed_target.as_ref().map(|target| {
                         TaskDiagnosticTargetFailure {
                             target_id: target.target_id.clone(),
@@ -484,7 +556,6 @@ impl RuntimeContainedTask<'_> {
                 target_index: target.target_index,
                 target_id: target.target_id.clone(),
                 passed: target.passed,
-                message: target.message.clone(),
             },
         )
     }
@@ -567,10 +638,12 @@ impl RuntimeContainedTask<'_> {
             None => self
                 .diagnostic(
                     None,
+                    // The guard's reason is not registered yet (A2-P renames it): its spelling
+                    // travels as the relayed outcome's `raw_code`.
                     Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
                         phase: phase.to_owned(),
                         target_id: target.map(str::to_owned),
-                        reason: reason.to_owned(),
+                        outcome: Outcome::relayed(reason),
                     }),
                 )
                 .map(|_| ()),
@@ -586,39 +659,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         let mut record = self.diagnostic_record(
             parent,
-            Payload::Target(Box::new(TaskDiagnosticTargetData {
-                id: target.id.clone(),
-                kind: match target.kind {
-                    actingcommand_recognition_pack::TargetKind::Template => "template",
-                    actingcommand_recognition_pack::TargetKind::Color => "color",
-                    actingcommand_recognition_pack::TargetKind::ClickOnly => "click_only",
-                    actingcommand_recognition_pack::TargetKind::Ocr => "ocr",
-                    actingcommand_recognition_pack::TargetKind::Nn => "nn",
-                    actingcommand_recognition_pack::TargetKind::ColorDigest => "color_digest",
-                    actingcommand_recognition_pack::TargetKind::Composite => "composite",
-                }
-                .to_owned(),
-                passed: target.passed,
-                message: target.message.clone(),
-                template: target.template.map(|value| TaskDiagnosticTemplateData {
-                    x: value.x,
-                    y: value.y,
-                    width: value.width,
-                    height: value.height,
-                    raw_score: value.raw_score,
-                    score: value.score,
-                    threshold: value.threshold,
-                }),
-                color: target.color.map(|value| TaskDiagnosticColorData {
-                    distance: value.distance,
-                    max_distance: value.max_distance,
-                    mean: value.mean,
-                    expected: value.expected,
-                    region: value.region.map(Into::into),
-                }),
-                source,
-                sampling: target.sampling.clone(),
-            })),
+            Payload::Target(Box::new(target_payload(target, source))),
         );
         if matches!(
             target.sampling,
@@ -628,22 +669,8 @@ impl RuntimeContainedTask<'_> {
         }
         let index = self.write_diagnostic_record(record)?;
         if let Some(ocr) = &target.ocr {
-            let ocr_index = self.diagnostic(
-                Some(index),
-                Payload::Ocr(Box::new(TaskDiagnosticOcrData::Evaluated {
-                    region: ocr.region.as_ref().clone(),
-                    raw_text: ocr.raw_text.clone(),
-                    derived_text: ocr.text.clone(),
-                    confidence: ocr.confidence,
-                    matched_expected: ocr.matched_expected.clone(),
-                    match_mode: match ocr.match_mode {
-                        actingcommand_recognition_pack::OcrMatchMode::Exact => "exact",
-                        actingcommand_recognition_pack::OcrMatchMode::Contains => "contains",
-                    }
-                    .to_owned(),
-                    block_count: ocr.blocks.len(),
-                })),
-            )?;
+            let ocr_index =
+                self.diagnostic(Some(index), Payload::Ocr(Box::new(ocr_payload(ocr))))?;
             self.diagnostic_ocr_blocks(ocr_index, &ocr.blocks, &ocr.block_source_order)?;
         }
         if let Some(nn) = &target.nn {
@@ -849,13 +876,15 @@ impl RuntimeContainedTask<'_> {
         }
         let data = match result {
             Ok(outcome) => TaskDiagnosticTerminalData::Returned {
-                outcome: outcome.outcome,
+                task_result: outcome.outcome,
                 executed_steps: outcome.executed_steps,
                 final_page: outcome.final_page.clone(),
             },
+            // Ledger revision 3: the task failure as the run's terminal records it (the
+            // kernel's detail text is not kept).
             Err(ContainedTaskRunError::Task(error)) => TaskDiagnosticTerminalData::TaskError {
-                code: error.code().as_str().to_owned(),
-                detail: error.detail().map(str::to_owned),
+                outcome: Outcome::relayed(error.code().as_str())
+                    .operation(ContractLocation::RunContainedTask),
                 executed_steps: self.executed_steps,
                 timing: error.timing().cloned(),
             },
@@ -863,7 +892,7 @@ impl RuntimeContainedTask<'_> {
                 ContainedTaskRunError::Boundary(error)
                 | ContainedTaskRunError::NonfatalOperation(error),
             ) => TaskDiagnosticTerminalData::OperationError {
-                code: error.error.code().to_owned(),
+                outcome: error.error.outcome(),
                 executed_steps: self.executed_steps,
             },
         };
@@ -893,5 +922,317 @@ impl RuntimeContainedTask<'_> {
                 .abort()
                 .map_err(online_observation::observation_artifact_failure)
         })
+    }
+}
+
+// Workflow #396 REC-1: the guard rows of a locate OCR target.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::OcrRegionEvidence;
+    use actingcommand_contract::outcome::Outcome;
+    use actingcommand_recognition_pack::{
+        OcrEvaluation, OcrLocatedEvidence, OcrMatchMode, OcrTextEvidence, PackRect,
+        RecognitionPackCode, RecognitionPackLocation, TargetKind, TargetMatchKind,
+        TargetUniquenessEvidence, TemplateEvaluation,
+    };
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> PackRect {
+        PackRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn region_rect_of(rect: PackRect) -> OcrRegionRect {
+        OcrRegionRect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        }
+    }
+
+    fn located_target(
+        located: Option<OcrLocatedEvidence>,
+        failure: Option<Outcome>,
+    ) -> TargetEvaluation {
+        let region = rect(40, 120, 600, 480);
+        TargetEvaluation {
+            id: "text/entry".to_owned(),
+            kind: TargetKind::Ocr,
+            passed: located.is_some(),
+            template: None,
+            color: None,
+            ocr: Some(Box::new(OcrEvaluation {
+                ppocr_diagnostics: Vec::new(),
+                region: Box::new(OcrRegionEvidence {
+                    frame_width: 1280,
+                    frame_height: 720,
+                    anchor_target_id: None,
+                    anchor_match: None,
+                    offset: None,
+                    width: region.width,
+                    height: region.height,
+                    roi: Some(region_rect_of(region)),
+                    unresolved: None,
+                }),
+                raw_text: "GAMMA\nALPHA".to_owned(),
+                block_source_order: vec![0, 1],
+                text: "GAMMA\nALPHA".to_owned(),
+                confidence: Some(0.9),
+                matched_expected: located.map(|_| "ALPHA".to_owned()),
+                match_mode: OcrMatchMode::Exact,
+                blocks: vec![
+                    OcrTextEvidence {
+                        text: "GAMMA".to_owned(),
+                        rect: rect(60, 130, 80, 30),
+                        confidence: Some(0.9),
+                    },
+                    OcrTextEvidence {
+                        text: "ALPHA".to_owned(),
+                        rect: rect(200, 400, 80, 30),
+                        confidence: Some(0.93),
+                    },
+                ],
+                located,
+            })),
+            nn: None,
+            color_digest: None,
+            composite: None,
+            failure,
+            uniqueness: None,
+            message: "ocr text located".to_owned(),
+            sampling: None,
+            sample_evaluations: Vec::new(),
+        }
+    }
+
+    /// Workflow #378 A3 (acceptance CL-L6): the error page, the unexecuted page and the
+    /// unexecuted guard rows round-trip with their outcomes (ledger revision 3).
+    #[test]
+    fn error_and_unexecuted_rows_round_trip_with_their_outcome() {
+        let rows = [
+            record(
+                1,
+                None,
+                Payload::Error(Box::new(TaskDiagnosticErrorData::Page {
+                    phase: "recognition".to_owned(),
+                    outcome: Outcome::new(SharedCode::ContainedTaskRecognitionFailed),
+                })),
+            ),
+            record(
+                2,
+                None,
+                Payload::Unexecuted(TaskDiagnosticUnexecutedData::Page {
+                    phase: "recognition".to_owned(),
+                    page: TaskDiagnosticUnexecutedPage {
+                        index: 1,
+                        page_id: "page/b".to_owned(),
+                        outcome: Outcome::new(
+                            actingcommand_page_detector::PageUnexecutedReason::BatchTerminated
+                                .code(),
+                        ),
+                    },
+                }),
+            ),
+            record(
+                3,
+                None,
+                Payload::Unexecuted(TaskDiagnosticUnexecutedData::Guard {
+                    phase: "candidate_sample".to_owned(),
+                    target_id: Some("text/entry".to_owned()),
+                    outcome: Outcome::relayed("candidate_sample"),
+                }),
+            ),
+        ];
+        for row in &rows {
+            assert_eq!(&round_trip(row), row);
+        }
+    }
+
+    fn round_trip(record: &TaskDiagnosticRecord) -> TaskDiagnosticRecord {
+        let bytes = serde_json::to_vec(record).expect("serialize the record");
+        serde_json::from_slice(&bytes).expect("read the record back")
+    }
+
+    fn record(index: u64, parent_index: Option<u64>, payload: Payload) -> TaskDiagnosticRecord {
+        TaskDiagnosticRecord {
+            index,
+            frame_id: None,
+            step_action_id: None,
+            physical_action_id: None,
+            parent_index,
+            payload,
+        }
+    }
+
+    #[test]
+    fn guard_rows_carry_the_located_block_and_cell_and_the_typed_failure_and_round_trip() {
+        let found = located_target(
+            Some(OcrLocatedEvidence {
+                block_index: 1,
+                rect: rect(200, 400, 80, 30),
+                confidence_milli: 930,
+                cell_index: Some(5),
+                cell_rect: Some(rect(190, 360, 140, 230)),
+                truncated: false,
+            }),
+            None,
+        );
+        let guard = || TaskDiagnosticTargetSource::Guard {
+            phase: "guard".to_owned(),
+        };
+        let target_row = record(
+            1,
+            None,
+            Payload::Target(Box::new(target_payload(&found, guard()))),
+        );
+        let ocr_row = record(
+            2,
+            Some(1),
+            Payload::Ocr(Box::new(ocr_payload(
+                found.ocr.as_deref().expect("OCR evidence"),
+            ))),
+        );
+        for row in [&target_row, &ocr_row] {
+            assert_eq!(&round_trip(row), row);
+        }
+        let Payload::Ocr(ocr) = &round_trip(&ocr_row).payload else {
+            panic!("an OCR row");
+        };
+        let TaskDiagnosticOcrData::Evaluated {
+            located: Some(located),
+            matched_expected,
+            ..
+        } = ocr.as_ref()
+        else {
+            panic!("the OCR row carries located");
+        };
+        assert_eq!(matched_expected.as_deref(), Some("ALPHA"));
+        assert_eq!(located.block_index, 1);
+        assert_eq!(located.rect, region_rect_of(rect(200, 400, 80, 30)));
+        assert_eq!(located.confidence_milli, 930);
+        assert_eq!(located.cell_index, Some(5));
+        assert_eq!(
+            located.cell_rect,
+            Some(region_rect_of(rect(190, 360, 140, 230)))
+        );
+        assert!(!located.truncated);
+
+        let failure = Outcome::new(RecognitionPackCode::TextLocateNotFound)
+            .target_id("text/entry")
+            .count(2_u32)
+            .stage(RecognitionPackLocation::TextLocateEvaluate);
+        let missed = located_target(None, Some(failure.clone()));
+        let missed_row = record(
+            3,
+            None,
+            Payload::Target(Box::new(target_payload(&missed, guard()))),
+        );
+        let read = round_trip(&missed_row);
+        assert_eq!(read, missed_row);
+        let Payload::Target(target) = &read.payload else {
+            panic!("a target row");
+        };
+        assert!(!target.passed);
+        let read_failure = target.failure.as_ref().expect("the typed failure");
+        assert!(read_failure.is(RecognitionPackCode::TextLocateNotFound));
+        assert_eq!(
+            read_failure.value("target_id"),
+            Some(&serde_json::json!("text/entry"))
+        );
+        assert_eq!(read_failure.value("count"), Some(&serde_json::json!(2)));
+        let Payload::Ocr(ocr) = record(
+            4,
+            Some(3),
+            Payload::Ocr(Box::new(ocr_payload(
+                missed.ocr.as_deref().expect("OCR evidence"),
+            ))),
+        )
+        .payload
+        else {
+            panic!("an OCR row");
+        };
+        assert!(matches!(
+            ocr.as_ref(),
+            TaskDiagnosticOcrData::Evaluated { located: None, .. }
+        ));
+    }
+
+    // Workflow #396 REC-2: the guard row of a unique target with a second place.
+    #[test]
+    fn a_guard_row_carries_the_uniqueness_check_and_round_trips() {
+        let failure = Outcome::new(RecognitionPackCode::TargetMatchNotUnique)
+            .target_id("icon/unique")
+            .target_kind(TargetMatchKind::Template)
+            .score_milli(1000_u32)
+            .second_score_milli(1000_u32)
+            .margin_milli(50_u32)
+            .stage(RecognitionPackLocation::TargetMatchUnique);
+        let target = TargetEvaluation {
+            id: "icon/unique".to_owned(),
+            kind: TargetKind::Template,
+            passed: false,
+            template: Some(TemplateEvaluation {
+                x: 40,
+                y: 30,
+                width: 24,
+                height: 18,
+                raw_score: 1.0,
+                score: 1.0,
+                threshold: 0.9,
+            }),
+            color: None,
+            ocr: None,
+            nn: None,
+            color_digest: None,
+            composite: None,
+            failure: Some(failure),
+            uniqueness: Some(TargetUniquenessEvidence {
+                score_milli: 1000,
+                second_score_milli: Some(1000),
+                margin_milli: 50,
+                second_rect: Some(rect(200, 150, 24, 18)),
+            }),
+            message: "target match not unique".to_owned(),
+            sampling: None,
+            sample_evaluations: Vec::new(),
+        };
+        let row = record(
+            1,
+            None,
+            Payload::Target(Box::new(target_payload(
+                &target,
+                TaskDiagnosticTargetSource::Guard {
+                    phase: "guard".to_owned(),
+                },
+            ))),
+        );
+
+        let read = round_trip(&row);
+
+        assert_eq!(read, row);
+        let Payload::Target(data) = &read.payload else {
+            panic!("a target row");
+        };
+        assert_eq!(
+            data.uniqueness,
+            Some(TaskDiagnosticUniquenessData {
+                score_milli: 1000,
+                second_score_milli: Some(1000),
+                margin_milli: 50,
+                second_rect: Some(region_rect_of(rect(200, 150, 24, 18))),
+            })
+        );
+        let failure = data.failure.as_ref().expect("the typed failure");
+        assert!(failure.is(RecognitionPackCode::TargetMatchNotUnique));
+        assert_eq!(
+            failure.value("target_kind"),
+            Some(&serde_json::json!("template"))
+        );
+        assert_eq!(failure.value("margin_milli"), Some(&serde_json::json!(50)));
     }
 }

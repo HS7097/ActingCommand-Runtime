@@ -23,6 +23,9 @@ crate::outcome_codes! {
         ForeignHttpError => "foreign_http_error": error / none,
         ForeignOtherError => "foreign_other_error": error / none,
         PanicCaught => "panic_caught": warning / none,
+        // Workflow #378 A3 (ledger revision 3): a relayed spelling the embedded catalog does not
+        // list; the record keeps the spelling as `raw_code` instead of inventing a code.
+        OutcomeRelayUnregistered => "outcome_relay_unregistered": error / none,
     }
 }
 
@@ -252,6 +255,10 @@ crate::outcome_codes! {
         CaptureSummaryFrameConflict => "capture_summary_frame_conflict": error / none,
         CaptureSummaryPinConflict => "capture_summary_pin_conflict": error / none,
         ClientActionInvalid => "client_action_invalid": error / none,
+        // Workflow #389 MCP-11, ruling Q6: actingd's two configuration refusals, which actingctl
+        // `packs` / `ac_packs` emit with the same meaning.
+        ConfigDecodeFailed => "config_decode_failed": error / none,
+        ConfigReadFailed => "config_read_failed": error / none,
         ConsecutiveUnchangedThresholdReached => "consecutive_unchanged_threshold_reached": info / none,
         ContainedTaskGuardEvaluationFailed => "contained_task_guard_evaluation_failed": error / pack_logic_mismatch,
         ContainedTaskHomeEntryNotMatched => "contained_task_home_entry_not_matched": error / pack_logic_mismatch,
@@ -324,6 +331,9 @@ crate::outcome_codes! {
         NemuAppIndexRequiresPairedInput => "nemu_app_index_requires_paired_input": error / none,
         NemuInputFrameRequired => "nemu_input_frame_required": error / none,
         NotImplemented => "not_implemented": error / none,
+        // OCR-CONF (R-11): the kernel fails a fields task with it, the client reads it as a
+        // fields-failure terminal.
+        OcrFieldLowConfidence => "ocr_field_low_confidence": error / pack_logic_mismatch,
         OcrFieldsDeclarationInvalid => "ocr_fields_declaration_invalid": error / declaration_error,
         OcrFieldsDeclarationMissing => "ocr_fields_declaration_missing": error / declaration_error,
         OcrFieldsDictionaryLimitExceeded => "ocr_fields_dictionary_limit_exceeded": error / declaration_error,
@@ -673,7 +683,6 @@ crate::outcome_codes! {
         ConfigManifestSubsystemsTooMany => "config_manifest_subsystems_too_many": error / none,
         ConfigManifestParametersTooMany => "config_manifest_parameters_too_many": error / none,
         InvalidConfigSubsystemName => "invalid_config_subsystem_name": error / none,
-        InvalidConfigSubsystemReason => "invalid_config_subsystem_reason": error / none,
         InvalidConfigParameterKey => "invalid_config_parameter_key": error / none,
         RuntimeFactSchemaVersionMismatch => "runtime_fact_schema_version_mismatch": error / none,
         RuntimeFactSnapshotPartInvalid => "runtime_fact_snapshot_part_invalid": error / none,

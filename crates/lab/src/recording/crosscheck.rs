@@ -14,7 +14,7 @@ use super::marks::OCR_NOT_EVALUATED;
 use super::model::{MarkFamily, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
 use actingcommand_contract::{
-    ContentDirectory, ContentDirectoryVersion, InputAction, LabError, LabResult,
+    ContentDirectory, ContentDirectoryVersion, InputAction, LabError, LabResult, PackageRef,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
@@ -49,11 +49,13 @@ fn admission_failed(stage: &str, message: String, mut details: Value) -> LabErro
     )
 }
 
-pub(crate) fn content_reference(digest: &str) -> ContentDirectory {
-    ContentDirectory {
+/// The content-directory reference the recording records for its package (Workflow #336
+/// PKG-S1: admission keeps it as a record and compares it with nothing).
+pub(crate) fn content_reference(digest: &str) -> PackageRef {
+    PackageRef::ContentDirectory(ContentDirectory {
         schema_version: ContentDirectoryVersion::V1,
         sha256: digest.to_string(),
-    }
+    })
 }
 
 fn containment_code(error: &ContainmentError) -> Option<&'static str> {
@@ -104,8 +106,9 @@ pub(crate) fn round_trip(
 }
 
 /// Section 4.6 item 2: the kernel admits the content table as actingd loads a content
-/// directory: the digest comparison, source compilation, declaration and `linear_steps`
-/// validation. No vision provider: OCR is admitted and only its evaluation would need one.
+/// directory: source compilation, declaration and `linear_steps` validation (Workflow #336
+/// PKG-S1: no digest comparison). No vision provider: OCR is admitted and only its evaluation
+/// would need one.
 pub(crate) fn admit(
     entries: &BTreeMap<String, Vec<u8>>,
     digest: &str,

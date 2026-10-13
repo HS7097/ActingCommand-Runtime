@@ -321,7 +321,7 @@ their original evaluators.
 | Kind | Actual data |
 | --- | --- |
 | `page` | phase (`page` or `home_preflight`), native page index/ID, matched flag, group pass/total counts and message; errors carry the failed target and original typed cause |
-| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index, guard phase or (v2) composite member |
+| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index, guard phase or (v2) composite member; (Workflow #396) the typed `failure` reason and the `uniqueness` check when present |
 | `color_digest` | (v2) actual `color_digest.v1` evaluation of its parent target row: algorithm, grid, active cells, mean/max/worst cell, both thresholds and the observed digest |
 | `ocr` | requested/resolved region evidence, provider `raw_text`, business `derived_text`, aggregate confidence, actual selection/execution metadata and block count |
 | `ocr_block` | original text/confidence/rect with `source_index` and `derived_rank` |
@@ -355,7 +355,8 @@ reconciliation, the start scans the events between the last two `runtime.started
 `runtime.takeover` events and writes, as Runtime/Runtime on the run's original links
 (request, correlation, causation, instance, lease, task, run), the same two events a
 resubmission of the original request writes: `task.terminal_intent` (cancelled) and
-`task.cancelled` with `failure_code: contained_task_recovered_after_restart`,
+`task.cancelled` whose terminal fact carries `task_result: cancelled`, the outcome
+`contained_task_recovered_after_restart` (ledger revision 3; it was `failure_code`) and
 `executed_steps: null`; an actually granted lease without `lease.released` / `lease.expired` gets the
 same `lease.released` (`not_performed`). A resubmission of the original request afterwards
 meets that terminal and answers `ContainedTaskCancelled(RecoveredAfterRestart)` unchanged.

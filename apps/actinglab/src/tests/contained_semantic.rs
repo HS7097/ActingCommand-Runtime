@@ -201,30 +201,3 @@ fn semantic_command_rejects_self_computed_hash_source_before_capture() {
     assert_eq!(error.code, "package_invalid");
     assert!(error.message.contains("externally supplied"));
 }
-
-#[test]
-fn semantic_command_rejects_external_hash_mismatch_before_scene_load() {
-    let temp = semantic_resource_root(false);
-    let result = run_cli(
-        [
-            "--json",
-            "--dry-run",
-            "do",
-            "home_button",
-            "--scene",
-            temp.path().join("missing.png").to_str().unwrap(),
-            "--state-dir",
-            temp.path().join("state").to_str().unwrap(),
-            "--zip",
-            temp.zip.to_str().unwrap(),
-            "--expected-sha256",
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        ],
-        true,
-    );
-
-    assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
-    let error = result.envelope.error.as_ref().unwrap();
-    assert_eq!(error.code, "package_invalid");
-    assert!(error.message.contains("hash mismatch"));
-}

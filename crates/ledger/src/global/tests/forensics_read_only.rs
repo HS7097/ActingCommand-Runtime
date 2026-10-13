@@ -31,9 +31,13 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
         LedgerPayloadDraft, LedgerSignatureEvent, LifecycleCauseDraft, LifecycleFailurePhase,
         OwnerResourceDisposition, ResourceQuiescence, RuntimeErrorCode,
         RuntimeLifecycleFailureDraft, RuntimePayloadDraft, RuntimeResourceClosePhase,
-        RuntimeResourceKind, Sensitivity, SignatureConditionField, SignatureLifecyclePredicate,
+        RuntimeResourceKind, SignatureConditionField, SignatureLifecyclePredicate,
         SignaturePageRequest, SignatureReplayGap, SignatureReplayRow,
+        outcome::{Location, Outcome},
     };
+    // Ledger revision 3 (Workflow #378 A3): the failure's code, operation and stage are its
+    // outcome's; the stage is a registered location.
+    const FAILURE_STAGE: &str = "close_runtime_host";
     use actingcommand_ledger_forensics::{ForensicSignatureRequest, replay_signatures_read_only};
     let input_root = tempfile::tempdir().unwrap();
     let catalog_root = tempfile::tempdir().unwrap();
@@ -76,7 +80,8 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
         let cause = LifecycleCauseDraft::new(
             LifecycleFailurePhase::ResourceClose,
             "nemu_ipc",
-            "capture_backend_close_failed",
+            actingcommand_contract::outcome::Code::relayed("capture_backend_close_failed")
+                .expect("registered code"),
             CleanupCauseSeverity::Fatal,
         )
         .with_resource_context(
@@ -91,20 +96,18 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
         );
         let lifecycle = RuntimeLifecycleFailureDraft::new(
             *ids.mint_owner_epoch().unwrap().transport(),
-            "runtime.lifecycle.session_close",
             "runtime_host",
-            "capture_backend_close_failed",
+            Outcome::relayed("capture_backend_close_failed")
+                .operation(Location::relayed(operation).expect("registered operation"))
+                .stage(Location::relayed(FAILURE_STAGE).expect("registered stage")),
         )
-        .with_operation(Some(operation))
-        .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
+        .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
         .with_cause(Some(cause));
         let detail = DiagnosticDetailDraft::new(
             "runtime_lifecycle",
             "runtime.lifecycle.session_close",
             "runtime_host",
             operation,
-            "close unconfirmed",
-            Sensitivity::Internal,
         );
         let source = append(
             &input,
@@ -128,7 +131,7 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
             event_type: EventType::RuntimeFailed,
             minimum_severity: EventSeverity::Error,
             lifecycle: Some(SignatureLifecyclePredicate {
-                stage: Some("runtime.lifecycle.session_close".into()),
+                stage: Some(FAILURE_STAGE.into()),
                 operation: Some(operation.into()),
                 code: Some("capture_backend_close_failed".into()),
                 cause_phase: Some(LifecycleFailurePhase::ResourceClose),
@@ -222,13 +225,12 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
         RuntimePayloadDraft::failed(
             DiagnosticCode::RuntimeDiagnostic,
             EffectDisposition::Indeterminate,
+            Outcome::relayed("capture_backend_close_failed"),
             DiagnosticDetailDraft::new(
                 "runtime_lifecycle",
                 "runtime.lifecycle.session_close",
                 "runtime_host",
                 "close_execution_session",
-                "missing lifecycle context",
-                Sensitivity::Internal,
             ),
             AuditInput::new(),
         )
@@ -522,7 +524,7 @@ fn forensic_snapshot_commands_are_read_only_and_deterministic() {
     match &outputs[3] {
         ForensicOutput::Machine(ForensicReport::Tail(report)) => {
             let tail = report.corrupt_tail.as_ref().expect("live corrupt tail");
-            assert_eq!(tail.code, "corrupt_segment");
+            assert_eq!(tail.outcome.code().as_str(), "corrupt_segment");
             assert_eq!(tail.dangling_byte_count, live_tail.len() as u64);
         }
         output => panic!("unexpected tail output: {output:?}"),
@@ -603,8 +605,26 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     use actingcommand_artifact_store::{ArtifactStore, ArtifactWriteRequest};
     use actingcommand_contract::{
         ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, CapturePersistedEvidence,
-        CapturePinnedEvidence, CaptureSummaryRecord, InputAction, InputExecutionPlanEvent,
-        InputExecutionPlanRecord, InputPayloadDraft, PinnedFrameReason, TaskSemanticFact,
+        CapturePinnedEvidence, CaptureSummaryRecord, DiagnosticDetailDraft, InputAction,
+        InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayloadDraft, PinnedFrameReason,
+        RuntimePayloadDraft, TaskSemanticFact, outcome::Outcome,
+    };
+    // Ledger revision 3 (Workflow #378 A3): a record's severity is its outcome's category, so
+    // the warning and fatal rejections carry outcomes of those categories.
+    let rejected_with = |code: &str| -> EventPayloadDraft {
+        RuntimePayloadDraft::failed(
+            DiagnosticCode::CommandRejected,
+            EffectDisposition::NotPerformed,
+            Outcome::relayed(code),
+            DiagnosticDetailDraft::new(
+                "fixture_category",
+                "fixture.stage",
+                "fixture_backend",
+                "fixture_operation",
+            ),
+            AuditInput::new(),
+        )
+        .into()
     };
     let temp = tempfile::tempdir().expect("tempdir");
     let state_root = temp.path();
@@ -646,13 +666,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             OriginModule::Runtime,
             EventActor::Runtime,
             EventLinksDraft::default().with_correlation_id(correlation_a),
-            CommandPayloadDraft::rejected(
-                EventAction::RuntimeStart,
-                DiagnosticCode::CommandRejected,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            )
-            .into(),
+            rejected_with("step_budget_exhausted"),
         ),
         (
             EventSeverity::Error,
@@ -702,13 +716,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
             OriginModule::Runtime,
             EventActor::Runtime,
             EventLinksDraft::default().with_correlation_id(correlation_a),
-            CommandPayloadDraft::rejected(
-                EventAction::RuntimeStart,
-                DiagnosticCode::CommandRejected,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            )
-            .into(),
+            rejected_with("watchdog_fatal_hold"),
         ),
     ];
     for (index, (severity, source, module, actor, links, payload)) in
@@ -749,12 +757,12 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         }
     };
     let filter = |origin: Option<&str>,
-                  diagnostic: Option<&str>,
+                  diagnostic: Option<DiagnosticCode>,
                   severity: Option<&str>,
                   correlation: Option<&str>| {
         ForensicEventFilter::new(
             origin.map(str::to_owned),
-            diagnostic.map(str::to_owned),
+            diagnostic,
             severity.map(str::to_owned),
             correlation.map(str::to_owned),
         )
@@ -763,7 +771,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
 
     let shared_filter = filter(
         Some("runtime"),
-        Some("command_rejected"),
+        Some(DiagnosticCode::CommandRejected),
         None,
         Some(&correlation_a_text),
     );
@@ -801,7 +809,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     );
     assert_eq!(
         page(
-            filter(None, Some("command_rejected"), None, None),
+            filter(None, Some(DiagnosticCode::CommandRejected), None, None),
             0,
             Some(6),
             10,
@@ -837,7 +845,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         page(
             filter(
                 Some("runtime"),
-                Some("command_rejected"),
+                Some(DiagnosticCode::CommandRejected),
                 Some("error"),
                 Some(&correlation_a_text),
             ),
@@ -852,7 +860,12 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         vec![3]
     );
 
-    let pagination_filter = filter(Some("runtime"), Some("command_rejected"), None, None);
+    let pagination_filter = filter(
+        Some("runtime"),
+        Some(DiagnosticCode::CommandRejected),
+        None,
+        None,
+    );
     let first = page(pagination_filter.clone(), 0, None, 2);
     assert_eq!(first.after_sequence, 0);
     assert_eq!(first.through_sequence, 6);
@@ -1142,10 +1155,11 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         links.clone(),
         TaskPayloadDraft::semantic(
             TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Success,
+                task_result: TaskOutcome::Success,
                 final_page: Some("neutral/end".into()),
                 executed_steps: Some(7),
-                failure_code: None,
+                outcome: None,
+                failure_severe: false,
                 scheduling_disposition: None,
                 task_timing: None,
             },
@@ -1299,6 +1313,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
                 matched_expected: None,
                 match_mode: "exact".to_owned(),
                 block_count: 0,
+                located: None,
             })),
         };
         serde_json::to_writer(&mut stream, &record).unwrap();
@@ -1318,8 +1333,7 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         physical_action_id: None,
         parent_index: None,
         payload: TaskDiagnosticPayload::Terminal(TaskDiagnosticTerminalData::TaskError {
-            code: "contained_task_timeout".to_owned(),
-            detail: None,
+            outcome: actingcommand_contract::outcome::Outcome::relayed("contained_task_timeout"),
             executed_steps: Some(1),
             timing: Some(timing),
         }),
@@ -1956,7 +1970,7 @@ fn performance_pages_preserve_typed_facts_and_read_only_boundaries() {
         let tail = page
             .corrupt_tail
             .expect("unknown field is visible corruption");
-        assert_eq!(tail.code, "corrupt_segment");
+        assert_eq!(tail.outcome.code().as_str(), "corrupt_segment");
         assert_eq!(tail.dangling_byte_count, unknown_bytes.len() as u64);
         assert_eq!(tail.byte_offset, contents.len() as u64);
         assert!(tail.tail_sha256.starts_with("sha256:"));
@@ -2172,7 +2186,7 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
         assert!(!serialized.contains("PRIVATE_DIAGNOSTIC"), "{name}");
         assert_eq!(report.artifact_byte_limit, MAX_STABILITY_ARTIFACT_BYTES);
         if let Some(code) = error {
-            assert_eq!(report.failures[0].code, code, "{name}");
+            assert_eq!(report.failures[0].outcome.code().as_str(), code, "{name}");
             assert!(!report.window_complete, "{name}");
             assert!(report.rows.is_empty(), "{name}");
             assert_eq!(
@@ -2211,6 +2225,20 @@ fn stability_projection_preserves_facts_provenance_and_bounded_failures() {
                 .get("max_steps")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            // Ledger revision 3 (Workflow #378 A3): the report carries the artifact's stop
+            // reason as its outcome.
+            let reason = projected_expected
+                .as_object_mut()
+                .expect("object")
+                .remove("terminal_reason")
+                .expect("artifact stop reason");
+            projected_expected["outcome"] = match reason.as_str() {
+                Some(code) => {
+                    serde_json::to_value(actingcommand_contract::outcome::Outcome::relayed(code))
+                        .expect("outcome")
+                }
+                None => serde_json::Value::Null,
+            };
             for (offset, row) in report.rows.iter().enumerate() {
                 assert_eq!(
                     serde_json::to_value(&row.comparison).expect("comparison"),

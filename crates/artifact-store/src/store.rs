@@ -1028,7 +1028,7 @@ impl ArtifactStore {
     ) -> ArtifactStoreError {
         let error = error.with_capacity(context.capacity.clone());
         let payload = ArtifactPayloadDraft::persistence_failed(
-            error.failure_record(*issued.reference().artifact_id(), stage),
+            error.failure_draft(*issued.reference().artifact_id(), stage),
             AuditInput::new(),
         );
         match self.append_event(sink, context, EventSeverity::Error, payload, None) {
@@ -1058,14 +1058,14 @@ fn admit_bytes(
         .as_ref()
         .is_some_and(|bound| decision.target_volume.as_ref() != Some(bound))
     {
-        decision.outcome = actingcommand_contract::CapacityAdmissionOutcome::Unknown;
+        decision.admission_result = actingcommand_contract::CapacityAdmissionOutcome::Unknown;
         decision.reason = actingcommand_contract::CapacityAdmissionReason::BindingChanged;
     }
     if context.bound_volume.is_none() {
         context.bound_volume = decision.target_volume.clone();
     }
-    let allowed =
-        decision.outcome.allows() || matches!(context.write_class, ArtifactWriteClass::Drain);
+    let allowed = decision.admission_result.allows()
+        || matches!(context.write_class, ArtifactWriteClass::Drain);
     context.capacity = Some(decision.clone());
     if !allowed {
         return Err(ArtifactStoreError::capacity_refused(decision));
@@ -1770,7 +1770,7 @@ pub(crate) mod tests {
                 decided_at_monotonic_ms: 0,
                 requested_bytes: bytes,
                 target_volume: Some("fixture-volume".to_owned()),
-                outcome,
+                admission_result: outcome,
                 reason,
                 fact: Some(fact.clone()),
             })
@@ -2338,7 +2338,15 @@ pub(crate) mod tests {
             .artifact_failure()
             .expect("typed verification failure");
         assert_eq!(failure.stage, ArtifactFailureStage::PublishedVerification);
-        assert_eq!(failure.primary.code, error.code());
+        // Ledger revision 3 (Workflow #378 A3): the failed step is the payload's outcome.
+        assert_eq!(
+            sink.payloads[1]
+                .outcome()
+                .expect("failure outcome")
+                .code()
+                .as_str(),
+            error.code()
+        );
     }
 
     #[test]
@@ -2391,17 +2399,40 @@ pub(crate) mod tests {
         assert!(sink.references.is_empty());
         let failure = sink.payloads[0].artifact_failure().expect("typed failure");
         assert_eq!(failure.artifact_id, *prepared.reference().artifact_id());
-        assert_eq!(failure.primary.operation, "sync_artifact_temp");
+        // Ledger revision 3 (Workflow #378 A3): the failed steps are the payload's outcome: the
+        // primary on top with its native text as the `caused_by` foreign link, each secondary
+        // step a `secondary` link.
+        use actingcommand_contract::outcome::CauseRelation;
+        let outcome = sink.payloads[0].outcome().expect("failure outcome");
+        let operation = |step: &actingcommand_contract::outcome::Outcome| {
+            step.value("operation")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        };
+        assert_eq!(operation(outcome).as_deref(), Some("sync_artifact_temp"));
         assert!(
-            failure
-                .primary
-                .native_detail
-                .text()
-                .contains("injected sync failure")
+            outcome
+                .causes()
+                .iter()
+                .find(|link| *link.relation() == CauseRelation::CausedBy)
+                .and_then(|link| link.outcome().value("raw_text"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains("injected sync failure"))
         );
-        assert_eq!(failure.secondary.len(), 1);
-        assert_eq!(failure.secondary[0].code, "artifact_cleanup_failed");
-        assert_eq!(failure.secondary[0].operation, "cleanup_artifact_temp");
+        let secondary = outcome
+            .causes()
+            .iter()
+            .filter(|link| *link.relation() == CauseRelation::Secondary)
+            .collect::<Vec<_>>();
+        assert_eq!(secondary.len(), 1);
+        assert_eq!(
+            secondary[0].outcome().code().as_str(),
+            "artifact_cleanup_failed"
+        );
+        assert_eq!(
+            operation(secondary[0].outcome()).as_deref(),
+            Some("cleanup_artifact_temp")
+        );
         assert!(sink.payloads[0].sensitivity() >= actingcommand_contract::Sensitivity::Sensitive);
         let public = format!("{:?}", sink.payloads[0].public_projection());
         assert!(!public.contains("injected sync failure"));

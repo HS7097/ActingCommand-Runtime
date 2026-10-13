@@ -2,9 +2,9 @@
 
 use crate::codes::{StoreCode, StoreLocation};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
-    ArtifactFailureCause, ArtifactFailureRecord, ArtifactFailureStage, ArtifactId,
+    ArtifactFailureCause, ArtifactFailureDraft, ArtifactFailureStage, ArtifactId,
     LifecycleNativeDetail, MAX_ARTIFACT_FAILURE_SECONDARY_CAUSES,
 };
 use std::error::Error;
@@ -21,7 +21,7 @@ pub struct ArtifactStoreError {
     code: &'static str,
     operation: &'static str,
     detail: String,
-    secondary: Vec<ArtifactFailureCause>,
+    secondary: Vec<RetainedCause>,
     omitted_secondary_count: u64,
     fatal: bool,
     raw_os_error: Option<i32>,
@@ -228,26 +228,26 @@ impl ArtifactStoreError {
         self
     }
 
-    fn primary_cause(&self) -> ArtifactFailureCause {
+    fn primary_cause(&self) -> RetainedCause {
         let (text, truncated) = bounded_text(&self.detail, 1024);
-        ArtifactFailureCause {
-            code: self.code.to_owned(),
-            operation: self.operation.to_owned(),
+        RetainedCause {
+            code: self.code,
+            operation: self.operation,
             native_detail: LifecycleNativeDetail::new(text, truncated),
             raw_os_error: self.raw_os_error,
         }
     }
 
-    pub(crate) fn failure_record(
+    pub(crate) fn failure_draft(
         &self,
         artifact_id: ArtifactId,
         stage: ArtifactFailureStage,
-    ) -> ArtifactFailureRecord {
-        ArtifactFailureRecord {
+    ) -> ArtifactFailureDraft {
+        ArtifactFailureDraft {
             artifact_id,
             stage,
-            primary: self.primary_cause(),
-            secondary: self.secondary.clone(),
+            primary: self.primary_cause().recorded(),
+            secondary: self.secondary.iter().map(RetainedCause::recorded).collect(),
             omitted_secondary_count: self.omitted_secondary_count,
             capacity: self.capacity.as_deref().cloned(),
         }
@@ -286,6 +286,40 @@ impl ArtifactStoreError {
         }
         let (text, clipped) = bounded_text(&text, 1024);
         LifecycleNativeDetail::new(text, truncated || clipped)
+    }
+}
+
+/// One cause a store failure keeps, with the code and operation spellings it was raised with:
+/// they stay strings while the runtime host relays its own codes (Workflow #378, slice A2b), so
+/// the error's text names them as raised. The cause becomes typed only when the failure is
+/// recorded ([`RetainedCause::recorded`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetainedCause {
+    code: &'static str,
+    operation: &'static str,
+    native_detail: LifecycleNativeDetail,
+    raw_os_error: Option<i32>,
+}
+
+impl RetainedCause {
+    /// This cause as one step of a recorded artifact failure (ledger revision 3, Workflow #378
+    /// A3): its registered code and location. A relayed code spelling the catalog does not list
+    /// stays visible as `outcome_relay_unregistered` with the spelling as `raw_code`, as every
+    /// relay does (acceptance CL-M2); an unlisted operation spelling falls back to the store's
+    /// `store_artifact` location (every operation the store raises is registered). The code is
+    /// never substituted and no text is made up.
+    fn recorded(&self) -> ArtifactFailureCause {
+        let step = match Code::relayed(self.code) {
+            Some(code) => Outcome::new(code),
+            None => Outcome::relayed(self.code),
+        };
+        let operation = Location::relayed(self.operation)
+            .unwrap_or_else(|| StoreLocation::StoreArtifact.location());
+        ArtifactFailureCause {
+            step: step.operation(operation),
+            native_detail: self.native_detail.clone(),
+            raw_os_error: self.raw_os_error,
+        }
     }
 }
 

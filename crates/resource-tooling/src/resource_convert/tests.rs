@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[test]
-fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithms() {
+fn schema_0_7_post_admission_ocr_validates_truth_and_closed_algorithms() {
     let root = tempfile::tempdir().expect("temp dir");
     let task_dir = root.path().join("operations/fixture_task");
     fs::create_dir_all(&task_dir).expect("task dir");
@@ -161,12 +161,10 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
             .message
             .contains("unsupported normalization")
     );
-    assert!(
-        validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &"0".repeat(64)))
-            .expect_err("truth hash mismatch")
-            .message
-            .contains("SHA-256")
-    );
+    // Workflow #336 PKG-S1 (model M-PKG v1.1 S1-T4): a well-formed truth-set SHA-256 that names
+    // other bytes is accepted; the pin is compared with nothing.
+    validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &"0".repeat(64)))
+        .expect("an unrelated well-formed truth set pin is not compared");
 
     let truth_v2_without_aliases = serde_json::to_vec(&json!({
         "schema_version": "actingcommand.ocr-truth-set.v2",
@@ -1256,6 +1254,35 @@ fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
             .iter()
             .any(|value| value.field == "expected_reward_milli:material")
     );
+}
+
+#[test]
+fn a_business_catalog_declares_up_to_1024_identities() {
+    let catalog = |size: usize| {
+        let entries: Vec<Value> = (0..size)
+            .map(|index| {
+                json!({
+                    "id": format!("member-{index:04}"),
+                    "names": {"test": [format!("Member {index:04}")]},
+                    "source": {"uri": "https://example.invalid/source", "date": "2026-10-03"}
+                })
+            })
+            .collect();
+        serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.business-catalog.v1", "catalog_id": "synthetic",
+            "pools": {"material": 10},
+            "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                            "minimum_confidence_milli": 800},
+            "entries": entries
+        }))
+        .unwrap()
+    };
+    let compiled = crate::compile_business_catalog(&catalog(1_024), "test", "business_id")
+        .expect("a 1024-row catalog compiles");
+    assert_eq!(compiled.provenance.entries.len(), 1_024);
+    let refusal = crate::compile_business_catalog(&catalog(1_025), "test", "business_id")
+        .expect_err("a 1025-row catalog is refused");
+    assert_eq!(refusal.code, "package_invalid");
 }
 
 #[test]

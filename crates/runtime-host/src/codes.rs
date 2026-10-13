@@ -62,10 +62,11 @@ actingcommand_contract::outcome_codes! {
         /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
         RuntimeRestartRequired => "runtime_restart_required": error / none,
         /// Error. A held or released start stopped before it finished preparing because the
-        /// Runtime latched a failure meanwhile. Operation `install_transition`. Until A2 makes
-        /// it a `caused_by` link, the latched failure travels as the tokens
-        /// `cause=<code> cause_operation=<operation>` (Workflow #381 A R3′). A restart may
-        /// succeed: the watchdog considers a start (R5′).
+        /// Runtime latched a failure meanwhile. Operation `install_transition`. The latched
+        /// failure is the outcome's `caused_by` link in the ledger (ledger revision 3), and the
+        /// tokens `cause=<code> cause_operation=<operation>` on the developer line and in the
+        /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
+        /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error / none,
         /// Error. A held start ended because a shutdown request for its owner was accepted
         /// before it was released. Operation `install_transition`. A formal stop: the watchdog
@@ -95,7 +96,8 @@ actingcommand_contract::outcome_codes! {
         /// record's links).
         PolicySettlementDispatchLeftOpen => "policy_settlement_dispatch_left_open": warning / none,
         /// Error. A start could not settle a scheduled run: the host's recovery or the ledger
-        /// refused its settlement (keys `failure_code`, the refusal's code, and `instance_id`,
+        /// refused its settlement (keys `failure_code`, the refusal's code when registered, else
+        /// its `caused_by` link, and `instance_id`,
         /// `task_id`, `lease_id` when the dispatch has one grant; the run id is on the record's
         /// links). The start carries on: the dispatch stays open, out of the active workloads,
         /// and the run's instance is paused with this code as its reason.
@@ -105,13 +107,13 @@ actingcommand_contract::outcome_codes! {
         /// request's one failure record (keys `restart_phase`, `stop_result`,
         /// `stop_elapsed_ms`, `start_dispatched`, `device_process_present`, and
         /// `start_elapsed_ms`, `process_started`, `android_started`, `adb_port_present` when
-        /// known). Until A2 makes it a `caused_by` link, the Stop's control failure travels as
-        /// the token `cause=<code>` (`emulator_control_wait_timeout` or
-        /// `emulator_control_failed`).
+        /// known; `stop_result` only for a token of its vocabulary). The Stop's control
+        /// failure (`emulator_control_wait_timeout` or `emulator_control_failed`) is the
+        /// outcome's `caused_by` link (ledger revision 3).
         EmulatorRestartStopFailed => "emulator_restart_stop_failed": error / environment_fault,
         /// Error. An operator emulator restart whose Stop phase was confirmed and whose Start
         /// phase failed (Workflow #381 B F4); same keys, `start_elapsed_ms` always present, and
-        /// the Start's control failure as the token `cause=<code>`.
+        /// the Start's control failure as the outcome's `caused_by` link.
         EmulatorRestartStartFailed => "emulator_restart_start_failed": error / environment_fault,
         /// Warning. A Stop confirmed by `info` alone because its process listing failed
         /// (Workflow #381 B F2, D6): once per Stop under the request's links, before
@@ -136,6 +138,15 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info / none,
+        // INST-1 (Workflow #390) begin
+        /// Warning. An install start went on although this instance's daemon-start
+        /// preparation self-check failed, because another instance passed (INST-1, FCM D-01).
+        /// The instance stays unavailable until a later self-check passes. One lifecycle
+        /// record per instance at stage `install_release` (keys `instance_id`); until A2 makes
+        /// it a `caused_by` link, the self-check's failure travels as the token
+        /// `cause=<code>`.
+        InstallPreparationInstanceUnavailable => "install_preparation_instance_unavailable": warning / none,
+        // INST-1 (Workflow #390) end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -284,8 +295,12 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskEffectInvalid => "contained_task_effect_invalid": error / none,
         ContainedTaskFinalizingStateInvalid => "contained_task_finalizing_state_invalid": error / none,
         ContainedTaskFrameIdentityMissing => "contained_task_frame_identity_missing": error / none,
-        ContainedTaskGeometryAspectMismatch => "contained_task_geometry_aspect_mismatch": error / declaration_error,
         ContainedTaskGeometryBudgetUnavailable => "contained_task_geometry_budget_unavailable": error / none,
+        /// Error. Workflow #392 DA-A: a contained task's frame and the logical display it was
+        /// captured from have different aspect ratios, so the run is refused before any input.
+        /// The frame's own aspect ratio is never checked. Replaces
+        /// `contained_task_geometry_aspect_mismatch`.
+        ContainedTaskGeometryFrameDisplayMismatch => "contained_task_geometry_frame_display_mismatch": error / environment_fault,
         ContainedTaskGeometryFrameExtentInvalid => "contained_task_geometry_frame_extent_invalid": error / environment_fault,
         ContainedTaskGeometryFrameUnavailable => "contained_task_geometry_frame_unavailable": error / environment_fault,
         ContainedTaskGeometryInputPrerequisiteMissing => "contained_task_geometry_input_prerequisite_missing": error / none,
@@ -293,6 +308,7 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskGeometrySessionUnavailable => "contained_task_geometry_session_unavailable": error / environment_fault,
         ContainedTaskGeometryUnavailable => "contained_task_geometry_unavailable": error / environment_fault,
         ContainedTaskGeometryUnknown => "contained_task_geometry_unknown": error / environment_fault,
+        ContainedTaskHomeRecoveryBindingInvalid => "contained_task_home_recovery_binding_invalid": error / declaration_error,
         ContainedTaskHomeRecoveryBindingMissing => "contained_task_home_recovery_binding_missing": error / pack_logic_mismatch,
         ContainedTaskHomeRecoveryFinalPageMissing => "contained_task_home_recovery_final_page_missing": error / pack_logic_mismatch,
         ContainedTaskHomeRecoveryPersistentlyNonHome => "contained_task_home_recovery_persistently_non_home": error / pack_logic_mismatch,
@@ -318,11 +334,6 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskOutcomeProgressMissing => "contained_task_outcome_progress_missing": error / none,
         ContainedTaskOutcomeRequiresSuccess => "contained_task_outcome_requires_success": error / none,
         ContainedTaskOutcomeTerminalPageMissing => "contained_task_outcome_terminal_page_missing": error / none,
-        ContainedTaskPackageHashInvalid => "contained_task_package_hash_invalid": error / none,
-        ContainedTaskPackageMetadataFailed => "contained_task_package_metadata_failed": error / declaration_error,
-        ContainedTaskPackageOpenFailed => "contained_task_package_open_failed": error / declaration_error,
-        ContainedTaskPackageReadFailed => "contained_task_package_read_failed": error / declaration_error,
-        ContainedTaskPackageSizeInvalid => "contained_task_package_size_invalid": error / declaration_error,
         ContainedTaskPackageStateInvalid => "contained_task_package_state_invalid": error / none,
         ContainedTaskPathNotAbsolute => "contained_task_path_not_absolute": error / none,
         ContainedTaskPostAdmissionOcrComparisonInvalid => "contained_task_post_admission_ocr_comparison_invalid": error / none,
@@ -385,15 +396,9 @@ actingcommand_contract::outcome_codes! {
         DebugPackageContainmentFailed => "debug_package_containment_failed": error / none,
         DebugPackageDeadlineOverflow => "debug_package_deadline_overflow": error / none,
         DebugPackageEntryCountOverflow => "debug_package_entry_count_overflow": error / none,
-        DebugPackageFileInvalid => "debug_package_file_invalid": error / none,
-        DebugPackageFileTooLarge => "debug_package_file_too_large": error / none,
-        DebugPackageHashInvalid => "debug_package_hash_invalid": error / none,
         DebugPackageInstanceInvalid => "debug_package_instance_invalid": error / none,
-        DebugPackageMetadataFailed => "debug_package_metadata_failed": error / none,
         DebugPackageNameInvalid => "debug_package_name_invalid": error / none,
-        DebugPackageOpenFailed => "debug_package_open_failed": error / none,
         DebugPackagePathNotAbsolute => "debug_package_path_not_absolute": error / none,
-        DebugPackageReadFailed => "debug_package_read_failed": error / none,
         DebugPackageSummaryInvalid => "debug_package_summary_invalid": error / none,
         DebugPackageTaskCountOverflow => "debug_package_task_count_overflow": error / none,
         DispatchPausedGlobal => "dispatch_paused_global": info / none,
@@ -487,6 +492,9 @@ actingcommand_contract::outcome_codes! {
         InstallOwnerStopping => "install_owner_stopping": error / none,
         InstallPauseScopeMismatch => "install_pause_scope_mismatch": error / none,
         InstallPreparationNotAuthorized => "install_preparation_not_authorized": error / none,
+        /// Error. An install start whose daemon-start preparation self-checks all failed (at
+        /// least one ran and none passed) ends under this code during `install_transition`
+        /// (INST-1, Workflow #390); a start where some instance passed goes on.
         InstallPreparationSelfcheckFailed => "install_preparation_selfcheck_failed": error / none,
         InstallPreviousDrainUnverified => "install_previous_drain_unverified": error / none,
         InstallPreviousOwnerInvalid => "install_previous_owner_invalid": error / none,
@@ -600,11 +608,7 @@ actingcommand_contract::outcome_codes! {
         ObservationFrameContextMissing => "observation_frame_context_missing": error / none,
         ObservationFrameHashInvalid => "observation_frame_hash_invalid": error / none,
         ObservationFrameIdentityMissing => "observation_frame_identity_missing": error / none,
-        ObservationHashInvalid => "observation_hash_invalid": error / none,
         ObservationPackageDeadlineOverflow => "observation_package_deadline_overflow": error / none,
-        ObservationPackageLimitExceeded => "observation_package_limit_exceeded": error / none,
-        ObservationPackageOpenFailed => "observation_package_open_failed": error / none,
-        ObservationPackageReadFailed => "observation_package_read_failed": error / none,
         ObservationPathNotAbsolute => "observation_path_not_absolute": error / none,
         ObservationRecognitionIdIssueFailed => "observation_recognition_id_issue_failed": error / none,
         ObservationResultInvalid => "observation_result_invalid": error / none,
@@ -997,11 +1001,7 @@ actingcommand_contract::outcome_codes! {
         SavedOcrDeadlineExceeded => "saved_ocr_deadline_exceeded": error / none,
         SavedOcrDeadlineOverflow => "saved_ocr_deadline_overflow": error / none,
         SavedOcrEvaluationFailed => "saved_ocr_evaluation_failed": error / none,
-        SavedOcrPackageHashInvalid => "saved_ocr_package_hash_invalid": error / none,
         SavedOcrPackageInvalid => "saved_ocr_package_invalid": error / none,
-        SavedOcrPackageLimit => "saved_ocr_package_limit": error / none,
-        SavedOcrPackageOpenFailed => "saved_ocr_package_open_failed": error / none,
-        SavedOcrPackageReadFailed => "saved_ocr_package_read_failed": error / none,
         SavedOcrProviderUnavailable => "saved_ocr_provider_unavailable": error / none,
         SavedOcrSerializationFailed => "saved_ocr_serialization_failed": error / none,
         SavedOcrVerifiedEventMissing => "saved_ocr_verified_event_missing": error / none,
@@ -1075,6 +1075,17 @@ actingcommand_contract::outcome_codes! {
         TaskIdTooLongForFacts => "task_id_too_long_for_facts": error / none,
         TerminalAlreadyCommitted => "terminal_already_committed": error / none,
         UnknownEmulatorCapability => "unknown_emulator_capability": error / none,
+        // Workflow #378 A3 (ledger revision 3): the outcomes of records whose former
+        // reason or code was an unregistered spelling. Pending (B2 settles them).
+        RecoveryRungSkippedNoRecoveryPackage => "recovery_rung_skipped_no_recovery_package": info / none,
+        RecoveryRungSkippedNoStartupPackage => "recovery_rung_skipped_no_startup_package": info / none,
+        RecoveryRungSkippedNoEmulatorControl => "recovery_rung_skipped_no_emulator_control": info / none,
+        RecoveryRungSkippedCaptureUnavailable => "recovery_rung_skipped_capture_unavailable": info / none,
+        RecoveryRungSkippedInputUnavailable => "recovery_rung_skipped_input_unavailable": info / none,
+        RecoveryRungSkippedAdbUnavailable => "recovery_rung_skipped_adb_unavailable": info / none,
+        SessionTimeout => "session_timeout": warning / budget_or_permission,
+        RecoveryLadderExhausted => "recovery_ladder_exhausted": error / environment_fault,
+        RecoveryLadderInterrupted => "recovery_ladder_interrupted": warning / planned_stop,
         // ---- #389 U-0 registrations (pending): the unified interface's host codes, registered
         // ahead of the slices that emit them (contracts/runtime-interface.md, "Outcome codes").
         /// Error. From U-6, an unbound connection sent a request other than the handshake;
@@ -1344,6 +1355,8 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #369 S6b.
+        HandOffToClaim => "hand_off_to_claim",
         HandOffToLadder => "hand_off_to_ladder",
         HashFactSnapshot => "hash_fact_snapshot",
         HashPolicyFactSnapshot => "hash_policy_fact_snapshot",
@@ -1429,6 +1442,8 @@ actingcommand_contract::outcome_locations! {
         OpenNemuSession => "open_nemu_session",
         OpenObservationPackage => "open_observation_package",
         OpenOwnerFile => "open_owner_file",
+        // Workflow #383 AO-7: the daemon's policy monitor opens the host's business notifications.
+        OpenPolicyWakes => "open_policy_wakes",
         OpenRecoveryLadderWindow => "open_recovery_ladder_window",
         OpenSuspensionLedger => "open_suspension_ledger",
         PauseGlobalScheduling => "pause_global_scheduling",
@@ -1447,6 +1462,8 @@ actingcommand_contract::outcome_locations! {
         PostHostClaim => "post_host_claim",
         PrepareAgentDispatcher => "prepare_agent_dispatcher",
         PrepareApplicationResources => "prepare_application_resources",
+        // Workflow #369 S6b.
+        PrepareClaimHandOff => "prepare_claim_hand_off",
         PrepareCleanupTransfer => "prepare_cleanup_transfer",
         PrepareHostClaim => "prepare_host_claim",
         PrepareIdlePreemption => "prepare_idle_preemption",
@@ -1535,6 +1552,8 @@ actingcommand_contract::outcome_locations! {
         ReadDeviceSessionGate => "read_device_session_gate",
         ReadDispatchProcedureRef => "read_dispatch_procedure_ref",
         ReadDueMonitors => "read_due_monitors",
+        // Workflow #369 S6b.
+        ReadEmulatorControlClaimTtl => "read_emulator_control_claim_ttl",
         ReadExecutionCloseResult => "read_execution_close_result",
         ReadFactSnapshot => "read_fact_snapshot",
         ReadFactSource => "read_fact_source",
@@ -1562,7 +1581,6 @@ actingcommand_contract::outcome_locations! {
         ReadInstanceRegistry => "read_instance_registry",
         ReadInstanceStringFact => "read_instance_string_fact",
         ReadLabOperationCleanupLease => "read_lab_operation_cleanup_lease",
-        ReadLabOperationPackage => "read_lab_operation_package",
         ReadLabOperationRun => "read_lab_operation_run",
         ReadLatestApprovalDecisions => "read_latest_approval_decisions",
         ReadLeaseConnection => "read_lease_connection",
@@ -1570,7 +1588,6 @@ actingcommand_contract::outcome_locations! {
         ReadLifecycleDraining => "read_lifecycle_draining",
         ReadMonitorRegistry => "read_monitor_registry",
         ReadMonitorStatus => "read_monitor_status",
-        ReadObservationPackage => "read_observation_package",
         ReadObservedBinding => "read_observed_binding",
         ReadOldInstallTransition => "read_old_install_transition",
         ReadPausedInstanceRuns => "read_paused_instance_runs",
@@ -1884,6 +1901,28 @@ actingcommand_contract::outcome_locations! {
         WithholdPolicyInstanceAvailability => "withhold_policy_instance_availability",
         WriteCatalogState => "write_catalog_state",
         WriteOwnerFile => "write_owner_file",
+        // Workflow #378 A3: the stages of runtime lifecycle failures (`runtime.failed`), which
+        // were the dotted tokens `runtime.lifecycle.*`; those stay the detail's stage.
+        RuntimeLifecycleInstallDrain => "runtime_lifecycle_install_drain",
+        RuntimeLifecycleInstallHeld => "runtime_lifecycle_install_held",
+        RuntimeLifecycleInstallRelease => "runtime_lifecycle_install_release",
+        RuntimeLifecyclePolicyInitialization => "runtime_lifecycle_policy_initialization",
+        RuntimeLifecyclePolicyMonitor => "runtime_lifecycle_policy_monitor",
+        RuntimeLifecyclePolicyForward => "runtime_lifecycle_policy_forward",
+        RuntimeLifecycleStrategicReport => "runtime_lifecycle_strategic_report",
+        RuntimeLifecycleSessionClose => "runtime_lifecycle_session_close",
+        RuntimeLifecycleConnectionPreparation => "runtime_lifecycle_connection_preparation",
+        RuntimeLifecycleOperationCleanup => "runtime_lifecycle_operation_cleanup",
+        RuntimeLifecycleConnectionCleanup => "runtime_lifecycle_connection_cleanup",
+        RuntimeLifecycleShutdownJoin => "runtime_lifecycle_shutdown_join",
+        RuntimeLifecycleInfoFileRemoval => "runtime_lifecycle_info_file_removal",
+        RuntimeLifecycleRetainedReference => "runtime_lifecycle_retained_reference",
+        RuntimeLifecycleHostClose => "runtime_lifecycle_host_close",
+        RuntimeLifecyclePolicyDriver => "runtime_lifecycle_policy_driver",
+        RuntimeLifecyclePolicyControl => "runtime_lifecycle_policy_control",
+        RuntimeLifecyclePolicyBootstrap => "runtime_lifecycle_policy_bootstrap",
+        RuntimeLifecycleSelectionRecord => "runtime_lifecycle_selection_record",
+        RuntimeLifecycleShutdownRequested => "runtime_lifecycle_shutdown_requested",
     }
 }
 

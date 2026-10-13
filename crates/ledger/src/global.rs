@@ -25,7 +25,7 @@ pub use migration::*;
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
-    verify_release_source_reference, verify_transaction_event,
+    refuse_unsupported_ledger_format, verify_release_source_reference, verify_transaction_event,
 };
 
 pub(crate) use projection::query_matches;
@@ -967,7 +967,7 @@ enum WriterCommand {
     FinishArtifactEviction {
         permit: Box<ArtifactEvictionPermit>,
         disposition: actingcommand_contract::ArtifactEvictionDisposition,
-        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        outcome: Option<actingcommand_contract::outcome::Outcome>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
     AppendTransaction {
@@ -2315,10 +2315,10 @@ fn writer_loop<S: LedgerStore>(
             WriterCommand::FinishArtifactEviction {
                 permit,
                 disposition,
-                io,
+                outcome,
                 response,
             } => {
-                let result = store.finish_artifact_eviction(*permit, disposition, io);
+                let result = store.finish_artifact_eviction(*permit, disposition, outcome);
                 let result = match result {
                     Ok(event) => {
                         deliver_live_event(&mut subscribers, &event);

@@ -87,7 +87,7 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, Sensitivity, StartupPackageDisposition, TaskEntryRecognitionPhase,
+    SchedulingOutcomeProjection, StartupPackageDisposition, TaskEntryRecognitionPhase,
     TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
     TaskSemanticFact, TaskTimingBoundary, TaskTimingObservationState, TaskTimingResult,
     TerminalEvent, TimingObservationIssue, ValidatedRuntimeRequest,
@@ -98,10 +98,10 @@ use actingcommand_execution_kernel::{
     ContainedTaskEvaluationTiming, ContainedTaskOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, DiscoveredInstanceBinding, ExecutionBackendProvenance,
-    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PostAdmissionOcrObservation,
-    PreparedContainedTask, PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint,
-    ResolvedInstanceEndpoint, StabilityComparisonResult, StabilityTerminalReason,
-    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    ExecutionBackendProvider, ExecutionKernel, PostAdmissionOcrObservation, PreparedContainedTask,
+    PreparedInputAction, RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedInstanceEndpoint,
+    StabilityComparisonResult, StabilityTerminalReason, StabilityTerminationDeclaration,
+    decide_monitor, page_anchor_matches,
 };
 use actingcommand_execution_kernel::{InputFrameContext, ObservedFrame};
 use actingcommand_ledger::critical::{
@@ -111,8 +111,7 @@ use actingcommand_ledger::critical::{
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent, project_subscription_event};
 use actingcommand_pack_containment::{
-    Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
-    Sha256Hash,
+    Containment, InstanceId as ContainmentInstanceId, PackageLayout,
 };
 use actingcommand_policy::{
     CatalogSources, DecisionReason, DecisionReasonChain, DispatchIntent, EvaluationFacts,
@@ -133,7 +132,7 @@ use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -186,6 +185,8 @@ mod planning;
 mod policy_catalog;
 mod policy_dispatch;
 mod policy_outcome;
+// Workflow #383 AO-7: the host's business notifications that wake the policy driver.
+mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
@@ -239,6 +240,9 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
+// Workflow #383 AO-7.
+pub(crate) use policy_wake::PolicyWakeSignal;
+pub use policy_wake::{PolicyWakes, policy_trigger_for_event, policy_trigger_for_family};
 use recovery_ladder::with_recovery_ladder_staging;
 use requests::{
     ActionFailure, ConnectionFailureContext, ConnectionFailureStage, RequestFailure,
@@ -1050,6 +1054,18 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
+        // Workflow #378 A3 (acceptance CL-M1): a format-1 ledger is refused before the owner
+        // journal is written or the writer lock is taken; the check reads only the database's
+        // format and creates nothing.
+        actingcommand_ledger::refuse_unsupported_ledger_format(&config.state_root).map_err(
+            |error| {
+                RuntimeHostError::relayed_fatal(
+                    error.code(),
+                    error.operation(),
+                    RuntimeErrorCode::LedgerFailure,
+                )
+            },
+        )?;
         let events =
             RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;
@@ -1211,11 +1227,14 @@ impl RuntimeHost {
             }
             return Err(original);
         }
+        // Workflow #383 AO-7: the capacity monitor's records raise wakes too.
+        let policy_wakes = Arc::new(PolicyWakeSignal::default());
         let performance = (|| {
             PerformanceMonitor::preflight_capacity(
                 crate::performance::CapacityPreflightConfig {
                     performance: config.performance_monitor.clone(),
                     thresholds: config.capacity_thresholds,
+                    policy_wakes: Arc::clone(&policy_wakes),
                 },
                 crate::performance::CapacityRoots::new(
                     owner_epoch,
@@ -1452,6 +1471,9 @@ impl RuntimeHost {
             agent_dispatcher_config: config.agent_dispatcher.clone(),
             agent_dispatcher: Mutex::new(AgentDispatcherState::default()),
             events,
+            policy_wakes,
+            #[cfg(any(test, feature = "test-hooks"))]
+            event_subscriptions_for_test: AtomicU64::new(0),
             execution: OnceLock::new(),
             registered_instances: Mutex::new(BTreeMap::new()),
             monitor_registry: OnceLock::new(),
@@ -1470,7 +1492,7 @@ impl RuntimeHost {
             #[cfg(test)]
             lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             #[cfg(test)]
-            failure_details_for_test: Mutex::new(BTreeMap::new()),
+            failure_outcomes_for_test: Mutex::new(BTreeMap::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(BTreeMap::new()),
             policy_outcome_gate: Mutex::new(()),
@@ -1899,6 +1921,25 @@ impl RuntimeHost {
     pub fn is_lifecycle_draining(&self) -> RuntimeHostResult<bool> {
         self.shared_ref(HostLocation::ReadLifecycleDraining)?
             .lifecycle_draining()
+    }
+
+    /// Workflow #383 AO-7: the host's business notifications for the daemon's policy monitor.
+    /// Opening them is the monitor's starting point; the wakes raised before are dropped.
+    pub fn open_policy_wakes(&self) -> RuntimeHostResult<PolicyWakes> {
+        Ok(self
+            .shared_ref(HostLocation::OpenPolicyWakes)?
+            .open_policy_wakes())
+    }
+
+    /// Workflow #383 AO7-c, test builds and the `test-hooks` feature only: the event
+    /// subscriptions (`SubscribeEvents`) this host has served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn event_subscriptions_for_test(&self) -> u64 {
+        self.shared
+            .as_ref()
+            .expect("test Runtime host is open")
+            .event_subscriptions_for_test
+            .load(Ordering::Acquire)
     }
 
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
@@ -2577,16 +2618,17 @@ impl RuntimeHost {
             .process_request(request, connection_id)
     }
 
-    /// Workflow #369 S5: the native detail of a refused request (its `key=value` tokens).
+    /// Workflow #369 S5: the outcome of a refused request; ledger revision 3 carries the
+    /// refusal's facts as its values (they were the native detail's `key=value` tokens).
     #[cfg(test)]
-    pub(crate) fn failure_detail_for_test(
+    pub(crate) fn failure_outcome_for_test(
         &self,
         request_id: RequestId,
-    ) -> RuntimeHostResult<Option<String>> {
+    ) -> RuntimeHostResult<Option<actingcommand_contract::outcome::Outcome>> {
         let shared =
             self.shared_ref(crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest)?;
         Ok(lock(
-            &shared.failure_details_for_test,
+            &shared.failure_outcomes_for_test,
             crate::codes::test_spellings::TestLocation::ReadFailureDetailForTest,
         )?
         .get(&request_id)
@@ -2842,10 +2884,9 @@ impl RuntimeHost {
         Ok((claim, result))
     }
 
-    /// Workflow #369 H-6: the tail of an emulator `start` / `restart` without the provider
-    /// (the test fakes have no emulator control): under the instance's admission guard the
-    /// startup package's scheduling intent is recorded and its claim queued, then the guard is
-    /// let go and the queue pumped, exactly as `drive_emulator_control` does.
+    /// A startup package's claim without the emulator control (Workflow #369 S6b): its
+    /// scheduling intent is recorded and the claim queued (`schedule_startup_package`, the path
+    /// of a start that hands it no key); on a free instance it is granted at once.
     #[cfg(test)]
     pub(crate) fn schedule_startup_package_for_test(
         &self,
@@ -2870,18 +2911,11 @@ impl RuntimeHost {
             .mint_request_id()
             .map_err(|_| runtime_identifier_error())?
             .transport();
-        let instance_guard = shared
-            .instance_guard(instance_id)
-            .map_err(|failure| *failure.error)?;
-        let admission = lock(
-            &instance_guard,
-            crate::codes::test_spellings::TestLocation::ScheduleStartupPackageForTest,
-        )?;
         let pending = shared
             .prepare_startup_package(&resolved, links, control_request_id)
             .map_err(|failure| *failure.error)?;
         shared
-            .schedule_startup_under_guard(instance_id, pending, admission)
+            .schedule_startup_package(pending)
             .map_err(|failure| *failure.error)
     }
 
@@ -3202,9 +3236,8 @@ impl RuntimeHost {
                     intent_already_recorded,
                     final_page,
                     executed_steps: Some(executed_steps),
-                    failure_code,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: failure_code.map(actingcommand_contract::outcome::Outcome::relayed),
+                    failure_severe: false,
                     scheduling_outcome: None,
                     selected_scheduling_outcome: None,
                     capture_summary: None,
@@ -3290,9 +3323,8 @@ impl RuntimeHost {
                     intent_already_recorded: false,
                     final_page,
                     executed_steps: Some(0),
-                    failure_code: None,
-                    failure_severity: None,
-                    projection_failure_severity: None,
+                    failure: None,
+                    failure_severe: false,
                     scheduling_outcome: Some((game, declaration)),
                     selected_scheduling_outcome,
                     capture_summary: None,
@@ -3453,7 +3485,7 @@ impl RuntimeHost {
                     )
                     .map(|_| ())
                     .map_err(|error| {
-                        error.with_failure_stage("runtime.lifecycle.shutdown_requested")
+                        error.with_failure_stage(HostLocation::RuntimeLifecycleShutdownRequested)
                     }),
             );
         }
@@ -3855,6 +3887,12 @@ struct HostShared {
     agent_dispatcher: Mutex<AgentDispatcherState>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
+    /// Workflow #383 AO-7: the policy driver's wakes raised at the append points and not yet
+    /// taken by the daemon's policy monitor.
+    policy_wakes: Arc<PolicyWakeSignal>,
+    /// Workflow #383 AO7-c, tests only: the event subscriptions (`SubscribeEvents`) served.
+    #[cfg(any(test, feature = "test-hooks"))]
+    event_subscriptions_for_test: AtomicU64,
     execution: OnceLock<ExecutionKernel>,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
     monitor_registry: OnceLock<Mutex<MonitorRegistry>>,
@@ -3872,10 +3910,10 @@ struct HostShared {
     lease_expiry_scan_test_gate: Mutex<()>,
     #[cfg(test)]
     lease_expiry_test_checkpoints: Mutex<Vec<LeaseExpiryTestCheckpoint>>,
-    /// Workflow #369 S5: the native detail of each refused request, by request id; it carries
-    /// the refusal's `key=value` tokens, which no receipt carries until #378 A2/A3.
+    /// Workflow #369 S5: the outcome of each refused request, by request id; its values are the
+    /// refusal's facts, which no receipt carries (ledger revision 3).
     #[cfg(test)]
-    failure_details_for_test: Mutex<BTreeMap<RequestId, String>>,
+    failure_outcomes_for_test: Mutex<BTreeMap<RequestId, actingcommand_contract::outcome::Outcome>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -4155,7 +4193,7 @@ impl HostShared {
                             HostLocation::CloseExecutionKernel,
                             &error,
                         )
-                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.as_str())),
+                        .with_failure_stage(RuntimeLifecycleFailureStage::SessionClose.location())),
                     );
                 }
                 if unconfirmed {
@@ -4287,7 +4325,6 @@ fn accept_loop(
                             stream,
                             connection_shared,
                             connection_id,
-                            connection_serial,
                             maximum_frame_bytes,
                             io_timeout,
                         )

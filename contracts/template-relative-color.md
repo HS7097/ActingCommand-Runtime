@@ -54,7 +54,11 @@ higher-scoring candidate with invalid color. The relative path visits the bounde
 ROI once with the existing five-second matching deadline, including candidate color
 work. It retains only the best template and best joint match. If that search cannot
 finish in budget, evaluation fails explicitly and returns no partial success.
-Choose an appropriate resource ROI for this exact joint search.
+The candidate scores come from exact integer sums computed for the whole ROI at once
+(Workflow #396 REC-2), so the full frame is a usable ROI for this exact joint search. A
+target that declares `unique` also fails when a second joint candidate, apart from the
+selected one, scores within its margin (`resource-declarations.md`, section Task schema
+`0.9` unique matches).
 
 Direct recognition, same-frame page/operation evaluation and template-region batch
 evaluation use this rule. With no joint match, `passed` is false and the best

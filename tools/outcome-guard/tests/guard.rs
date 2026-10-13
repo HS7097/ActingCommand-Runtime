@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The outcome guard on this workspace (G1, G2-G5 outside the allow list, G7, G8, G9), plus
+//! The outcome guard on this workspace (G1, G2-G6 outside the allow list, G7, G8, G9), plus
 //! counterexamples that show each check catches a break.
 
 use actingcommand_outcome_guard::catalog::{
@@ -9,7 +9,8 @@ use actingcommand_outcome_guard::catalog::{
 use actingcommand_outcome_guard::source::{ChannelScope, Check, inspect_channels, scan_file};
 use actingcommand_outcome_guard::{
     ALLOW_LIST, ScannedFile, Workspace, check_channels, check_contract, check_keys, check_naming,
-    check_registries, load_workspace, workspace_members, workspace_root,
+    check_persisted_prose, check_registries, load_workspace, persisted, workspace_members,
+    workspace_root,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -48,6 +49,41 @@ fn g1_registries_equal_the_catalog_fragments() {
 #[test]
 fn g2_to_g5_have_no_finding_outside_the_allow_list() {
     assert_none("G2-G5", check_channels(workspace()));
+}
+
+/// #378 A3 (model section 9, G6): ledger revision 3 persists no Runtime text.
+#[test]
+fn g6_persisted_contract_types_carry_no_text_member() {
+    assert_none("G6", check_persisted_prose(workspace()));
+}
+
+/// #378 A3 (model section 9, G6): a text member is a finding exactly when a stored root reaches
+/// its type, through any member type; an unreached type, a non-text member and test code are not.
+#[test]
+fn persisted_text_is_caught_where_a_stored_record_reaches_it() {
+    let source = r#"
+        #[derive(Serialize, Deserialize)]
+        pub enum EventPayload { Failed(Box<Failure>), Other { note: Option<String> } }
+        #[derive(Serialize)]
+        pub struct Failure { pub message: String, pub detail: Option<Detail>, pub code: u32 }
+        #[derive(Deserialize)]
+        pub struct Detail { pub text: Box<str>, pub summary: u64 }
+        #[derive(Serialize)]
+        pub struct WireOnly { pub message: String }
+        pub struct Unreached { pub reason: String }
+        #[cfg(test)]
+        mod tests { #[derive(Serialize)] pub struct EventPayload { pub error: String } }
+    "#;
+    let types = persisted::serde_types("contract.rs", source).expect("parse the counterexample");
+    let mut items = persisted::persisted_prose(&types)
+        .into_iter()
+        .map(|(_, finding)| finding.item.unwrap_or_default())
+        .collect::<Vec<_>>();
+    items.sort_unstable();
+    assert_eq!(
+        items,
+        ["Detail.text", "EventPayload::Other.note", "Failure.message"]
+    );
 }
 
 #[test]

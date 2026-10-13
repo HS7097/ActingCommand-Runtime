@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     OcrAnchorMatch, OcrRegionEvidence, OcrRegionOffset, OcrRegionRect, OcrRegionUnresolvedReason,
 };
@@ -24,21 +25,32 @@ mod candidate_identity;
 mod candidate_layout;
 mod codes;
 mod target_consensus;
+// Workflow #396 REC-2.
+mod target_unique;
+mod text_locate;
+pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
+pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
+pub use text_locate::{
+    OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
+    OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
+    OcrProviderDetection, TEXT_READ_MAX_CALLS, TextReadBudgetOverrun, TextReadCount,
+};
 
 pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
 
 pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, normalize_name,
+    CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
 };
 
-pub use codes::RecognitionPackCode;
+pub use codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget};
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
     CandidateFeatureDeclaration, CandidateFeatureValue, CandidateIntegerDeclaration,
-    CandidateLayout, CandidateProjectionFailure, CandidateSlot, UnknownIdentityHandling,
+    CandidateLayout, CandidateOrder, CandidateProjectionFailure, CandidateSlot, TargetSearch,
+    UnknownIdentityHandling,
 };
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
@@ -71,6 +83,8 @@ pub enum RecognitionPackErrorCode {
     VisionProviderFailure,
     VisionProviderInvalidResponse,
     RegionUnresolved,
+    /// Workflow #396 REC-1: a text read refused to conclude (its outcome says why).
+    TextReadRefused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,14 +94,20 @@ pub struct RecognitionPackError {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<Box<OcrRegionEvidence>>,
+    /// Boxed: only a timed template failure carries it, and inline it would put the error,
+    /// with the outcome of Workflow #396 REC-1, at clippy's large-error threshold.
     #[serde(skip_serializing_if = "Option::is_none")]
-    timing: Option<actingcommand_contract::TemplateMatchTimingObservation>,
+    timing: Option<Box<actingcommand_contract::TemplateMatchTimingObservation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     #[serde(skip)]
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
     sample: Option<Box<actingcommand_contract::TaskDiagnosticSampleData>>,
+    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude;
+    /// REC-2: of a unique template search past its limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<Outcome>,
 }
 
 impl RecognitionPackError {
@@ -105,7 +125,24 @@ impl RecognitionPackError {
             declaration_issue: None,
             ppocr_diagnostics: Vec::new(),
             sample: None,
+            outcome: None,
         }
+    }
+
+    /// A text read that refused to conclude, under its registered outcome (Workflow #396).
+    pub(crate) fn text_read(outcome: Outcome) -> Self {
+        let mut error = Self::fatal_with_code(
+            RecognitionPackErrorCode::TextReadRefused,
+            outcome.to_string(),
+        );
+        error.outcome = Some(outcome);
+        error
+    }
+
+    /// The registered outcome of an evaluation that refused to conclude: a text read
+    /// (Workflow #396 REC-1) or a unique template search past its limit (REC-2).
+    pub fn outcome(&self) -> Option<&Outcome> {
+        self.outcome.as_ref()
     }
 
     pub fn severity(&self) -> RecognitionPackErrorSeverity {
@@ -141,7 +178,7 @@ impl RecognitionPackError {
     }
 
     pub fn timing(&self) -> Option<&actingcommand_contract::TemplateMatchTimingObservation> {
-        self.timing.as_ref()
+        self.timing.as_deref()
     }
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
@@ -183,7 +220,7 @@ impl fmt::Display for RecognitionPackError {
 
 impl Error for RecognitionPackError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackRect {
     pub x: i32,
     pub y: i32,
@@ -327,6 +364,9 @@ pub struct TemplateTarget {
     pub rect_move: Option<PackRect>,
     pub color_check: Option<ColorCheck>,
     pub click: Option<PackRect>,
+    /// Schema 0.7: a second place within this margin fails the target (Workflow #396 REC-2).
+    #[serde(default)]
+    pub unique: Option<TargetUnique>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -399,6 +439,13 @@ pub struct OcrTarget {
     pub model_ref: String,
     pub model_sha256: String,
     pub click: Option<PackRect>,
+    /// Schema 0.7: find the text block by block and give its box (Workflow #396 REC-1).
+    #[serde(default)]
+    pub locate: Option<OcrLocate>,
+    /// Schema 0.7, with `locate`: a second matching block within this margin fails the target
+    /// (Workflow #396 REC-2).
+    #[serde(default)]
+    pub unique: Option<TargetUnique>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,6 +523,8 @@ pub struct RecognitionEvaluator {
     pack: RecognitionPack,
     target_indexes: HashMap<String, usize>,
     unsupported_targets: Vec<UnsupportedRecognitionTarget>,
+    /// Workflow #396 REC-2: the clock the 5 s limit of a unique template search is read on.
+    search_clock: recognition::SearchClock,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -493,6 +542,8 @@ pub struct OcrProviderRequest<'a> {
     pub timeout_ms: u64,
     pub model_ref: &'a str,
     pub model_sha256: &'a str,
+    /// How the region is cut into blocks (Workflow #396 REC-1).
+    pub blocks: OcrProviderBlocks,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -508,6 +559,8 @@ pub struct OcrProviderResult {
     pub text: String,
     pub blocks: Vec<OcrProviderTextBlock>,
     pub confidence: Option<f32>,
+    /// A `Detect` read's box count before truncation (Workflow #396 REC-1).
+    pub detection: Option<OcrProviderDetection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -574,6 +627,21 @@ pub enum VisionProviderErrorCode {
     ModelMismatch,
     InvalidResponse,
     Internal,
+}
+
+impl VisionProviderErrorCode {
+    /// The code's spelling, which a caller relays with `Outcome::relayed` (Workflow #378 A3).
+    /// The catalog does not register these codes yet (B4), so the relayed spelling stays
+    /// visible as the `raw_code` of `outcome_relay_unregistered`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Timeout => "timeout",
+            Self::ModelMismatch => "model_mismatch",
+            Self::InvalidResponse => "invalid_response",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -720,6 +788,15 @@ pub struct TargetEvaluation {
     pub color_digest: Option<Box<ColorDigestEvaluation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<Box<CompositeEvaluation>>,
+    /// Why the target did not pass, when a registered reason exists (Workflow #396 REC-1:
+    /// `text_locate_not_found`, `text_locate_outside_cells`; REC-2: `target_match_not_unique`);
+    /// absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Outcome>,
+    /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique` (a second
+    /// place makes `failure` `target_match_not_unique`); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uniqueness: Option<TargetUniquenessEvidence>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<actingcommand_contract::TaskDiagnosticSamplingData>,
@@ -835,6 +912,9 @@ pub struct OcrEvaluation {
     pub matched_expected: Option<String>,
     pub match_mode: OcrMatchMode,
     pub blocks: Vec<OcrTextEvidence>,
+    /// A locate target's found block and cell (Workflow #396 REC-1); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located: Option<OcrLocatedEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -900,6 +980,14 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     let pack: RecognitionPack = serde_json::from_value(value).map_err(|err| {
         RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
     })?;
+    text_locate::validate_locate_declarations(&pack).map_err(|refusal| {
+        let mut error = RecognitionPackError::fatal(refusal.explanation)
+            .at_declaration(refusal.pointer, refusal.reason);
+        if let Some(issue) = &mut error.declaration_issue {
+            issue.schema_version = Some(schema_version.clone());
+        }
+        error
+    })?;
     if matches!(schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5")
         && pack
             .targets
@@ -916,8 +1004,20 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     Ok(pack)
 }
 
+/// The search a joint template and relative color evaluation selects with: the direct joint
+/// search, or (Workflow #396 REC-2) the exact score map of a unique template.
+pub(crate) enum JointSearch<'a> {
+    Filter {
+        template_png: &'a [u8],
+        region: Option<recognition::Rect>,
+    },
+    Map(&'a recognition::ExactScoreMap),
+}
+
 /// A template cache bound to one immutable Scene and its admitted evaluator.
-/// OCR results are never cached; callers cannot import evaluations from another frame.
+/// OCR results are not cached, except the text reads of locate targets, which are remembered
+/// per request for this Scene only (Workflow #396 REC-1); callers cannot import evaluations
+/// from another frame.
 pub struct SceneEvaluation<'a> {
     evaluator: &'a RecognitionEvaluator,
     scene: &'a Scene,
@@ -926,6 +1026,11 @@ pub struct SceneEvaluation<'a> {
     sample_recorder: Option<RefCell<&'a mut TargetSampleRecorder<'a>>>,
     consensus_results: RefCell<HashMap<String, RecognitionPackResult<TargetEvaluation>>>,
     sample_deadline: Option<std::time::Instant>,
+    text_reads: RefCell<text_locate::TextReads>,
+    /// The clock an anchor search reads its time limit from.
+    search_clock: fn() -> std::time::Instant,
+    /// Workflow #396 REC-2: the transforms of the regions unique templates search in.
+    spectra: RefCell<recognition::RegionSpectra>,
 }
 
 impl SceneEvaluation<'_> {
@@ -1059,6 +1164,7 @@ impl SceneEvaluation<'_> {
                 declaration_issue: None,
                 ppocr_diagnostics: Vec::new(),
                 sample: None,
+                outcome: None,
             }
         };
         if !evaluated.passed {
@@ -1119,6 +1225,9 @@ impl RecognitionEvaluator {
             sample_recorder: None,
             consensus_results: RefCell::new(HashMap::new()),
             sample_deadline: None,
+            text_reads: RefCell::new(text_locate::TextReads::default()),
+            search_clock: std::time::Instant::now,
+            spectra: RefCell::new(recognition::RegionSpectra::default()),
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
@@ -1165,7 +1274,15 @@ impl RecognitionEvaluator {
             pack,
             target_indexes,
             unsupported_targets,
+            search_clock: recognition::SearchClock::system(),
         })
+    }
+
+    /// Workflow #396 REC-2: reads the 5 s limit of unique template searches on `clock` instead
+    /// of the system's monotonic clock.
+    pub fn with_search_clock(mut self, clock: recognition::SearchClock) -> Self {
+        self.search_clock = clock;
+        self
     }
 
     pub fn pack(&self) -> &RecognitionPack {
@@ -1197,7 +1314,7 @@ impl RecognitionEvaluator {
                         target.id
                     )));
                 }
-                self.evaluate_template(scene, target)
+                self.evaluate_template(context, target)
             }
             RecognitionTarget::Color(target) => self.evaluate_color(scene, target),
             RecognitionTarget::ClickOnly(target) => Err(RecognitionPackError::fatal(format!(
@@ -1226,6 +1343,14 @@ impl RecognitionEvaluator {
         if let Some(reason) = unsupported_template_reason(target) {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' uses unsupported recognition semantics: {reason}",
+                target.id
+            )));
+        }
+        // Workflow #396 REC-2: a batch of regions does not check uniqueness; it refuses a
+        // target that declares it instead of ignoring the declaration.
+        if target.unique.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' declares unique, which template-region batch evaluation does not check",
                 target.id
             )));
         }
@@ -1422,6 +1547,7 @@ impl RecognitionEvaluator {
                     timeout_ms,
                     model_ref: &target.model_ref,
                     model_sha256: &target.model_sha256,
+                    blocks: OcrProviderBlocks::Implicit,
                 })
                 .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
             diagnostics = observation.result.ppocr_diagnostics.clone();
@@ -1560,9 +1686,10 @@ impl RecognitionEvaluator {
 
     fn evaluate_template(
         &self,
-        scene: &Scene,
+        context: &SceneEvaluation<'_>,
         target: &TemplateTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        let scene = context.scene;
         let template_png = self
             .asset_resolver
             .read_asset(&target.template_path)
@@ -1575,6 +1702,10 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
+        // Workflow #396 REC-2.
+        if let Some(unique) = target.unique {
+            return self.evaluate_unique_template(context, target, unique, &template_png, region);
+        }
         if target
             .color_check
             .as_ref()
@@ -1620,6 +1751,8 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            failure: None,
+            uniqueness: None,
             message: template_message(template_ok, color_ok),
         })
     }
@@ -1631,21 +1764,89 @@ impl RecognitionEvaluator {
         template_png: &[u8],
         search_region: Option<recognition::Rect>,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let check = target
+        self.joint_color_evaluation(
+            scene,
+            target,
+            JointSearch::Filter {
+                template_png,
+                region: search_region,
+            },
+        )
+        .map(|(evaluation, _)| evaluation)
+    }
+
+    /// The relative color of `target`'s check at `candidate` (`template-relative-color.md`),
+    /// or why its region is unresolved there.
+    pub(crate) fn relative_color_at(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        candidate: recognition::TemplateMatch,
+    ) -> recognition::RecognitionResult<(Option<ColorEvaluation>, Option<OcrRegionUnresolvedReason>)>
+    {
+        let relative = target
             .color_check
             .as_ref()
-            .ok_or_else(|| RecognitionPackError::fatal("relative color check missing"))?;
-        let PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
-            offset,
-            width,
-            height,
-            ..
-        }) = &check.region
-        else {
-            return Err(RecognitionPackError::fatal(
+            .and_then(|check| match &check.region {
+                PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
+                    offset,
+                    width,
+                    height,
+                    ..
+                }) => Some((check, offset, width, height)),
+                _ => None,
+            });
+        let Some((check, offset, width, height)) = relative else {
+            return Err(recognition::RecognitionError::fatal(
                 "relative color declaration missing",
             ));
         };
+        Ok(
+            match resolve_template_relative_region(
+                scene,
+                PackPoint {
+                    x: candidate.x,
+                    y: candidate.y,
+                },
+                *offset,
+                *width,
+                *height,
+            ) {
+                Ok(region) => {
+                    let measured = scene.compare_color(region.into(), check.expected)?;
+                    (
+                        Some(ColorEvaluation {
+                            distance: measured.distance,
+                            max_distance: self.color_max_distance(check.max_distance),
+                            mean: measured.mean,
+                            expected: check.expected,
+                            region: Some(region),
+                        }),
+                        None,
+                    )
+                }
+                Err((_, reason)) => (None, Some(reason)),
+            },
+        )
+    }
+
+    /// The joint template and relative color evaluation of `target`: the selection `search`
+    /// makes with the joint acceptance, and the accepted candidate.
+    pub(crate) fn joint_color_evaluation(
+        &self,
+        scene: &Scene,
+        target: &TemplateTarget,
+        search: JointSearch<'_>,
+    ) -> RecognitionPackResult<(TargetEvaluation, Option<recognition::TemplateMatch>)> {
+        if !target
+            .color_check
+            .as_ref()
+            .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)))
+        {
+            return Err(RecognitionPackError::fatal(
+                "relative color declaration missing",
+            ));
+        }
         let threshold = target
             .threshold
             .unwrap_or(self.pack.defaults.template_threshold);
@@ -1653,51 +1854,37 @@ impl RecognitionEvaluator {
         let mut best_color = None;
         let mut best_color_unresolved = None;
         let mut accepted_color = None;
-        let selection = scene
-            .match_template_with_filter(
+        let mut accept =
+            |candidate: recognition::TemplateMatch| -> recognition::RecognitionResult<bool> {
+                let (color, unresolved) = self.relative_color_at(scene, target, candidate)?;
+                if best_color_score.is_none_or(|score| candidate.raw_score > score) {
+                    best_color_score = Some(candidate.raw_score);
+                    best_color = color;
+                    best_color_unresolved = unresolved;
+                }
+                let passed = color.is_some_and(|color| color.distance <= color.max_distance);
+                if passed {
+                    accepted_color = color;
+                }
+                Ok(passed)
+            };
+        let selection = match search {
+            JointSearch::Filter {
                 template_png,
-                search_region,
-                self.default_match_metric(),
-                threshold,
-                |candidate| {
-                    let (color, unresolved) = match resolve_template_relative_region(
-                        scene,
-                        PackPoint {
-                            x: candidate.x,
-                            y: candidate.y,
-                        },
-                        *offset,
-                        *width,
-                        *height,
-                    ) {
-                        Ok(region) => {
-                            let measured = scene.compare_color(region.into(), check.expected)?;
-                            (
-                                Some(ColorEvaluation {
-                                    distance: measured.distance,
-                                    max_distance: self.color_max_distance(check.max_distance),
-                                    mean: measured.mean,
-                                    expected: check.expected,
-                                    region: Some(region),
-                                }),
-                                None,
-                            )
-                        }
-                        Err((_, reason)) => (None, Some(reason)),
-                    };
-                    if best_color_score.is_none_or(|score| candidate.raw_score > score) {
-                        best_color_score = Some(candidate.raw_score);
-                        best_color = color;
-                        best_color_unresolved = unresolved;
-                    }
-                    let passed = color.is_some_and(|color| color.distance <= color.max_distance);
-                    if passed {
-                        accepted_color = color;
-                    }
-                    Ok(passed)
-                },
-            )
-            .map_err(|err| primitive_error(&target.id, err))?;
+                region,
+            } => scene
+                .match_template_with_filter(
+                    template_png,
+                    region,
+                    self.default_match_metric(),
+                    threshold,
+                    &mut accept,
+                )
+                .map_err(|err| primitive_error(&target.id, err))?,
+            JointSearch::Map(map) => map
+                .select(threshold, &mut accept)
+                .map_err(|err| target_unique::search_error(&target.id, err))?,
+        };
         let matched = selection.accepted.unwrap_or(selection.best_template);
         let passed = selection.accepted.is_some();
         let (color, unresolved) = if passed {
@@ -1705,36 +1892,41 @@ impl RecognitionEvaluator {
         } else {
             (best_color, best_color_unresolved)
         };
-        Ok(TargetEvaluation {
-            id: target.id.clone(),
-            kind: TargetKind::Template,
-            sample_evaluations: Vec::new(),
-            sampling: None,
-            passed,
-            template: Some(TemplateEvaluation {
-                x: matched.x,
-                y: matched.y,
-                width: matched.width,
-                height: matched.height,
-                raw_score: matched.raw_score,
-                score: matched.score,
-                threshold,
-            }),
-            color,
-            ocr: None,
-            nn: None,
-            color_digest: None,
-            composite: None,
-            message: match unresolved {
-                Some(reason) => format!(
-                    "no joint template/color match; best template color region unresolved: {reason:?}"
-                ),
-                None => template_message(
-                    matched.score >= threshold,
-                    color.is_none_or(|color| color.distance <= color.max_distance),
-                ),
+        Ok((
+            TargetEvaluation {
+                id: target.id.clone(),
+                kind: TargetKind::Template,
+                sample_evaluations: Vec::new(),
+                sampling: None,
+                passed,
+                template: Some(TemplateEvaluation {
+                    x: matched.x,
+                    y: matched.y,
+                    width: matched.width,
+                    height: matched.height,
+                    raw_score: matched.raw_score,
+                    score: matched.score,
+                    threshold,
+                }),
+                color,
+                ocr: None,
+                nn: None,
+                color_digest: None,
+                composite: None,
+                failure: None,
+                uniqueness: None,
+                message: match unresolved {
+                    Some(reason) => format!(
+                        "no joint template/color match; best template color region unresolved: {reason:?}"
+                    ),
+                    None => template_message(
+                        matched.score >= threshold,
+                        color.is_none_or(|color| color.distance <= color.max_distance),
+                    ),
+                },
             },
-        })
+            selection.accepted,
+        ))
     }
 
     fn evaluate_color(
@@ -1763,6 +1955,8 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            failure: None,
+            uniqueness: None,
             message: if passed {
                 "color passed".to_string()
             } else {
@@ -1776,6 +1970,9 @@ impl RecognitionEvaluator {
         context: &SceneEvaluation<'_>,
         target: &OcrTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
+        if let Some(locate) = &target.locate {
+            return self.evaluate_located_text(context, target, locate);
+        }
         let scene = context.scene;
         let (region, region_evidence) = context.ocr_region(target)?;
         (|| {
@@ -1796,6 +1993,7 @@ impl RecognitionEvaluator {
                     timeout_ms: target.timeout_ms,
                     model_ref: &target.model_ref,
                     model_sha256: &target.model_sha256,
+                    blocks: OcrProviderBlocks::Implicit,
                 })
                 .map_err(|err| provider_error(&target.id, "ocr", err))?;
             let ocr = validate_ocr_result(result, region)?;
@@ -1834,10 +2032,13 @@ impl RecognitionEvaluator {
                     matched_expected,
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
+                    located: None,
                 })),
                 nn: None,
                 color_digest: None,
                 composite: None,
+                failure: None,
+                uniqueness: None,
                 message,
             })
         })()
@@ -1900,6 +2101,8 @@ impl RecognitionEvaluator {
             }),
             color_digest: None,
             composite: None,
+            failure: None,
+            uniqueness: None,
             message: if passed {
                 "nn passed".to_string()
             } else {
@@ -1954,6 +2157,8 @@ impl RecognitionEvaluator {
                 observed_cells: observed.to_hex(),
             })),
             composite: None,
+            failure: None,
+            uniqueness: None,
             message: if passed {
                 "color digest passed".to_string()
             } else {
@@ -2028,6 +2233,8 @@ impl RecognitionEvaluator {
                 members,
                 ppocr_diagnostics,
             })),
+            failure: None,
+            uniqueness: None,
             message,
         })
     }
@@ -2227,6 +2434,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "rect_move",
                     "color_check",
                     "click",
+                    "unique",
                 ][..]
             }
             "color" if schema == SCHEMA_0_7 => {
@@ -2259,6 +2467,18 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             ][..],
             "composite" => &["type", "id", "mode", "members"][..],
             "click_only" => &["type", "id", "click"][..],
+            "ocr" if schema != SCHEMA_0_7 && object.contains_key("locate") => {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::UnsupportedTarget,
+                    format!(
+                        "schema {schema} target[{index}].locate requires schema_version '{SCHEMA_0_7}'"
+                    ),
+                )
+                .at_declaration(
+                    format!("/targets/{index}/locate"),
+                    actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+                ));
+            }
             "ocr" => &[
                 "type",
                 "id",
@@ -2272,6 +2492,8 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 "model_ref",
                 "model_sha256",
                 "click",
+                "locate",
+                "unique",
             ][..],
             "nn" => &[
                 "type",
@@ -2294,6 +2516,11 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
             }
         };
         reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
+        // Workflow #396 REC-2.
+        target_unique::validate_unique_wire(schema, object, index)?;
+        if let Some(locate) = object.get("locate") {
+            validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
+        }
         if target_type == "color_digest"
             && let Some(algorithm) = object.get("algorithm").and_then(Value::as_str)
             && let Err(error) = ColorDigestAlgorithm::parse(algorithm)
@@ -2386,6 +2613,67 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
     }
     if let Some(layouts) = root.get("candidate_layouts") {
         candidate_layout::validate_candidate_layouts_wire(layouts)?;
+    }
+    Ok(())
+}
+
+/// The wire shape of a schema 0.7 `locate` object (Workflow #396 REC-1): its members, the
+/// `line_merge` keyword or object and the integer members of `cells`. Values are checked with
+/// the typed declaration.
+fn validate_locate_wire(value: &Value, pointer: &str) -> RecognitionPackResult<()> {
+    let locate = validate_strict_object(
+        value,
+        &["normalize", "blocks", "line_merge", "cells"],
+        pointer,
+    )?;
+    let invalid_type = |field: String| {
+        RecognitionPackError::fatal(format!("{field} has the wrong type")).at_declaration(
+            field,
+            actingcommand_contract::ResourceDeclarationReason::InvalidType,
+        )
+    };
+    for field in ["normalize", "blocks"] {
+        match locate.get(field) {
+            Some(value) if value.is_string() => {}
+            Some(_) => return Err(invalid_type(format!("{pointer}/{field}"))),
+            None => {
+                return Err(
+                    RecognitionPackError::fatal(format!("{pointer} lacks {field}")).at_declaration(
+                        format!("{pointer}/{field}"),
+                        actingcommand_contract::ResourceDeclarationReason::MissingField,
+                    ),
+                );
+            }
+        }
+    }
+    if let Some(line_merge) = locate.get("line_merge") {
+        let line_merge_pointer = format!("{pointer}/line_merge");
+        if line_merge.is_object() {
+            let factor = validate_strict_object(line_merge, &["gap_factor"], &line_merge_pointer)?;
+            if !factor.get("gap_factor").is_some_and(Value::is_u64) {
+                return Err(invalid_type(format!("{line_merge_pointer}/gap_factor")));
+            }
+        } else if line_merge.as_str() != Some("none") {
+            return Err(RecognitionPackError::fatal(format!(
+                "{line_merge_pointer} must be \"none\" or {{\"gap_factor\": n}}"
+            ))
+            .at_declaration(
+                line_merge_pointer,
+                actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+            ));
+        }
+    }
+    if let Some(cells) = locate.get("cells") {
+        let cells_pointer = format!("{pointer}/cells");
+        const CELL_FIELDS: [&str; 8] = [
+            "x", "y", "width", "height", "pitch_x", "pitch_y", "columns", "rows",
+        ];
+        let cells = validate_strict_object(cells, &CELL_FIELDS, &cells_pointer)?;
+        for field in CELL_FIELDS {
+            if !cells.get(field).is_some_and(Value::is_i64) {
+                return Err(invalid_type(format!("{cells_pointer}/{field}")));
+            }
+        }
     }
     Ok(())
 }
@@ -2698,6 +2986,11 @@ fn validate_pack(
     }
     target_consensus::validate_target_consensus(pack, errors);
     candidate_layout::validate_candidate_layouts(pack, errors);
+    if let Err(refusal) = text_locate::validate_locate_declarations(pack) {
+        errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
+    }
+    // Workflow #396 REC-2.
+    target_unique::validate_unique_declarations(pack, errors);
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
@@ -3337,33 +3630,35 @@ fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> Recog
     let mut error = RecognitionPackError::fatal(format!(
         "recognition primitive failed for target '{target_id}': {err}"
     ));
-    error.timing = err.timing().map(|timing| TemplateMatchTimingObservation {
-        clock: TimingObservationClock::ProcessInstant,
-        stage: match timing.stage {
-            recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
-            recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
-            recognition::TemplateMatchTimingStage::Refinement => {
-                TemplateMatchTimingStage::Refinement
-            }
-            recognition::TemplateMatchTimingStage::ImageprocReturned => {
-                TemplateMatchTimingStage::ImageprocReturned
-            }
-            recognition::TemplateMatchTimingStage::JointTemplateColor => {
-                TemplateMatchTimingStage::JointTemplateColor
-            }
-        },
-        elapsed_us: timing.elapsed_us.map_or(
-            ObservedMicroseconds::Unavailable {
-                reason: TimingObservationIssue::DurationOverflow,
+    error.timing = err.timing().map(|timing| {
+        Box::new(TemplateMatchTimingObservation {
+            clock: TimingObservationClock::ProcessInstant,
+            stage: match timing.stage {
+                recognition::TemplateMatchTimingStage::Exact => TemplateMatchTimingStage::Exact,
+                recognition::TemplateMatchTimingStage::Coarse => TemplateMatchTimingStage::Coarse,
+                recognition::TemplateMatchTimingStage::Refinement => {
+                    TemplateMatchTimingStage::Refinement
+                }
+                recognition::TemplateMatchTimingStage::ImageprocReturned => {
+                    TemplateMatchTimingStage::ImageprocReturned
+                }
+                recognition::TemplateMatchTimingStage::JointTemplateColor => {
+                    TemplateMatchTimingStage::JointTemplateColor
+                }
             },
-            |value| ObservedMicroseconds::Measured { value },
-        ),
-        limit_us: timing.limit_us.map_or(
-            ObservedMicroseconds::Unavailable {
-                reason: TimingObservationIssue::DurationOverflow,
-            },
-            |value| ObservedMicroseconds::Measured { value },
-        ),
+            elapsed_us: timing.elapsed_us.map_or(
+                ObservedMicroseconds::Unavailable {
+                    reason: TimingObservationIssue::DurationOverflow,
+                },
+                |value| ObservedMicroseconds::Measured { value },
+            ),
+            limit_us: timing.limit_us.map_or(
+                ObservedMicroseconds::Unavailable {
+                    reason: TimingObservationIssue::DurationOverflow,
+                },
+                |value| ObservedMicroseconds::Measured { value },
+            ),
+        })
     });
     error
 }
@@ -3690,6 +3985,7 @@ mod tests {
                     confidence: Some(0.95),
                 }],
                 confidence: Some(0.95),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -3934,6 +4230,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -4140,6 +4437,7 @@ mod tests {
                 text: "hello".to_string(),
                 blocks: Vec::new(),
                 confidence: Some(f32::NAN),
+                detection: None,
             },
             OcrProviderResult {
                 ppocr_diagnostics: Vec::new(),
@@ -4150,6 +4448,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             },
         ] {
             let evaluator = vision_evaluator(
@@ -4194,6 +4493,7 @@ mod tests {
                 text: "hello".into(),
                 blocks: vec![],
                 confidence: Some(1.0),
+                detection: None,
             }),
             nn: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
@@ -4942,6 +5242,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: Some(rect(5, 6, 7, 8)),
+                    unique: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "color".to_string(),
@@ -5008,6 +5309,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "".to_string(),
@@ -5170,6 +5472,7 @@ mod tests {
                     rect_move: None,
                     color_check: None,
                     click: None,
+                    unique: None,
                 })],
                 ..base_pack()
             };
@@ -5196,6 +5499,7 @@ mod tests {
                         max_distance: None,
                     }),
                     click: None,
+                    unique: None,
                 })],
                 ..base_pack()
             };
@@ -5245,6 +5549,7 @@ mod tests {
                         rect_move: None,
                         color_check: None,
                         click: None,
+                        unique: None,
                     }),
                     RecognitionTarget::Color(ColorTarget {
                         id: "color".to_string(),
@@ -5265,6 +5570,8 @@ mod tests {
                         model_ref: PPOCR_V6_MEDIUM_MODEL_REF.to_string(),
                         model_sha256: "a".repeat(64),
                         click: None,
+                        locate: None,
+                        unique: None,
                     }),
                     RecognitionTarget::Nn(NnTarget {
                         id: "nn/page".to_string(),
@@ -5461,6 +5768,7 @@ mod tests {
                     confidence: Some(1.0),
                 }],
                 confidence: Some(1.0),
+                detection: None,
             })
         }
 
@@ -5527,6 +5835,7 @@ mod tests {
                         confidence: Some(1.0),
                     }],
                     confidence: Some(1.0),
+                    detection: None,
                 }),
                 nn: Err(VisionProviderError::new(
                     VisionProviderErrorCode::Unavailable,
@@ -5744,5 +6053,405 @@ mod tests {
             "expected '{needle}' in '{}'",
             err.message()
         );
+    }
+
+    /// Workflow #308 list selector slice L1: `repeated_anchor` layouts on synthetic neutral
+    /// frames, drawn noise markers and color squares only.
+    mod repeated_anchor {
+        use super::*;
+        use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
+        use actingcommand_contract::CandidateFeature;
+        use actingcommand_contract::candidate_projection::{
+            CandidateLayoutKind, CandidateProjection, CandidateRect,
+        };
+        use actingcommand_contract::outcome::Category;
+        use serde_json::json;
+        use std::cell::Cell;
+        use std::time::{Duration, Instant};
+
+        const MARKER: &str = "assets/marker.png";
+
+        #[derive(Debug)]
+        struct MarkerAssets(Vec<u8>);
+
+        impl AssetResolver for MarkerAssets {
+            fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+                if path == MARKER {
+                    Ok(self.0.clone())
+                } else {
+                    Err(RecognitionPackError::fatal(format!("no asset {path}")))
+                }
+            }
+        }
+
+        /// An 8x6 block of deterministic noise: a shifted copy correlates with it near zero.
+        fn marker() -> RgbImage {
+            let mut state = 0x2545_f491_4f6c_dd1d_u64;
+            let mut channel = || {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 56) as u8
+            };
+            let mut image = blank_image(8, 6, [0, 0, 0]);
+            for y in 0..6 {
+                for x in 0..8 {
+                    image.set(x, y, [channel(), channel(), channel()]);
+                }
+            }
+            image
+        }
+
+        fn rows_pack(layout: Value) -> Value {
+            json!({
+                "schema_version": "0.7",
+                "coordinate_space": {"width": 96, "height": 72},
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {"type": "template", "id": "ui/row_marker", "template_path": MARKER,
+                     "region": "full_frame", "threshold": 0.95},
+                    {"type": "color", "id": "state/row_open",
+                     "region": {"x": 0, "y": 0, "width": 4, "height": 4}, "expected": [0, 200, 0]},
+                    {"type": "nn", "id": "model/row_kind", "region": "full_frame",
+                     "model_ref": "fixture-page-model", "model_sha256": "b".repeat(64),
+                     "candidate_labels": ["open", "closed"], "minimum_score": 0.75,
+                     "selection": "label", "expected_label": "open", "timeout_ms": 1000},
+                    {"type": "composite", "id": "check/row_ready", "mode": "all_of",
+                     "members": ["state/row_open", "ui/row_marker"]}
+                ],
+                "candidate_layouts": [layout]
+            })
+        }
+
+        fn rows_layout() -> Value {
+            json!({
+                "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                "anchor": "ui/row_marker", "max_instances": 4, "order": "top_to_bottom",
+                "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+                "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+                "features": [{"name": "open", "value": "passed", "target": "state/row_open",
+                              "offset": {"x": 30, "y": 1}}]
+            })
+        }
+
+        fn rows_evaluator(layout: Value) -> RecognitionPackResult<RecognitionEvaluator> {
+            let pack = load_pack_from_json_str(&rows_pack(layout).to_string())?;
+            RecognitionEvaluator::with_asset_resolver(
+                pack,
+                Arc::new(MarkerAssets(encode_png(&marker()))),
+            )
+        }
+
+        /// Markers at (4, 10) with its open square, (50, 10), (4, 40) and (60, 62); the last
+        /// instance rectangle reaches past the right edge of the frame.
+        fn rows_scene() -> Scene {
+            let mut frame = blank_image(96, 72, [30, 31, 32]);
+            for (x, y) in [(4, 10), (50, 10), (4, 40), (60, 62)] {
+                paste(&mut frame, &marker(), x, y);
+            }
+            for y in 11..15 {
+                for x in 34..38 {
+                    frame.set(x, y, [0, 200, 0]);
+                }
+            }
+            Scene::from_png(&encode_png(&frame)).expect("scene")
+        }
+
+        fn project(layout: Value) -> CandidateProjection {
+            rows_evaluator(layout)
+                .expect("layout admitted")
+                .scene_context(&rows_scene())
+                .project_candidates("layout/rows")
+                .expect("projection")
+        }
+
+        /// Each candidate's rectangle origin, whether it is actionable, and its `open` value.
+        fn summary(projection: &CandidateProjection) -> Vec<(i32, i32, bool, Option<bool>)> {
+            projection
+                .candidates()
+                .iter()
+                .map(|candidate| {
+                    let open = match candidate.features.get("open") {
+                        None => None,
+                        Some(CandidateFeature::Boolean { value, .. }) => Some(*value),
+                        Some(other) => panic!("unexpected feature {other:?}"),
+                    };
+                    (
+                        candidate.rect.x,
+                        candidate.rect.y,
+                        candidate.actionable,
+                        open,
+                    )
+                })
+                .collect()
+        }
+
+        /// Reads the start instant for the anchor search and its checks before rows 0..=10, then
+        /// a time past the 5 s limit.
+        fn clock_past_row_ten() -> Instant {
+            thread_local! {
+                static START: Instant = Instant::now();
+                static CALLS: Cell<u32> = const { Cell::new(0) };
+            }
+            let calls = CALLS.with(|calls| {
+                let current = calls.get();
+                calls.set(current + 1);
+                current
+            });
+            let start = START.with(|start| *start);
+            if calls <= 11 {
+                start
+            } else {
+                start + Duration::from_secs(6)
+            }
+        }
+
+        #[test]
+        fn repeated_anchor_projects_every_instance_with_edge_and_band_actionability() {
+            let projection = project(rows_layout());
+            assert_eq!(
+                projection.layout_kind(),
+                CandidateLayoutKind::RepeatedAnchor
+            );
+            // top_to_bottom numbers the matches by (y, x). The last instance reaches past the
+            // frame, so it is not actionable and carries no features.
+            assert_eq!(
+                summary(&projection),
+                [
+                    (2, 8, true, Some(true)),
+                    (48, 8, true, Some(false)),
+                    (2, 38, true, Some(false)),
+                    (58, 60, false, None),
+                ]
+            );
+            assert_eq!(
+                projection.candidates()[0].click,
+                CandidateRect {
+                    x: 14,
+                    y: 10,
+                    width: 20,
+                    height: 6
+                }
+            );
+            assert_eq!(projection.candidates()[3].id, "layout/rows#03");
+            assert_eq!(
+                projection.candidate_set_sha256(),
+                "69a3bdfe911c4871f42bbfa7f080253dac4f8416a286c4ac18435a457fb381c8"
+            );
+
+            // A readable band that ends above the third row leaves that row unreadable.
+            let mut banded = rows_layout();
+            banded["readable_band"] = json!({"x": 0, "y": 0, "width": 96, "height": 40});
+            assert_eq!(
+                summary(&project(banded)),
+                [
+                    (2, 8, true, Some(true)),
+                    (48, 8, true, Some(false)),
+                    (2, 38, false, None),
+                    (58, 60, false, None),
+                ]
+            );
+
+            // left_to_right numbers the same matches by (x, y).
+            let mut columns = rows_layout();
+            columns["order"] = json!("left_to_right");
+            assert_eq!(
+                project(columns)
+                    .candidates()
+                    .iter()
+                    .map(|candidate| (candidate.rect.x, candidate.rect.y))
+                    .collect::<Vec<_>>(),
+                [(2, 8), (2, 38), (48, 8), (58, 60)]
+            );
+        }
+
+        #[test]
+        fn repeated_anchor_overflow_and_search_limit_fail_without_a_partial_set() {
+            let scene = rows_scene();
+            let mut three = rows_layout();
+            three["max_instances"] = json!(3);
+            let overflow = rows_evaluator(three)
+                .expect("layout admitted")
+                .scene_context(&scene)
+                .project_candidates("layout/rows")
+                .expect_err("four matches exceed three instances");
+            assert_eq!(
+                overflow.code().as_str(),
+                "candidate_projection_budget_exceeded"
+            );
+            assert_eq!(overflow.item(), "candidates");
+            assert_eq!(
+                overflow.detail(),
+                "layout_id=layout/rows count=4 limit_count=3"
+            );
+
+            let evaluator = rows_evaluator(rows_layout()).expect("layout admitted");
+            let incomplete = evaluator
+                .scene_context(&scene)
+                .with_search_clock(clock_past_row_ten)
+                .project_candidates("layout/rows")
+                .expect_err("the search runs past its limit at row 11");
+            assert_eq!(
+                incomplete.code(),
+                RecognitionPackCode::CandidateSearchIncomplete.code()
+            );
+            assert_eq!(
+                RecognitionPackCode::CandidateSearchIncomplete.category(),
+                Category::Error
+            );
+            assert_eq!(incomplete.item(), "anchor");
+            // Rows 0..=10 hold the two upper markers.
+            assert_eq!(
+                incomplete.detail(),
+                format!(
+                    "stage={} timeout_ms=5000 count=2",
+                    RecognitionPackLocation::CandidateSearchRepeatedAnchor.as_str()
+                )
+            );
+        }
+
+        /// The rows layout with six OCR features, each read at its own offset, built without a
+        /// vision provider.
+        fn ocr_rows_evaluator(readable_band: Option<Value>) -> RecognitionEvaluator {
+            let mut layout = rows_layout();
+            layout["features"] = (0..6)
+                .map(|index| {
+                    json!({
+                        "name": format!("label_{index}"), "value": "passed",
+                        "target": "text/row_label", "offset": {"x": 2 + 5 * index, "y": 1}
+                    })
+                })
+                .collect();
+            if let Some(band) = readable_band {
+                layout["readable_band"] = band;
+            }
+            let mut pack = rows_pack(layout);
+            pack["targets"]
+                .as_array_mut()
+                .expect("targets")
+                .push(json!({
+                    "type": "ocr", "id": "text/row_label",
+                    "region": {"x": 0, "y": 0, "width": 4, "height": 4},
+                    "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
+                    "expected": ["open"], "case_sensitive": false, "minimum_confidence": 0.9,
+                    "model_ref": "PP-OCRv6_medium", "model_sha256": "a".repeat(64)
+                }));
+            RecognitionEvaluator::with_asset_resolver(
+                load_pack_from_json_str(&pack.to_string()).expect("pack"),
+                Arc::new(MarkerAssets(encode_png(&marker()))),
+            )
+            .expect("layout admitted")
+        }
+
+        #[test]
+        fn repeated_anchor_provider_budget_counts_every_actionable_instance() {
+            let scene = rows_scene();
+            // Six OCR evaluations per instance on the three actionable rows make 18.
+            let over = ocr_rows_evaluator(None)
+                .scene_context(&scene)
+                .project_candidates("layout/rows")
+                .expect_err("18 OCR evaluations exceed the budget of 16");
+            assert_eq!(over.code().as_str(), "candidate_projection_budget_exceeded");
+            assert_eq!(over.item(), "provider_evaluations");
+            assert_eq!(
+                over.detail(),
+                "layout_id=layout/rows count=18 limit_count=16"
+            );
+
+            // A readable band that leaves two rows actionable needs 12, within the budget, so
+            // the features are read; offline, without a provider, that is refused as such.
+            let within =
+                ocr_rows_evaluator(Some(json!({"x": 0, "y": 0, "width": 96, "height": 40})))
+                    .scene_context(&scene)
+                    .project_candidates("layout/rows")
+                    .expect_err("no vision provider reads the OCR features");
+            assert_eq!(within.code().as_str(), "candidate_feature_provider_missing");
+        }
+
+        #[test]
+        fn repeated_anchor_declarations_are_refused_with_their_pointer() {
+            let edit = |change: fn(&mut Value)| {
+                let mut layout = rows_layout();
+                change(&mut layout);
+                layout
+            };
+            let fixed_slots = json!({
+                "id": "layout/slots", "page_id": "list_page", "kind": "fixed_slots",
+                "readable_band": {"x": 0, "y": 0, "width": 96, "height": 40},
+                "features": [{"name": "open", "value": "passed"}],
+                "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "click": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "targets": {"open": "state/row_open"}}]
+            });
+            // The wire shape is refused while the pack is read, at the field's pointer.
+            for (layout, pointer) in [
+                (
+                    edit(|layout| layout["kind"] = json!("grid")),
+                    "/candidate_layouts/0/kind",
+                ),
+                (
+                    edit(|layout| layout["slots"] = json!([])),
+                    "/candidate_layouts/0/slots",
+                ),
+                (
+                    edit(|layout| layout["order"] = json!("row_major")),
+                    "/candidate_layouts/0/order",
+                ),
+                (fixed_slots, "/candidate_layouts/0/readable_band"),
+            ] {
+                let error =
+                    load_pack_from_json_str(&rows_pack(layout).to_string()).expect_err(pointer);
+                assert_eq!(
+                    error
+                        .declaration_issue()
+                        .map(|issue| issue.field_path.as_str()),
+                    Some(pointer)
+                );
+            }
+            // The package rules are refused when the evaluator is built, led by the pointer.
+            for (layout, message) in [
+                (
+                    edit(|layout| layout["max_instances"] = json!(65)),
+                    "/candidate_layouts/0/max_instances must be 1..=64",
+                ),
+                (
+                    edit(|layout| layout["anchor"] = json!("state/row_open")),
+                    "/candidate_layouts/0/anchor: 'state/row_open' is not a template target",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["offset"] = json!({"x": 36, "y": 1})),
+                    "/candidate_layouts/0/features/0/offset: the feature region lies outside instance_rect",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["target"] = json!("model/row_kind")),
+                    "/candidate_layouts/0/features/0/target: target 'model/row_kind' cannot be read at an offset",
+                ),
+                (
+                    edit(|layout| layout["features"][0]["target"] = json!("check/row_ready")),
+                    "/candidate_layouts/0/features/0/target: target 'check/row_ready' cannot be read at an offset",
+                ),
+                (
+                    edit(|layout| {
+                        layout["sample_interval_ms"] = json!(1);
+                        layout["features"][0]["consensus"] = json!({
+                            "samples": [{"frame": 0}, {"frame": 1}],
+                            "aggregate": {"kind": "k_of_n", "k": 2}
+                        });
+                    }),
+                    "/candidate_layouts/0/features/0/consensus: a repeated_anchor layout samples one frame",
+                ),
+                (
+                    edit(|layout| {
+                        layout["features"][0]
+                            .as_object_mut()
+                            .expect("feature object")
+                            .remove("offset");
+                    }),
+                    "/candidate_layouts/0/features/0: a repeated_anchor feature reads a target at an offset",
+                ),
+            ] {
+                assert_fatal_contains(rows_evaluator(layout).expect_err(message), message);
+            }
+        }
     }
 }

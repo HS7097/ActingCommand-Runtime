@@ -90,7 +90,7 @@ impl MinitouchBackend {
         target: DeviceTarget,
         minitouch_config: MinitouchConfig,
     ) -> Self {
-        let serial = target.resolved_serial();
+        let serial = target.adb_arg();
         Self {
             adb_config,
             target,
@@ -126,8 +126,13 @@ impl MinitouchBackend {
 
         self.input_parameters = None;
         let adb = Adb::new(self.adb_config.clone());
-        let device = verify_minitouch_device(&adb, &self.serial, self.target.connect)
-            .map_err(DeviceError::without_input_parameters)?;
+        let device = verify_minitouch_device(
+            &adb,
+            &self.serial,
+            &self.target.label(),
+            self.target.connect,
+        )
+        .map_err(DeviceError::without_input_parameters)?;
         self.install(&adb)?;
         self.start(&device)?;
         Ok(device)
@@ -875,27 +880,30 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
     })
 }
 
+/// `serial` is the adb argument; `label` is what the error text and `DeviceInfo` show
+/// (Workflow #398 RD-1a).
 fn verify_minitouch_device(
     adb: &Adb,
     serial: &str,
+    label: &str,
     connect_allowed: bool,
 ) -> DeviceResult<DeviceInfo> {
     let state = adb.ensure_device(serial, connect_allowed).map_err(|err| {
         if err.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
             return err;
         }
-        DeviceError::transient(format!("target device {serial} is not available: {err}"))
+        DeviceError::transient(format!("target device {label} is not available: {err}"))
     })?;
     if state != "device" {
         return Err(DeviceError::transient(format!(
-            "target device {serial} is not in device state: {state:?}"
+            "target device {label} is not in device state: {state:?}"
         )));
     }
     let screen_size = adb.screen_size(serial).map_err(|err| {
-        DeviceError::transient(format!("failed to read screen size for {serial}: {err}"))
+        DeviceError::transient(format!("failed to read screen size for {label}: {err}"))
     })?;
     Ok(DeviceInfo {
-        serial: serial.to_string(),
+        serial: label.to_owned(),
         state,
         screen_size,
     })

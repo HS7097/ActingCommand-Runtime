@@ -365,8 +365,7 @@ pub(super) fn expand(
                     report.failures.push(StabilityFailure {
                         source_sequence: Some(event.sequence()),
                         artifact,
-                        code: error.code(),
-                        operation: error.operation(),
+                        outcome: error.outcome(),
                     });
                 }
             }

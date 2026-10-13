@@ -53,8 +53,6 @@ fn dispatch_contended_error(
         RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
             .with_retry_after(DISPATCH_CONTENDED_RETRY_AFTER_MS),
     )
-    // Workflow #378 A4: the receipt's outcome carries the policy's instance id and the time
-    // the candidate may run again.
     .with_outcome_values(|outcome| {
         outcome
             .instance_id(instance_id)
@@ -146,17 +144,13 @@ impl HostShared {
                 HostLocation::AdmitPolicyDispatch,
                 RuntimeErrorCode::InvalidRequest,
             )
-            // Workflow #378 A4: the policy's instance id, the holder and the waiting count.
+            // Ledger revision 3: the policy's instance id, the holder and the waiting count.
             .with_outcome_values(|outcome| {
                 outcome
                     .instance_id(instance_alias)
                     .holder_kind(crate::error::ClaimKindToken(holder_kind))
                     .count(count)
-            })
-            .with_native_detail(format!(
-                "holder_kind={} count={count}",
-                holder_kind.as_str()
-            )),
+            }),
         ))
     }
 }
@@ -1093,7 +1087,7 @@ impl HostShared {
                         ledger_error(HostLocation::ProjectPolicySchedulingOutcome)
                     }
                 })?;
-            if projected.outcome() != outcome {
+            if projected.scheduling_result() != outcome {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyOutcomeProjectionMismatch,
                     operation,
@@ -2165,8 +2159,8 @@ impl HostShared {
     /// Workflow #191 ps2 (c): waits until the paused instance's device is idle. Under the
     /// instance admission guard it re-checks that nothing still uses the device: a queued entry
     /// the pause does not hold back fails at once (`TransferNotSafe`; Workflow #369 §5.1, review
-    /// M-2: an operator entry, and until #369 S6b the ungated startup claim; neither a gated
-    /// routine entry nor a holding ladder's continuation, whose ladder is the lease waited
+    /// M-2: an operator entry; neither a gated routine entry, the startup claim included since
+    /// #369 S6b, nor a holding ladder's continuation, whose ladder is the lease waited
     /// for below); a contained run that started after (b) (a
     /// policy dispatch admitted before the gate closed) is drained again under the pause's
     /// deadlines; the reset a client owes after its cancelled run (`SafeReset`) and an active
@@ -2799,7 +2793,6 @@ fn policy_event_data(
             .iter()
             .map(|reason| PolicyReasonRecord {
                 code: reason.code.clone(),
-                detail: reason.detail.clone(),
             })
             .collect(),
         catalog_hash: intent.catalog_hash.clone(),

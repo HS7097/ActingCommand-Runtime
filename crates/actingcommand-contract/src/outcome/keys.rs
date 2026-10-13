@@ -16,7 +16,7 @@ outcome_keys! {
     aliases: list(name),
     instance_id: id,
     instance_index: integer,
-    adb_serial: name,
+    device_label: name,
     path: path,
     install_root: path,
     state_root: path,
@@ -45,6 +45,7 @@ outcome_keys! {
     raw_text: evidence,
     raw_text_truncated: boolean,
     raw_text_sensitivity: vocab(sensitivity),
+    raw_text_redacted: boolean,
     os_error: integer,
     io_kind: vocab(io_kind),
     io_op: vocab(io_op),
@@ -144,10 +145,20 @@ outcome_keys! {
     fact_key: token,
     gate_code: code,
     budget_dimension: vocab(budget_dimension),
+    // Workflow #396 REC-1.
+    target_id: id,
+    text_read_budget: vocab(text_read_budget),
+    // Workflow #396 REC-2.
+    target_kind: vocab(target_kind),
+    score_milli: integer,
+    second_score_milli: integer,
+    margin_milli: integer,
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
     reader_problem: vocab(reader_problem),
+    // Workflow #373 NAV-3b: why a task's entry page set is refused.
+    entry_problem: vocab(entry_problem),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,
@@ -365,4 +376,8 @@ outcome_keys! {
     // ---- Workflow #386 SR-0 (scheduling rules): end ----
     // Workflow #387 D1a: a code's ladder class, as a value.
     ladder_class: vocab(ladder_class),
+    // Workflow #398 RD-5a: the device-state read of a handset that failed.
+    device_state_probe: vocab(device_state_probe),
+    // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
+    mumu_manager_version: version,
 }

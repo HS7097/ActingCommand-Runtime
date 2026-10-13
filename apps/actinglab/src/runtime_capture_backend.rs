@@ -215,6 +215,7 @@ const fn device_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendNa
         RuntimeCaptureBackend::AdbScreencapRawGzip => CaptureBackendName::AdbScreencapRawGzip,
         RuntimeCaptureBackend::DroidcastRaw => CaptureBackendName::DroidcastRaw,
         RuntimeCaptureBackend::NemuIpc => CaptureBackendName::NemuIpc,
+        RuntimeCaptureBackend::Scrcpy => CaptureBackendName::Scrcpy,
     }
 }
 
@@ -359,6 +360,7 @@ mod tests {
                 CaptureBackendName::DroidcastRaw,
             ),
             (RuntimeCaptureBackend::NemuIpc, CaptureBackendName::NemuIpc),
+            (RuntimeCaptureBackend::Scrcpy, CaptureBackendName::Scrcpy),
         ];
         for (runtime, device) in mappings {
             assert_eq!(device_backend_name(runtime), device);

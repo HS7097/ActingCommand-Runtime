@@ -86,8 +86,9 @@
         "raw_code": "optional",
         "raw_text_truncated": "optional",
         "raw_text_sensitivity": "optional",
+        "raw_text_redacted": "optional",
         "exit_code": "optional",
-        "adb_serial": "optional",
+        "device_label": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -95,7 +96,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "adb failed or printed a failure; raw_text keeps its output.",
+      "description": "adb failed or printed a failure; raw_text keeps its output, with every bound device serial replaced by its label token (raw_text_redacted).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -240,6 +241,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_relay_unregistered": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "raw_code": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code arrived as its spelling (relayed by a crate whose channel is not typed yet, received from a client, or read back from a record) and the embedded catalog does not list it; raw_code keeps the spelling when it is a token.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -462,7 +479,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required",
+        "lease_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -472,7 +489,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "A lease was used, renewed or released after its expiry. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal came after the key lapsed: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "A holder that overran its own step bound; a host that was stopping while a ladder held an instance.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -483,7 +500,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "lease_id": "required",
+        "lease_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -493,7 +510,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "The lease named is no longer the instance's lease. Since 0.11.5 it also ends a Runtime-held key (a stuck-recovery ladder, a startup package claim) whose renewal found the key gone: the ladder records its rung failed with this reason and finishes. Since 0.12.0 it ends an operator emulator control's hold the same way: the control records its command.rejected + runtime.failed with this code. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Shutdown cancelled the hold, or the key was handed on after it lapsed.",
       "handling": "Nothing to repair for a Runtime hold: the next trigger starts a new ladder. A client acquires a new lease."
     },
@@ -1697,6 +1714,34 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "config_decode_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): the configuration file does not decode as actingd's configuration. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_read_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, #389 MCP-11 ruling Q6, from actingd): reading the configuration file failed. actingd refuses to start on it; actingctl packs and ac_packs refuse to read the selected configuration.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "consecutive_unchanged_threshold_reached": {
       "category": "info",
       "ladder_class": "none",
@@ -2298,7 +2343,7 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
-        "timeout_ms": "required",
+        "timeout_ms": "optional",
         "holder_kind": "optional",
         "queue_position": "optional",
         "operation": "optional",
@@ -2308,7 +2353,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), and a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
+      "description": "An operator request waited its cap in its instance's one queue without a grant, and its entry was removed (Workflow #369). The waiting requests are a direct task run (CLI, console, MCP ac_run_pack; cap min(60 s, the run's remaining deadline minus a 30 s run budget)), a safe reset or an application lifecycle command (3 s), a self-check or the reconnect of an instance resume (3 s; a resume is refused before its gate is lifted), and since 0.12.0 an emulator control (CLI, console, MCP ac_emulator; 5 s, once for a restart; nothing is driven). timeout_ms is the cap; holder_kind names the instance's holder when it has one; queue_position is the entry's position when it was removed. Its ledger record is the instance-linked scheduler.denied lease_queue_expired at warning. A client QueueLease whose wait ended is refused with this code too. Registered once in the contract (A2a D3); the host and the scheduler emit it.",
       "common_causes": "Another client, a scheduled run, a stuck-recovery ladder or another operator request held the instance for longer than the cap; a takeover cooldown after an unclean restart; business capacity refused the grant for the whole cap.",
       "handling": "Nothing ran. Retry once the holder named by holder_kind has released the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
@@ -2489,6 +2534,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): nemu input frame required.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ocr_field_low_confidence": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A required OCR field's text resolved, but its observation's confidence was missing or below the minimum_confidence its OCR target declares, so the field stayed unresolved and the fields task failed (Workflow R-11). The kernel emits it; the client reads it as a fields-failure terminal.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -8282,24 +8341,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Event or record sanitization refused a value: invalid config subsystem name.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_config_subsystem_reason": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Event or record sanitization refused a value: invalid config subsystem reason.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

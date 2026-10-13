@@ -142,6 +142,10 @@ pub struct ExecutionFailureContext {
     adb_recovery: Option<Box<actingcommand_contract::AdbTargetRecovery>>,
     recorded_event: Arc<OnceLock<EventId>>,
     native_detail: Option<Box<LifecycleNativeDetail>>,
+    /// The native detail is the device message that the failure's own diagnostic detail
+    /// carried before ledger revision 3 (a device failure without a fixed summary). The
+    /// failure record's outcome holds it, so it needs no extra lifecycle record.
+    native_detail_is_device_message: bool,
     causes: Vec<ExecutionLifecycleCause>,
     resources: Vec<ExecutionResourceContribution>,
     close_recording: bool,
@@ -178,6 +182,12 @@ impl ExecutionFailureContext {
         self.native_detail.as_deref()
     }
 
+    /// Whether the native detail is the device message of a failure without a fixed summary,
+    /// which the failure record's own outcome carries (see the field).
+    pub const fn native_detail_is_device_message(&self) -> bool {
+        self.native_detail_is_device_message
+    }
+
     pub fn adb_recovery(&self) -> Option<&actingcommand_contract::AdbTargetRecovery> {
         self.adb_recovery.as_deref()
     }
@@ -203,6 +213,7 @@ impl ExecutionFailureContext {
 
     pub fn with_native_detail(mut self, detail: LifecycleNativeDetail) -> Self {
         self.native_detail = Some(Box::new(detail));
+        self.native_detail_is_device_message = false;
         self
     }
 
@@ -413,7 +424,7 @@ impl ExecutionKernelError {
                         }
                     },
                     cause.backend,
-                    code.as_str(),
+                    code,
                     cleanup_severity(cause.severity),
                 )
                 .with_native_detail(LifecycleNativeDetail::new(
@@ -429,7 +440,7 @@ impl ExecutionKernelError {
                 cause: LifecycleCauseDraft::new(
                     LifecycleFailurePhase::ResourceClose,
                     cause.backend(),
-                    code.as_str(),
+                    code,
                     cleanup_severity(cause.severity()),
                 )
                 .with_native_detail(LifecycleNativeDetail::new(
@@ -475,6 +486,7 @@ impl ExecutionKernelError {
                     .collect(),
                 adb_recovery: error.adb_recovery().map(adb_recovery_record).map(Box::new),
                 native_detail: device_native_detail(error),
+                native_detail_is_device_message: error.diagnostic_message().is_none(),
                 causes,
                 resources: error
                     .resource_contributions()
@@ -522,15 +534,20 @@ impl ExecutionKernelError {
             && !Arc::ptr_eq(primary.recorded_event(), secondary.recorded_event())
             && !(secondary.lifecycle.close_recording && primary.code == secondary.code)
         {
-            primary.lifecycle.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
-                secondary.code.as_str(),
-                if secondary.is_fatal() {
-                    CleanupCauseSeverity::Fatal
-                } else {
-                    CleanupCauseSeverity::Transient
-                },
-                secondary.diagnostic_detail().cloned(),
-            )));
+            // Ledger revision 3: the cleanup is the failure's `cleanup` link (its code, with
+            // its device text as a foreign link) and its typed detail.
+            primary.lifecycle.cleanup_cause = Some(Box::new(
+                CleanupCauseDraft::new(
+                    secondary.code,
+                    if secondary.is_fatal() {
+                        CleanupCauseSeverity::Fatal
+                    } else {
+                        CleanupCauseSeverity::Transient
+                    },
+                    secondary.diagnostic_detail().cloned(),
+                )
+                .with_native_detail(secondary.native_detail().cloned()),
+            ));
         }
         Self::merge(primary, secondary)
     }
@@ -569,19 +586,26 @@ impl ExecutionKernelError {
     }
 
     pub(crate) fn merge_retirement(mut primary: Self, secondary: Self) -> Self {
+        let cause = LifecycleCauseDraft::new(
+            LifecycleFailurePhase::Retirement,
+            "execution_kernel",
+            secondary.code,
+            if secondary.is_fatal() {
+                CleanupCauseSeverity::Fatal
+            } else {
+                CleanupCauseSeverity::Transient
+            },
+        )
+        .with_detail(secondary.diagnostic_detail().cloned());
+        // Ledger revision 3: the retired failure's device text rides on the cause's
+        // `foreign_other_error` link instead of its detail's message.
+        let cause = match secondary.native_detail() {
+            Some(native) => cause.with_native_detail(native.clone()),
+            None => cause,
+        };
         primary.lifecycle.causes.push(ExecutionLifecycleCause {
             source_occurrence: None,
-            cause: LifecycleCauseDraft::new(
-                LifecycleFailurePhase::Retirement,
-                "execution_kernel",
-                secondary.code.as_str(),
-                if secondary.is_fatal() {
-                    CleanupCauseSeverity::Fatal
-                } else {
-                    CleanupCauseSeverity::Transient
-                },
-            )
-            .with_detail(secondary.diagnostic_detail().cloned()),
+            cause,
             recorded_event: Arc::clone(&secondary.lifecycle.recorded_event),
         });
         Self::merge(primary, secondary)
@@ -744,22 +768,31 @@ impl fmt::Display for ExecutionKernelError {
 
 impl Error for ExecutionKernelError {}
 
+/// The device's own text, recorded as the failure's `foreign_other_error` link (ledger
+/// revision 3). Beside a fixed diagnostic summary (Runtime text, which is no longer persisted)
+/// it is the device's differing message; without a summary it is the message the diagnostic
+/// detail used to carry. A message equal to the summary is Runtime text and is dropped.
 fn device_native_detail(error: &DeviceError) -> Option<Box<LifecycleNativeDetail>> {
-    let summary = error.diagnostic_message()?;
     let message = error.message();
-    if message.is_empty() || message == summary {
+    let device_text = match error.diagnostic_message() {
+        Some(summary) => message != summary,
+        None => error.diagnostic().is_some() && error.diagnostic_context().is_some(),
+    };
+    if !device_text {
         return None;
     }
-    let mut end = message.len().min(1_024);
-    while !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    Some(Box::new(LifecycleNativeDetail::new(
-        &message[..end],
-        end < message.len(),
-    )))
+    let declared = match error
+        .diagnostic_context()
+        .map(|context| context.declared_sensitivity())
+    {
+        Some(DeviceErrorSensitivity::Secret) => Sensitivity::Secret,
+        _ => Sensitivity::Sensitive,
+    };
+    LifecycleNativeDetail::bounded(message)
+        .map(|detail| Box::new(detail.with_declared_sensitivity(declared)))
 }
 
+/// Where the device failure arose; its text is the native detail ([`device_native_detail`]).
 fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailDraft>> {
     let diagnostic = error.diagnostic()?;
     let context = error.diagnostic_context()?;
@@ -768,15 +801,6 @@ fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailD
         diagnostic.stage(),
         context.backend(),
         context.operation(),
-        error
-            .diagnostic_message()
-            .unwrap_or_else(|| error.message()),
-        match context.declared_sensitivity() {
-            DeviceErrorSensitivity::Public => Sensitivity::Public,
-            DeviceErrorSensitivity::Internal => Sensitivity::Internal,
-            DeviceErrorSensitivity::Sensitive => Sensitivity::Sensitive,
-            DeviceErrorSensitivity::Secret => Sensitivity::Secret,
-        },
     )))
 }
 

@@ -663,11 +663,10 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
 
-    for required in [
-        "pub struct ExternalExpectedSha256",
-        "pub struct ExternallyVerifiedBundle",
-        "Containment::new()",
-    ] {
+    // Workflow #336 PKG-S1: the capability admits by path or bytes and records the caller's
+    // reference; `pkg_s1_package_admission_computes_and_compares_no_package_digest` keeps every
+    // digest comparison off this path.
+    for required in ["pub struct ExternallyVerifiedBundle", "Containment::new()"] {
         assert!(
             bundle.contains(required),
             "execution bundle ingress lost {required}"
@@ -680,16 +679,13 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)"),
+        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded)"),
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains(
-            "ExternalExpectedSha256::parse_hex(request.expected_sha256().legacy_sha256()"
-        ) && host.contains("PreparedContainedTask::load_path(")
-            && host.contains("request.expected_sha256(),")
-            && host.contains("PreparedContainedTask::load(instance_alias, &bytes, expected)"),
-        "Runtime host must bind the client package reference to contained package admission"
+        host.contains("PreparedContainedTask::load_path(")
+            && host.contains("request.expected_sha256(),"),
+        "Runtime host must admit the client package by its path and record its reference"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
@@ -705,6 +701,143 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
             && cli.contains("ContainedTaskRequest::new")
             && cli.contains("run_contained_task(&instance, request)"),
         "ActingLab production run CLI does not require an external package reference"
+    );
+}
+
+// Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T7: package admission (containment, the
+// kernel's package ingress and the host's contained-task preparation) computes no content
+// digest and compares no digest or pin; `content_directory_digest` keeps only its designated
+// callers, the authoring and recording tools PKG-S5 retires.
+#[test]
+fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
+    let root = workspace_root();
+    let read = |path: &str| {
+        fs::read_to_string(root.join(path)).unwrap_or_else(|error| panic!("read {path}: {error}"))
+    };
+    for (path, forbidden) in [
+        (
+            "crates/pack-containment/src/lib.rs",
+            &[
+                "constant_time_hash_eq",
+                "HashMismatch",
+                "DigestMismatch",
+                "TrustSource",
+                "validate_manifest_hash",
+            ][..],
+        ),
+        (
+            "crates/pack-containment/src/content_dir.rs",
+            &[
+                "content_directory_digest",
+                "constant_time_hash_eq",
+                "DigestMismatch",
+                "digest_named",
+                "Sha256Hash::digest",
+            ][..],
+        ),
+        (
+            "crates/pack-containment/src/source_pack.rs",
+            &["Sha256Hash::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/pack-containment/src/source/mod.rs",
+            &["Sha256::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/pack-containment/src/source/declarations.rs",
+            &["Sha256Hash::digest", "content_directory_digest"][..],
+        ),
+        (
+            "crates/execution-kernel/src/bundle.rs",
+            &[
+                "ExternalExpectedSha256",
+                "Sha256Hash",
+                "content_directory_digest",
+            ][..],
+        ),
+        (
+            "crates/execution-kernel/src/contained_task.rs",
+            &[
+                "ExternalExpectedSha256",
+                "manifest_entry_sha256",
+                "content_directory_digest",
+                "Sha256Hash::digest",
+            ][..],
+        ),
+        (
+            "crates/execution-kernel/src/contained_task/selection.rs",
+            &[
+                "Sha256Hash",
+                "SELECT_POLICY_HASH_MISMATCH",
+                "content_directory_digest",
+            ][..],
+        ),
+        (
+            "crates/runtime-host/src/host/contained_task.rs",
+            &[
+                "ExternalExpectedSha256",
+                "content_directory_digest",
+                ".is_directory_source()",
+                ".legacy_sha256()",
+            ][..],
+        ),
+    ] {
+        let source = read(path);
+        for token in forbidden {
+            assert!(
+                !source.contains(token),
+                "package admission in {path} still holds {token}"
+            );
+        }
+    }
+
+    let containment = read("crates/pack-containment/src/lib.rs");
+    let measuring = containment
+        .find("pub fn snapshot_content_directory(")
+        .expect("containment keeps its measuring snapshot");
+    let measuring_end = containment[measuring..]
+        .find("\n    }\n")
+        .map(|end| measuring + end)
+        .expect("end of the measuring snapshot");
+    let calls = containment
+        .match_indices("content_directory_digest(")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(
+        !calls.is_empty()
+            && calls
+                .iter()
+                .all(|index| (measuring..measuring_end).contains(index)),
+        "containment computes a content digest outside its measuring snapshot"
+    );
+
+    let designated = [
+        "crates/actingcommand-contract/src/package.rs",
+        "crates/pack-containment/src/lib.rs",
+        "crates/resource-tooling/src/package_directory.rs",
+        "crates/lab/src/recording/container.rs",
+    ];
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let mut callers = Vec::new();
+    for file in files {
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if source.contains("content_directory_digest(") && !designated.contains(&display.as_str()) {
+            callers.push(display);
+        }
+    }
+    assert!(
+        callers.is_empty(),
+        "content_directory_digest has undesignated callers: {callers:?}"
     );
 }
 
@@ -3793,6 +3926,42 @@ fn b3_fact_publication_reaches_the_store_through_one_gated_entry() {
     );
 }
 
+/// Workflow #392 DA-A, test DA-A-T3 (model 392 v1.1, section 8.1): `display.aspect` is recorded
+/// only and has no reader. Its key is spelled once, by the constant of its one writer in
+/// `crates/runtime-host/src/host/facts.rs`, and the constant is named only where it is defined and
+/// where the writer builds the record. Any other mention of the spelling or of the constant in a
+/// production source under `apps`, `crates`, `providers` or `tools` is a reader.
+#[test]
+fn da_a_t3_display_aspect_has_no_reader() {
+    const WRITER: &str = "crates/runtime-host/src/host/facts.rs";
+    const SPELLING: &str = "\"display.aspect\"";
+    const CONSTANT: &str = "DISPLAY_ASPECT_FACT_KEY";
+    let identifier =
+        |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let root = workspace_root();
+    let mut mentions = BTreeMap::new();
+    for (path, source) in production_sources(&root, &["apps", "crates", "providers", "tools"]) {
+        let bytes = source.as_bytes();
+        let spelled = source.matches(SPELLING).count();
+        let named = source
+            .match_indices(CONSTANT)
+            .filter(|(start, _)| {
+                !identifier(start.checked_sub(1).and_then(|before| bytes.get(before)))
+                    && !identifier(bytes.get(start + CONSTANT.len()))
+            })
+            .count();
+        if spelled + named > 0 {
+            mentions.insert(path, (spelled, named));
+        }
+    }
+    assert_eq!(
+        mentions,
+        BTreeMap::from([(WRITER.to_owned(), (1, 2))]),
+        "display.aspect must be spelled once and named only by its definition and its one writer \
+         ((spelling count, constant count) per production source)"
+    );
+}
+
 #[test]
 fn bplus_vision_provider_check_takes_provider_symbols_from_vision_ffi() {
     let root = workspace_root();
@@ -4548,6 +4717,10 @@ const RUNTIME_DATABASE_CONSTRUCTORS: &[(&str, &str)] = &[
         "ledger: the selected read of the check-config preview opens the existing database read-only (Workflow #375 R375-3)",
     ),
     (
+        "crates/ledger/src/global/sqlite.rs::refuse_unsupported_ledger_format -> RuntimeDatabase",
+        "ledger: the start's read-only format check of an existing database, before the owner journal and writer.lock (Workflow #378 A3, CL-M1)",
+    ),
+    (
         "crates/runtime-host/src/host.rs::RuntimeHost::start_with_provider -> RuntimeDatabase",
         "runtime-host: startup opens existing storage (fresh storage goes through runtime-state)",
     ),
@@ -4903,6 +5076,7 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("policy_catalog", &["HostShared"]),
     host_module("policy_dispatch", &["HostShared"]),
     host_module("policy_outcome", &["HostShared"]),
+    host_module("policy_wake", &["HostShared"]),
     host_module("ppocr_diagnostic", &["HostShared", "RuntimeContainedTask"]),
     host_module("prerequisite", &["HostShared"]),
     HostModule {
@@ -5822,8 +5996,10 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "DeviceRuntimeConfig::runtime_state_root",
                 DeclaredVisibility::Private,
             ),
+            // Workflow #398 RD-1a: the test scaffolding keeps the configured serial as text, not a
+            // `DeviceTarget` holding a `DeviceSerial`, which would bind it for the test process.
             glue_test_owner(
-                "DeviceRuntimeConfig::target",
+                "DeviceRuntimeConfig::adb_serial",
                 SymbolKind::Field,
                 DeclaredVisibility::Super,
             ),
@@ -5839,6 +6015,11 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_test_owner(
                 "DeviceRuntimeConfig::touch_backend",
                 SymbolKind::Field,
+                DeclaredVisibility::Super,
+            ),
+            glue_test_owner(
+                "DeviceRuntimeConfig::test_adb_arg",
+                SymbolKind::Fn,
                 DeclaredVisibility::Super,
             ),
             glue_fn("DeviceRuntimeConfig::runtime_capture_endpoint"),
@@ -5860,7 +6041,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         invariants: &[
             glue_invariant("DeviceRuntimeConfig", "instance_alias: String"),
             glue_invariant("DeviceRuntimeConfig", "runtime_state_root: PathBuf"),
-            glue_invariant("DeviceRuntimeConfig", "target: DeviceTarget"),
+            glue_invariant("DeviceRuntimeConfig", "adb_serial: Option<String>"),
             glue_invariant("DeviceRuntimeConfig", "adb_source: AdbPathSource"),
             glue_invariant("DeviceRuntimeConfig", "adb_warning: Option<String>"),
             glue_invariant(

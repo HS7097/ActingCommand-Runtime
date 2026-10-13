@@ -76,6 +76,7 @@ fn runtime_capture_backend(
         CaptureBackendName::AdbScreencapRawGzip => Ok(RuntimeCaptureBackend::AdbScreencapRawGzip),
         CaptureBackendName::DroidcastRaw => Ok(RuntimeCaptureBackend::DroidcastRaw),
         CaptureBackendName::NemuIpc => Ok(RuntimeCaptureBackend::NemuIpc),
+        CaptureBackendName::Scrcpy => Ok(RuntimeCaptureBackend::Scrcpy),
     }
 }
 
@@ -360,6 +361,7 @@ impl HostShared {
                     } else {
                         EffectDisposition::NotPerformed
                     },
+                    runtime_error.record_outcome(),
                     runtime_error.diagnostic_detail().cloned(),
                     runtime_error.cleanup_cause().cloned(),
                     AuditInput::new(),

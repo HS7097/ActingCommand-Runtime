@@ -61,7 +61,7 @@ pub(super) trait LedgerStore: Send + 'static {
         &mut self,
         permit: super::ArtifactEvictionPermit,
         disposition: actingcommand_contract::ArtifactEvictionDisposition,
-        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        outcome: Option<actingcommand_contract::outcome::Outcome>,
     ) -> GlobalLedgerResult<PersistedEvent>;
     fn commit_statistics(&self) -> Arc<CommitStatistics>;
 
@@ -165,9 +165,9 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         &mut self,
         permit: super::ArtifactEvictionPermit,
         disposition: actingcommand_contract::ArtifactEvictionDisposition,
-        io: Option<actingcommand_contract::ArtifactEvictionIo>,
+        outcome: Option<actingcommand_contract::outcome::Outcome>,
     ) -> GlobalLedgerResult<PersistedEvent> {
-        Self::finish_artifact_eviction(self, permit, disposition, io)
+        Self::finish_artifact_eviction(self, permit, disposition, outcome)
     }
     fn commit_statistics(&self) -> Arc<CommitStatistics> {
         Arc::clone(&self.commit_statistics)

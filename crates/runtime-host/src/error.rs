@@ -102,7 +102,9 @@ impl HostErrorOperation {
 pub(crate) struct RuntimeHostFailureContext {
     pub(crate) installation_effect: Option<actingcommand_contract::EffectDisposition>,
     diagnostics: ExecutionFailureContext,
-    pub(crate) failure_stage: Option<&'static str>,
+    /// The registered lifecycle stage the failure arose in (ledger revision 3: the `stage` of
+    /// its runtime lifecycle failure's outcome).
+    pub(crate) failure_stage: Option<Location>,
     pub(crate) ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     pub(crate) ppocr_message: Option<String>,
     pub(crate) ppocr_source: Option<Arc<PpocrFailureSource>>,
@@ -118,11 +120,14 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) owner_probe: Option<String>,
     /// Workflow #381 A R3′: the `(code, operation)` of the condition latched in the Runtime's
     /// fatal state that stopped an install start; shown after the operation as
-    /// `cause=<code> cause_operation=<operation>` until A2 makes it a `caused_by` link.
+    /// `cause=<code> cause_operation=<operation>` on the developer line and in the transition's
+    /// status fact. The ledger records it as the `caused_by` link of the error's outcome.
     pub(crate) latched_cause: Option<(&'static str, &'static str)>,
-    /// Workflow #378 A4: the error's outcome with the values its code declares, when its
-    /// producer attached them ([`RuntimeHostError::with_outcome_values`]); a denied or failed
-    /// receipt carries it. Otherwise the receipt's outcome is the code and operation alone.
+    /// The failure behind this error (ledger revision 3): the `caused_by` link of its outcome.
+    pub(crate) caused_by: Option<Outcome>,
+    /// The error's outcome with the values its code declares, when its producer attached them
+    /// ([`RuntimeHostError::with_outcome_values`]); otherwise the outcome is its code and
+    /// operation alone.
     outcome_values: Option<Outcome>,
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) resource_quiescence: Option<ResourceQuiescence>,
@@ -160,6 +165,7 @@ impl PartialEq for RuntimeHostError {
                 == other.lifecycle.incomplete_device_diagnostic_summary
             && self.lifecycle.owner_probe == other.lifecycle.owner_probe
             && self.lifecycle.latched_cause == other.lifecycle.latched_cause
+            && self.lifecycle.caused_by == other.lifecycle.caused_by
             && self.lifecycle.outcome_values == other.lifecycle.outcome_values
     }
 }
@@ -167,14 +173,15 @@ impl Eq for RuntimeHostError {}
 
 impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
     fn from(error: actingcommand_policy::PolicyEvaluationError) -> Self {
-        // Workflow #355 D12: keep the policy code and message so the lifecycle record names
-        // the failing fact or overflow.
-        Self::request(
+        // Workflow #355 D12: the lifecycle record names the policy's failure. Ledger revision 3
+        // keeps its code as the `caused_by` link; the policy's English message is not recorded.
+        let mut result = Self::request(
             HostCode::PolicyEvaluationRejected,
             HostLocation::EvaluatePolicyCycle,
             RuntimeErrorCode::InvalidRequest,
-        )
-        .with_native_detail(format!("{}: {}", error.code(), error.message()))
+        );
+        result.lifecycle.caused_by = Some(Outcome::new(error.code()));
+        result
     }
 }
 
@@ -207,7 +214,8 @@ impl RuntimeHostError {
         self
     }
 
-    pub(crate) fn with_failure_stage(mut self, stage: &'static str) -> Self {
+    pub(crate) fn with_failure_stage(mut self, stage: impl Into<Location>) -> Self {
+        let stage: Location = stage.into();
         self.lifecycle.failure_stage.get_or_insert(stage);
         if let Some(complete) = &mut self.lifecycle.complete_failure {
             complete
@@ -284,21 +292,85 @@ impl RuntimeHostError {
         }
     }
 
+    /// The policy dispatch rejection of this error: the one recorded on it, else one of its
+    /// outcome (ledger revision 3: the refusal's code with its `operation`; no `fatal` flag).
     pub(crate) fn policy_rejection(&self) -> actingcommand_contract::PolicyDispatchRejection {
-        let mut rejection = self
-            .lifecycle
+        self.lifecycle
             .policy_rejection
             .as_deref()
             .cloned()
-            .unwrap_or(actingcommand_contract::PolicyDispatchRejection {
-                code: self.code().to_owned(),
-                operation: self.operation().to_owned(),
-                fatal: self.is_fatal(),
+            .unwrap_or_else(|| actingcommand_contract::PolicyDispatchRejection {
+                outcome: self.outcome(),
                 budget: None,
                 next_eligible_unix_ms: None,
-            });
-        rejection.fatal = self.is_fatal();
-        rejection
+            })
+    }
+
+    /// The error as an outcome (ledger revision 3): its code (a registered one, or the spelling
+    /// it relays, whose category the embedded catalog gives) with its `operation` (a registered
+    /// location, or the relayed spelling when the catalog lists it), and the failure behind it
+    /// as its `caused_by` link. Every record that carries this failure builds its outcome here.
+    pub(crate) fn outcome(&self) -> Outcome {
+        let outcome = self
+            .lifecycle
+            .outcome_values
+            .clone()
+            .unwrap_or_else(|| self.code_outcome());
+        match &self.lifecycle.caused_by {
+            Some(cause) => outcome.caused_by(cause.clone()),
+            None => outcome,
+        }
+    }
+
+    /// The outcome a record of this failure carries as its own (`capture.failed`,
+    /// `input.failed`, a `runtime.failed` of the error; ledger revision 3): [`Self::outcome`]
+    /// with the error's native text as a `caused_by` foreign link, `foreign_os_error` when the
+    /// error has an OS error number. A lifecycle failure takes [`Self::outcome`] instead: its
+    /// draft attaches the native text and the OS error itself.
+    pub(crate) fn record_outcome(&self) -> Outcome {
+        let outcome = self.outcome();
+        let native = self.diagnostics().native_detail();
+        match (native, self.lifecycle.raw_os_error) {
+            (Some(native), Some(os_error)) => outcome.caused_by(native.os_outcome(os_error)),
+            (Some(native), None) => outcome.caused_by(native.outcome()),
+            (None, Some(os_error)) => {
+                outcome.caused_by(actingcommand_contract::os_error_outcome(os_error))
+            }
+            (None, None) => outcome,
+        }
+    }
+
+    /// The outcome of the error's code with its operation, before any value or link.
+    fn code_outcome(&self) -> Outcome {
+        let outcome = match self.code {
+            HostErrorCode::Registered(code) => Outcome::new(code),
+            HostErrorCode::Relayed { relayed_code } => Outcome::relayed(relayed_code),
+        };
+        let operation = match self.operation {
+            HostErrorOperation::Registered(operation) => Some(operation),
+            HostErrorOperation::Relayed { relayed_operation } => {
+                Location::relayed(relayed_operation)
+            }
+        };
+        match operation {
+            Some(operation) => outcome.operation(operation),
+            None => outcome,
+        }
+    }
+
+    /// This error with the values its code declares on its outcome (ledger revision 3): `values`
+    /// receives the outcome of the error's code and operation and returns it with the values.
+    pub(crate) fn with_outcome_values(mut self, values: impl FnOnce(Outcome) -> Outcome) -> Self {
+        let outcome = values(self.code_outcome());
+        self.lifecycle.outcome_values = Some(outcome);
+        self
+    }
+
+    /// Whether the error's producer attached values to its outcome
+    /// ([`Self::with_outcome_values`]): the outcome is then more than its code and operation, and
+    /// a record that carries only those does not carry the failure (ledger revision 3).
+    pub(crate) fn has_outcome_values(&self) -> bool {
+        self.lifecycle.outcome_values.is_some()
     }
 
     pub(crate) fn artifact(error: actingcommand_artifact_store::ArtifactStoreError) -> Self {
@@ -369,21 +441,6 @@ impl RuntimeHostError {
                 .projection
                 .receipt_outcome(self.registered_code(), self.registered_operation()),
         }
-    }
-
-    /// This error with the values its code declares on its receipt outcome (Workflow #378 A4):
-    /// `values` receives the outcome of the error's code and operation and returns it with the
-    /// values. A code whose catalog entry requires values tops a receipt only with them.
-    pub(crate) fn with_outcome_values(mut self, values: impl FnOnce(Outcome) -> Outcome) -> Self {
-        let code = self
-            .registered_code()
-            .unwrap_or_else(|| self.projection.code.code());
-        let outcome = match self.registered_operation() {
-            Some(operation) => Outcome::new(code).operation(operation),
-            None => Outcome::new(code),
-        };
-        self.lifecycle.outcome_values = Some(values(outcome));
-        self
     }
 
     /// This refusal naming the lease it refused (Workflow #378 A4): the catalog entries of
@@ -699,6 +756,18 @@ impl RuntimeHostError {
         }
     }
 
+    /// [`Self::with_native_detail`] for MuMuManager's output from a command that exited: the
+    /// text becomes a `foreign_mumu_manager_error` link with the exit status as `exit_code`
+    /// (ledger revision 3). An exit status is never an OS error.
+    pub(crate) fn with_mumu_manager_output(self, output: &str, exit_code: i32) -> Self {
+        match actingcommand_contract::LifecycleNativeDetail::bounded(output) {
+            Some(native) => {
+                self.with_native_failure_detail(native.with_mumu_manager_exit_code(exit_code))
+            }
+            None => self,
+        }
+    }
+
     pub(crate) fn with_native_detail(self, detail: String) -> Self {
         let mut end = detail.len().min(1024);
         while !detail.is_char_boundary(end) {
@@ -711,15 +780,19 @@ impl RuntimeHostError {
     }
 
     /// Workflow #381 A R3′: this error with the condition `cause` latched in the fatal state named
-    /// on it, in the developer line and as `key=value` tokens in its native detail (the lifecycle
-    /// failure's detail), until A2 makes it a `caused_by` link.
+    /// on it: on the developer line, and (ledger revision 3) as the `caused_by` link of its
+    /// outcome, which its lifecycle failure records.
     pub(crate) fn with_latched_cause(mut self, cause: &Self) -> Self {
         self.lifecycle.latched_cause = Some((cause.code(), cause.operation()));
-        self.with_native_detail(format!(
-            "cause={} cause_operation={}",
-            cause.code(),
-            cause.operation()
-        ))
+        self.lifecycle.caused_by = Some(cause.outcome());
+        self
+    }
+
+    /// This error with the failure behind it as the `caused_by` link of its outcome (ledger
+    /// revision 3), in place of that failure's text.
+    pub(crate) fn with_caused_by(mut self, cause: Outcome) -> Self {
+        self.lifecycle.caused_by = Some(cause);
+        self
     }
 
     pub(crate) const fn latched_cause(&self) -> Option<(&'static str, &'static str)> {
@@ -878,8 +951,7 @@ impl FatalState {
 }
 
 /// A scheduler claim kind as a token of the catalog vocabulary `claim_kind` (the scheduler's
-/// Q-2 kinds), so an outcome can carry it as `holder_kind` (Workflow #378 A4; the same token as
-/// A3's ledger revision 3).
+/// Q-2 kinds), so a record outcome can carry it as `holder_kind` (ledger revision 3).
 #[derive(Clone, Copy)]
 pub(crate) struct ClaimKindToken(pub(crate) actingcommand_scheduler::ClaimKind);
 

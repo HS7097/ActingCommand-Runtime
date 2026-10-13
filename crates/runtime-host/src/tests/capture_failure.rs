@@ -44,21 +44,31 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
         failure.stage,
         actingcommand_contract::ArtifactFailureStage::BeforePublication
     );
-    assert_eq!(failure.primary.code, "artifact_directory_failed");
-    assert_eq!(failure.primary.operation, "store_artifact");
-    assert!(!failure.primary.native_detail.text().is_empty());
+    // Ledger revision 3 (#378 A3): the failed step is the payload's outcome, and the store's
+    // native text is `raw_text` on its `caused_by` foreign link.
+    let outcome = payload.outcome().expect("artifact failure outcome");
+    assert_eq!(outcome.code().as_str(), "artifact_directory_failed");
+    assert_eq!(outcome_str(outcome, "operation"), Some("store_artifact"));
+    let native_text = outcome_links(
+        outcome,
+        actingcommand_contract::outcome::CauseRelation::CausedBy,
+    )
+    .into_iter()
+    .find_map(|link| outcome_str(link, "raw_text"))
+    .expect("store native text");
+    assert!(!native_text.is_empty());
     assert!(payload.sensitivity() >= Sensitivity::Sensitive);
     let public = serde_json::to_string(&payload.public_projection()).expect("public failure");
-    assert!(!public.contains("native_detail"));
-    assert!(!public.contains(failure.primary.native_detail.text()));
+    assert!(!public.contains("\"raw_text\""));
+    assert!(!public.contains(native_text));
     let fatal = host.fatal_error().expect("health").expect("fatal");
     assert_eq!(fatal.operation(), "store_artifact");
     let native = fatal
         .diagnostics()
         .native_detail()
         .expect("Host native I/O");
-    assert!(native.text().contains(failure.primary.native_detail.text()));
-    assert!(!format!("{fatal} {fatal:?}").contains(failure.primary.native_detail.text()));
+    assert!(native.text().contains(native_text));
+    assert!(!format!("{fatal} {fatal:?}").contains(native_text));
     let repeated = fatal
         .clone()
         .with_related_failure("diagnostic_cleanup", &fatal);
@@ -81,11 +91,7 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
     assert_eq!(combined.code(), fatal.code());
     assert_eq!(combined.operation(), fatal.operation());
     let combined_native = combined.diagnostics().native_detail().expect("both causes");
-    assert!(
-        combined_native
-            .text()
-            .contains(failure.primary.native_detail.text())
-    );
+    assert!(combined_native.text().contains(native_text));
     assert!(combined_native.text().contains(&cleanup_io.to_string()));
     assert!(
         combined_native
@@ -103,12 +109,19 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
             ..EventQuery::default()
         })
         .expect("native lifecycle failures");
-    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome)) if outcome.lifecycle_failure().and_then(|value| value.native_detail()) == Some(combined_native))));
+    // Ledger revision 3: the merged native texts ride on the lifecycle outcome's foreign links.
+    let cleanup_text = cleanup_io.to_string();
+    assert!(recorded.iter().any(|event| matches!(event.payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(outcome))
+        if outcome.lifecycle_failure().is_some() && {
+            let texts = outcome_raw_texts(outcome.outcome());
+            texts.iter().any(|text| text.contains(native_text))
+                && texts.iter().any(|text| text.contains(&cleanup_text))
+        })));
     for event in recorded {
         assert!(event.artifacts().is_empty());
         let public = serde_json::to_string(&event.payload().public_projection())
             .expect("public merged failure");
-        assert!(!public.contains(failure.primary.native_detail.text()));
+        assert!(!public.contains(native_text));
         assert!(!public.contains(&cleanup_io.to_string()));
     }
     drop(client);
@@ -224,9 +237,17 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
             .as_ref()
             .and_then(|last| last.detail.as_ref())
             .expect("full detail")
-            .message(),
-        "injected capture failure"
+            .stage(),
+        "device_registry.capture.operation"
     );
+    // Ledger revision 3 (#378 A3): the device's text is no longer the detail's message; it is
+    // `raw_text` on the source record's outcome.
+    let ProjectionPayload::Full(last_source) = &sources[16].payload else {
+        panic!("full capture failure payload")
+    };
+    assert!(last_source.outcome().is_some_and(|outcome| {
+        outcome_with_raw_text(outcome, "injected capture failure").is_some()
+    }));
     assert_eq!(closed.last().unwrap().event_id(), summary.event_id());
     summary
         .payload()
@@ -366,20 +387,34 @@ fn capture_failure_persists_nemu_resolution_context() {
             let lifecycle = native_outcome.lifecycle_failure().expect("typed lifecycle");
             assert_eq!(lifecycle.entered_event_id(), Some(flow[2].event_id));
             assert_eq!(lifecycle.primary_detail(), outcome.detail());
-            let native = lifecycle.native_detail().expect("original cause");
-            assert_eq!(native.text(), "original Nemu resolution error");
-            assert!(!native.truncated());
+            // Ledger revision 3 (#378 A3): the original cause is `raw_text` on a foreign link.
+            let native =
+                outcome_with_raw_text(native_outcome.outcome(), "original Nemu resolution error")
+                    .expect("original cause");
+            assert_eq!(native.value("raw_text_truncated"), None);
             let public = serde_json::to_string(&native_payload.public_projection())
                 .expect("public native failure");
             assert!(!public.contains("original Nemu resolution error"));
         }
         let detail = outcome.detail().expect("resolution detail");
-        assert_eq!(detail.message(), expected_message);
+        // Ledger revision 3 (#378 A3): the detail keeps no message. The failure is the record's
+        // outcome, the device's own text its foreign `raw_text`, and the Runtime's resolution
+        // summary goes only to the developer log.
+        assert_eq!(
+            *outcome.outcome().code(),
+            actingcommand_contract::codes::DeviceSelfCheckFailure::CaptureBackendOpenFailed.code()
+        );
+        assert!(
+            outcome_with_raw_text(outcome.outcome(), "original Nemu resolution error").is_some()
+        );
+        if include_context {
+            let full = serde_json::to_string(payload.as_ref()).expect("full capture failure");
+            assert!(!full.contains(&expected_message));
+        }
         assert_eq!(detail.category(), "protocol");
         assert_eq!(detail.stage(), "nemu.installation.resolve");
         assert_eq!(detail.backend(), "nemu_ipc");
         assert_eq!(detail.operation(), "installation_resolve");
-        assert_eq!(detail.declared_sensitivity(), Sensitivity::Internal);
         assert_eq!(state.capture_open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
         assert!(host.fatal_error().expect("health").is_none());
@@ -405,8 +440,14 @@ fn capture_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.stage(), "device_registry.capture.operation");
     assert_eq!(detail.backend(), "nemu_ipc");
     assert_eq!(detail.operation(), "capture");
-    assert_eq!(detail.message(), "injected capture failure");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+    // Ledger revision 3 (#378 A3): the device's text left the detail; it is the error's native
+    // detail, recorded as a sensitive foreign `raw_text`.
+    let native = kernel_error.native_detail().expect("device text");
+    assert_eq!(native.text(), "injected capture failure");
+    assert_eq!(
+        outcome_str(&native.outcome(), "raw_text_sensitivity"),
+        Some("sensitive")
+    );
     let runtime_error = RuntimeHostError::execution(
         crate::codes::HostLocation::ExecuteCaptureBackend,
         &kernel_error,
@@ -489,8 +530,12 @@ fn capture_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     assert_eq!(detail.stage(), "device_registry.capture.operation");
     assert_eq!(detail.backend(), "nemu_ipc");
     assert_eq!(detail.operation(), "capture");
-    assert_eq!(detail.message(), "injected capture failure");
-    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+    let device_text = outcome_with_raw_text(outcome.outcome(), "injected capture failure")
+        .expect("device text on a foreign link");
+    assert_eq!(
+        outcome_str(device_text, "raw_text_sensitivity"),
+        Some("sensitive")
+    );
     assert_eq!(state.capture_open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_count.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);

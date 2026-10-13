@@ -6,14 +6,30 @@
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
+mod events;
 #[cfg(test)]
 mod gate_381a;
 #[cfg(feature = "mcp")]
 mod mcp;
+mod packs;
 mod process_probe;
+// Workflow #389 MCP-10: `start` and `restart`.
+#[cfg(windows)]
+mod runtime_start;
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
+
+// Workflow #389 MCP-5a: `observe --export` (MCP `ac_observe`), with the instance selector and the
+// material export writer it shares with MCP.
+mod instance_selector;
+mod material_export;
+mod observe_export;
+// End of MCP-5a.
+
+// Workflow #389 MCP-3: `runs` (MCP `ac_runs`); it uses MCP-5a's instance selector above.
+mod run_list;
+// End of MCP-3.
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Category, Code};
@@ -62,6 +78,34 @@ fn main() -> ExitCode {
         if let Some(exit) = watchdog::dispatch(&arguments) {
             return exit;
         }
+    }
+    // --- Workflow #389 MCP-1: `events`, the CLI of ac_events, parses its own flags. ---
+    if let Some(exit) = events::dispatch(&arguments) {
+        return exit;
+    }
+    // --- end MCP-1 ---
+    // Workflow #389 MCP-5a: `observe --export` takes the instance selector of MCP and leaves
+    // before `Invocation::parse`; `observe` without `--export` is unchanged.
+    if let Some(exit) = observe_export::dispatch(&arguments) {
+        return exit;
+    }
+    // Workflow #389 MCP-10: `start` and `restart` take `--root`, not `--state-root`; CLI only.
+    #[cfg(windows)]
+    {
+        if let Some(exit) = runtime_start::dispatch(&arguments) {
+            return exit;
+        }
+    }
+    // ---- Workflow #389 MCP-11 (begin): `packs` reads the selected configuration offline and
+    // takes no `--state-root` (command table D5). ----
+    if let Some(exit) = packs::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-11 (end) ----
+    // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
+    // `Invocation::parse`.
+    if let Some(exit) = run_list::dispatch(&arguments) {
+        return exit;
     }
     match run(arguments) {
         Ok(output) => match write_output(&output) {

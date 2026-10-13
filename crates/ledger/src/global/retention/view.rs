@@ -172,7 +172,7 @@ struct RunFacts {
     /// generic `task.completed`, `task.failed` or `task.cancelled` that ends a Lab debug run,
     /// which commits no `TerminalCommitted`.
     terminal: Option<(u64, u64)>,
-    /// The `failure_code` of a failure terminal, with its sequence.
+    /// The outcome code of a failure terminal, with its sequence.
     terminal_failure: Option<(u64, String)>,
     /// The latest capture summary of the run.
     summary: Option<u64>,
@@ -234,13 +234,17 @@ impl FrameFacts {
             if facts.terminal.is_none() {
                 match event.payload() {
                     EventPayload::Task(TaskPayload::Semantic(payload)) => {
-                        if let TaskSemanticFact::TerminalCommitted { outcome, .. } = payload.fact()
+                        if let TaskSemanticFact::TerminalCommitted {
+                            task_result,
+                            outcome,
+                            ..
+                        } = payload.fact()
                         {
                             facts.terminal = Some((sequence, event.timestamp_unix_ms()));
-                            if *outcome == TaskOutcome::Failure {
-                                facts.terminal_failure =
-                                    payload_text(event.payload(), "failure_code")
-                                        .map(|code| (sequence, code));
+                            if *task_result == TaskOutcome::Failure {
+                                facts.terminal_failure = outcome
+                                    .as_ref()
+                                    .map(|outcome| (sequence, outcome.code().as_str().to_owned()));
                             }
                         }
                     }
@@ -347,7 +351,7 @@ impl FrameFacts {
         let links = event.links();
         let run = links.run_id().copied();
         let failure_terminal = matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }));
+            if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result: TaskOutcome::Failure, .. }));
         let point = failure_terminal
             || (run.is_some() && event.severity() >= EventSeverity::Warning)
             || (run.is_none() && event.severity() >= EventSeverity::Error);
@@ -369,12 +373,13 @@ impl FrameFacts {
             .filter(|(terminal, _)| *terminal < sequence)
             .map(|(_, code)| code.clone());
         let own = serde_json::to_value(event.payload()).ok();
+        // Ledger revision 3 (Workflow #378 A3): the event's own failure is its outcome.
         let leaf_name = leaf_name(
-            own.as_ref()
-                .and_then(|value| first_string(value, "failure_code")),
-            own.as_ref().and_then(|value| {
-                nested_string(value, "rejection", "code").or_else(|| first_string(value, "code"))
-            }),
+            event
+                .payload()
+                .outcome()
+                .map(|outcome| outcome.code().as_str().to_owned()),
+            own.as_ref().and_then(|value| first_string(value, "code")),
             preceding_failure,
             event.event_type(),
         );
@@ -964,10 +969,10 @@ fn file_name(frame: &ViewFrame, local: LocalOffsetMs) -> Option<String> {
     ))
 }
 
-/// The `<code>` part of an error leaf: the event's own `failure_code`, else its own code (a
-/// `rejection.code` before any other `code`), else the failure code of its run's failure
-/// terminal when that terminal precedes it, else its event type with `.` as `_`; at most 64
-/// characters, outside `[A-Za-z0-9_-]` as `_`.
+/// The `<code>` part of an error leaf: the event's own outcome code (a dispatch rejection's is
+/// its rejection's outcome), else its own `code` member, else the failure code of its run's
+/// failure terminal when that terminal precedes it, else its event type with `.` as `_`; at
+/// most 64 characters, outside `[A-Za-z0-9_-]` as `_`.
 fn leaf_name(
     own_failure: Option<String>,
     own_value: Option<String>,
@@ -981,11 +986,7 @@ fn leaf_name(
     leaf_part(&name, LEAF_NAME_CHARS)
 }
 
-/// The first string under `key` in the payload's JSON, depth first in field order.
-fn payload_text(payload: &EventPayload, key: &str) -> Option<String> {
-    first_string(&serde_json::to_value(payload).ok()?, key)
-}
-
+/// The first string under `key` in the JSON, depth first in field order.
 fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
     match value {
         serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| match item {
@@ -993,24 +994,6 @@ fn first_string(value: &serde_json::Value, key: &str) -> Option<String> {
             _ => first_string(item, key),
         }),
         serde_json::Value::Array(items) => items.iter().find_map(|item| first_string(item, key)),
-        _ => None,
-    }
-}
-
-/// The string `key` of the first object named `parent`, depth first in field order.
-fn nested_string(value: &serde_json::Value, parent: &str, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::Object(map) => map.iter().find_map(|(name, item)| {
-            if name == parent
-                && let Some(serde_json::Value::String(text)) = item.get(key)
-            {
-                return Some(text.clone());
-            }
-            nested_string(item, parent, key)
-        }),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .find_map(|item| nested_string(item, parent, key)),
         _ => None,
     }
 }
@@ -1805,23 +1788,6 @@ mod tests {
             }
         });
         assert_eq!(first_string(&payload, "code").as_deref(), Some("first"));
-        assert_eq!(nested_string(&payload, "rejection", "code"), None);
-        // A dispatch rejection names its leaf by `rejection.code`, not by an earlier `code`.
-        let rejected = serde_json::json!({
-            "family": "policy",
-            "payload": {
-                "kind": "dispatch_rejected",
-                "data": {
-                    "candidates": [{ "code": "eligible" }],
-                    "rejection": { "code": "instance_busy", "detail": { "code": "inner" } }
-                }
-            }
-        });
-        assert_eq!(first_string(&rejected, "code").as_deref(), Some("eligible"));
-        assert_eq!(
-            nested_string(&rejected, "rejection", "code").as_deref(),
-            Some("instance_busy")
-        );
         assert_eq!(
             first_string(&payload, "failure_code").as_deref(),
             Some("failed")

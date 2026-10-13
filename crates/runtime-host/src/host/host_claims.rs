@@ -216,21 +216,23 @@ impl HostShared {
             OriginModule::Runtime,
             EventActor::Runtime,
             links,
+            // Ledger revision 3: `panic_caught` is the record's outcome, with the worker thread,
+            // the boundary and the panic payload (words only, bounded) as its values.
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::Indeterminate,
+                actingcommand_contract::outcome::Outcome::new(
+                    actingcommand_contract::codes::ContractCode::PanicCaught,
+                )
+                .thread(detail_text(&thread_name))
+                .boundary(HostLocation::RunInstanceWorker)
+                .raw_source(actingcommand_contract::outcome::RawSource::Panic)
+                .raw_text(detail_text(&raw_text)),
                 DiagnosticDetailDraft::new(
                     category,
                     RuntimeLifecycleFailureStage::OperationCleanup.as_str(),
                     "runtime_host",
                     HostLocation::RunInstanceWorker.as_str(),
-                    format!(
-                        "code={} thread={} boundary=instance_worker raw_source=panic raw_text={}",
-                        actingcommand_contract::codes::ContractCode::PanicCaught.as_str(),
-                        detail_text(&thread_name),
-                        detail_text(&raw_text)
-                    ),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),

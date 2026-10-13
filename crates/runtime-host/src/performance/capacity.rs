@@ -6,15 +6,16 @@ use super::{
 };
 use crate::codes::{HostCode, HostLocation};
 use crate::events::{RuntimeEvents, is_sanitization_failure};
+use crate::host::PolicyWakeSignal;
 use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
 };
-use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Code, Outcome, RawSource};
 use actingcommand_contract::{
     AuditInput, CapacityAdmissionOutcome, CapacityAdmissionReason, CapacityDecision,
-    CapacityFactReference, CapacityNativeCause, CapacityPurpose, CapacityState, CapacityThresholds,
+    CapacityFactReference, CapacityPurpose, CapacityState, CapacityThresholds,
     CapacityVolumeSample, EventActor, EventSeverity, EventSource, EventType, LifecycleNativeDetail,
     OriginModule, OwnerEpoch, PerformanceCapacitySample, PerformanceMetric,
     PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePayloadDraft,
@@ -30,6 +31,8 @@ use std::time::Duration;
 pub(crate) struct CapacityPreflightConfig {
     pub(crate) performance: Option<PerformanceMonitorConfig>,
     pub(crate) thresholds: CapacityThresholds,
+    /// Workflow #383 AO-7: where the capacity monitor's records raise the policy driver's wakes.
+    pub(crate) policy_wakes: Arc<PolicyWakeSignal>,
 }
 
 pub(crate) struct CapacityRoots {
@@ -118,7 +121,7 @@ impl CapacityProjection {
                 .as_ref()
                 .and_then(|binding| binding.as_ref().ok())
                 .cloned(),
-            outcome: CapacityAdmissionOutcome::Unknown,
+            admission_result: CapacityAdmissionOutcome::Unknown,
             reason: CapacityAdmissionReason::NoCommittedFact,
             fact: committed.as_ref().map(|value| value.reference.clone()),
         };
@@ -183,12 +186,12 @@ impl CapacityProjection {
                 0
             };
             let Some(required) = sample.thresholds.hard_bytes.checked_add(bytes) else {
-                decision.outcome = CapacityAdmissionOutcome::RequiredBytesOverflow;
+                decision.admission_result = CapacityAdmissionOutcome::RequiredBytesOverflow;
                 decision.reason = CapacityAdmissionReason::KnownBytesOverflow;
                 return Ok(decision);
             };
             if free < required {
-                decision.outcome = CapacityAdmissionOutcome::HardPressure;
+                decision.admission_result = CapacityAdmissionOutcome::HardPressure;
                 decision.reason = CapacityAdmissionReason::HardThreshold;
                 return Ok(decision);
             }
@@ -196,7 +199,7 @@ impl CapacityProjection {
                 outcome = CapacityAdmissionOutcome::SoftPressure;
             }
         }
-        decision.outcome = outcome;
+        decision.admission_result = outcome;
         decision.reason = CapacityAdmissionReason::FreshSample;
         Ok(decision)
     }
@@ -252,6 +255,8 @@ pub(super) struct CapacityMonitor {
     pressure: Option<PerformancePressureRecord>,
     /// The capacity sample of the last recorded summary; material change is measured against it.
     pub(super) recorded: Option<PerformanceCapacitySample>,
+    /// Workflow #383 AO-7: each record this monitor commits raises its policy driver wake here.
+    policy_wakes: Arc<PolicyWakeSignal>,
 }
 
 impl PerformanceMonitor {
@@ -289,6 +294,7 @@ impl PerformanceMonitor {
             consecutive_failures: 0,
             pressure: None,
             recorded: None,
+            policy_wakes: config.policy_wakes,
         });
         monitor.sample_and_record_capacity(ledger, events)?;
         artifacts
@@ -312,7 +318,7 @@ impl PerformanceMonitor {
             .as_ref()
             .ok_or_else(|| failure(SharedCode::CapacityOwnerMissing))?;
         let decision = capacity.projection.decide(None, 0)?;
-        if !decision.outcome.allows() {
+        if !decision.admission_result.allows() {
             let mut error = RuntimeHostError::request(
                 SharedCode::CapacityAdmissionRefused,
                 HostLocation::AdmitNewBusiness,
@@ -332,6 +338,7 @@ impl PerformanceMonitor {
         let Some(capacity) = self.capacity.as_mut() else {
             return Ok(());
         };
+        let wakes = Arc::clone(&capacity.policy_wakes);
         let now = capacity.projection.clock.sample()?;
         let targets = capacity
             .projection
@@ -358,15 +365,7 @@ impl PerformanceMonitor {
                         },
                         None,
                     ),
-                    Err(error) => (
-                        None,
-                        CapacityState::Unknown,
-                        Some(CapacityNativeCause {
-                            operation: error.operation.as_str().into(),
-                            raw_os_error: error.raw_os_error,
-                            detail: bounded_native(&error.detail),
-                        }),
-                    ),
+                    Err(error) => (None, CapacityState::Unknown, Some(capacity_cause(&error))),
                 };
                 let purposes = sample
                     .targets
@@ -445,6 +444,7 @@ impl PerformanceMonitor {
                 [PerformanceSemanticEvent::Summary(summary)] => append(
                     ledger,
                     events,
+                    &wakes,
                     severity,
                     PerformancePayloadDraft::summary(summary.as_ref().clone(), AuditInput::new()),
                 ),
@@ -469,7 +469,13 @@ impl PerformanceMonitor {
                     return Err(error);
                 }
                 let code = rejected_event_code(error.code(), EventType::PerformanceSummary)?;
-                return self.degrade_for_rejected_summary(now.unix_ms, &code, ledger, events);
+                return self.degrade_for_rejected_summary(
+                    now.unix_ms,
+                    &code,
+                    ledger,
+                    events,
+                    &wakes,
+                );
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
@@ -493,10 +499,11 @@ impl PerformanceMonitor {
         code: &str,
         ledger: &GlobalLedger,
         events: &RuntimeEvents,
+        wakes: &PolicyWakeSignal,
     ) -> RuntimeHostResult<()> {
         let tick = self.record_monitor_failure(observed_at_unix_ms, code, None)?;
         for event in &tick.events {
-            let persisted = append(ledger, events, event.severity(), event.payload())?;
+            let persisted = append(ledger, events, wakes, event.severity(), event.payload())?;
             self.record_event_reference(event, *persisted.event_id())?;
         }
         Ok(())
@@ -572,6 +579,7 @@ impl CapacityMonitor {
                 append(
                     ledger,
                     events,
+                    &self.policy_wakes,
                     if self.consecutive_failures == 3 {
                         EventSeverity::Error
                     } else {
@@ -581,7 +589,7 @@ impl CapacityMonitor {
                         PerformanceMonitorStateEventData {
                             observed_at_unix_ms: now.unix_ms,
                             health: PerformanceMonitorHealth::Degraded,
-                            failure_code: Some(HostCode::CapacitySampleUnavailable.as_str().into()),
+                            outcome: Some(Outcome::new(HostCode::CapacitySampleUnavailable)),
                             consecutive_failures: self.consecutive_failures,
                             terminal: false,
                             unavailable_metrics: vec![PerformanceMetric::DiskCapacity],
@@ -596,12 +604,13 @@ impl CapacityMonitor {
             append(
                 ledger,
                 events,
+                &self.policy_wakes,
                 EventSeverity::Info,
                 PerformancePayloadDraft::monitor_recovered(
                     PerformanceMonitorStateEventData {
                         observed_at_unix_ms: now.unix_ms,
                         health: PerformanceMonitorHealth::Healthy,
-                        failure_code: None,
+                        outcome: None,
                         consecutive_failures: 0,
                         terminal: false,
                         unavailable_metrics: Vec::new(),
@@ -649,6 +658,7 @@ impl CapacityMonitor {
                 append(
                     ledger,
                     events,
+                    &self.policy_wakes,
                     if free < self.thresholds.hard_bytes {
                         EventSeverity::Error
                     } else {
@@ -670,6 +680,7 @@ impl CapacityMonitor {
             append(
                 ledger,
                 events,
+                &self.policy_wakes,
                 EventSeverity::Info,
                 PerformancePayloadDraft::pressure_ended(
                     PerformancePressureEventData {
@@ -687,6 +698,7 @@ impl CapacityMonitor {
 fn append(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
+    wakes: &PolicyWakeSignal,
     severity: EventSeverity,
     payload: PerformancePayloadDraft,
 ) -> RuntimeHostResult<PersistedEvent> {
@@ -698,7 +710,7 @@ fn append(
         events.system_links()?,
         payload,
     )?;
-    ledger.append(events.sanitize(draft)?).map_err(|error| {
+    let event = ledger.append(events.sanitize(draft)?).map_err(|error| {
         let mut result = RuntimeHostError::relayed_fatal(
             error.code(),
             error.operation(),
@@ -708,7 +720,10 @@ fn append(
             result = result.with_native_failure_detail(bounded_native(detail));
         }
         result
-    })
+    })?;
+    // Workflow #383 AO-7: a committed performance or capacity record wakes the policy driver.
+    wakes.raise(event.event_type());
+    Ok(event)
 }
 
 fn failure(code: impl Into<Code>) -> RuntimeHostError {
@@ -723,6 +738,28 @@ fn native_failure(code: impl Into<Code>, error: std::io::Error) -> RuntimeHostEr
     let mut result = failure(code);
     result.lifecycle.raw_os_error = error.raw_os_error();
     result.with_native_failure_detail(bounded_native(&error.to_string()))
+}
+
+/// Why a volume's free space is unknown (ledger revision 3): the failed OS query as a
+/// `foreign_os_error` with its native text (and the OS error number, when it gave one) and the
+/// probe's operation.
+fn capacity_cause(error: &actingcommand_host_metrics::CapacityUnavailable) -> Outcome {
+    let native = bounded_native(&error.detail);
+    let outcome = match error.raw_os_error {
+        Some(os_error) => native.os_outcome(os_error),
+        None => {
+            let outcome = Outcome::new(ContractCode::ForeignOsError)
+                .raw_source(RawSource::Os)
+                .raw_text(native.text())
+                .raw_text_sensitivity(actingcommand_contract::Sensitivity::Sensitive);
+            if native.truncated() {
+                outcome.raw_text_truncated(true)
+            } else {
+                outcome
+            }
+        }
+    };
+    outcome.operation(error.operation)
 }
 
 fn bounded_native(detail: &str) -> LifecycleNativeDetail {

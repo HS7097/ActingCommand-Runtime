@@ -214,6 +214,10 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "\u{5efa}\u{9020}",
         "\u{9000}\u{5f79}",
         "\u{5f37}\u{5316}",
+        // Workflow #308 list selector: a roster, its name item and its sweep.
+        "\u{751f}\u{5f92}",
+        "\u{795e}\u{540d}",
+        "\u{6383}\u{8a0e}",
     ];
     const FORBIDDEN_WORDS: &[&str] = &[
         "ak",
@@ -230,9 +234,12 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "pvp",
         "pyroxene",
         "sortie",
+        "student",
     ];
+    // The bare word `shard` is generic Runtime vocabulary; only the sequence names a business.
     const FORBIDDEN_SEQUENCES: &[&[&str]] = &[
         &["blue", "archive"],
+        &["shard", "farm"],
         &["server", "cn"],
         &["server", "jp"],
         &["server", "ko"],

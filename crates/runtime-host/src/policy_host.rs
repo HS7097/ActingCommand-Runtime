@@ -1445,7 +1445,11 @@ impl PolicyHost {
                         deferrals.note_budget(&rejection);
                         Ok(CandidateEligibility::Deferred {
                             reason: DecisionReason {
-                                code: rejection.code,
+                                // Coordinator ruling 7 (acceptance H-L6): an unregistered
+                                // relayed spelling defers under its `raw_code`.
+                                code: actingcommand_contract::scheduled_failure_code(
+                                    &rejection.outcome,
+                                ),
                                 detail: format!(
                                     "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
                                     rejection.budget, rejection.next_eligible_unix_ms
@@ -3157,7 +3161,6 @@ fn event_data(
             .iter()
             .map(|reason| PolicyReasonRecord {
                 code: reason.code.clone(),
-                detail: reason.detail.clone(),
             })
             .collect(),
         catalog_hash: payload.catalog_hash().to_owned(),
@@ -3198,7 +3201,6 @@ fn dispatch_event_data(
             .iter()
             .map(|reason| PolicyReasonRecord {
                 code: reason.code.clone(),
-                detail: reason.detail.clone(),
             })
             .collect(),
         catalog_hash: intent.catalog_hash.clone(),
@@ -3428,7 +3430,7 @@ fn execution_event_data(
         task_id: payload.task_id().to_owned(),
         instance_id: payload.instance_id().to_owned(),
         observed_at_unix_ms: payload.observed_at_unix_ms(),
-        outcome: payload.outcome().clone(),
+        outcome: payload.policy_result().clone(),
     }
 }
 

@@ -151,11 +151,17 @@ impl HostShared {
                 if let Some(last) = page.last() {
                     after = last.sequence();
                 }
-                older.extend(page.into_iter().map(|event| ProjectDiagnosticProjection {
-                    sequence: event.sequence(),
-                    timestamp_unix_ms: event.timestamp_unix_ms(),
-                    severity: event.severity(),
-                    event_type: event.event_type(),
+                older.extend(page.into_iter().map(|event| {
+                    ProjectDiagnosticProjection {
+                        sequence: event.sequence(),
+                        timestamp_unix_ms: event.timestamp_unix_ms(),
+                        severity: event.severity(),
+                        event_type: event.event_type(),
+                        code: event
+                            .payload()
+                            .outcome()
+                            .map(|outcome| outcome.code().clone()),
+                    }
                 }));
                 if older.len() > MAX_PROJECT_DIAGNOSTICS {
                     older.drain(..older.len() - MAX_PROJECT_DIAGNOSTICS);
@@ -177,6 +183,10 @@ impl HostShared {
         &self,
         request: &RuntimeSubscriptionRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
+        // Workflow #383 AO7-c: tests count the subscriptions served.
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.event_subscriptions_for_test
+            .fetch_add(1, Ordering::AcqRel);
         let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|_| {
             RequestFailure::poison(ledger_error(ContractLocation::SubscribeRuntimeEvents), None)
         })?;

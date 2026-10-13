@@ -9,14 +9,22 @@
 //! each recording its own `command.received` and `command.validated` under the restart's links,
 //! as the ladder's emulator-restart rung does; the vendor's restart verb is never dispatched.
 //! The Start follows a confirmed Stop or a Stop whose readiness wait expired, never another
-//! Stop failure (F3). The request is fenced per instance exactly like monitor recovery: an
-//! active or expired lease, an active destructive step, a pending preemption, the takeover
-//! cooldown or queued lease requests deny it with `emulator_control_busy` (`RuntimeBusy`). The
-//! instance's retained device session is closed first for every action while the daemon keeps
-//! running (a session must not outlive the endpoint it was opened on); a refusal there is the
-//! same busy denial. The provider is driven outside the fact write gate and outside any device
-//! session. After `start` / `restart` the preparation phase reopens the session and keeps it
-//! open (Workflow #191 H: the session belongs to the instance and only an external command
+//! Stop failure (F3).
+//!
+//! Workflow #369 H-4 (S6b): the request is an operator claim on the instance's key. It waits at
+//! most `EMULATOR_CONTROL_CLAIM_WAIT_MS` for its turn in the instance's one queue (W-3; not
+//! granted in time it is refused `lease_queue_expired` and nothing is driven), and it is granted
+//! on a stopped (pending) instance too (Q-2a). It holds the key through the Stop, the Start, the
+//! ADB baseline and the preparation, renewing it before the provider step (the Stop's or the
+//! Start's bound) and before the preparation (Q-5, B1; review L-3); a refused renewal ends the
+//! hold with the renewal's own code. The call-site fence admits the control's own key (lease id
+//! and holder id, unexpired, no destructive step open; otherwise `emulator_control_busy`). The
+//! instance's retained device session is closed first for every action under that key while the
+//! daemon keeps running (a session must not outlive the endpoint it was opened on). The
+//! provider is driven outside the fact write gate and outside any device session, with the
+//! instance's admission guard held, so no keyless observe meets the changing emulator. After
+//! `start` / `restart` the preparation phase reopens the session on the control's key and keeps
+//! it open (Workflow #191 H: the session belongs to the instance and only an external command
 //! disconnects it); after `stop` nothing reopens it.
 //!
 //! Slice #316-B2: a discovery-bound instance may be registered with a PENDING endpoint (it
@@ -28,8 +36,9 @@
 //!
 //! Every request is recorded intent -> result: `client.cli_command` / `client.ui_action` plus
 //! `command.received`, then `command.validated` (Performed) on success, or `command.rejected`
-//! plus one `runtime.failed` whose record carries the tool exit code (`raw_os_error`), the
-//! bounded Sensitive vendor output (`native_detail`) and a typed primary detail. Success also
+//! plus one `runtime.failed` whose outcome links the bounded Sensitive vendor output as
+//! `foreign_mumu_manager_error` with the tool's exit code (`exit_code`, never an OS error), and
+//! a typed primary detail. Success also
 //! records the instance program fact `device.connected` (and, after `Stop`, invalidates it
 //! with `device_closed`). Workflow #381 B F4 (review M3): after a failed provider control the
 //! instance's state is read once (bounded) and applied before the failure is recorded; a
@@ -41,23 +50,34 @@
 //! intent. Workflow #369-1: on that recovery path this module neither prepares the connection
 //! nor schedules the startup package; the rung's own readiness wait does both. Workflow #369
 //! H-3: the rung runs on the ladder's key, which the fence admits (lease id and holder id, no
-//! destructive step) and under which the retained session is closed.
+//! destructive step) and under which the retained session is closed; the ladder renews it.
 //!
-//! Workflow #369 H-6: after `start` / `restart` the startup package's claim is queued while
-//! the control still holds the instance's admission guard; the guard's release pumps it, so no
-//! dispatch can see the instance free between the start and the startup run.
+//! Workflow #369 H-4, M6 (S6b): the control's hold ends with its release. After a `start` /
+//! `restart` whose preparation passed, an instance with a startup package hands the key to the
+//! package's claim on that release, through the gate (`hand_off_startup_package`), so no
+//! dispatch can see the instance free between the start and the startup run; behind a closed
+//! gate the claim waits queued. A hold that hands no startup claim over (a stop, a failed
+//! preparation) first cancels the instance's queued startup claims (coordinator ruling on
+//! review #716). A failed preparation's admitted ladder (`record_preparation_finished`) gets
+//! the key straight from the release (H-1, P1; `release_to_preparation_ladder`).
 
+use super::host_claims::HostKey;
+use super::lease::HostClaim;
+use super::recovery_ladder::{
+    EMULATOR_START_BOUND_MS, EMULATOR_STOP_BOUND_MS, HOLD_MARGIN_MS, PendingRecoveryLadder,
+};
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
+use super::startup_package::PendingStartupPackage;
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
 use actingcommand_contract::outcome::{Outcome, VocabularyToken};
-use actingcommand_contract::{EmulatorInstanceAction, FactValue};
+use actingcommand_contract::{CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, FactValue};
 
-/// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (Workflow
-/// #378 A4: the `restart_phase` value of a failed restart's receipt outcome).
+/// A restart phase as a token of the catalog vocabulary `emulator_restart_phase` (ledger
+/// revision 3: the `restart_phase` value of a failed restart's outcome).
 #[derive(Clone, Copy)]
 struct RestartPhaseToken(&'static str);
 
@@ -83,8 +103,11 @@ impl VocabularyToken for StopResultToken {
 
 /// The tokens of the vocabulary `emulator_stop_result`: `confirmed`, or the last part of the
 /// device stage a Stop failed at.
-const STOP_RESULT_TOKENS: [&str; 18] = [
+const STOP_RESULT_TOKENS: [&str; 19] = [
     "confirmed",
+    // The default stage `mumu_manager.control` of a failure without a device diagnostic
+    // (acceptance H-L7).
+    "control",
     "control_exit",
     "control_errcode",
     "launch_error",
@@ -109,8 +132,8 @@ const STOP_RESULT_TOKENS: [&str; 18] = [
 fn stop_result_token(result: &str) -> Option<StopResultToken> {
     STOP_RESULT_TOKENS
         .iter()
+        .find(|token| **token == result)
         .copied()
-        .find(|token| *token == result)
         .map(StopResultToken)
 }
 
@@ -127,6 +150,10 @@ impl VocabularyToken for ProcessPresenceToken {
 }
 
 const CONTROL_OPERATION: ContractLocation = ContractLocation::ControlEmulatorInstance;
+/// Workflow #369 Q-2, H-4: how long an operator emulator control waits for its turn in the
+/// instance's queue before it is refused `lease_queue_expired` (the client's receipt wait adds
+/// it, `client.rs`).
+const EMULATOR_CONTROL_CLAIM_WAIT_MS: u64 = 5_000;
 pub(super) const DEVICE_CONNECTED_FACT_KEY: &str = "device.connected";
 /// The provider control's readiness wait expired (`mumu_manager.wait_timeout`).
 pub(super) const EMULATOR_CONTROL_WAIT_TIMEOUT: &str =
@@ -138,8 +165,9 @@ const ADB_BASELINE_WAIT: Duration = Duration::from_secs(30);
 const ADB_BASELINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// A performed control action: its result terminal and, after `start` / `restart` of an
-/// instance with a startup package, that package with its scheduling intent recorded, and
-/// whether its claim was queued (Workflow #369 H-6).
+/// instance with a startup package, that package with its scheduling intent recorded, which the
+/// control's release hands its key to (Workflow #369 H-4, S6b); after a failed preparation, the
+/// ladder it admitted, which the release hands the key to instead (H-1, P1).
 pub(super) struct EmulatorControlDriven {
     pub(super) outcome: EmulatorControlOutcome,
     adb_wait_ms: u64,
@@ -147,27 +175,79 @@ pub(super) struct EmulatorControlDriven {
     /// result's `elapsed_ms` stays the whole request's.
     stop_ms: u64,
     pub(super) terminal: TerminalEvent,
-    pub(super) startup_package: Option<super::startup_package::PendingStartupPackage>,
-    startup: StartupPackageDisposition,
+    pub(super) startup_package: Option<PendingStartupPackage>,
+    ladder: Option<PendingRecoveryLadder>,
 }
 
-/// Who drives one control action (Workflow #381 B, coordinator answer D2).
-#[derive(Clone, Copy)]
+/// A failed operator control (Workflow #369 S6b): the request's failure and, for a restart
+/// whose Stop failed while its Start succeeded (Workflow #381 B D2 (c)), the startup package the
+/// Start's success path scheduled, or the ladder its failed preparation admitted, which the key
+/// still goes to after the failure record.
+struct FailedControl {
+    failure: RequestFailure,
+    startup_package: Option<Box<PendingStartupPackage>>,
+    ladder: Option<Box<PendingRecoveryLadder>>,
+}
+
+impl From<RequestFailure> for FailedControl {
+    fn from(failure: RequestFailure) -> Self {
+        Self {
+            failure,
+            startup_package: None,
+            ladder: None,
+        }
+    }
+}
+
+impl From<RuntimeHostError> for FailedControl {
+    fn from(error: RuntimeHostError) -> Self {
+        RequestFailure::poison_without_terminal(error).into()
+    }
+}
+
+/// Who drives one control action and on which key (Workflow #381 B, coordinator answer D2;
+/// Workflow #369 H-3, H-4).
 enum ControlMode<'key> {
-    /// An operator `start` or `stop`: the action records its own failure.
-    Operator,
-    /// A phase of an operator restart: a failure the Runtime survives is returned unrecorded,
-    /// so the restart records one failure for the request, under the restart's action.
-    RestartPhase,
-    /// The ladder's emulator-restart rung on its key: the action records its own failure.
+    /// An operator `start` or `stop` on its claim's key, which the action renews before its
+    /// provider step and before its preparation: the action records its own failure.
+    Operator(&'key mut HostKey),
+    /// A phase of an operator restart on the restart's claim key, renewed as an operator
+    /// action's: a failure the Runtime survives is returned unrecorded, so the restart records
+    /// one failure for the request, under the restart's action.
+    RestartPhase(&'key mut HostKey),
+    /// The ladder's emulator-restart rung on its key, which the ladder renews itself: the action
+    /// records its own failure.
     Ladder(&'key LeaseToken),
 }
 
-impl<'key> ControlMode<'key> {
-    const fn held(self) -> Option<&'key LeaseToken> {
+impl ControlMode<'_> {
+    fn token(&self) -> &LeaseToken {
         match self {
-            Self::Ladder(token) => Some(token),
-            Self::Operator | Self::RestartPhase => None,
+            Self::Operator(key) | Self::RestartPhase(key) => &key.token,
+            Self::Ladder(token) => token,
+        }
+    }
+
+    /// The operator's claim key; `None` on the ladder's rung.
+    fn operator_key(&self) -> Option<&HostKey> {
+        match self {
+            Self::Operator(key) | Self::RestartPhase(key) => Some(&**key),
+            Self::Ladder(_) => None,
+        }
+    }
+
+    fn restart_phase(&self) -> bool {
+        matches!(self, Self::RestartPhase(_))
+    }
+
+    /// Workflow #369 Q-5 (B1; review L-3): an operator hold renews before a step whose bound
+    /// may exceed what is left of its key; the ladder renews its own key.
+    fn renew(&mut self, host: &HostShared, bound_ms: u64) -> Result<(), RequestFailure> {
+        match self {
+            Self::Operator(key) | Self::RestartPhase(key) => {
+                host.renew_host_key(key, bound_ms.saturating_add(HOLD_MARGIN_MS))
+            }
+            Self::Ladder(_) => Ok(()),
         }
     }
 }
@@ -314,32 +394,7 @@ fn stage_token(failure: &EmulatorControlFailure) -> &str {
     stage.rsplit_once('.').map_or(stage, |(_, token)| token)
 }
 
-/// The values of a failed restart's receipt outcome (F4.1; Workflow #378 A4): the report's
-/// tokens, which the failure record's primary detail also carries.
-fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outcome {
-    let outcome = outcome
-        .restart_phase(RestartPhaseToken(report.phase))
-        .stop_elapsed_ms(report.stop_ms)
-        .start_dispatched(report.start_ms.is_some())
-        .device_process_present(ProcessPresenceToken(report.device_process_present));
-    let outcome = match stop_result_token(report.stop_result) {
-        Some(token) => outcome.stop_result(token),
-        None => outcome,
-    };
-    let outcome = match report.start_ms {
-        Some(start_ms) => outcome.start_elapsed_ms(start_ms),
-        None => outcome,
-    };
-    match report.state {
-        Some(state) => outcome
-            .process_started(state.process_started)
-            .android_started(state.android_started)
-            .adb_port_present(state.adb_port_present),
-        None => outcome,
-    }
-}
-
-/// The canonical spelling of an instance id, for a `key=value` token.
+/// The canonical spelling of an instance id, for an outcome's `instance_id` value.
 fn instance_token(instance_id: InstanceId) -> String {
     match serde_json::to_value(instance_id) {
         Ok(serde_json::Value::String(text)) => text,
@@ -348,12 +403,18 @@ fn instance_token(instance_id: InstanceId) -> String {
 }
 
 impl HostShared {
+    /// `ControlEmulatorInstance`. Workflow #369 H-4 (S6b): after its intent is recorded, the
+    /// request waits for the instance's key as an operator claim (`await_emulator_control_claim`)
+    /// and drives the action on it under the instance's admission guard; its release then ends
+    /// the hold (`end_emulator_control_hold`). A failure the Runtime survives releases the key
+    /// as a failed lease end does; an unconfirmed close keeps it (`cleanup_composite_failure`).
     pub(super) fn control_emulator_instance(
         &self,
         original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
         action: EmulatorInstanceAction,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
         let links = self.append_client_command_intent(
@@ -363,14 +424,33 @@ impl HostShared {
             action.event_action(),
             None,
         )?;
-        let driven = if action == EmulatorInstanceAction::Restart {
-            self.drive_emulator_restart(&resolved, links, original.request_id())?
-        } else {
-            self.drive_emulator_control(&resolved, links, action, original.request_id())?
+        let mut key = self.await_emulator_control_claim(original, instance_alias, connection_id)?;
+        // The binding is read again on the key: another control may have changed it meanwhile.
+        let driven = match self.resolve_instance(instance_alias) {
+            Ok(resolved) if action == EmulatorInstanceAction::Restart => {
+                self.drive_emulator_restart(&resolved, links, &mut key)
+            }
+            Ok(resolved) => self.drive_emulator_control(&resolved, links, action, &mut key),
+            Err(failure) => Err(failure.into()),
+        };
+        let mut driven = match driven {
+            Ok(driven) => driven,
+            Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
         };
         // Slice #316-B3: after `start` / `restart` the configured startup package is only
-        // scheduled (intent event + claim; Workflow #369 H-6); it runs on the instance's worker.
-        let startup_package = driven.startup;
+        // scheduled (intent event + the key handed to its claim, or the claim queued; Workflow
+        // #369 H-4, S6b); it runs on the instance's worker.
+        let startup_package = match self.end_emulator_control_hold(
+            request,
+            &key,
+            driven.startup_package.take(),
+            driven.ladder.take(),
+        ) {
+            Ok(startup_package) => startup_package,
+            Err(failure) => {
+                return Err(self.cleanup_composite_failure(key.token, key.connection_id, failure));
+            }
+        };
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(driven.terminal),
@@ -389,36 +469,142 @@ impl HostShared {
         })
     }
 
-    /// Performs one control action whose intent is already recorded under `links`: fence,
-    /// session close, provider control, rebinding, `backend.selfcheck.*` invalidation (which
-    /// leaves a gated physical instance unavailable), ADB baseline, `command.validated` (or
+    /// Workflow #369 Q-2, Q-2a, H-4, W-3: the operator claim of an emulator control (a minted
+    /// holder, the scheduler's default lease TTL, drain capacity, no bound-endpoint or
+    /// performance-control check, so a stopped instance is granted too). It waits at most
+    /// `EMULATOR_CONTROL_CLAIM_WAIT_MS` for its turn; not granted in time, the request is refused
+    /// `lease_queue_expired` and nothing is driven. A restart is one claim.
+    fn await_emulator_control_claim(
+        &self,
+        original: &RuntimeRequest,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+    ) -> Result<HostKey, RequestFailure> {
+        let holder_id = *self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
+            .transport();
+        let lease_ttl_ms = lock(&self.scheduler, HostLocation::ReadEmulatorControlClaimTtl)?
+            .config()
+            .lease_ttl_ms;
+        let token = self.await_operator_claim(
+            HostClaim {
+                request: original,
+                instance_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::EmulatorControl,
+                priority: actingcommand_contract::LeasePriority::Normal,
+                lease_ttl_ms,
+            },
+            EMULATOR_CONTROL_CLAIM_WAIT_MS,
+        )?;
+        Ok(HostKey {
+            request: original.clone(),
+            token,
+            connection_id,
+        })
+    }
+
+    /// Workflow #369 H-4, M6, P1: ends an operator control's hold with its explicit release
+    /// (the control's request id). With a startup package scheduled, the key goes to the
+    /// package's claim through the gate (`hand_off_startup_package`). Otherwise (a stop, a failed
+    /// preparation) the instance's queued startup claims are cancelled first (coordinator ruling
+    /// on review #716: a startup run against a stopped or unprepared emulator is meaningless),
+    /// then the release hands the key straight to the ladder a failed preparation admitted (H-1,
+    /// P1; `release_to_preparation_ladder`), or to the next eligible claim.
+    fn end_emulator_control_hold(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        key: &HostKey,
+        startup_package: Option<PendingStartupPackage>,
+        ladder: Option<PendingRecoveryLadder>,
+    ) -> Result<StartupPackageDisposition, RequestFailure> {
+        let request_id = key.request.request_id();
+        if let Some(pending) = startup_package {
+            return self.hand_off_startup_package(request, request_id, key, pending);
+        }
+        self.cancel_queued_startup_claims(key.token.instance_id())?;
+        match ladder {
+            Some(ladder) => self.release_to_preparation_ladder(
+                request,
+                request_id,
+                &key.token,
+                key.connection_id,
+                ladder,
+            )?,
+            None => {
+                self.release_lease(request, request_id, &key.token, key.connection_id, None)?;
+            }
+        }
+        Ok(StartupPackageDisposition::None)
+    }
+
+    /// The end of a failed operator control's hold: a failure the Runtime does not survive, or
+    /// one with neither a startup package nor a ladder, ends the key as a failed lease end does
+    /// (`cleanup_composite_failure`: an unconfirmed close keeps it, any other end hands it on).
+    /// A restart whose Start succeeded after a failed Stop (Workflow #381 B D2 (c)) hands its
+    /// key to the startup package, or to the ladder its failed preparation admitted, after the
+    /// failure record, as on success.
+    fn end_failed_emulator_control(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        key: HostKey,
+        failed: FailedControl,
+    ) -> RequestFailure {
+        let FailedControl {
+            failure,
+            startup_package,
+            ladder,
+        } = failed;
+        if failure.poison_runtime || (startup_package.is_none() && ladder.is_none()) {
+            return self.cleanup_composite_failure(key.token, key.connection_id, failure);
+        }
+        match self.end_emulator_control_hold(
+            request,
+            &key,
+            startup_package.map(|pending| *pending),
+            ladder.map(|ladder| *ladder),
+        ) {
+            Ok(_) => failure,
+            Err(end) if end.poison_runtime => failure.replace_with_poison(*end.error),
+            Err(_) => self.cleanup_composite_failure(key.token, key.connection_id, failure),
+        }
+    }
+
+    /// Performs one operator `start` or `stop` whose intent is already recorded under `links`,
+    /// on its claim's `key` and under the instance's admission guard: fence, session close,
+    /// renewal, provider control, rebinding, `backend.selfcheck.*` invalidation (which leaves a
+    /// gated physical instance unavailable), ADB baseline, renewal, `command.validated` (or
     /// `command.rejected` + `runtime.failed`), `runtime.instance_bound`, `device.connected`,
-    /// after `start` of a physical instance its connection preparation phase (Workflow #317
-    /// sc3), and the startup package's scheduling intent.
-    pub(super) fn drive_emulator_control(
+    /// after `start` of a physical instance its connection preparation phase on the key
+    /// (Workflow #317 sc3), and the startup package's scheduling intent.
+    fn drive_emulator_control(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
         action: EmulatorInstanceAction,
-        control_request_id: RequestId,
-    ) -> Result<EmulatorControlDriven, RequestFailure> {
-        let instance_id = resolved.instance_id();
-        let instance_guard = self.instance_guard(instance_id)?;
+        key: &mut HostKey,
+    ) -> Result<EmulatorControlDriven, FailedControl> {
+        let control_request_id = key.request.request_id();
+        let instance_guard = self.instance_guard(resolved.instance_id())?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
-        let mut driven = self.drive_emulator_control_while_guarded(
+        match self.drive_control_phase(
             resolved,
-            links,
+            links.clone(),
             action,
             control_request_id,
             &admission,
-            None,
-        )?;
-        driven.startup = self.schedule_startup_under_guard(
-            instance_id,
-            driven.startup_package.take(),
-            admission,
-        )?;
-        Ok(driven)
+            &mut ControlMode::Operator(key),
+        ) {
+            Ok(driven) => Ok(driven),
+            Err(ControlFailure::Request(failure)) => Err(failure.into()),
+            Err(ControlFailure::Unrecorded(failure)) => Err(self
+                .record_unrecorded(links, action.event_action(), *failure)
+                .into()),
+        }
     }
 
     /// Workflow #381 B F1′ (review M1): an operator restart is a Stop phase and then a Start
@@ -428,15 +614,18 @@ impl HostShared {
     /// readiness wait expired, never another Stop failure. Coordinator answer D2: a failed
     /// restart records one `command.rejected` and one `runtime.failed` (after the Start phase
     /// when one ran), the receipt's terminal; a Start that succeeded after an expired Stop still
-    /// prepares the connection and schedules the startup package, as on success.
+    /// prepares the connection and schedules the startup package, as on success. Workflow #369
+    /// H-4 (S6b): the restart is one claim; both phases run on its `key`, each renewing it
+    /// before its own provider step (review L-3).
     fn drive_emulator_restart(
         &self,
         resolved: &RegisteredInstance,
         links: EventLinksDraft,
-        control_request_id: RequestId,
-    ) -> Result<EmulatorControlDriven, RequestFailure> {
+        key: &mut HostKey,
+    ) -> Result<EmulatorControlDriven, FailedControl> {
         let instance_id = resolved.instance_id();
         let instance_alias = resolved.instance_alias.as_str();
+        let control_request_id = key.request.request_id();
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let stop_started = Instant::now();
@@ -446,6 +635,7 @@ impl HostShared {
             EmulatorInstanceAction::Stop,
             control_request_id,
             &admission,
+            key,
         )?;
         let stop_ms = elapsed_ms(stop_started);
         let restart_action = EmulatorInstanceAction::Restart.event_action();
@@ -455,15 +645,19 @@ impl HostShared {
                 Ok(wrapped) if wrapped.code == HostCode::EmulatorControlWaitTimeout => Err(wrapped),
                 // F3: no Start after any other Stop failure.
                 Ok(wrapped) => {
-                    return Err(self.report_stop_failed(
-                        &links,
-                        instance_id,
-                        &wrapped,
-                        stop_ms,
-                        StartAfterStop::NotDispatched,
-                    ));
+                    return Err(self
+                        .report_stop_failed(
+                            &links,
+                            instance_id,
+                            &wrapped,
+                            stop_ms,
+                            StartAfterStop::NotDispatched,
+                        )
+                        .into());
                 }
-                Err(other) => return Err(self.record_unrecorded(links, restart_action, *other)),
+                Err(other) => {
+                    return Err(self.record_unrecorded(links, restart_action, *other).into());
+                }
             },
         };
         let start_started = Instant::now();
@@ -473,16 +667,13 @@ impl HostShared {
             EmulatorInstanceAction::Start,
             control_request_id,
             &admission,
+            key,
         )?;
         let start_ms = elapsed_ms(start_started);
         match (stop, start) {
+            // The startup package stays on the result: the control's release hands it the key.
             (Ok(stopped), Ok(mut started)) => {
                 started.stop_ms = stopped.outcome.elapsed_ms;
-                started.startup = self.schedule_startup_under_guard(
-                    instance_id,
-                    started.startup_package.take(),
-                    admission,
-                )?;
                 Ok(started)
             }
             (Ok(stopped), Err(failure)) => match failure.into_wrapped() {
@@ -501,13 +692,18 @@ impl HostShared {
                         failure: &wrapped,
                         effect: EffectDisposition::Indeterminate,
                     };
-                    Err(self.record_restart_report(&links, instance_id, &report))
+                    Err(self
+                        .record_restart_report(&links, instance_id, &report)
+                        .into())
                 }
-                Err(other) => Err(self.record_unrecorded(links, restart_action, *other)),
+                Err(other) => Err(self.record_unrecorded(links, restart_action, *other).into()),
             },
             (Err(stop_failure), Ok(mut started)) => {
-                // D2 (c): the Start ran its success path; the restart's one record follows it.
+                // D2 (c): the Start ran its success path; the restart's one record follows it,
+                // and the control's release hands the key to the startup package, or to the
+                // ladder a failed preparation admitted, after it.
                 let pending = started.startup_package.take();
+                let ladder = started.ladder.take();
                 let failure = self.report_stop_failed(
                     &links,
                     instance_id,
@@ -515,32 +711,39 @@ impl HostShared {
                     stop_ms,
                     StartAfterStop::Confirmed(&started, start_ms),
                 );
-                if failure.poison_runtime {
-                    return Err(failure);
-                }
-                self.schedule_startup_under_guard(instance_id, pending, admission)?;
-                Err(failure)
+                let (startup_package, ladder) = if failure.poison_runtime {
+                    (None, None)
+                } else {
+                    (pending.map(Box::new), ladder.map(Box::new))
+                };
+                Err(FailedControl {
+                    failure,
+                    startup_package,
+                    ladder,
+                })
             }
             (Err(stop_failure), Err(start_failure)) => {
                 let start_state = start_failure
                     .into_wrapped()
                     .ok()
                     .and_then(|wrapped| ObservedState::after(&wrapped.provider));
-                Err(self.report_stop_failed(
-                    &links,
-                    instance_id,
-                    &stop_failure,
-                    stop_ms,
-                    StartAfterStop::Failed(start_state, start_ms),
-                ))
+                Err(self
+                    .report_stop_failed(
+                        &links,
+                        instance_id,
+                        &stop_failure,
+                        stop_ms,
+                        StartAfterStop::Failed(start_state, start_ms),
+                    )
+                    .into())
             }
         }
     }
 
     /// One phase of an operator restart: its `command.received` under the restart's links,
-    /// then the drive on the binding registered now (a Start follows the Stop's binding). The
-    /// outer error is recorded or ends the Runtime; the inner one is the phase's unrecorded
-    /// failure.
+    /// then the drive on the binding registered now (a Start follows the Stop's binding), on the
+    /// restart's `key`. The outer error is recorded or ends the Runtime; the inner one is the
+    /// phase's unrecorded failure.
     fn drive_restart_phase(
         &self,
         instance_alias: &str,
@@ -548,6 +751,7 @@ impl HostShared {
         action: EmulatorInstanceAction,
         control_request_id: RequestId,
         admission: &MutexGuard<'_, ()>,
+        key: &mut HostKey,
     ) -> Result<Result<EmulatorControlDriven, Box<UnrecordedControl>>, RequestFailure> {
         self.append_event(
             EventSeverity::Info,
@@ -564,7 +768,7 @@ impl HostShared {
             action,
             control_request_id,
             admission,
-            ControlMode::RestartPhase,
+            &mut ControlMode::RestartPhase(key),
         ) {
             Ok(driven) => Ok(Ok(driven)),
             Err(ControlFailure::Unrecorded(failure)) => Ok(Err(failure)),
@@ -572,27 +776,12 @@ impl HostShared {
         }
     }
 
-    /// Workflow #369 H-6: queues the startup claim while the control's admission guard is
-    /// still held, then lets the guard go and pumps, so the claim is granted before any
-    /// dispatch can see the instance free.
-    pub(super) fn schedule_startup_under_guard(
-        &self,
-        instance_id: InstanceId,
-        pending: Option<super::startup_package::PendingStartupPackage>,
-        admission: MutexGuard<'_, ()>,
-    ) -> Result<StartupPackageDisposition, RequestFailure> {
-        let disposition = self.schedule_startup_package(pending)?;
-        drop(admission);
-        self.pump(instance_id)
-            .map_err(RequestFailure::poison_without_terminal)?;
-        Ok(disposition)
-    }
-
-    /// A cold recovery holds this same admission guard across confirmed Stop and Start.
-    /// `held` is the ladder's key on its emulator-restart rung (Workflow #369 H-3): the fence
-    /// admits that lease by its lease id and holder id while no destructive step is open (a
-    /// call-site parameter; `monitor_recovery_admission` is unchanged), the retained session is
-    /// closed under it (`reuse_active_lease`), and nothing is prepared or scheduled here.
+    /// The stuck-recovery ladder's emulator-restart rung: a cold recovery holds the instance's
+    /// admission guard across confirmed Stop and Start, on the ladder's `key` (Workflow #369
+    /// H-3), which the ladder renews itself: the fence admits that lease by its lease id and
+    /// holder id while no destructive step is open (a call-site parameter;
+    /// `monitor_recovery_admission` is unchanged), the retained session is closed under it
+    /// (`reuse_active_lease`), and nothing is prepared or scheduled here.
     pub(super) fn drive_emulator_control_while_guarded(
         &self,
         resolved: &RegisteredInstance,
@@ -600,16 +789,15 @@ impl HostShared {
         action: EmulatorInstanceAction,
         control_request_id: RequestId,
         admission: &MutexGuard<'_, ()>,
-        held: Option<&LeaseToken>,
+        key: &LeaseToken,
     ) -> Result<EmulatorControlDriven, RequestFailure> {
-        let mode = held.map_or(ControlMode::Operator, ControlMode::Ladder);
         match self.drive_control_phase(
             resolved,
             links.clone(),
             action,
             control_request_id,
             admission,
-            mode,
+            &mut ControlMode::Ladder(key),
         ) {
             Ok(driven) => Ok(driven),
             Err(ControlFailure::Request(failure)) => Err(failure),
@@ -619,8 +807,8 @@ impl HostShared {
         }
     }
 
-    /// The drive of one control action (see `drive_emulator_control`); `mode` decides who
-    /// records its failure and whether it runs on the ladder's key.
+    /// The drive of one control action (see `drive_emulator_control`) on the key `mode` holds;
+    /// `mode` also decides who records its failure and who renews the key.
     fn drive_control_phase(
         &self,
         resolved: &RegisteredInstance,
@@ -628,26 +816,24 @@ impl HostShared {
         action: EmulatorInstanceAction,
         control_request_id: RequestId,
         admission: &MutexGuard<'_, ()>,
-        mode: ControlMode<'_>,
+        mode: &mut ControlMode<'_>,
     ) -> Result<EmulatorControlDriven, ControlFailure> {
         let instance_id = resolved.instance_id();
         let event_action = action.event_action();
-        let record_action = match mode {
-            ControlMode::RestartPhase => EmulatorInstanceAction::Restart.event_action(),
-            ControlMode::Operator | ControlMode::Ladder(_) => event_action,
+        let record_action = if mode.restart_phase() {
+            EmulatorInstanceAction::Restart.event_action()
+        } else {
+            event_action
         };
-        let held = mode.held();
-        let recovery = held.is_some();
+        // Workflow #369 H-3, H-4: the call-site fence admits the control's own key (lease id and
+        // holder id, unexpired, no destructive step open).
         let fence = self
             .monitor_recovery_admission(instance_id)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let admitted = match held {
-            Some(own) => self
-                .own_key_admitted(instance_id, own)
-                .map_err(RequestFailure::poison_without_terminal)?,
-            None => fence.admitted(),
-        };
-        if !admitted {
+        if !self
+            .own_key_admitted(instance_id, mode.token())
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
             return Err(self.control_failed(
                 mode,
                 links,
@@ -659,11 +845,12 @@ impl HostShared {
             ));
         }
         // A retained session was opened on the endpoint in force before the action; it must
-        // not survive the (re)binding below. Closing with no session open is a no-op.
+        // not survive the (re)binding below. It is closed under the control's key. Closing with
+        // no session open is a no-op.
         match self.close_retained_instance_while_guarded(
             instance_id,
             links.clone(),
-            recovery,
+            true,
             LeaseReleaseReason::HostShutdown,
             admission,
         ) {
@@ -707,8 +894,26 @@ impl HostShared {
                 ));
             }
         }
-        // Outside the fact write gate and outside any device session; the per-instance
-        // admission guard stays held so no lease is granted while the emulator changes state.
+        // Workflow #369 H-4 (B1; review L-3): an operator's key is renewed before the provider
+        // step, to the Stop's or the Start's bound; a refused renewal ends the hold with its code.
+        let provider_bound_ms = if action == EmulatorInstanceAction::Stop {
+            EMULATOR_STOP_BOUND_MS
+        } else {
+            EMULATOR_START_BOUND_MS
+        };
+        if let Err(refused) = mode.renew(self, provider_bound_ms) {
+            return Err(self.renewal_refused(
+                mode,
+                links,
+                record_action,
+                instance_id,
+                refused,
+                EffectDisposition::NotPerformed,
+            ));
+        }
+        // Outside the fact write gate and outside any device session, on the control's key; the
+        // per-instance admission guard stays held so no keyless observe meets the changing
+        // emulator.
         let outcome = match self
             .execution()?
             .control_instance(&resolved.instance_alias, action)
@@ -806,6 +1011,22 @@ impl HostShared {
                 }
             }
         };
+        // Workflow #369 H-4 (B1; review L-3): a started physical instance is prepared on the
+        // operator's key; the key is renewed to the preparation's bound before the action is
+        // validated, so a refused renewal is the action's failure, as an unready ADB is.
+        let prepares = mode.operator_key().is_some()
+            && action != EmulatorInstanceAction::Stop
+            && rebound.device_self_checked();
+        if prepares && let Err(refused) = mode.renew(self, CONNECTION_PREPARATION_WAIT_MS) {
+            return Err(self.renewal_refused(
+                mode,
+                links,
+                record_action,
+                instance_id,
+                refused,
+                EffectDisposition::Indeterminate,
+            ));
+        }
         let validated = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -832,34 +1053,39 @@ impl HostShared {
         self.record_device_connected(instance_id, action, outcome.running, terminal_event)?;
         // Workflow #317 sc3 (b), #316 goal 5: a started physical instance is connected and
         // self-checked at once; it stays unavailable until that self-check passes. A failed
-        // preparation is recorded and does not fail the completed control action.
-        // Workflow #369-1: the ladder's emulator restart waits for readiness itself
-        // (`recovery_ladder`), so nothing is prepared or scheduled here on that path.
-        if recovery {
+        // preparation is recorded and does not fail the completed control action; Workflow #369
+        // H-1, P1: the ladder it admitted goes back with the result, and the control's release
+        // hands the operator's key straight to it. Workflow #369-1: the ladder's emulator restart
+        // waits for readiness itself (`recovery_ladder`), so nothing is prepared or scheduled
+        // here on that path.
+        let Some(key) = mode.operator_key() else {
             return Ok(EmulatorControlDriven {
                 outcome,
                 adb_wait_ms,
                 stop_ms: 0,
                 terminal: terminal_event,
                 startup_package: None,
-                startup: StartupPackageDisposition::None,
+                ladder: None,
             });
-        }
-        let preparation_failed =
-            if action != EmulatorInstanceAction::Stop && rebound.device_self_checked() {
-                let check = self
-                    .prepare_instance_connection(
-                        &rebound.instance_alias,
-                        instance_id,
-                        links.clone(),
-                        admission,
-                        ClaimKind::EmulatorControl,
-                    )
-                    .map_err(RequestFailure::poison_without_terminal)?;
-                !check.capture.ok || !check.touch.ok || check.failure_code.is_some()
-            } else {
-                false
-            };
+        };
+        let (preparation_failed, ladder) = if prepares {
+            let (check, ladder) = self
+                .prepare_instance_connection(
+                    &rebound.instance_alias,
+                    instance_id,
+                    links.clone(),
+                    admission,
+                    &key.token,
+                    key.connection_id,
+                )
+                .map_err(RequestFailure::poison_without_terminal)?;
+            (
+                !check.capture.ok || !check.touch.ok || check.failure_code.is_some(),
+                ladder,
+            )
+        } else {
+            (false, None)
+        };
         let startup_package = if action == EmulatorInstanceAction::Stop || preparation_failed {
             None
         } else {
@@ -871,8 +1097,38 @@ impl HostShared {
             stop_ms: 0,
             terminal: terminal_event,
             startup_package,
-            startup: StartupPackageDisposition::None,
+            ladder,
         })
+    }
+
+    /// Workflow #369 Q-5: an operator control whose renewal was refused (`lease_expired`,
+    /// `lease_missing`) ends its hold with the existing `command.rejected` + `runtime.failed`
+    /// pair, carrying the renewal's own code; a failure the Runtime does not survive is
+    /// returned as it is.
+    fn renewal_refused(
+        &self,
+        mode: &ControlMode<'_>,
+        links: EventLinksDraft,
+        record_action: EventAction,
+        instance_id: InstanceId,
+        refused: RequestFailure,
+        effect: EffectDisposition,
+    ) -> ControlFailure {
+        if refused.poison_runtime || refused.error.is_fatal() {
+            return ControlFailure::Request(refused);
+        }
+        let code = refused.error.projection().code;
+        let mut error = RuntimeHostError::request(code, CONTROL_OPERATION, code);
+        error.lifecycle.instance_id = Some(instance_id);
+        self.control_failed(
+            mode,
+            links,
+            record_action,
+            error,
+            RuntimeReceiptState::Failed,
+            effect,
+            None,
+        )
     }
 
     /// A failed control action: an operator restart's phase returns a failure the Runtime
@@ -881,7 +1137,7 @@ impl HostShared {
     #[allow(clippy::too_many_arguments)]
     fn control_failed(
         &self,
-        mode: ControlMode<'_>,
+        mode: &ControlMode<'_>,
         links: EventLinksDraft,
         record_action: EventAction,
         error: RuntimeHostError,
@@ -889,7 +1145,7 @@ impl HostShared {
         effect: EffectDisposition,
         provider: Option<ProviderControlFailure>,
     ) -> ControlFailure {
-        if matches!(mode, ControlMode::RestartPhase) && !error.is_fatal() {
+        if mode.restart_phase() && !error.is_fatal() {
             return ControlFailure::Unrecorded(Box::new(UnrecordedControl {
                 error,
                 state,
@@ -962,8 +1218,8 @@ impl HostShared {
     }
 
     /// The one failure record of a restart (F4, D2): `command.rejected` under the restart's
-    /// action, the receipt's terminal, and one `runtime.failed` whose primary detail carries the
-    /// tokens and whose native detail is the failing phase's vendor output.
+    /// action, the receipt's terminal, and one `runtime.failed` whose outcome carries the
+    /// report's values and whose native detail is the failing phase's vendor output.
     fn record_restart_report(
         &self,
         links: &EventLinksDraft,
@@ -971,48 +1227,27 @@ impl HostShared {
         report: &RestartReport<'_>,
     ) -> RequestFailure {
         let provider = &report.failure.provider;
-        let code = report.code.as_str();
-        let mut message = format!(
-            "{code}: restart_phase={} stop_result={} stop_elapsed_ms={} start_dispatched={}",
-            report.phase,
-            report.stop_result,
-            report.stop_ms,
-            report.start_ms.is_some()
-        );
-        if let Some(start_ms) = report.start_ms {
-            message.push_str(&format!(" start_elapsed_ms={start_ms}"));
-        }
-        if let Some(state) = report.state {
-            message.push_str(&format!(
-                " process_started={} android_started={} adb_port_present={}",
-                state.process_started, state.android_started, state.adb_port_present
-            ));
-        }
-        message.push_str(&format!(
-            " device_process_present={} cause={}",
-            report.device_process_present.as_str(),
-            report.failure.code
-        ));
         let diagnostic = provider.failure.error.diagnostic();
         let stage = diagnostic.map_or("mumu_manager.control", |diagnostic| diagnostic.stage());
         let category = diagnostic.map_or("child_exit", |diagnostic| diagnostic.category().as_str());
-        let mut error = RuntimeHostError::request(
+        // Ledger revision 3: the report's tokens are the outcome's values and the failing
+        // phase's control code its `caused_by` link (they were the detail's message).
+        let error = RuntimeHostError::request(
             report.code,
             CONTROL_OPERATION,
             RuntimeErrorCode::BackendOperationFailed,
         )
-        // Workflow #378 A4: the receipt's outcome carries the values the code requires.
         .with_outcome_values(|outcome| restart_report_outcome(outcome, report))
         .with_diagnostic_detail(DiagnosticDetailDraft::new(
             category,
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-            message,
-            Sensitivity::Sensitive,
-        ))
-        .with_native_detail(provider.failure.output_summary.clone());
-        error.lifecycle.raw_os_error = provider.failure.exit_code;
+        ));
+        // Acceptance H-M1: the control command's exit status is MuMuManager's, not an OS error.
+        let mut error = control_output(error, &provider.failure);
+        error.lifecycle.caused_by =
+            Some(Outcome::new(report.failure.code).operation(CONTROL_OPERATION));
         error.lifecycle.instance_id = Some(instance_id);
         match self.emulator_control_failure(
             links.clone(),
@@ -1034,7 +1269,6 @@ impl HostShared {
         instance_id: InstanceId,
         stop_elapsed_ms: u64,
     ) -> Result<(), RequestFailure> {
-        let code = HostCode::EmulatorStopProcessUnverified.as_str();
         self.append_event(
             EventSeverity::Warning,
             EventSource::Runtime,
@@ -1044,17 +1278,16 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                Outcome::new(HostCode::EmulatorStopProcessUnverified)
+                    .operation(ContractLocation::ControlInstance)
+                    .instance_id(instance_token(instance_id))
+                    .device_process_present(ProcessPresenceToken(DeviceProcessPresence::Unknown))
+                    .stop_elapsed_ms(stop_elapsed_ms),
                 DiagnosticDetailDraft::new(
                     "emulator_control",
                     "mumu_manager.process_list",
                     "mumu_manager",
                     ContractLocation::ControlInstance.as_str(),
-                    format!(
-                        "{code}: instance_id={} device_process_present={} stop_elapsed_ms={stop_elapsed_ms}",
-                        instance_token(instance_id),
-                        DeviceProcessPresence::Unknown.as_str()
-                    ),
-                    Sensitivity::Sensitive,
                 ),
                 AuditInput::new(),
             ),
@@ -1395,8 +1628,8 @@ impl HostShared {
 }
 
 /// Maps the typed device failure onto the host error: code, projection, receipt state and the
-/// effect claim. The vendor output goes to `native_detail` only; the primary detail message
-/// is a controlled template (no paths), so the sanitizer accepts it as Sensitive.
+/// effect claim. The vendor output goes to `native_detail` only; the device observations are
+/// the outcome's values and the primary detail keeps the stage (ledger revision 3).
 fn emulator_control_error(
     failure: &EmulatorControlFailure,
     instance_id: InstanceId,
@@ -1432,40 +1665,76 @@ fn emulator_control_error(
     } else {
         EffectDisposition::NotPerformed
     };
-    let mut message = format!(
-        "{code}: stage={stage} exit_status={} elapsed_ms={}",
-        failure
-            .exit_code
-            .map_or_else(|| "none".to_owned(), |exit_code| exit_code.to_string()),
-        failure.elapsed_ms
-    );
-    if let Some(state) = &failure.last_state {
-        message.push_str(&format!(
-            " process_started={} android_started={} adb_port_present={} launch_err_code={}",
-            state.process_started,
-            state.android_started,
-            state.adb_port.is_some(),
-            state.launch_err_code
-        ));
-    }
-    // Workflow #381 B F2, F4 (coordinator answer D5): a Stop's process check, carried by its
-    // failure record (on the ladder's rung, the one carrier of `device_process_present=true`).
-    if let Some(present) = failure.device_process_present {
-        message.push_str(&format!(" device_process_present={}", present.as_str()));
-    }
-    let mut error = RuntimeHostError::request(code, CONTROL_OPERATION, runtime_code)
+    // Ledger revision 3: the device failure's observations are the outcome's values (they were
+    // the detail's `key=value` message); the stage stays the detail's, the vendor output the
+    // native detail.
+    let error = RuntimeHostError::request(code, CONTROL_OPERATION, runtime_code)
+        .with_outcome_values(|outcome| {
+            let outcome = outcome.elapsed_ms(failure.elapsed_ms);
+            let outcome = match failure.exit_code {
+                Some(exit_code) => outcome.exit_code(exit_code),
+                None => outcome,
+            };
+            let outcome = match &failure.last_state {
+                Some(state) => outcome
+                    .process_started(state.process_started)
+                    .android_started(state.android_started)
+                    .adb_port_present(state.adb_port.is_some()),
+                None => outcome,
+            };
+            // Workflow #381 B F2, F4 (coordinator answer D5): a Stop's process check, carried
+            // by its failure record (on the ladder's rung, the one carrier of
+            // `device_process_present=true`).
+            match failure.device_process_present {
+                Some(present) => outcome.device_process_present(ProcessPresenceToken(present)),
+                None => outcome,
+            }
+        })
         .with_diagnostic_detail(DiagnosticDetailDraft::new(
             category,
             stage,
             "mumu_manager",
             ContractLocation::ControlInstance.as_str(),
-            message,
-            Sensitivity::Sensitive,
-        ))
-        .with_native_detail(failure.output_summary.clone());
-    error.lifecycle.raw_os_error = failure.exit_code;
+        ));
+    let mut error = control_output(error, failure);
     error.lifecycle.instance_id = Some(instance_id);
     (error, state, effect)
+}
+
+/// The failure's text as the error's native detail (ledger revision 3, acceptance H-M1): once
+/// the control command exited, its output is a `foreign_mumu_manager_error` link with the exit
+/// status as `exit_code` (0 for an errcode envelope, a launch error or the wait deadline);
+/// without an exit the text is the device's, a `foreign_other_error` link. No exit status is
+/// recorded as an OS error.
+fn control_output(error: RuntimeHostError, failure: &EmulatorControlFailure) -> RuntimeHostError {
+    match failure.exit_code {
+        Some(exit_code) => error.with_mumu_manager_output(&failure.output_summary, exit_code),
+        None => error.with_native_detail(failure.output_summary.clone()),
+    }
+}
+
+/// The values of a failed restart's outcome (F4.1; ledger revision 3).
+fn restart_report_outcome(outcome: Outcome, report: &RestartReport<'_>) -> Outcome {
+    let outcome = outcome
+        .restart_phase(RestartPhaseToken(report.phase))
+        .stop_elapsed_ms(report.stop_ms)
+        .start_dispatched(report.start_ms.is_some())
+        .device_process_present(ProcessPresenceToken(report.device_process_present));
+    let outcome = match stop_result_token(report.stop_result) {
+        Some(token) => outcome.stop_result(token),
+        None => outcome,
+    };
+    let outcome = match report.start_ms {
+        Some(start_ms) => outcome.start_elapsed_ms(start_ms),
+        None => outcome,
+    };
+    match report.state {
+        Some(state) => outcome
+            .process_started(state.process_started)
+            .android_started(state.android_started)
+            .adb_port_present(state.adb_port_present),
+        None => outcome,
+    }
 }
 
 /// The busy denial of the fence (`fence=<reason>` as native detail).

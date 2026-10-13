@@ -196,8 +196,6 @@ fn discovery_error(failure: &InstanceDiscoveryFailure) -> RuntimeHostError {
             stage,
             "execution_backend_provider",
             DISCOVERY_OPERATION.as_str(),
-            format!("{code}: stage={stage}"),
-            Sensitivity::Sensitive,
         ))
         .with_native_detail(failure.error.to_string())
 }

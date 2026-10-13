@@ -107,74 +107,26 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
-            if input.expected_sha256().is_directory_source() {
-                let deadline = Instant::now()
-                    .checked_add(Duration::from_millis(
-                        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-                    ))
-                    .ok_or_else(|| {
-                        observation_admission_error(
-                            HostCode::ObservationPackageDeadlineOverflow,
-                            ContractLocation::AdmitContainedObservation,
-                            "admission deadline overflow",
-                        )
-                    })?;
-                return PreparedPageObservation::load_path(
-                    instance_alias,
-                    path,
-                    input.expected_sha256(),
-                    input.targets(),
-                    self.execution()?.vision_provider(),
-                    deadline,
-                )
-                .map_err(observation_kernel_error);
-            }
-            let file = fs::File::open(path).map_err(|error| {
-                observation_admission_error(
-                    HostCode::ObservationPackageOpenFailed,
-                    HostLocation::OpenObservationPackage,
-                    error,
-                )
-            })?;
-            let mut bytes = Vec::new();
-            file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| {
+            // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is
+            // recorded and compared with nothing.
+            let deadline = Instant::now()
+                .checked_add(Duration::from_millis(
+                    ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+                ))
+                .ok_or_else(|| {
                     observation_admission_error(
-                        HostCode::ObservationPackageReadFailed,
-                        HostLocation::ReadObservationPackage,
-                        error,
+                        HostCode::ObservationPackageDeadlineOverflow,
+                        ContractLocation::AdmitContainedObservation,
+                        "admission deadline overflow",
                     )
                 })?;
-            if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
-                return Err(observation_admission_error(
-                    HostCode::ObservationPackageLimitExceeded,
-                    HostLocation::ReadObservationPackage,
-                    "compressed package limit exceeded",
-                ));
-            }
-            let expected = ExternalExpectedSha256::parse_hex(
-                input.expected_sha256().legacy_sha256().ok_or_else(|| {
-                    observation_admission_error(
-                        HostCode::ObservationHashInvalid,
-                        ContractLocation::AdmitContainedObservation,
-                        "legacy package reference required",
-                    )
-                })?,
-            )
-            .map_err(|error| {
-                observation_admission_error(
-                    HostCode::ObservationHashInvalid,
-                    ContractLocation::AdmitContainedObservation,
-                    error,
-                )
-            })?;
-            PreparedPageObservation::load(
+            PreparedPageObservation::load_path(
                 instance_alias,
-                &bytes,
-                expected,
+                path,
+                input.expected_sha256(),
                 input.targets(),
                 self.execution()?.vision_provider(),
+                deadline,
             )
             .map_err(observation_kernel_error)
         })()
@@ -384,13 +336,12 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                error.record_outcome(),
                 DiagnosticDetailDraft::new(
                     "contained_observation",
                     "observation.failed",
                     "contained_package",
                     error.operation(),
-                    error.code(),
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             ),
@@ -455,8 +406,8 @@ pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> Request
         return RequestFailure::poison_without_terminal(error);
     }
     let evidence = TaskFailureEvidence {
-        code: error.code(),
-        severity: EventSeverity::Warning,
+        outcome: error.outcome(),
+        severe: false,
     };
     let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
     failure.task_failure = Some(evidence);

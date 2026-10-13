@@ -20,14 +20,27 @@ use actingcommand_contract::{
     FRAME_RETENTION_POLICY_VERSION, IdentifierIssuer, IssuedInstanceId, IssuedRunId, OriginModule,
     OwnerEpoch, OwnerResourceDisposition, PerformanceMetric, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePayloadDraft, ProjectedArtifactReference,
-    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, Sensitivity,
-    TaskOutcome, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase, RuntimePayloadDraft, TaskOutcome,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, outcome::Outcome,
 };
 
 /// The salt of the drafts' secret fingerprints: a neutral fixture word.
 const FINGERPRINT_SALT: &[u8] = b"ledger-gate-fixture";
-/// The fixture's own failure code of a degraded performance monitor.
-const MONITOR_FAILURE_CODE: &str = "fixture_failure_first";
+
+/// Ledger revision 3 (Workflow #378 A3): a record's severity is its outcome's category, so a
+/// fixture asks for a severity through a registered code of that category (none of them
+/// requires a value).
+pub(super) fn code_of(severity: EventSeverity) -> &'static str {
+    match severity {
+        EventSeverity::Info => "max_steps_reached",
+        EventSeverity::Warning => "step_budget_exhausted",
+        EventSeverity::Error => "capture_failed",
+        EventSeverity::Fatal => "watchdog_fatal_hold",
+        EventSeverity::Debug | EventSeverity::Success => {
+            panic!("no fixture failure code has the category {severity:?}")
+        }
+    }
+}
 
 /// A run: its id and the links of its task events (instance, request, correlation, task and
 /// run).
@@ -283,11 +296,12 @@ impl<'r> RetentionEvents<'r> {
         );
     }
 
-    /// Item 5: a task terminal (`TerminalCommitted`) with `outcome` and `failure_code`.
+    /// Item 5: a task terminal (`TerminalCommitted`) with `task_result` and the outcome of
+    /// `failure_code` (its severity is that code's category, ledger revision 3).
     pub(super) fn terminal(
         &self,
         links: EventLinksDraft,
-        outcome: TaskOutcome,
+        task_result: TaskOutcome,
         failure_code: Option<&str>,
         severity: EventSeverity,
         at: u64,
@@ -299,10 +313,11 @@ impl<'r> RetentionEvents<'r> {
             links,
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::TerminalCommitted {
-                    outcome,
+                    task_result,
                     final_page: None,
                     executed_steps: Some(0),
-                    failure_code: failure_code.map(str::to_owned),
+                    outcome: failure_code.map(Outcome::relayed),
+                    failure_severe: false,
                     scheduling_disposition: None,
                     task_timing: None,
                 },
@@ -312,7 +327,8 @@ impl<'r> RetentionEvents<'r> {
         )
     }
 
-    /// Item 6: a `runtime.failed` with fixture detail words.
+    /// Item 6: a `runtime.failed` with fixture detail words, whose outcome has the category
+    /// `severity` (ledger revision 3).
     pub(super) fn runtime_failed(
         &self,
         links: EventLinksDraft,
@@ -327,13 +343,12 @@ impl<'r> RetentionEvents<'r> {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::NotPerformed,
+                Outcome::relayed(code_of(severity)),
                 DiagnosticDetailDraft::new(
                     "fixture_category",
                     "fixture.stage",
                     "fixture_backend",
                     "fixture_operation",
-                    "fixture_message",
-                    Sensitivity::Internal,
                 ),
                 AuditInput::new(),
             )
@@ -341,7 +356,8 @@ impl<'r> RetentionEvents<'r> {
         )
     }
 
-    /// Item 7: a `perf.monitor_degraded`, built as the capacity monitor builds one.
+    /// Item 7: a `perf.monitor_degraded`, built as the capacity monitor builds one, whose
+    /// outcome has the category `severity` (ledger revision 3).
     pub(super) fn monitor_degraded(
         &self,
         links: EventLinksDraft,
@@ -361,7 +377,7 @@ impl<'r> RetentionEvents<'r> {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms: at,
                     health: PerformanceMonitorHealth::Degraded,
-                    failure_code: Some(MONITOR_FAILURE_CODE.into()),
+                    outcome: Some(Outcome::relayed(code_of(severity))),
                     consecutive_failures: 1,
                     terminal: false,
                     unavailable_metrics: vec![PerformanceMetric::DiskCapacity],

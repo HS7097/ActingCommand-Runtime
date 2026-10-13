@@ -491,24 +491,29 @@ fn matches_signature(
         return Ok(true);
     };
     let lifecycle = match event.payload() {
-        EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload.lifecycle_failure(),
+        EventPayload::Runtime(RuntimePayload::Failed(payload)) => payload
+            .lifecycle_failure()
+            .map(|lifecycle| (lifecycle, payload.outcome())),
         _ => None,
     };
-    let Some(lifecycle) = lifecycle else {
+    let Some((lifecycle, outcome)) = lifecycle else {
         return Err(vec![SignatureConditionField::Lifecycle]);
     };
+    // Ledger revision 3 (Workflow #378 A3): the failure's code, stage and operation are its
+    // outcome's code and its `stage` and `operation` values; the cause stays typed context.
+    let value = |key: &str| outcome.value(key).and_then(serde_json::Value::as_str);
     let mut matches = predicate
         .stage
         .as_deref()
-        .is_none_or(|value| value == lifecycle.stage())
+        .is_none_or(|expected| value("stage") == Some(expected))
         && predicate
             .code
             .as_deref()
-            .is_none_or(|value| value == lifecycle.code());
+            .is_none_or(|expected| expected == outcome.code().as_str());
     let mut missing = Vec::new();
     matches &= match_optional(
         predicate.operation.as_deref(),
-        lifecycle.operation(),
+        value("operation"),
         SignatureConditionField::Operation,
         &mut missing,
     );

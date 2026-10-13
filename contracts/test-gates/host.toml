@@ -369,3 +369,39 @@ tests = [
     "actingcommand-runtime-host::lib::tests::agent_sessions::agent_dispatcher_paged_recovery_matches_the_whole_ledger_fold",
 ]
 incident = ["#381 A R4a"]
+
+# A device serial reaches no record, artifact, log or error; records name the device by its label
+[[gate]]
+key = "47"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::tests::gate_398_rd1a::rd1a_t1_adb_text_keeps_a_bound_serial_only_as_its_label_token",
+    "actingcommand-contract::gate::rd1a::rd1a_t1_stored_adb_command_evidence_round_trips_raw_text_redacted",
+    "actingcommand-device::lib::tests::gate_398_rd1a::rd1a_t2_debug_and_display_show_only_the_label",
+    "actingcommand-device::lib::tests::gate_398_rd1a::rd1a_t3_an_unavailable_target_reports_device_counts_not_serials",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1a::rd1a_t4_effective_configuration_names_the_handset_by_its_label",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1a::rd1a_t5_a_whole_fake_host_run_leaves_no_device_serial_behind",
+    "actingcommand-contract::gate::rd1a::rd1a_t6_device_label_replaces_adb_serial_in_keys_and_foreign_adb_error",
+    "actingcommand-actinglab::bin:actinglab::tests::session_instance_list_and_registry_show_a_label_instead_of_the_serial",
+]
+incident = ["#398"]
+
+# A crash mid-run: the next start comes up with its instance usable and winds the killed epoch down
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_epoch_close::gate_after_a_crash_mid_run_the_new_process_starts_and_its_instance_is_usable",
+    "actingcommand-runtime-host::lib::tests::gate_epoch_close::gate_after_a_crash_mid_run_the_new_start_winds_the_old_epoch_down",
+]
+incident = ["#394"]
+
+# An install start with one unreachable device: only that instance is unavailable and the start goes on; a start that reached no device still ends
+[[gate]]
+key = "49"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_one_unreachable_device_leaves_only_its_instance_unavailable_and_the_start_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_that_reaches_no_device_still_ends_under_the_selfcheck_failure",
+]
+incident = ["#71", "#390 D-01"]

@@ -112,7 +112,8 @@ Between Runtime modules outcomes always travel full.
   `setup_*` or `console_*` belong to the UI's own table.
 - **`vocabularies`**: `{description, tokens: {token: {description, category?}}, source?, review?}`.
   `source` `{file, enum}` names the Rust enum the tokens must equal; every `event_type` token has
-  a category.
+  a category. Within a ledger revision an event type's category is frozen: a record without an
+  outcome stores it as its severity, so recategorising a token needs a ledger revision bump.
 - **Code entry**: `category`, `ladder_class`, `owner`, `layer`, `uncertain`, `values`
   (`key: required|optional`), `review` (`pending`|`settled`), `status` (`active`|`retired`),
   `since`, `description`, `common_causes`, `handling` (`TBD` while pending), and `retired_in`,

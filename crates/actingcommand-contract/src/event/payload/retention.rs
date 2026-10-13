@@ -103,11 +103,13 @@ pub enum ArtifactRetentionPublicFact {
         settlement: Option<crate::TerminalEvent>,
         through_sequence: u64,
     },
+    /// A failed eviction's I/O failure, codes only (ledger revision 3; was `io_kind` and
+    /// `raw_os_error`).
     EvictionOutcome {
         intent: crate::TerminalEvent,
         disposition: ArtifactEvictionDisposition,
-        io_kind: Option<String>,
-        raw_os_error: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
     },
 }
 
@@ -143,8 +145,7 @@ impl ArtifactRetentionPayload {
                 ArtifactRetentionPublicFact::EvictionOutcome {
                     intent: value.intent,
                     disposition: value.disposition,
-                    io_kind: value.io.as_ref().map(|io| io.kind.clone()),
-                    raw_os_error: value.io.as_ref().and_then(|io| io.raw_os_error),
+                    outcome: value.outcome.as_ref().map(Outcome::codes_only),
                 }
             }
         };
@@ -161,7 +162,7 @@ impl ArtifactRetentionPayload {
             ArtifactRedactionState::Pending => Sensitivity::Secret,
             ArtifactRedactionState::Applied => Sensitivity::Sensitive,
             ArtifactRedactionState::NotRequired => {
-                if matches!(self.record.as_ref(), ArtifactRetentionFact::EvictionOutcome(value) if value.io.is_some())
+                if matches!(self.record.as_ref(), ArtifactRetentionFact::EvictionOutcome(value) if value.outcome.is_some())
                 {
                     Sensitivity::Sensitive
                 } else {
@@ -194,6 +195,13 @@ impl ArtifactRetentionPayload {
 }
 
 impl PayloadDetail for ArtifactRetentionPayload {
+    fn outcome(&self) -> Option<&Outcome> {
+        match self.record.as_ref() {
+            ArtifactRetentionFact::EvictionOutcome(value) => value.outcome.as_ref(),
+            _ => None,
+        }
+    }
+
     fn action(&self) -> EventAction {
         EventAction::ArtifactRetention
     }

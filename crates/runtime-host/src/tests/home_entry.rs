@@ -73,7 +73,7 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
             .any(|fact| matches!(
                 fact,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     executed_steps: Some(0),
                     ..
                 }
@@ -91,8 +91,8 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
         fact,
         TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::FailClosed,
-            failure_code: Some(code),
-        } if code == "contained_task_home_recovery_binding_missing"
+            outcome: Some(outcome),
+        } if outcome.code().as_str() == "contained_task_home_recovery_binding_missing"
     )));
     assert_eq!(
         events
@@ -164,7 +164,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
         fact,
         TaskSemanticFact::EntryTargetDisposition {
             disposition: TaskEntryTargetDisposition::Started,
-            failure_code: None,
+            outcome: None,
         }
     )));
     assert_eq!(
@@ -296,8 +296,8 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
         if leaves_home {
             assert!(facts.iter().any(
                 |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
-                disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
-            } if code == "contained_task_home_entry_not_matched")
+                disposition:TaskEntryTargetDisposition::FailClosed, outcome:Some(outcome)
+            } if outcome.code().as_str() == "contained_task_home_entry_not_matched")
             ));
         } else {
             assert!(
@@ -399,7 +399,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
             .any(|fact| matches!(
                 fact,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     executed_steps: Some(1),
                     ..
                 }
@@ -455,7 +455,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     let prepared = PreparedContainedTask::load(
         "fixture01.instance",
         &incompatible,
-        ExternalExpectedSha256::parse_hex(&hash).unwrap(),
+        &actingcommand_contract::PackageRef::LegacyZipSha256(hash.clone()),
     )
     .unwrap();
     assert!(!prepared.is_entry_recovery_compatible());
@@ -531,8 +531,8 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     );
     assert!(entry_preflight_facts(&events).iter().any(
         |fact| matches!(fact, TaskSemanticFact::EntryTargetDisposition {
-        disposition:TaskEntryTargetDisposition::FailClosed, failure_code:Some(code)
-    } if code == "contained_task_home_recovery_package_incompatible")
+        disposition:TaskEntryTargetDisposition::FailClosed, outcome:Some(outcome)
+    } if outcome.code().as_str() == "contained_task_home_recovery_package_incompatible")
     ));
     assert!(
         !events
@@ -640,8 +640,8 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
                 fact,
                 TaskSemanticFact::EntryTargetDisposition {
                     disposition: TaskEntryTargetDisposition::FailClosed,
-                    failure_code: Some(code),
-                } if code == expected_code
+                    outcome: Some(outcome),
+                } if outcome.code().as_str() == expected_code
             )),
             "{case}"
         );
@@ -650,8 +650,8 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
                 fact,
                 TaskSemanticFact::EntryRecoveryFailed {
                     package_sha256,
-                    failure_code,
-                } if package_sha256 == &actingcommand_contract::PackageRef::from(&recovery_sha256) && failure_code == expected_code
+                    outcome,
+                } if package_sha256 == &actingcommand_contract::PackageRef::from(&recovery_sha256) && outcome.code().as_str() == expected_code
             )));
         } else {
             assert!(facts.iter().any(|fact| matches!(
@@ -677,7 +677,7 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
             assert!(matches!(
                 terminal,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     executed_steps: Some(1),
                     ..
                 }

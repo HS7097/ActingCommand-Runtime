@@ -234,19 +234,24 @@ Every import and scope close carries a `basis`: `proven`, or `unproven` with one
 of three reasons. A prior owner without a native proof is still imported and
 closed, once per owner epoch and once per scope, through the same append path,
 links rule and startup barrier. `legacy_journal`: the owner's journal epoch
-contains a record older than the v2 schema. `process_exit_only`: a consistent v2
-epoch ends in a normal exit record and never recorded ConfirmedClosed.
-`proof_missing`: no journal epoch for the owner, or one whose records support no
-positive close (a block that ends active, reuses an epoch, contradicts its own
-identity or follows ConfirmedClosed with later resource use). An epoch whose last
-record still declares InUse or Unconfirmed is left open; a block the native
+contains a record older than the v2 schema. `process_exit_only` (released by
+process exit): a consistent v2 epoch that never recorded ConfirmedClosed and
+either ends in a normal exit record or whose last record still declares InUse or
+Unconfirmed. An epoch of the second kind reaches this startup step only after the
+OwnerGuard released it because its process had exited
+(`contracts/actingd-unlock-owner.md`, "When startup releases the owner itself"),
+which is recorded as the lifecycle observation
+`prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
+`last_disposition`). So the start after a crash imports the crashed epoch with
+this reason and closes every scope it left open (Workflow #394 EPOCH-CLOSE;
+#332 Q5, Alice's choice (a) of 09-30). `proof_missing`: no journal epoch for
+the owner, or one whose records support no positive close (a block that ends
+active with None or ConfirmedClosed, reuses an epoch, contradicts its own
+identity or follows ConfirmedClosed with later resource use). A block the native
 reader could not have produced fails startup as `prior_epoch_unproven_unclassified`.
-Such an epoch reaches this startup step when the OwnerGuard released it because
-its process had exited (`contracts/actingd-unlock-owner.md`, "When startup
-releases the owner itself"). That release is recorded as the lifecycle
-observation `prior_epoch_owner_released_by_exit` (`pid`, `started_at_unix_ms`,
-`last_disposition`); it is not close evidence, the epoch stays open here, and it
-authorises nothing on the device side.
+The release observation itself is not close evidence and authorises nothing on
+the device side; the unproven import and scope closes of the same start serve
+retention only.
 The unproven import seals the observation instead of a suffix: no positive close,
 the block identity when one exists and the complete-read bounds, which a later
 startup must still support. Facts sealed before `basis` existed read as proven.
@@ -741,9 +746,9 @@ persisted structure.
   lowest-sequence point whose window contains it; its leaf is
   `<instance alias>-<sequence>-<code>`, dated at that point's t, where the alias is the
   one bound at the point (for an epoch-end point, at the run's last frame) and the code
-  is the point's own `failure_code`, else its own code (a `rejection.code`, as in a
-  `policy.dispatch_rejected`, before any other `code`), else the failure code of its
-  run's failure terminal when that terminal precedes it, else its event type with `.` as
+  is the code of the point's own `outcome` (ledger revision 3; a `policy.dispatch_rejected`
+  names its rejection's outcome), else its own `code` member, else the code of its run's
+  failure terminal's outcome when that terminal precedes it, else its event type with `.` as
   `_` (an epoch-end point: `runtime_takeover` or `runtime_started`); characters outside
   `[A-Za-z0-9_-]` become `_`, and the code keeps at most 64 of them. A Lab frame's leaf
   is `lab-<instance alias>`, dated at its capture.

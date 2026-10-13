@@ -118,11 +118,11 @@ fn geometry_unavailable() -> TaskSemanticFact {
             conclusion: TaskGeometryConclusion::Unavailable,
             trigger: Some(TaskGeometryRecheckTrigger::RecognitionFailed),
             original_failure: Some(TaskGeometryFailure {
-                code: "recognition_failed".to_owned(),
+                outcome: actingcommand_contract::outcome::Outcome::relayed("recognition_failed"),
                 event_id: None,
             }),
             unavailable: Some(TaskGeometryFailure {
-                code: "capture_unavailable".to_owned(),
+                outcome: actingcommand_contract::outcome::Outcome::relayed("capture_failed"),
                 event_id: None,
             }),
         }),
@@ -158,13 +158,12 @@ fn selection_evaluated() -> TaskSemanticFact {
             input_ledger_position: 1,
             now_unix_ms: AT_MS,
             input_sha256: format!("sha256:{}", "e".repeat(64)),
-            outcome: TaskSelectionOutcome::Empty,
+            selection_result: TaskSelectionOutcome::Empty,
             outcome_key: "empty".to_owned(),
             selected: Vec::new(),
             verdicts: Vec::new(),
             reasons: vec![PolicyReasonRecord {
                 code: "no_candidate".to_owned(),
-                detail: "no candidate on the page".to_owned(),
             }],
             confirmation: TaskSelectionConfirmation::NotAttempted,
         }),
@@ -365,7 +364,9 @@ fn observational(ids: &IdentifierIssuer, owner: OwnerEpoch) -> Vec<Row> {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms: AT_MS,
                     health: PerformanceMonitorHealth::Degraded,
-                    failure_code: Some("performance_counter_failed".to_owned()),
+                    outcome: Some(actingcommand_contract::outcome::Outcome::relayed(
+                        "performance_pdh_open_failed",
+                    )),
                     consecutive_failures: 1,
                     terminal: false,
                     unavailable_metrics: vec![PerformanceMetric::Gpu],
@@ -382,7 +383,7 @@ fn observational(ids: &IdentifierIssuer, owner: OwnerEpoch) -> Vec<Row> {
                 PerformanceMonitorStateEventData {
                     observed_at_unix_ms: AT_MS + 1_000,
                     health: PerformanceMonitorHealth::Healthy,
-                    failure_code: None,
+                    outcome: None,
                     consecutive_failures: 0,
                     terminal: false,
                     unavailable_metrics: Vec::new(),

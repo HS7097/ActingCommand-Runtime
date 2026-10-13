@@ -29,34 +29,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "config_read_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration file: reading it failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "config_decode_failed": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration file: it does not decode as actingd's configuration.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "install_provider_retired": {
       "category": "error",
       "ladder_class": "none",
@@ -1143,11 +1115,14 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "mumu_manager_version": "optional",
+        "mumu_root": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup refused the emulator capability profile from discovery.",
+      "description": "Provider startup refused the emulator capability profile from discovery. mumu_manager_version is the version discovery reported, mumu_root the configured MuMu folder when one is configured, and the host's refusal is the caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1157,11 +1132,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found no discovered emulator instance for a binding key.",
+      "description": "Provider startup found no discovered emulator instance for a binding key. alias names the configured instance and instance_index or instance_name its declared binding key.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1171,11 +1150,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "instance_index": "optional",
+        "instance_name": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found more than one discovered emulator instance for a binding key.",
+      "description": "Provider startup found more than one discovered emulator instance for a binding key. alias names the configured instance, instance_name its declared binding key, and instances the discovered candidates.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1203,7 +1187,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup could not build the vision provider from the listed models.",
+      "description": "Provider startup could not build the vision provider from the listed models. The kernel error's code is the caused_by link, relayed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1227,11 +1211,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared adb_path is not the discovered adb.",
+      "description": "A provider native failure: the declared adb_path is not the discovered adb. alias names the configured instance, adb_path the declared adb, other_path the discovered one, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1241,11 +1230,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_host": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared host differs from the discovered one.",
+      "description": "A provider native failure: the declared host differs from the discovered one. alias names the configured instance, adb_host the declared host, and instances the discovered instance with the host it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1255,11 +1248,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port differs from the discovered one.",
+      "description": "A provider native failure: the declared port differs from the discovered one. alias names the configured instance, adb_port the declared port, and instances the discovered instance with the port it reported.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1269,11 +1266,15 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_port": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance.",
+      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance. alias names the configured instance, adb_port the declared port, and instances the discovered instance, which reported no port.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1283,11 +1284,16 @@
       "owner": "actingd",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "adb_path": "optional",
+        "other_path": "optional",
+        "instances": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the discovered adb path is not UTF-8.",
+      "description": "A provider native failure: the discovered adb path is not UTF-8. alias names the configured instance, other_path the discovered adb (lossy), adb_path the declared adb when one is declared, and instances the discovered instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1933,6 +1939,139 @@
       "description": "actingd refused its configuration file: a policy.monitor value is outside its range.",
       "common_causes": "TBD",
       "handling": "Correct policy.monitor as contracts/actingd-check-config.md describes it."
+    },
+    "provider_native_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "device_category": "optional",
+        "mumu_root": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text. mumu_root names the configured MuMu folder of a failed discovery when one is configured.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file configures: its flag is on or its section is present.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_configured_off": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the configuration file turns off with its flag; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_flag_absent": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem whose flag the configuration file does not name, so its default applies; an env_overrides subsystem carries each ignored ACTINGCOMMAND_* variable as a note link of env_override_ignored.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_section_absent": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem off because the configuration file has no section for it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_always_on": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a subsystem the Runtime always runs; count is the number of allowed client identities when the governance subsystem restricts them.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_bound": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem on: count instances are bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "config_subsystem_discovery_unbound": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The configuration manifest reports a discovery subsystem off: no instance is bound by instance_index or instance_name.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration (#398 R1 RD-3i): an instance's device fields do not fit its device kind, for example capture_backend scrcpy on an emulator instance. Every configured instance is an emulator until RD-1b adds the key device.kind.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

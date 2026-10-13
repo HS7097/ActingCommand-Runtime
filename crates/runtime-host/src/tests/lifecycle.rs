@@ -81,13 +81,17 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
                     panic!("runtime failure");
                 };
                 let failure = payload.lifecycle_failure().expect("typed lifecycle");
-                (failure.instance_id() == Some(instance)).then_some((event, failure))
+                (failure.instance_id() == Some(instance)).then_some((
+                    event,
+                    failure,
+                    payload.outcome(),
+                ))
             })
             .collect::<Vec<_>>();
         assert_eq!(actual.len(), 6);
         let roots = actual
             .iter()
-            .filter(|(_, failure)| failure.cause().is_none())
+            .filter(|(_, failure, _)| failure.cause().is_none())
             .collect::<Vec<_>>();
         assert_eq!(roots.len(), 1);
         let root_id = *roots[0].0.event_id();
@@ -105,21 +109,34 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         assert_eq!(
             actual
                 .iter()
-                .filter(|(_, failure)| failure
+                .filter(|(_, failure, _)| failure
                     .cause()
                     .is_some_and(|cause| cause.resource().is_some()))
                 .count(),
             1
         );
-        for (event, failure) in actual {
-            assert_eq!(failure.stage(), "runtime.lifecycle.session_close");
+        for (event, failure, outcome) in actual {
+            // Ledger revision 3 (#378 A3): the stage is the outcome's registered location.
+            assert_eq!(
+                outcome_str(outcome, "stage"),
+                Some(crate::codes::HostLocation::RuntimeLifecycleSessionClose.as_str())
+            );
             assert_eq!(
                 event.links(),
                 &actingcommand_contract::EventLinks::default()
             );
-            if let Some(cause) = failure.cause() {
+            if failure.cause().is_some() {
                 assert_eq!(failure.entered_event_id(), Some(root_id));
-                assert!(cause.native_detail().is_some());
+                // The cause's native text is `raw_text` on its own `caused_by` foreign link.
+                let caused_by = actingcommand_contract::outcome::CauseRelation::CausedBy;
+                assert!(
+                    outcome_links(outcome, caused_by)
+                        .into_iter()
+                        .any(|cause| outcome_links(cause, caused_by)
+                            .into_iter()
+                            .any(|native| outcome_str(native, "raw_text").is_some())),
+                    "{outcome:?}"
+                );
                 assert!(failure.resource_dispositions().is_none());
             } else {
                 assert!(failure.entered_event_id().is_none());

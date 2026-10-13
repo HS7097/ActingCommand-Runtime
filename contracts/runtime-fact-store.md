@@ -283,8 +283,14 @@ is unchanged; `--config` on any other command is a usage error.
 `actingcommand_ledger_forensics::runtime_facts_at(state_root, position,
 deadline)` is the single offline implementation of the startup replay above,
 bound to a ledger position (inclusive) instead of the latest one. The UI and
-every other offline consumer call it; none folds `runtime.fact_*` events
-itself.
+every other offline consumer call it, or `runtime_facts_at_per_phase(state_root,
+position, budget)`, the same read with a deadline per phase; none folds
+`runtime.fact_*` events itself. Its three steps are its phases (Workflow #395),
+named `read_runtime_facts_position`, `read_runtime_fact_snapshot_set` and
+`read_runtime_fact_changes`. `runtime_facts_at`'s one `deadline` bounds them
+together; `runtime_facts_at_per_phase` gives each phase its budget from the
+phase's own start, and the snapshot serves each later phase under that phase's
+deadline (`GlobalLedgerMetadata::set_read_deadline`).
 
 1. It opens one read-only metadata snapshot of the state root
    (`GlobalLedger::open_metadata`, the source `actingledger views` uses) and
@@ -322,16 +328,20 @@ The result `ForensicRuntimeFactsResult` is one of:
   `position`).
 - `not_available { position, latest_sequence, reason }` — `ledger_empty` (the
   snapshot holds no event) or `position_beyond_snapshot`.
-- `failed { position, code, operation, detail, io_kind? }` — position 0
-  (`runtime_fact_ledger_position_invalid`), an empty state root
+- `failed { position, outcome, detail, io_kind? }` — `outcome` is the failure
+  as a code with its `operation` (ledger revision 3; was `code` and `operation`):
+  position 0 (`runtime_fact_ledger_position_invalid`), an empty state root
   (`invalid_state_root`), the ledger's own open and read codes (`ledger_io` for
   an absent ledger, `ledger_read_budget_exceeded`), a source that is not
   completely readable (`runtime_facts_source_incomplete`), no event at the
   position (`runtime_facts_position_missing`), the cooperative deadline
   (`runtime_facts_read_budget_exceeded`), or `runtime_fact_replay_failed`.
+  When a deadline runs out (`ledger_read_budget_exceeded` or
+  `runtime_facts_read_budget_exceeded`), the outcome's `operation` names the
+  phase it ran out in.
 
 `actingledger --state-root <state-root> facts --at <sequence>` prints the
-result as one JSON line under `command: facts`, with a 30 s deadline. It exits
+result as one JSON line under `command: facts`, with 30 s for each phase. It exits
 0 only for `available`; otherwise the result is printed first and the tool
 exits nonzero with `runtime_facts_not_available` or the failure code.
 
@@ -465,8 +475,8 @@ the backend self-check facts (source `device-proxy` or `capture`).
   applies and hands it to the host with
   `RuntimeHostConfig::with_config_manifest`; `RuntimeHostConfig::validate`
   runs the manifest's own validation (at most 64 subsystems and 256
-  parameters; names, keys and reasons non-empty, control-free, at most
-  128 / 128 / 512 bytes) and refuses a bad one with
+  parameters; names and keys non-empty, control-free, at most
+  128 / 128 bytes) and refuses a bad one with
   `invalid_runtime_config_manifest`. The host records the two facts once per
   startup, after the startup events, replay and the instance-fact
   synchronization and before any thread is spawned, with one clock sample
@@ -476,8 +486,13 @@ the backend self-check facts (source `device-proxy` or `capture`).
   built without a manifest (tests, `actinglab` goldens, `ledger-maintenance`)
   record nothing.
   - `config.subsystems` rows: `name` (string), `enabled` (boolean),
-    `reason` (string, a short fact such as `configured`, `section absent`,
-    `always on; mode shadow`).
+    `code` (string, the subsystem's `config_subsystem_*` outcome code, ledger
+    revision 3) plus each scalar value of that outcome under its own key (for
+    example `count`); no links. The `env_overrides` row also names the
+    `variable` of each ignored environment override (`note` links of
+    `env_override_ignored`) under `ignored_variables`, comma-separated, so an
+    ignored override is never silent (`contracts/actingd-check-config.md`,
+    "Environment overrides").
   - `config.parameters` rows: `key` (string), `value` (the effective scalar:
     `string`, `integer`, `boolean` or `duration_ms`), `source` (`explicit` for
     a value set in the configuration file, `default` for a library default,
@@ -617,8 +632,7 @@ Contract: `runtime_fact_ledger_position_invalid`,
 `invalid_runtime_fact_recorded_action`, `invalid_runtime_fact_invalidated_action`,
 `invalid_runtime_fact_snapshot_action`, `invalid_fact_snapshot_set_skipped`; manifest:
 `config_manifest_subsystems_too_many`, `config_manifest_parameters_too_many`,
-`invalid_config_subsystem_name`, `invalid_config_subsystem_reason`,
-`invalid_config_parameter_key`. Host: `runtime_fact_stale`,
+`invalid_config_subsystem_name`, `invalid_config_parameter_key`. Host: `runtime_fact_stale`,
 `runtime_fact_capacity_exceeded`, `runtime_fact_missing`,
 `runtime_fact_instance_unknown`, `task_id_too_long_for_facts` (request class;
 a refusal while recording settlement facts is raised as fatal with the same

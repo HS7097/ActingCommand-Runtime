@@ -8,6 +8,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -15,7 +16,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -26,6 +27,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -33,7 +35,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -44,6 +46,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -51,7 +54,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -62,6 +65,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -69,7 +73,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -80,6 +84,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -87,7 +92,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -98,6 +103,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -105,7 +111,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -116,6 +122,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -123,7 +130,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -134,6 +141,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -141,7 +149,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -152,6 +160,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -159,7 +168,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -170,6 +179,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -177,7 +187,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -188,6 +198,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -195,7 +206,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -206,6 +217,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -213,7 +225,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>).",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>). A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -224,6 +236,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -231,7 +244,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -242,6 +255,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -249,7 +263,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -260,6 +274,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -267,7 +282,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -278,6 +293,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -285,7 +301,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -296,6 +312,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -303,7 +320,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -314,6 +331,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -321,7 +339,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -332,6 +350,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -339,7 +358,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -350,6 +369,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -357,7 +377,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -368,6 +388,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -375,7 +396,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -386,6 +407,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -393,7 +415,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -404,6 +426,7 @@
       "layer": "device",
       "uncertain": false,
       "values": {
+        "mumu_root": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional"
@@ -411,9 +434,143 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type.",
+      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type. A failed provider startup discovery adds the configured mumu_root.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "scrcpy_server_digest_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy server the executable carries does not match the SHA-256 pinned in scripts/windows-tools/windows-tool-sources.v1.json, or the build embedded none; the scrcpy capture backend of the instance that opens it does not open, and the server is never pushed to the device. A damaged or incomplete installation. Only that instance's scrcpy capture backend is unavailable; the Runtime goes on (coordinator ruling 10-13, board #403 direction).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_server_start_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy capture backend could not start: pushing the server, the adb forward, starting the server, connecting to it, its stream header or its first frame failed within the start timeout. The open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_stream_ended": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy video stream stopped: the server exited, the socket closed, a packet was malformed or H.264 decoding failed. No frame is delivered from a stream that ended; the capture fails instead of falling back to another backend. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13, the instance-level rule of board #403).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scrcpy_video_size_mismatch": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#402 RD-3: the scrcpy stream's video size is not the unscaled size requested (the display, or its centred crop to the size alignment), so its frames would be scaled; the stream is refused instead of downsampled. When it happens at the start, the open fails as capture_backend_open_failed. Only that instance's run fails and the recovery ladder handles it; the Runtime goes on (coordinator ruling 10-13 09:2x: every scrcpy code is instance-level).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "capture_frame_stale": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "#398 R1 RD-3i: a stream capture backend received no frame encoded after the capture floor (the completion of the last input, or the frame delivered last) within its fresh wait; the step makes no input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_state_unreadable": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_state_probe": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A device-state read of a handset (model-398 section 7.1) failed, or its answer has a shape the parser does not know; device_state_probe names the read. When adb answered, the foreign_adb_error link keeps adb's failure output or the answer that could not be read; when adb could not run or did not finish there is no link. The state is never guessed.",
+      "common_causes": "The phone left adb (unplugged, offline, unauthorized); the phone vendor prints another dumpsys format than the parser knows.",
+      "handling": "Check the device link; for an unknown shape, add a neutral sample of the new format to the parser."
+    },
+    "device_wake_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The handset's screen was still not awake after one KEYCODE_WAKEUP and the configured settle time (device_state.wake_settle_ms). The run does not start and no other input is sent.",
+      "common_causes": "The settle time is shorter than the phone needs to turn the screen on; the wake key failed.",
+      "handling": "Raise device_state.wake_settle_ms, or check the phone."
+    },
+    "device_keyguard_dismiss_failed": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard without a credential still showed on the handset after one wm dismiss-keyguard and the settle time. The run does not start.",
+      "common_causes": "The phone does not dismiss its keyguard from the shell.",
+      "handling": "Set device_state.keyguard_insecure to wait, or remove the keyguard on the phone."
+    },
+    "device_locked": {
+      "category": "warning",
+      "ladder_class": "budget_or_permission",
+      "owner": "device",
+      "layer": "device",
+      "uncertain": false,
+      "values": {
+        "device_label": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A keyguard waits for a person on the handset: it asks for a credential (PIN, pattern, password or biometric), or it asks for none and device_state.keyguard_insecure is wait. The code covers \"locked, and a person is needed\", whether because of a secure lock or the wait policy. Nothing is sent; the Runtime never enters a credential.",
+      "common_causes": "The phone locked itself after its screen timeout.",
+      "handling": "Unlock the phone."
     }
   },
   "locations": {

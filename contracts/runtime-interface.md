@@ -485,6 +485,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `selfcheck` | SelfCheckInstance | option two | retires → actinglab `emulator selfcheck` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
+| new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | planned: `pack-schedule set`, `pack-schedule get` (SR-11), `perf-status` (#385), the D2 S5 query, the SR-5a entry | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
 | `watchdog *`, `mcp-config` | not requests | — | stay; `mcp-config`'s example drops `--tier` |
@@ -497,11 +498,12 @@ two.
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
 | `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; output as today | general |
-| `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `cursor`, `limit` ↔ same flags | general |
+| `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `exclude_event_types`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1). Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design) | general |
 | `ac_get_run` | read | `actingctl run get` | `handle` or `run_id` ↔ `--handle` or `--run-id`; `wait_s` is presentation | general |
 | `ac_material` | read | `actingctl material` | `ref`, `mode`, `offset`, `max_bytes` ↔ same flags | general |
 | `ac_diagnose` | read | `actingctl diagnose` | `instance`, `task_id`, `since_unix_ms` ↔ same flags. Its text says that `actingd suspended` reports the configuration and not runtime pack loads or unloads | general |
 | `ac_resources_list`, `ac_targets_get` | read | `actingctl targets list`, `targets get` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port) | general |
+| `ac_packs` (new, #389 MCP-11) | read | `actingctl packs` | `instance`, `role` ↔ same flags (`instance` matches the configuration's alias, `instance_id` or ADB port); the server's location stands for `--root` and, as in the CLI, the selected generation is found again at every call; an answer past the output budget is exported (presentation) | general |
 | `ac_pause` | instruction | `actingctl pause` | `drain_timeout_ms` in milliseconds, its range a contract constant; default reason `operator` for both (the counter is recorded by the channel); the CLI's `--instance` takes all three selector forms | general |
 | `ac_resume` | instruction | `actingctl resume` | the CLI gains the optional expected-pause parameter `ac_resume` has; selector as above | general |
 | `ac_targets_set` | instruction | the actingctl command with `--instance`, `--targets`, `--valid-days` that builds the v2 document as the tool does today (named by U-3) | `instance`, `targets`, `valid_days` | general (§14.2) |

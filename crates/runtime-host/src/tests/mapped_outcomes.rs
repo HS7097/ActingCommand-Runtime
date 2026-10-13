@@ -157,12 +157,16 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
             .as_ref()
             .unwrap_or_else(|| panic!("{case}: mapped completion wake missing"));
         assert_eq!(
-            projection.outcome().disposition().outcome_key(),
+            projection.scheduling_result().disposition().outcome_key(),
             outcome_key,
             "{case}: wake must carry the exact tagged outcome"
         );
         assert!(
-            projection.ledger_position() >= projection.outcome().identity().terminal_sequence(),
+            projection.ledger_position()
+                >= projection
+                    .scheduling_result()
+                    .identity()
+                    .terminal_sequence(),
             "{case}: wake projection must cover its source terminal"
         );
         let snapshot = host
@@ -840,17 +844,29 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
         .complete_scheduled_policy_run(&context, &receipt)
         .expect("two-key mapped completion");
     let projection = projection.expect("two-key authoritative wake projection");
-    assert_eq!(projection.outcome().identity().run_id(), context.run_id());
-    assert_eq!(projection.outcome().identity().task_id(), context.task_id());
     assert_eq!(
-        projection.outcome().identity().decision_id(),
+        projection.scheduling_result().identity().run_id(),
+        context.run_id()
+    );
+    assert_eq!(
+        projection.scheduling_result().identity().task_id(),
+        context.task_id()
+    );
+    assert_eq!(
+        projection.scheduling_result().identity().decision_id(),
         context.decision_id()
     );
     assert_eq!(
-        projection.outcome().identity().lease_id(),
+        projection.scheduling_result().identity().lease_id(),
         context.lease_token().lease_id()
     );
-    assert!(projection.ledger_position() >= projection.outcome().identity().terminal_sequence());
+    assert!(
+        projection.ledger_position()
+            >= projection
+                .scheduling_result()
+                .identity()
+                .terminal_sequence()
+    );
     let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
@@ -1175,7 +1191,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
         panic!("expected task semantic payload")
     };
     let TaskSemanticFact::TerminalCommitted {
-        outcome,
+        task_result,
         final_page,
         scheduling_disposition: Some(disposition),
         ..
@@ -1183,7 +1199,7 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
     else {
         panic!("expected actual scheduling disposition")
     };
-    assert_eq!(*outcome, TaskOutcome::Success);
+    assert_eq!(*task_result, TaskOutcome::Success);
     assert_eq!(final_page.as_deref(), Some("neutral/terminal"));
     assert_eq!(disposition.outcome_key(), outcome_key);
     assert!(matches!(
@@ -1387,10 +1403,10 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
                 .filter_map(projected_task_semantic_fact)
                 .filter_map(|fact| match fact {
                     TaskSemanticFact::TerminalCommitted {
-                        outcome,
+                        task_result,
                         scheduling_disposition,
                         ..
-                    } => Some((*outcome, scheduling_disposition.as_ref())),
+                    } => Some((*task_result, scheduling_disposition.as_ref())),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -1697,10 +1713,10 @@ fn unmapped_generic_terminals_preserve_success_failure_and_cancelled_outcomes() 
             .filter_map(projected_task_semantic_fact)
             .filter_map(|fact| match fact {
                 TaskSemanticFact::TerminalCommitted {
-                    outcome,
+                    task_result,
                     scheduling_disposition,
                     ..
-                } => Some((*outcome, scheduling_disposition)),
+                } => Some((*task_result, scheduling_disposition)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -2252,7 +2268,7 @@ fn an_outcome_key_the_new_catalog_no_longer_lists_reads_as_unknown_while_other_i
     assert_eq!(
         first_outcome
             .as_ref()
-            .map(|projection| projection.outcome().disposition().outcome_key()),
+            .map(|projection| projection.scheduling_result().disposition().outcome_key()),
         Some(listed_key),
         "the producer's run under v1 gives key A"
     );

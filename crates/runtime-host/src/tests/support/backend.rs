@@ -11,6 +11,9 @@ pub(super) fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>
 #[derive(Default)]
 pub(super) struct FakeState {
     physical_task_geometry: AtomicBool,
+    // Workflow #392 DA-A: the frame and display extent of `physical_task_geometry`, 16x9 when
+    // not set.
+    physical_task_extent: std::sync::Mutex<Option<(u32, u32)>>,
     adb_recovery: std::sync::Mutex<Option<actingcommand_device::AdbTargetRecovery>>,
     input_selection: std::sync::Mutex<Option<actingcommand_device::InputSelectionContext>>,
     capture_selection: std::sync::Mutex<Option<actingcommand_device::CaptureSelectionContext>>,
@@ -70,6 +73,24 @@ pub(super) struct FakeState {
     // Workflow #369 (verify-666 L6): opens report a passed native open, so a preparation's
     // self-check passes (`fake_opened_backend`).
     observed_open: AtomicBool,
+    // #398 R1 RD-3i: with `stream_capture` every frame carries a stream stamp whose sequence is
+    // its capture number; each capture records the floor it was given, and each completed input
+    // records when it completed and how many captures came before it. A capture after an input
+    // fails with `capture_error_after_input` when one is set.
+    stream_capture: AtomicBool,
+    capture_floors: std::sync::Mutex<Vec<Option<actingcommand_device::CaptureFloor>>>,
+    inputs_completed: std::sync::Mutex<Vec<(Instant, usize)>>,
+    capture_error_after_input: std::sync::Mutex<Option<DeviceError>>,
+}
+
+impl FakeState {
+    /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A).
+    fn physical_task_extent(&self) -> (u32, u32) {
+        self.physical_task_extent
+            .lock()
+            .expect("fake physical task extent")
+            .unwrap_or((16, 9))
+    }
 }
 
 struct FakeBackend {
@@ -115,6 +136,14 @@ impl FakeBackend {
                 ));
         }
         self.state.input_count.fetch_add(1, Ordering::AcqRel);
+        self.state
+            .inputs_completed
+            .lock()
+            .expect("completed inputs")
+            .push((
+                Instant::now(),
+                self.state.capture_count.load(Ordering::Acquire),
+            ));
         Ok(())
     }
 }
@@ -299,13 +328,13 @@ impl CaptureBackend for FakeCapture {
         let physical_task_geometry = self.provenance == ExecutionBackendProvenance::PhysicalDevice
             && self.state.physical_task_geometry.load(Ordering::Acquire);
         let (width, height) = if physical_task_geometry {
-            (16, 9)
+            self.state.physical_task_extent()
         } else {
             (2, 1)
         };
         let mut pixels = [first.as_slice(), guard.as_slice()].concat();
         if physical_task_geometry {
-            pixels.resize(16 * 9 * 3, 0);
+            pixels.resize(width as usize * height as usize * 3, 0);
         }
         let mut frame = Frame::from_pixels(
             width,
@@ -338,6 +367,36 @@ impl CaptureBackend for FakeCapture {
         Ok(frame)
     }
 
+    fn capture_fresh(
+        &mut self,
+        floor: Option<actingcommand_device::CaptureFloor>,
+    ) -> DeviceResult<Frame> {
+        self.state
+            .capture_floors
+            .lock()
+            .expect("capture floors")
+            .push(floor);
+        if self.state.input_count.load(Ordering::Acquire) > 0
+            && let Some(error) = self
+                .state
+                .capture_error_after_input
+                .lock()
+                .expect("capture error after input")
+                .clone()
+        {
+            return Err(error);
+        }
+        let mut frame = self.capture_timed()?;
+        if self.state.stream_capture.load(Ordering::Acquire) {
+            frame.stream = Some(actingcommand_device::FrameStreamStamp {
+                sequence: self.state.capture_count.load(Ordering::Acquire) as u64,
+                device_pts_us: 0,
+                received_at: Instant::now(),
+            });
+        }
+        Ok(frame)
+    }
+
     fn observe_geometry(
         &mut self,
         _deadline: std::time::Instant,
@@ -358,7 +417,8 @@ impl CaptureBackend for FakeCapture {
             ));
         }
         // The existing fake supplies these dimensions and binding; no device is queried.
-        let extent = CaptureExtent::new(16, 9).expect("positive fake Task extent");
+        let (width, height) = self.state.physical_task_extent();
+        let extent = CaptureExtent::new(width, height).expect("positive fake Task extent");
         Ok(CaptureGeometryObservation::Observed(CaptureGeometry {
             backend: CaptureBackendName::AdbScreencap,
             source: CaptureGeometrySource::AdbDefaultDisplay {
@@ -447,6 +507,8 @@ struct FakeEntry {
 
 const FAKE_EMULATOR_INDEX: u16 = 0;
 const FAKE_EMULATOR_ADB_PORT: u16 = 16384;
+/// INST-1 (Workflow #390): the first neutral port of `FakeProvider::with_device_endpoints`.
+const FAKE_DEVICE_ADB_PORT_BASE: u16 = 15000;
 
 /// Workflow #369 review C-2: the discovery-bound fake instance, bound to `adb_port` while
 /// running and pending while stopped (`None`).
@@ -496,6 +558,9 @@ pub(super) struct FakeProvider {
     provenance: ExecutionBackendProvenance,
     vision_provider: Option<Arc<dyn VisionProvider>>,
     resolved_override: Option<Arc<std::sync::Mutex<ResolvedExecutionInstance>>>,
+    // INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
+    // own (`with_device_endpoints`).
+    device_endpoints: bool,
 }
 
 impl FakeProvider {
@@ -515,7 +580,16 @@ impl FakeProvider {
             provenance: ExecutionBackendProvenance::PhysicalDevice,
             vision_provider: None,
             resolved_override: None,
+            device_endpoints: false,
         }
+    }
+
+    /// INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
+    /// own (one neutral port per entry, in alias order), as configured instances do, so a
+    /// start prepares and self-checks each of them (`device_self_checked`).
+    fn with_device_endpoints(mut self) -> Self {
+        self.device_endpoints = true;
+        self
     }
 
     fn fixture_simulation(mut self) -> Self {
@@ -608,6 +682,21 @@ impl ExecutionBackendProvider for FakeProvider {
             );
         }
         Some(match self.provenance {
+            ExecutionBackendProvenance::PhysicalDevice if self.device_endpoints => {
+                let index = self
+                    .entries
+                    .keys()
+                    .position(|alias| alias == instance_alias)
+                    .and_then(|index| u16::try_from(index).ok())
+                    .expect("a registered fake entry");
+                let adb_port = FAKE_DEVICE_ADB_PORT_BASE + index;
+                ResolvedExecutionInstance::new(entry.instance_id, format!("127.0.0.1:{adb_port}"))
+                    .with_adb_endpoint(actingcommand_execution_kernel::ResolvedAdbEndpoint::new(
+                        "127.0.0.1",
+                        adb_port,
+                        false,
+                    ))
+            }
             ExecutionBackendProvenance::PhysicalDevice => {
                 ResolvedExecutionInstance::new(entry.instance_id, "127.0.0.1:16384")
             }

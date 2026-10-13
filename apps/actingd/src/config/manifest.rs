@@ -8,7 +8,7 @@
 
 use crate::codes::ActingdCode;
 use crate::monitor_retry::PolicyMonitorSettings;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{CauseRelation, Code, Outcome};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSubsystem, DeviceDiagnosticMode, FactScalar,
     InstanceId, RuntimeConfigManifest,
@@ -26,7 +26,7 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) host: &'a RuntimeHostConfig,
     pub(super) bind_port_explicit: bool,
     pub(super) device_diagnostic_mode_explicit: bool,
-    /// The file's `frame_retention_enabled` as declared; the subsystem reason names it.
+    /// The file's `frame_retention_enabled` as declared; the subsystem outcome names it.
     pub(super) frame_retention_enabled: Option<bool>,
     pub(super) failed_run_successes_explicit: bool,
     pub(super) failed_run_days_explicit: bool,
@@ -104,85 +104,59 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         .allowed_clients
         .as_ref()
         .map(|allowed| allowed.iter().map(String::as_str).collect::<Vec<_>>());
-    let governance_allowed_clients_count = governance_allowed_clients
-        .as_ref()
-        .map_or_else(|| "any".to_owned(), |allowed| allowed.len().to_string());
+    // Ledger revision 3: each subsystem says why it is on or off by a registered code; the
+    // values the former prose reason carried are kept where the key table has a key for them
+    // (`count`), and the rest are the manifest's parameters.
+    let governance = match &governance_allowed_clients {
+        Some(allowed) => Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn).count(allowed.len()),
+        None => Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+    };
+    let discovery = || {
+        if discovery_bound {
+            Outcome::new(ActingdCode::ConfigSubsystemDiscoveryBound)
+                .count(inputs.instances_deferred_count)
+        } else {
+            Outcome::new(ActingdCode::ConfigSubsystemDiscoveryUnbound)
+        }
+    };
     let subsystems = vec![
         subsystem(
             "frame_retention",
             frame_retention_enabled,
-            match inputs.frame_retention_enabled {
-                Some(true) => "configured",
-                Some(false) => "configured off",
-                None => "flag absent",
-            },
+            Outcome::new(flag_state(inputs.frame_retention_enabled)),
         ),
         subsystem(
             "agent_dispatcher",
             inputs.agent_dispatcher.is_some(),
-            present(inputs.agent_dispatcher.is_some(), "section absent"),
+            Outcome::new(present(inputs.agent_dispatcher.is_some())),
         ),
-        ConfigSubsystem {
-            name: "governance".to_owned(),
-            enabled: true,
-            reason: format!(
-                "declarative_identity; allowed_clients={governance_allowed_clients_count}"
-            ),
-        },
+        subsystem("governance", true, governance),
         subsystem(
             "policy_driver",
             inputs.policy_configured,
-            present(inputs.policy_configured, "section absent"),
+            Outcome::new(present(inputs.policy_configured)),
         ),
         subsystem(
             "vision_provider",
             inputs.vision_provider_configured,
-            present(inputs.vision_provider_configured, "section absent"),
+            Outcome::new(present(inputs.vision_provider_configured)),
         ),
-        ConfigSubsystem {
-            name: "device_diagnostic".to_owned(),
-            enabled: true,
-            reason: format!(
-                "always on; mode {}",
-                device_diagnostic_mode_name(device_diagnostic_mode)
-            ),
-        },
-        ConfigSubsystem {
-            name: "performance_monitor".to_owned(),
-            enabled: true,
-            reason: format!(
-                "sample interval {} ms (default)",
-                performance_monitor.sample_interval().as_millis()
-            ),
-        },
-        ConfigSubsystem {
-            name: "mumu_discovery".to_owned(),
-            enabled: discovery_bound,
-            reason: if discovery_bound {
-                format!(
-                    "instances bound by instance_index or instance_name: {}",
-                    inputs.instances_deferred_count
-                )
-            } else {
-                "no instance bound by instance_index or instance_name".to_owned()
-            },
-        },
-        ConfigSubsystem {
-            name: "emulator_control".to_owned(),
-            enabled: discovery_bound,
-            reason: if discovery_bound {
-                format!(
-                    "discovery-bound instances: {}",
-                    inputs.instances_deferred_count
-                )
-            } else {
-                "no discovery-bound instance".to_owned()
-            },
-        },
+        subsystem(
+            "device_diagnostic",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        subsystem(
+            "performance_monitor",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
+        subsystem("mumu_discovery", discovery_bound, discovery()),
+        subsystem("emulator_control", discovery_bound, discovery()),
         subsystem(
             "runtime_fact_snapshot",
             true,
-            "rides the performance monitor thread",
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
         env_overrides_subsystem(inputs.allow_env_overrides, inputs.ignored_env_overrides),
     ];
@@ -467,44 +441,44 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
     Ok(manifest)
 }
 
-fn subsystem(name: &str, enabled: bool, reason: &str) -> ConfigSubsystem {
+fn subsystem(name: &str, enabled: bool, outcome: Outcome) -> ConfigSubsystem {
     ConfigSubsystem {
         name: name.to_owned(),
         enabled,
-        reason: reason.to_owned(),
+        outcome,
     }
 }
 
-/// "configured" for a present section, otherwise the absence reason.
-const fn present(configured: bool, absent: &'static str) -> &'static str {
-    if configured { "configured" } else { absent }
+/// `config_subsystem_configured` for a present section, else `config_subsystem_section_absent`.
+const fn present(configured: bool) -> ActingdCode {
+    if configured {
+        ActingdCode::ConfigSubsystemConfigured
+    } else {
+        ActingdCode::ConfigSubsystemSectionAbsent
+    }
+}
+
+/// The state of a subsystem's flag as the file declares it.
+const fn flag_state(declared: Option<bool>) -> ActingdCode {
+    match declared {
+        Some(true) => ActingdCode::ConfigSubsystemConfigured,
+        Some(false) => ActingdCode::ConfigSubsystemConfiguredOff,
+        None => ActingdCode::ConfigSubsystemFlagAbsent,
+    }
 }
 
 /// `env_overrides` (Workflow #318 cfg3): enabled only when the file allows the
-/// `ACTINGCOMMAND_*` fallbacks. The reason names the flag's state and, when it is off,
-/// every set variable as `env_override_ignored:<VAR>`: the startup record of the warnings
-/// `check-config` prints.
-fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSubsystem {
-    let state = match declared {
-        Some(true) => "configured",
-        Some(false) => "configured off",
-        None => "flag absent",
-    };
-    let reason = if ignored.is_empty() {
-        state.to_owned()
-    } else {
-        let warnings = super::env_override_warnings(ignored)
-            .iter()
-            .map(super::env_override_warning_v1)
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{state}; {warnings}")
-    };
-    ConfigSubsystem {
-        name: "env_overrides".to_owned(),
-        enabled: declared == Some(true),
-        reason,
-    }
+/// `ACTINGCOMMAND_*` fallbacks. The outcome names the flag's state and, when it is off,
+/// carries every set variable as a `note` link of `env_override_ignored`: the startup record
+/// of the warnings `check-config` prints. The `config.subsystems` row names those variables
+/// under `ignored_variables`, so an ignored override is never silent.
+pub(crate) fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) -> ConfigSubsystem {
+    let outcome = super::env_override_warnings(ignored)
+        .into_iter()
+        .fold(Outcome::new(flag_state(declared)), |outcome, warning| {
+            outcome.link(CauseRelation::Note, warning)
+        });
+    subsystem("env_overrides", declared == Some(true), outcome)
 }
 
 /// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.

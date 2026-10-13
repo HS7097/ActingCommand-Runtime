@@ -118,6 +118,11 @@ actingcommand_contract::outcome_codes! {
         LedgerDumpUnsupported => "ledger_dump_unsupported": fatal / none,
         LedgerFlushDelayed => "ledger_flush_delayed": warning / none,
         LedgerFormatMarkerMismatch => "ledger_format_marker_mismatch": error / none,
+        /// Fatal. The database holds a format-1 ledger (written by v0.11, ledger revision 2);
+        /// ledger revision 3 refuses it after reading only its format, before any ledger row is
+        /// read or written and, at the Runtime's start, before the owner journal and the writer
+        /// lock (Workflow #378 A3, no compatibility path).
+        LedgerFormatUnsupported => "ledger_format_unsupported": fatal / none,
         LedgerIndexMismatch => "ledger_index_mismatch": error / none,
         LedgerInitializationConflict => "ledger_initialization_conflict": error / none,
         LedgerInsertIncomplete => "ledger_insert_incomplete": error / none,

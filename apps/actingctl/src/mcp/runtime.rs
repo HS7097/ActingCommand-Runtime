@@ -10,9 +10,10 @@ use super::tools::ToolError;
 use crate::codes::ActingctlCode;
 use actingcommand_contract::RuntimeErrorCode;
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::{EventActor, EventSource};
+use actingcommand_contract::{EventActor, EventSource, InstanceId};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,10 @@ use std::sync::Mutex;
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 pub(super) struct RuntimeAccess {
+    /// Train 4 review ruling on MCP-11: the `--root` this server was started with, as given;
+    /// `ac_packs` finds the selected configuration from it at every call, as `actingctl packs`
+    /// does from its own `--root`.
+    requested_root: Option<PathBuf>,
     root: Option<PathBuf>,
     install_root: Option<PathBuf>,
     config: Option<PathBuf>,
@@ -36,6 +41,9 @@ struct Slot {
     client: Option<RuntimeClient>,
     /// Counts connections; a cursor names the one it was issued on.
     generation: u64,
+    /// Workflow #389 MCP-1 (MCP-0 command table §2.5): the instance selectors this connection
+    /// resolved, to their instance_id; a new connection starts without any.
+    instances: HashMap<String, InstanceId>,
 }
 
 /// Where the install and the Runtime state live, as found at one call.
@@ -90,6 +98,7 @@ pub(super) struct Connected {
 
 impl RuntimeAccess {
     pub(super) fn new(root: Option<PathBuf>, state_root: Option<PathBuf>) -> Self {
+        let requested_root = root.clone();
         let located = (|| {
             let process = actingcommand_contract::process_installation()
                 .map_err(|error| error.code().as_str().to_owned())?;
@@ -154,6 +163,7 @@ impl RuntimeAccess {
             Err(error) => (None, None, None, None, Some(error)),
         };
         Self {
+            requested_root,
             root,
             install_root,
             config,
@@ -162,6 +172,11 @@ impl RuntimeAccess {
             state_root,
             slot: Mutex::new(Slot::default()),
         }
+    }
+
+    /// The `--root` this server was started with, as given (train 4 review ruling on MCP-11).
+    pub(super) fn requested_root(&self) -> Option<&Path> {
+        self.requested_root.as_deref()
     }
 
     /// `--root`, or two levels above the running executable when
@@ -216,6 +231,7 @@ impl RuntimeAccess {
         .map_err(|error| unavailable(&error, &state_root))?;
         slot.generation += 1;
         slot.client = Some(client.clone());
+        slot.instances.clear();
         Ok(Connected {
             client,
             generation: slot.generation,
@@ -234,6 +250,34 @@ impl RuntimeAccess {
             }
         }
         client_error(error)
+    }
+
+    /// The instance_id `selector` named when it was resolved on `connected`, while that is
+    /// still the server's connection (Workflow #389 MCP-1, §2.5).
+    pub(super) fn resolved_instance(
+        &self,
+        connected: &Connected,
+        selector: &str,
+    ) -> Option<InstanceId> {
+        let slot = lock(&self.slot);
+        if slot.generation == connected.generation {
+            slot.instances.get(selector).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Remembers what `selector` resolved to on `connected`, for that connection's lifetime.
+    pub(super) fn remember_instance(
+        &self,
+        connected: &Connected,
+        selector: &str,
+        instance_id: InstanceId,
+    ) {
+        let mut slot = lock(&self.slot);
+        if slot.generation == connected.generation {
+            slot.instances.insert(selector.to_owned(), instance_id);
+        }
     }
 
     /// A new connection with this origin, for one write and its job: (Cli, Cli) as actingctl,

@@ -64,6 +64,27 @@
       "distributed_adb_version": "37.0.1-15733141",
       "distributed_provenance": "The Windows exact-SHA build fetches the archive above from its official URL only, checks size, Google's SHA-1 and the sha256, extracts exactly distributed_files, checks each size and sha256, and requires `adb.exe version` to print `Version 37.0.1-15733141` (the build number is not in the repository XML). Recorded once on 2026-10-03, not checked in CI: adb.exe, AdbWinApi.dll and AdbWinUsbApi.dll with these sha256 values carry valid Authenticode signatures by CN=Google LLC, O=Google LLC, L=Mountain View, S=California, C=US, SERIALNUMBER=3582691 (EV fields), timestamped by DigiCert SHA256 RSA4096 Timestamp Responder 2025 1."
     },
+    "scrcpy-server-5.0.1": {
+      "kind": "download_files",
+      "version": "5.0.1",
+      "license": {
+        "id": "Apache-2.0",
+        "url": "https://github.com/Genymobile/scrcpy/blob/v5.0.1/LICENSE",
+        "redistribution": "embedded_in_runtime_executable_by_owner_decision",
+        "redistribution_note": "The owner approved pinning the official scrcpy server release, verifying its SHA-256 in CI and bundling it with the Runtime (#402 ruling, 2026-10-13). crates/device/build.rs embeds the verified file in actingcommand-actingd.exe; NOTICE.md and the Runtime artifact's RELEASE-NOTES.md carry the notice. This records the owner's decision; it is not a legal opinion."
+      },
+      "artifacts": [
+        {
+          "id": "scrcpy-server",
+          "url": "https://github.com/Genymobile/scrcpy/releases/download/v5.0.1/scrcpy-server-v5.0.1",
+          "relative_path": "scrcpy/scrcpy-server-v5.0.1",
+          "size": 733930,
+          "sha256": "764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536",
+          "hash_provenance": "official SHA-256: PREBUILT_SERVER_SHA256 in install_release.sh at tag v5.0.1 of Genymobile/scrcpy, equal to the SHA-256 digest GitHub reports for the release asset (read 2026-10-13); size as GitHub reports it"
+        }
+      ],
+      "embedded_provenance": "The Windows exact-SHA build fetches the asset from its official URL only, checks its size and the sha256 above, and names the verified file in ACTINGCOMMAND_SCRCPY_SERVER for the build; crates/device/build.rs checks the file against this pin again and embeds it in the device crate. Before every push to a device the scrcpy backend checks the embedded bytes, and the local copy it pushes, against the same sha256 (scrcpy_server_digest_mismatch)."
+    },
     "onnxruntime-gpu-1.24.4": {
       "kind": "download_zip",
       "version": "v1.24.4",

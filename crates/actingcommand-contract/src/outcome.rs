@@ -596,6 +596,16 @@ impl Code {
     pub const fn category(self) -> Category {
         self.category
     }
+
+    /// The registered code whose spelling another crate still relays as text (the A2-R bridge,
+    /// Workflow #378 A3): the catalog this build embeds gives its category. `None` when the
+    /// spelling is not registered, so a relay can never invent a code.
+    pub fn relayed(spelling: &'static str) -> Option<Self> {
+        check::code_category(spelling).map(|category| Self {
+            name: spelling,
+            category,
+        })
+    }
 }
 
 impl fmt::Debug for Code {
@@ -627,6 +637,12 @@ impl Location {
 
     pub const fn as_str(self) -> &'static str {
         self.name
+    }
+
+    /// The registered location whose spelling another crate still relays as text (the A2-R
+    /// bridge, Workflow #378 A3). `None` when the catalog this build embeds does not list it.
+    pub fn relayed(spelling: &'static str) -> Option<Self> {
+        check::location_registered(spelling).then_some(Self { name: spelling })
     }
 }
 
@@ -916,10 +932,38 @@ pub enum Detail {
 
 /// One result: a code with its category, typed values and nested links. The fields sit
 /// behind one box, so a `Result<_, Outcome>` (or a module error holding one) stays small.
-/// Equality ignores whether the outcome was received from another process.
-#[derive(Debug, Clone)]
+/// Equality ignores whether the outcome was received from another process. `Debug` shows every
+/// value except foreign text (`raw_text`), which records may hold at a sensitivity above the
+/// developer log's.
+#[derive(Clone)]
 pub struct Outcome {
     inner: Box<OutcomeInner>,
+}
+
+impl fmt::Debug for Outcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let values = self
+            .inner
+            .values
+            .iter()
+            .map(|(key, value)| {
+                let shown = if key == RAW_TEXT_KEY {
+                    JsonValue::String("<redacted>".to_owned())
+                } else {
+                    value.clone()
+                };
+                (key.as_str(), shown)
+            })
+            .collect::<Vec<_>>();
+        formatter
+            .debug_struct("Outcome")
+            .field("code", &self.inner.code)
+            .field("category", &self.inner.category)
+            .field("values", &values)
+            .field("causes", &self.inner.causes)
+            .field("causes_total", &self.inner.causes_total)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -931,6 +975,10 @@ struct OutcomeInner {
     causes_total: Option<u64>,
     /// Deserialised from another process: relayed unchanged, never checked as an emission.
     received: bool,
+    /// Built from a spelling another crate still relays as text (the A2-R bridge, Workflow #378
+    /// A3): the relay carries the code alone, so the code's required values are not checked
+    /// on this node until the channel is typed. Everything else is.
+    relayed: bool,
 }
 
 impl PartialEq for Outcome {
@@ -994,6 +1042,7 @@ impl Outcome {
             causes: Vec::new(),
             causes_total: None,
             received: false,
+            relayed: false,
         })
     }
 
@@ -1100,6 +1149,98 @@ impl Outcome {
             .iter()
             .map(|link| 1 + link.outcome.link_count())
             .sum()
+    }
+
+    /// The outcome of a code that arrives as its spelling: relayed by a crate whose channel is
+    /// not typed yet (the A2-R bridge), received from a client, or read back from a record. The
+    /// catalog this build embeds gives the category. A spelling it does not list stays visible:
+    /// it becomes `outcome_relay_unregistered`, carrying the spelling as `raw_code` when the
+    /// spelling is a token.
+    pub fn relayed(spelling: &str) -> Self {
+        match check::code_category(spelling) {
+            Some(category) => Self::from_inner(OutcomeInner {
+                code: CodeStr(Cow::Owned(spelling.to_owned())),
+                category,
+                values: Map::new(),
+                causes: Vec::new(),
+                causes_total: None,
+                received: false,
+                relayed: true,
+            }),
+            None => {
+                let outcome = Self::new(ContractCode::OutcomeRelayUnregistered);
+                if text_rule_broken(KeyKind::Token, spelling).is_none() {
+                    outcome.raw_code(spelling)
+                } else {
+                    outcome
+                }
+            }
+        }
+    }
+
+    /// The highest `raw_text_sensitivity` anywhere in the outcome; foreign text without a
+    /// declared sensitivity counts as `sensitive`. `None` when no node carries `raw_text`.
+    pub fn foreign_text_sensitivity(&self) -> Option<crate::Sensitivity> {
+        let own = self.inner.values.get(RAW_TEXT_KEY).map(|_| {
+            match self
+                .inner
+                .values
+                .get("raw_text_sensitivity")
+                .and_then(JsonValue::as_str)
+            {
+                Some("public") => crate::Sensitivity::Public,
+                Some("internal") => crate::Sensitivity::Internal,
+                Some("secret") => crate::Sensitivity::Secret,
+                _ => crate::Sensitivity::Sensitive,
+            }
+        });
+        self.inner
+            .causes
+            .iter()
+            .filter_map(|link| link.outcome.foreign_text_sensitivity())
+            .chain(own)
+            .max()
+    }
+
+    /// The codes-only projection of this outcome (model section 4.3): every node keeps its
+    /// code, category and relation, and only the values whose type is a registered name. It is
+    /// a projection, not an emission, so it is relayed unchanged like a received outcome.
+    pub fn codes_only(&self) -> Self {
+        fn project(outcome: &Outcome) -> Outcome {
+            Outcome::from_inner(OutcomeInner {
+                code: outcome.inner.code.clone(),
+                category: outcome.inner.category,
+                values: outcome
+                    .inner
+                    .values
+                    .iter()
+                    .filter(|(key, _)| key_kind(key).is_some_and(KeyKind::is_registered_name))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                causes: outcome
+                    .inner
+                    .causes
+                    .iter()
+                    .map(|link| Link {
+                        relation: link.relation.clone(),
+                        outcome: project(&link.outcome),
+                    })
+                    .collect(),
+                causes_total: outcome.inner.causes_total,
+                received: true,
+                relayed: false,
+            })
+        }
+        project(self)
+    }
+
+    /// Every code in the outcome, the top first, then its links depth first.
+    pub fn codes(&self) -> Vec<&CodeStr> {
+        let mut codes = vec![&self.inner.code];
+        for link in &self.inner.causes {
+            codes.extend(link.outcome.codes());
+        }
+        codes
     }
 }
 
@@ -1397,6 +1538,7 @@ fn received_links(links: Vec<WireLink>) -> Vec<Link> {
                 causes: received_links(link.causes),
                 causes_total: None,
                 received: true,
+                relayed: false,
             }),
         })
         .collect()
@@ -1441,6 +1583,7 @@ impl<'de> Deserialize<'de> for OutcomeEnvelope {
                 causes: received_links(wire.causes),
                 causes_total: wire.causes_total,
                 received: true,
+                relayed: false,
             }),
             detail,
         })
@@ -1472,6 +1615,7 @@ impl<'de> Deserialize<'de> for Outcome {
             causes: received_links(wire.causes),
             causes_total: wire.causes_total,
             received: true,
+            relayed: false,
         }))
     }
 }
@@ -1563,6 +1707,7 @@ fn rebuilt(
         causes,
         causes_total: outcome.inner.causes_total,
         received: outcome.inner.received,
+        relayed: outcome.inner.relayed,
     })
 }
 

@@ -350,7 +350,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         event.payload(),
         EventPayload::Task(TaskPayload::Semantic(payload))
             if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Cancelled,
                 executed_steps: Some(0),
                 ..
             })
@@ -444,7 +444,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         event.payload(),
         EventPayload::Task(TaskPayload::Semantic(payload))
             if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted {
-                outcome: TaskOutcome::Cancelled,
+                task_result: TaskOutcome::Cancelled,
                 executed_steps: Some(1),
                 ..
             })

@@ -192,7 +192,6 @@ pub enum TaskDiagnosticPageData {
         index: usize,
         page_id: String,
         matched: bool,
-        message: String,
         required_passed: usize,
         required_total: usize,
         any_of_passed: usize,
@@ -202,11 +201,12 @@ pub enum TaskDiagnosticPageData {
         forbidden_passed: usize,
         forbidden_total: usize,
     },
+    /// The page's error text is not persisted (ledger revision 3); `failed_target` names the
+    /// target whose recognition failed.
     Failed {
         phase: String,
         index: usize,
         page_id: String,
-        error: String,
         failed_target: Option<TaskDiagnosticTargetFailure>,
     },
 }
@@ -221,18 +221,23 @@ pub struct TaskDiagnosticTargetFailure {
     pub cause: TaskDiagnosticRecognitionError,
 }
 
+/// A recognition error: its severity and code as the recognition pack names them (A2-P
+/// registers these spellings); its text is not persisted (ledger revision 3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDiagnosticRecognitionError {
     pub severity: String,
     pub code: String,
-    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Box<crate::OcrRegionEvidence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<super::TemplateMatchTimingObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<Box<TaskDiagnosticSampleData>>,
+    /// Workflow #396 REC-1: the registered outcome of a text read that refused to conclude
+    /// (`text_read_budget_exceeded`, `text_read_blocks_truncated`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<crate::outcome::Outcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,12 +246,33 @@ pub struct TaskDiagnosticTargetData {
     pub id: String,
     pub kind: String,
     pub passed: bool,
-    pub message: String,
     pub template: Option<TaskDiagnosticTemplateData>,
     pub color: Option<TaskDiagnosticColorData>,
     pub source: TaskDiagnosticTargetSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<TaskDiagnosticSamplingData>,
+    /// Workflow #396 REC-1: why a target did not pass, when a registered reason exists
+    /// (`text_locate_not_found`, `text_locate_outside_cells`, and from REC-2
+    /// `target_match_not_unique`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::outcome::Outcome>,
+    /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique`; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniqueness: Option<TaskDiagnosticUniquenessData>,
+}
+
+/// Workflow #396 REC-2: the best match's score and the declared margin, in milli, and the
+/// second place within that margin when one exists (the target then did not pass).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticUniquenessData {
+    pub score_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_score_milli: Option<u32>,
+    pub margin_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_rect: Option<crate::OcrRegionRect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,7 +308,6 @@ pub enum TaskDiagnosticTargetSource {
         target_index: usize,
         target_id: String,
         passed: bool,
-        message: String,
     },
     Guard {
         phase: String,
@@ -347,6 +372,9 @@ pub enum TaskDiagnosticOcrData {
         matched_expected: Option<String>,
         match_mode: String,
         block_count: usize,
+        /// Workflow #396 REC-1: where a locate target found its text; absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        located: Option<TaskDiagnosticOcrLocatedData>,
     },
     Observed {
         phase: String,
@@ -358,6 +386,22 @@ pub enum TaskDiagnosticOcrData {
         block_count: usize,
         execution: Box<TaskDiagnosticOcrExecution>,
     },
+}
+
+/// Workflow #396 REC-1: the block a locate OCR target found, and the declared cell holding its
+/// center when the target declares cells. `block_index` is the block's `derived_rank` among
+/// the OCR row's block rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticOcrLocatedData {
+    pub block_index: usize,
+    pub rect: crate::OcrRegionRect,
+    pub confidence_milli: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_rect: Option<crate::OcrRegionRect>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -435,9 +479,10 @@ pub struct TaskDiagnosticNnRank {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum TaskDiagnosticErrorData {
+    /// The batch failure that ended page recognition (ledger revision 3; was `message`).
     Page {
         phase: String,
-        message: String,
+        outcome: crate::outcome::Outcome,
     },
     Recognition {
         phase: String,
@@ -453,10 +498,11 @@ pub enum TaskDiagnosticUnexecutedData {
         phase: String,
         page: TaskDiagnosticUnexecutedPage,
     },
+    /// Why the guard target was not evaluated (ledger revision 3; was `reason`).
     Guard {
         phase: String,
         target_id: Option<String>,
-        reason: String,
+        outcome: crate::outcome::Outcome,
     },
 }
 
@@ -465,7 +511,8 @@ pub enum TaskDiagnosticUnexecutedData {
 pub struct TaskDiagnosticUnexecutedPage {
     pub index: usize,
     pub page_id: String,
-    pub reason: String,
+    /// Why the page was not evaluated (ledger revision 3; was `reason`).
+    pub outcome: crate::outcome::Outcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,19 +576,20 @@ pub struct TaskTimingFailure {
 #[serde(tag = "execution", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskDiagnosticTerminalData {
     Returned {
-        outcome: crate::TaskOutcome,
+        task_result: crate::TaskOutcome,
         executed_steps: u32,
         final_page: Option<String>,
     },
+    /// The run's task failure (ledger revision 3; was `code` and `detail`).
     TaskError {
-        code: String,
-        detail: Option<String>,
+        outcome: crate::outcome::Outcome,
         executed_steps: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timing: Option<TaskTimingFailure>,
     },
+    /// The operation failure that ended the run (ledger revision 3; was `code`).
     OperationError {
-        code: String,
+        outcome: crate::outcome::Outcome,
         executed_steps: Option<u32>,
     },
 }

@@ -284,3 +284,40 @@ The existing strict codec, sanitizer, Sensitive native details and public summar
 already carry the closed capture-check enum and dimensions; no wire field or
 event type is added. This is a capture/layout observation, not a complete
 connection self-check or dispatch availability by itself.
+
+## Stream backends and frame freshness (#398 R1 RD-3i, #402 RD-3)
+
+`CaptureBackend::capture_fresh(floor)` acquires a frame that meets a
+`CaptureFloor { after, after_sequence }`. `after` is the host time the last
+input completed; `after_sequence` is the stream sequence of the frame delivered
+last. A contained task's capture passes the input's completion as the floor of
+the first capture after that input (even when it belongs to the next step), and
+otherwise the sequence of the frame it received last; the kernel hands the floor
+to the session's capture backend, and wrappers (the selected and the primed
+backend) forward it.
+
+A snapshot backend (`adb`, `droidcast_raw`, `nemu_ipc`, fixtures) acquires after
+the call, so every frame it returns meets any floor: `capture_fresh` is its
+`capture_timed`, the primed frame is returned exactly as before, and its frames
+carry no stream stamp. Nothing changes for emulators.
+
+A stream backend (`scrcpy`, real devices only, explicit selection only) keeps the
+latest decoded frame with a `FrameStreamStamp { sequence, device_pts_us,
+received_at }` (sequence 1, 2, … per open). It delivers a frame only when the
+frame is newer than `after_sequence` and, for `after`, arrived after it and was
+encoded no earlier: the encode time is estimated from the device presentation
+time plus the smallest arrival-minus-presentation difference in the offset window,
+less the configured margin (the conservative side). When no such frame arrives
+within its `fresh_wait`, the capture fails with `capture_frame_stale` and the step
+makes no input. A stream that ended fails at once with `scrcpy_stream_ended`; it
+never falls back to another backend. A primed stream frame goes back through the
+backend's own check when a floor is given.
+
+A stream frame must show the logical display pixel for pixel. When the display's
+sides are not multiples of the encoder alignment, the stream encodes a centred
+aligned crop and `observe_geometry` records it as `frame_transform: { "crop":
+{ x, y, width, height } }` in logical display pixels; the host compares such a
+frame with the recorded crop instead of the display's proportions. A frame that
+differs from its display without a recorded crop is judged as before. The stream
+is never downsampled: a stream of any other size is refused with
+`scrcpy_video_size_mismatch`.

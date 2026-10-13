@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::outcome::Record;
 use actingcommand_contract::{
-    DiscoveredInstanceObservation, ProviderBackend, ProviderNativeFailure,
+    DiscoveredInstanceObservation, LifecycleNativeDetail, ProviderBackend, ProviderNativeFailure,
     ProviderStartupObservation as Observation, ProviderStartupStage as Stage,
 };
 use actingcommand_device::{
-    DiscoveredMumuInstance, EmulatorCapability, EmulatorCapabilityAvailability,
-    EmulatorCapabilityProfile, MUMU_CAPABILITY_PROVIDER_ID, MumuDiscoveryReport,
-    MumuEmulatorCapabilityBackend,
+    DeviceError, DiscoveredMumuInstance, EmulatorCapability, EmulatorCapabilityAvailability,
+    EmulatorCapabilityProfile, MumuDiscoveryReport, MumuEmulatorCapabilityBackend,
 };
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_runtime_host::{
     DiscoveredInstanceBinding, ProviderStartup, RuntimeHostResult, admit_emulator_capabilities,
 };
-use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY};
+use actingcommand_vision_ffi::{ONNXRUNTIME_LIBRARY, VISION_RUNTIME_DIRECTORY, VisionListingCode};
 
 impl ConfiguredProvider {
     /// Provider startup: completes the discovery-bound instances, constructs the vision
@@ -65,9 +65,7 @@ impl ConfiguredProvider {
                 error.code(),
                 ProviderNativeFailure {
                     module: "actingcommand_runtime_host::provider".into(),
-                    code: error.code().into(),
-                    severity: "fatal".into(),
-                    message: "execution backend registration was refused".into(),
+                    outcome: Outcome::relayed(error.code()),
                 },
             )
         })?;
@@ -89,40 +87,22 @@ fn bind_discovered_instances(
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::InstanceDiscovery;
     startup.record(backend, Observation::Started { stage })?;
-    let mumu_root = discovery
-        .mumu_root()
-        .map_or_else(|| "<unset>".to_owned(), |root| root.display().to_string());
     let report = discovery.discover().map_err(|failure| {
         let InstanceDiscoveryFailure {
             code: classification,
             error,
         } = *failure;
-        let code = error
-            .nemu_resolution_context()
-            .map(|context| context.reason().as_str().to_owned())
-            .or_else(|| {
-                error.diagnostic().map(|diagnostic| {
-                    format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
-                })
-            })
-            .unwrap_or_else(|| "device_error".to_owned());
         startup.failed(
             backend,
             stage,
             classification,
             ProviderNativeFailure {
                 module: "actingcommand_device::mumu_manager".into(),
-                code,
-                severity: format!("{:?}", error.severity()).to_ascii_lowercase(),
-                message: format!(
-                    "mumu_root={mumu_root}; {}; diagnostic={}",
-                    error.message(),
-                    error.diagnostic_message().unwrap_or("unavailable")
-                ),
+                outcome: device_failure_outcome(&error, discovery.mumu_root()),
             },
         )
     })?;
-    let profile = admit_capability_profile(startup, &report, &mumu_root)?;
+    let profile = admit_capability_profile(startup, &report, discovery.mumu_root())?;
     let mut bound = BTreeMap::new();
     let mut resolved = Vec::new();
     let mut refusal = None;
@@ -167,13 +147,37 @@ fn bind_discovered_instances(
     Ok(resolved)
 }
 
+/// The outcome of a device-layer discovery failure (ledger revision 3): a Nemu resolution's
+/// registered reason, else `provider_native_failed` with the device failure's category, with
+/// the configured `mumu_root`; the device's own text is its `foreign_other_error` link. The
+/// Runtime's summary of the failure (`diagnostic_message`) and the stage are not persisted.
+fn device_failure_outcome(error: &DeviceError, mumu_root: Option<&Path>) -> Outcome {
+    let outcome = match (error.nemu_resolution_context(), error.diagnostic()) {
+        (Some(context), _) => Outcome::new(context.reason()),
+        (None, Some(diagnostic)) => {
+            Outcome::new(ActingdCode::ProviderNativeFailed).device_category(diagnostic.category())
+        }
+        (None, None) => Outcome::new(ActingdCode::ProviderNativeFailed),
+    };
+    let outcome = match mumu_root {
+        Some(root) => outcome.mumu_root(root),
+        None => outcome,
+    };
+    match LifecycleNativeDetail::bounded(error.message()) {
+        Some(native) => outcome.caused_by(native.outcome()),
+        None => outcome,
+    }
+}
+
 /// Admits the capability profile derived from the discovery report (pure, nothing is
 /// dispatched) and records it as one `capability_profile` observation inside a
-/// `capability_admission` bracket. A refusal is recorded before startup fails.
+/// `capability_admission` bracket. A refusal is recorded before startup fails, with the
+/// refused MuMuManager version and the configured `mumu_root`, and the host's refusal as its
+/// `caused_by` link (ledger revision 3).
 fn admit_capability_profile(
     startup: &mut ProviderStartup<'_>,
     report: &MumuDiscoveryReport,
-    mumu_root: &str,
+    mumu_root: Option<&Path>,
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::CapabilityAdmission;
@@ -187,18 +191,19 @@ fn admit_capability_profile(
         ],
     )
     .map_err(|error| {
+        let refused = Outcome::new(ActingdCode::EmulatorCapabilityAdmissionRefused)
+            .mumu_manager_version(report.version.to_string());
+        let refused = match mumu_root {
+            Some(root) => refused.mumu_root(root),
+            None => refused,
+        };
         startup.failed(
             backend,
             stage,
             ActingdCode::EmulatorCapabilityAdmissionRefused.as_str(),
             ProviderNativeFailure {
                 module: "actingcommand_runtime_host::emulator_control".into(),
-                code: error.code().into(),
-                severity: "fatal".into(),
-                message: format!(
-                    "mumu_root={mumu_root}; provider_id={MUMU_CAPABILITY_PROVIDER_ID}; version={}; {error}",
-                    report.version
-                ),
+                outcome: refused.caused_by(Outcome::relayed(error.code())),
             },
         )
     })?;
@@ -224,24 +229,6 @@ fn admit_capability_profile(
     Ok(profile)
 }
 
-fn render_discovered_instances(instances: &[&DiscoveredMumuInstance]) -> String {
-    let rendered = instances
-        .iter()
-        .map(|instance| {
-            format!(
-                "{{index={} name={:?} adb_host={:?} adb_port={:?} running={} player_state={:?}}}",
-                instance.instance_index,
-                instance.instance_name,
-                instance.adb_host,
-                instance.adb_port,
-                instance.running,
-                instance.player_state
-            )
-        })
-        .collect::<Vec<_>>();
-    format!("[{}]", rendered.join(", "))
-}
-
 /// A deferred instance's refusal: the startup failure code and the native failure it records.
 type DeferredRefusal = (Code, ProviderNativeFailure);
 
@@ -256,17 +243,24 @@ fn resolve_deferred_instance(
     let DeferredInstance {
         alias, key, config, ..
     } = entry;
-    let facts = format!(
-        "alias={alias} {key} source={} mumu_manager_path={} version={}",
-        report.source.as_str(),
-        report.mumu_manager_path.display(),
-        report.version
-    );
-    let failure = |code: &str, message: String| ProviderNativeFailure {
+    // Ledger revision 3: a refusal is its registered code with the instance's alias and the
+    // declared value as values, and what discovery reported for the instance as `instances`
+    // records (the candidates of an ambiguous name) or, for the adb path, `other_path`. The
+    // whole discovery is the `instance_discovery` record written before it; no Runtime text is
+    // kept.
+    let failure = |outcome: Outcome| ProviderNativeFailure {
         module: "actingd.config".into(),
-        code: code.into(),
-        severity: "fatal".into(),
-        message,
+        outcome,
+    };
+    let refused = |code: ActingdCode| Outcome::new(code).alias(alias.as_str());
+    let declared_key = |outcome: Outcome| match &key {
+        InstanceBindingKey::Index(index) => outcome.instance_index(*index),
+        InstanceBindingKey::Name(name) => outcome.instance_name(name.as_str()),
+    };
+    let discovered = |instance: &DiscoveredMumuInstance| {
+        Record::new()
+            .instance_index(instance.instance_index)
+            .instance_name(instance.instance_name.as_str())
     };
     let matches = report
         .instances
@@ -278,38 +272,22 @@ fn resolve_deferred_instance(
         .collect::<Vec<_>>();
     let instance = match matches.as_slice() {
         [] => {
-            let discovered = report.instances.iter().collect::<Vec<_>>();
             return Err((
                 ActingdCode::InstanceDiscoveryNoMatch.code(),
-                failure(
-                    "no_match",
-                    format!(
-                        "{facts}; discovered={}",
-                        render_discovered_instances(&discovered)
-                    ),
-                ),
+                failure(declared_key(refused(ActingdCode::InstanceDiscoveryNoMatch))),
             ));
         }
         [instance] => *instance,
-        _ => {
+        candidates => {
             return Err((
                 ActingdCode::InstanceDiscoveryAmbiguous.code(),
                 failure(
-                    "ambiguous",
-                    format!("{facts}; matches={}", render_discovered_instances(&matches)),
+                    declared_key(refused(ActingdCode::InstanceDiscoveryAmbiguous))
+                        .instances(candidates.iter().copied().map(discovered)),
                 ),
             ));
         }
     };
-    let discovered = format!(
-        "discovered index={} name={:?} running={} adb_host={:?} adb_port={:?} adb_path={}",
-        instance.instance_index,
-        instance.instance_name,
-        instance.running,
-        instance.adb_host,
-        instance.adb_port,
-        instance.adb_path.display()
-    );
     // Workflow #337: an instance whose `adb_path` is absent or names the install root's adb
     // uses that adb, which `ac_adb::require` verified before the ledger opened; any other
     // declared `adb_path` must be the discovered MuMu adb.
@@ -323,24 +301,13 @@ fn resolve_deferred_instance(
         && let Some(declared) = config.adb_path.as_deref()
         && !fs::canonicalize(declared).is_ok_and(|path| path == instance.adb_path)
     {
-        let accepted = match config.adb.installed() {
-            Some(installed) => format!(
-                "the discovered MuMu adb {} or this install root's adb {} (the default when adb_path is omitted)",
-                instance.adb_path.display(),
-                installed.path_string()
-            ),
-            None => format!(
-                "the discovered MuMu adb {} (the default when adb_path is omitted; the daemon does not run from an AC install root, so there is no AC adb)",
-                instance.adb_path.display()
-            ),
-        };
         return Err((
             ActingdCode::InstanceDiscoveryConflict.code(),
             failure(
-                ActingdCode::AdbPathConflict.as_str(),
-                format!(
-                    "{facts}; declared adb_path={declared:?}; {discovered}; accepted adb_path: {accepted}"
-                ),
+                refused(ActingdCode::AdbPathConflict)
+                    .adb_path(declared)
+                    .other_path(&instance.adb_path)
+                    .instances([discovered(instance)]),
             ),
         ));
     }
@@ -350,8 +317,9 @@ fn resolve_deferred_instance(
         return Err((
             ActingdCode::InstanceDiscoveryConflict.code(),
             failure(
-                ActingdCode::HostConflict.as_str(),
-                format!("{facts}; declared host={declared:?}; {discovered}"),
+                refused(ActingdCode::HostConflict)
+                    .adb_host(declared.trim())
+                    .instances([discovered(instance).adb_host(adb_host)]),
             ),
         ));
     }
@@ -363,19 +331,21 @@ fn resolve_deferred_instance(
             return Err((
                 ActingdCode::InstanceDiscoveryConflict.code(),
                 failure(
-                    ActingdCode::PortConflict.as_str(),
-                    format!("{facts}; declared port={declared}; {discovered}"),
+                    refused(ActingdCode::PortConflict)
+                        .adb_port(declared)
+                        .instances([discovered(instance).adb_port(adb_port)]),
                 ),
             ));
         }
+        // The instance is stopped, so a declared port cannot be cross-checked: omitting `port`
+        // binds it pending.
         (Some(declared), None) => {
             return Err((
                 ActingdCode::InstanceDiscoveryConflict.code(),
                 failure(
-                    ActingdCode::PortUnverifiable.as_str(),
-                    format!(
-                        "{facts}; declared port={declared}; {discovered}; the instance is stopped, so the declared port cannot be cross-checked: omit `port` to bind it pending"
-                    ),
+                    refused(ActingdCode::PortUnverifiable)
+                        .adb_port(declared)
+                        .instances([discovered(instance).running(instance.running)]),
                 ),
             ));
         }
@@ -394,12 +364,15 @@ fn resolve_deferred_instance(
             .adb_path
             .to_str()
             .ok_or_else(|| {
+                let refusal = refused(ActingdCode::AdbPathEncodingInvalid)
+                    .other_path(&instance.adb_path)
+                    .instances([discovered(instance)]);
                 (
                     SharedCode::InstanceDiscoveryUnavailable.code(),
-                    failure(
-                        ActingdCode::AdbPathEncodingInvalid.as_str(),
-                        format!("{facts}; {discovered}"),
-                    ),
+                    failure(match config.adb_path.as_deref() {
+                        Some(declared) => refusal.adb_path(declared),
+                        None => refusal,
+                    }),
                 )
             })?
             .to_owned(),
@@ -413,12 +386,7 @@ fn resolve_deferred_instance(
     let adb_port = instance.adb_port;
     let registration = config
         .device_registration(adb_path, adb_host, adb_port)
-        .map_err(|code| {
-            (
-                code,
-                failure(code.as_str(), format!("{facts}; {discovered}")),
-            )
-        })?;
+        .map_err(|code| (code, failure(Outcome::new(code))))?;
     let registration = match adb_port {
         Some(_) => registration.with_discovered_binding(binding),
         None => registration.with_pending_discovered_binding(binding),
@@ -446,9 +414,10 @@ fn assemble_vision_provider(
             refusal.code.as_str(),
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                code: refusal.code.as_str().into(),
-                severity: "fatal".into(),
-                message: refusal.message,
+                outcome: match refusal.cause {
+                    Some(cause) => Outcome::new(refusal.code).caused_by(cause),
+                    None => Outcome::new(refusal.code),
+                },
             },
         )
     })?;
@@ -519,17 +488,17 @@ fn assemble_vision_provider(
             },
         )?;
     }
-    // An invalid folder's name or path may not be UTF-8; its fact carries the lossy form.
+    // Ledger revision 3: an invalid folder is its registered code with the folder's path (lossy
+    // when it is not UTF-8) and its name when the name fits the key table's name rule (at most
+    // 256 bytes, no control character); vision-ffi's reason stays in check-config's report.
     for folder in &inventory.listing.invalid {
-        startup.record(
-            backend,
-            Observation::Binding {
-                field: format!("invalid_model:{}", folder.name),
-                configured: format!("invalid: {}", folder.reason),
-                base: models_dir.clone(),
-                resolved: folder.path.to_string_lossy().into_owned(),
-            },
-        )?;
+        let outcome = Outcome::new(VisionListingCode::VisionModelFolderInvalid).path(&folder.path);
+        let outcome = if folder.name.len() <= 256 && !folder.name.chars().any(char::is_control) {
+            outcome.model_name(folder.name.as_str())
+        } else {
+            outcome
+        };
+        startup.record(backend, Observation::ModelFolderInvalid { outcome })?;
     }
     if inventory.listing.ocr.is_empty() {
         startup.record(ProviderBackend::FastdeployPpocr, Observation::NotConfigured)?;
@@ -549,11 +518,13 @@ fn assemble_vision_provider(
             backend,
             stage,
             ActingdCode::VisionProviderUnavailable.as_str(),
+            // Ledger revision 3: the kernel error's code is the refusal's `caused_by` link
+            // (relayed: the vision provider's codes are registered with B4); its text is the
+            // Runtime's own and is not kept.
             ProviderNativeFailure {
                 module: "execution-kernel".into(),
-                code: format!("{:?}", error.code()),
-                severity: "fatal".into(),
-                message: error.message().into(),
+                outcome: Outcome::new(ActingdCode::VisionProviderUnavailable)
+                    .caused_by(Outcome::relayed(error.code().as_str())),
             },
         )
     })?;
@@ -574,9 +545,7 @@ fn text(
             ActingdCode::VisionProviderPathEncodingInvalid.as_str(),
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                code: ActingdCode::PathEncodingInvalid.as_str().into(),
-                severity: "fatal".into(),
-                message: format!("{value:?}"),
+                outcome: Outcome::new(ActingdCode::PathEncodingInvalid),
             },
         )
     })
@@ -602,4 +571,172 @@ fn binding(
             resolved,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::IdentifierIssuer;
+    use actingcommand_device::{MumuManagerSource, MumuManagerVersion, mumu_capability_profile};
+    use serde_json::{Value, json};
+    use std::path::PathBuf;
+
+    /// A discovery of four instances: one running, one stopped (no ADB endpoint) and two
+    /// sharing a name.
+    fn discovery_report() -> MumuDiscoveryReport {
+        let version = MumuManagerVersion::parse("6.5.7.0").expect("a four-part version");
+        let instance =
+            |instance_index: u16, name: &str, port: Option<u16>| DiscoveredMumuInstance {
+                install_root: PathBuf::from("C:/fixture"),
+                mumu_manager_path: PathBuf::from("C:/fixture/nx_main/MuMuManager.exe"),
+                adb_path: PathBuf::from("C:/fixture/nx_main/adb.exe"),
+                instance_index,
+                instance_name: name.to_owned(),
+                adb_host: port.map(|_| "127.0.0.1".to_owned()),
+                adb_port: port,
+                running: port.is_some(),
+                player_state: port.map(|_| "start_finished".to_owned()),
+                android_version: Some("12".to_owned()),
+                mumu_version: version,
+            };
+        MumuDiscoveryReport {
+            source: MumuManagerSource::ExplicitRoot,
+            mumu_manager_path: PathBuf::from("C:/fixture/nx_main/MuMuManager.exe"),
+            version,
+            registry_display_version: None,
+            instances: vec![
+                instance(0, "neutral-a", Some(16384)),
+                instance(1, "neutral-b", None),
+                instance(2, "neutral-dup", Some(16448)),
+                instance(3, "neutral-dup", Some(16480)),
+            ],
+        }
+    }
+
+    /// The one deferred instance of a configuration whose instance declares `binding`.
+    fn deferred_instance(binding: Value) -> DeferredInstance {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let mut instance = json!({
+            "alias": "neutral.deferred", "instance_id": id.transport(),
+            "application_id": "neutral.application", "connect": false,
+            "touch_backend": "adb_shell_input", "capture_backend": "adb"
+        });
+        for (key, value) in binding.as_object().expect("binding fields") {
+            instance[key] = value.clone();
+        }
+        let config = serde_json::from_value::<ActingdConfigFile>(json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [instance]
+        }))
+        .expect("typed config");
+        let mut deferred = config
+            .assemble()
+            .expect("runtime assembly")
+            .provider
+            .deferred;
+        assert_eq!(deferred.len(), 1, "one discovery-bound instance");
+        deferred.remove(0)
+    }
+
+    /// Workflow #378 A3 (acceptance CA-H1, CA-M1): each deferred-instance refusal records its
+    /// registered code with the instance's alias and the declared value as values, and what
+    /// discovery reported for the instance as `instances` records (the candidates of an
+    /// ambiguous name) or, for the adb path, `other_path`. Nothing else is recorded: no serial
+    /// and no Runtime text.
+    #[test]
+    fn a_deferred_instance_refusal_records_the_alias_and_the_declared_and_discovered_values() {
+        let report = discovery_report();
+        let profile = mumu_capability_profile(&report).expect("admitted capability profile");
+        let declared_adb = "C:/fixture/other/adb.exe";
+        let cases = [
+            (
+                json!({"instance_index": 7}),
+                ActingdCode::InstanceDiscoveryNoMatch,
+                ActingdCode::InstanceDiscoveryNoMatch,
+                json!({"alias": "neutral.deferred", "instance_index": 7}),
+            ),
+            (
+                json!({"instance_name": "neutral-dup"}),
+                ActingdCode::InstanceDiscoveryAmbiguous,
+                ActingdCode::InstanceDiscoveryAmbiguous,
+                json!({
+                    "alias": "neutral.deferred",
+                    "instance_name": "neutral-dup",
+                    "instances": [
+                        {"instance_index": 2, "instance_name": "neutral-dup"},
+                        {"instance_index": 3, "instance_name": "neutral-dup"}
+                    ]
+                }),
+            ),
+            (
+                json!({"instance_index": 0, "adb_path": declared_adb}),
+                ActingdCode::InstanceDiscoveryConflict,
+                ActingdCode::AdbPathConflict,
+                json!({
+                    "alias": "neutral.deferred",
+                    "adb_path": declared_adb,
+                    "other_path": "C:/fixture/nx_main/adb.exe",
+                    "instances": [{"instance_index": 0, "instance_name": "neutral-a"}]
+                }),
+            ),
+            (
+                json!({"instance_index": 0, "host": "localhost"}),
+                ActingdCode::InstanceDiscoveryConflict,
+                ActingdCode::HostConflict,
+                json!({
+                    "alias": "neutral.deferred",
+                    "adb_host": "localhost",
+                    "instances": [
+                        {"instance_index": 0, "instance_name": "neutral-a", "adb_host": "127.0.0.1"}
+                    ]
+                }),
+            ),
+            (
+                json!({"instance_index": 0, "port": 16416}),
+                ActingdCode::InstanceDiscoveryConflict,
+                ActingdCode::PortConflict,
+                json!({
+                    "alias": "neutral.deferred",
+                    "adb_port": 16416,
+                    "instances": [
+                        {"instance_index": 0, "instance_name": "neutral-a", "adb_port": 16384}
+                    ]
+                }),
+            ),
+            (
+                json!({"instance_index": 1, "port": 16416}),
+                ActingdCode::InstanceDiscoveryConflict,
+                ActingdCode::PortUnverifiable,
+                json!({
+                    "alias": "neutral.deferred",
+                    "adb_port": 16416,
+                    "instances": [
+                        {"instance_index": 1, "instance_name": "neutral-b", "running": false}
+                    ]
+                }),
+            ),
+        ];
+        for (binding, startup_code, refusal, values) in cases {
+            let label = refusal.as_str();
+            let Err((code, failure)) =
+                resolve_deferred_instance(deferred_instance(binding), &report, &profile)
+            else {
+                panic!("{label}: the deferred instance must be refused");
+            };
+            assert_eq!(code, startup_code.code(), "{label}");
+            assert!(failure.outcome.is(refusal), "{label}: {}", failure.outcome);
+            assert_eq!(
+                Value::Object(failure.outcome.values().clone()),
+                values,
+                "{label}"
+            );
+            assert!(failure.outcome.causes().is_empty(), "{label}");
+        }
+    }
 }

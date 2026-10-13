@@ -679,6 +679,57 @@ fn session_instance_registry_rejects_invalid_configured_backend() {
     );
 }
 
+// Workflow #398 RD-1a T7 (model-398 v1.1 §3.5 rule 8): the instance list and registry say that
+// a serial is configured and give the instance's label, never the serial.
+#[test]
+fn session_instance_list_and_registry_show_a_label_instead_of_the_serial() {
+    let _guard = env_lock();
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.json");
+    set_config_env(&config_path);
+
+    let mut config = UserConfig::default();
+    config.instances.insert(
+        "neutral".to_string(),
+        InstanceConfig {
+            serial: Some("TESTSERIAL0001".to_string()),
+            ..Default::default()
+        },
+    );
+    write_user_config(&config).unwrap();
+
+    let list = run_cli(["--json", "session", "instance", "list"], true);
+    let registry = run_cli(["--json", "session", "instance", "registry"], true);
+    set_missing_config_env();
+
+    for result in [&list, &registry] {
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        let text = serde_json::to_string(data).unwrap();
+        assert!(!text.contains("TESTSERIAL0001"), "{text}");
+        assert!(
+            !text.to_ascii_lowercase().contains("testserial0001"),
+            "{text}"
+        );
+        let instance = data
+            .get("instances")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("neutral"))
+            .unwrap();
+        assert!(instance.get("serial").is_none(), "{instance}");
+        assert_eq!(
+            instance.get("serial_configured").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            instance.get("device_label").and_then(Value::as_str),
+            Some("handset:neutral")
+        );
+    }
+}
+
 #[test]
 fn capabilities_are_offline() {
     // Specification: Workflow #97 P6 CAPABILITY-TRUTH-v1.
@@ -2436,42 +2487,6 @@ fn package_validate_accepts_matching_external_hash() {
 }
 
 #[test]
-fn package_validate_rejects_mismatched_external_hash() {
-    let temp = TempDir::new().unwrap();
-    let zip = temp.path().join("bundle.zip");
-    write_test_zip(
-        &zip,
-        &[
-            (
-                "module/manifest.json",
-                br#"{"schema_version":"0.2"}"#.as_slice(),
-            ),
-            (
-                "module/operations/task/task.json",
-                br#"{"id":"task"}"#.as_slice(),
-            ),
-            ("module/operations/resources.json", br#"{}"#.as_slice()),
-        ],
-    );
-
-    let result = run_cli(
-        [
-            "--json",
-            "package",
-            "validate",
-            "--zip",
-            zip.to_str().unwrap(),
-            "--expected-sha256",
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        ],
-        true,
-    );
-
-    assert_eq!(result.exit_code(), 2);
-    assert!(result.envelope_json().contains("hash mismatch"));
-}
-
-#[test]
 fn package_validate_rejects_bare_external_hash_flag() {
     let temp = TempDir::new().unwrap();
     let zip = temp.path().join("bundle.zip");
@@ -2712,7 +2727,7 @@ fn bare_instance_argument_is_used_as_adb_serial_without_config_entry() {
     };
     let (_adb_dir, config) = user_config_with_test_adb();
     let resolved = device_config(&global, &config).expect("device config");
-    assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
+    assert_eq!(resolved.adb_serial.as_deref(), Some("127.0.0.1:16416"));
 }
 
 #[test]
@@ -2733,7 +2748,7 @@ fn device_config_uses_instance_capture_backend_default() {
 
     let resolved = device_config(&global, &config).expect("device config");
 
-    assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
+    assert_eq!(resolved.adb_serial.as_deref(), Some("127.0.0.1:16416"));
     assert_eq!(resolved.capture_backend, CaptureBackendChoice::NemuIpc);
 }
 

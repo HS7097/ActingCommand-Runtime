@@ -9,18 +9,15 @@ use actingcommand_contract::resource_declaration::{
 };
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
-    ContainedTaskRequest, ContentDirectory, ContentDirectoryVersion, InstanceId,
-    InstanceResourcePackage, InstanceResourcePackageKind, PackageRef, RuntimeConfigManifest,
-    digest_named,
+    ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
+    PackageRef, RuntimeConfigManifest,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
+    DeviceSerial, DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{
-    ExternalExpectedSha256, PreparedContainedTask, prerequisite_package_id_valid,
-};
+use actingcommand_execution_kernel::{PreparedContainedTask, prerequisite_package_id_valid};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -37,7 +34,6 @@ use actingcommand_vision_ffi::{
     VisionModelListing, VisionRuntimeSpec, list_vision_models,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -48,6 +44,8 @@ use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
 mod manifest;
+#[cfg(test)]
+pub(crate) use manifest::env_overrides_subsystem;
 mod provider_startup;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
@@ -460,6 +458,9 @@ pub(super) struct VisionInventory {
 pub(super) struct VisionRefusal {
     pub(super) code: Code,
     pub(super) message: String,
+    /// The foreign failure behind the refusal, when the OS reported one (ledger revision 3:
+    /// the provider startup record carries it as the refusal's `caused_by` link).
+    pub(super) cause: Option<Outcome>,
 }
 
 impl ConfiguredVision {
@@ -491,6 +492,10 @@ impl ConfiguredVision {
                 "vision root {} is unavailable: {error}",
                 configured.display()
             ),
+            cause: Some(Outcome::from_io_error(
+                &error,
+                actingcommand_contract::outcome::IoOp::Canonicalize,
+            )),
         })?;
         if let Some(install_root) = &self.install_root
             && ["A", "B"]
@@ -504,12 +509,14 @@ impl ConfiguredVision {
                     root.display(),
                     install_root.display()
                 ),
+                cause: None,
             });
         }
         let models_dir = root.join(VISION_MODELS_DIRECTORY);
         let listing = list_vision_models(&models_dir).map_err(|error| VisionRefusal {
             code: VisionListingCode::VisionRootUnavailable.code(),
             message: error.message().to_owned(),
+            cause: error.os_cause().cloned(),
         })?;
         let runtime = VisionRuntimeSpec::from_vision_root(
             &root,
@@ -519,11 +526,13 @@ impl ConfiguredVision {
         .map_err(|error| VisionRefusal {
             code: ActingdCode::VisionRuntimeUnavailable.code(),
             message: error.message().to_owned(),
+            cause: error.os_cause().cloned(),
         })?;
         if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
             return Err(VisionRefusal {
                 code: VisionListingCode::VisionModelsEmpty.code(),
                 message: format!("{} holds no model folder", models_dir.display()),
+                cause: None,
             });
         }
         Ok(VisionInventory {
@@ -746,9 +755,9 @@ struct InstanceConfig {
 
 /// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
 /// locator (relative paths resolve against the configuration file's directory) and the
-/// bare lowercase hex digest. A locator whose last segment is that same digest names a
-/// content directory (Workflow #288) and yields its `ContentDirectory` reference; any other
-/// locator keeps the ZIP digest. Nothing is opened or hashed at assembly.
+/// bare lowercase hex digest. Workflow #336 PKG-S1: the locator's path chooses the loader and
+/// no name is read as an identity; the digest is only recorded, as the request's reference,
+/// until PKG-S4 removes the key. Nothing is opened or hashed at assembly.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
@@ -766,14 +775,7 @@ impl StartupPackageConfigFile {
         if !path.is_absolute() {
             return Err(ActingdCode::StartupPackagePathInvalid.code());
         }
-        let digest = if digest_named(&path) == Some(self.expected_sha256.as_str()) {
-            PackageRef::ContentDirectory(ContentDirectory {
-                schema_version: ContentDirectoryVersion::V1,
-                sha256: self.expected_sha256,
-            })
-        } else {
-            PackageRef::from(self.expected_sha256)
-        };
+        let digest = PackageRef::from(self.expected_sha256);
         if digest.validate().is_err() {
             return Err(ActingdCode::StartupPackageDigestInvalid.code());
         }
@@ -804,9 +806,6 @@ pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) provider: ConfiguredProvider,
     pub(super) policy: Option<PolicyBootstrap>,
-    /// Workflow #397: `policy.monitor`, resolved; every default without a `policy` section,
-    /// where no policy monitor runs.
-    pub(super) policy_monitor: PolicyMonitorSettings,
     /// The manifest handed to `host`; `check-config` prints it.
     pub(super) manifest: RuntimeConfigManifest,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
@@ -855,12 +854,11 @@ impl std::fmt::Display for ResourcePackageRejection {
 }
 
 /// Admits every configured `resource_package`, identically for `check-config` and daemon
-/// startup: the path must exist (`resource_package_missing`); a file must be read by the
-/// contained-task package loader exactly as `task-run` admits one, with the file's own
-/// digest as the expected one (`resource_package_invalid`). A directory whose name is a
-/// content digest (Workflow #288) is admitted the same way against the `ContentDirectory`
-/// reference of that name; any other directory is confirmed to exist only, since the field
-/// carries no reference for it, so `check-config` lists it as not checked.
+/// startup: the path must exist (`resource_package_missing`); a directory or a file must be
+/// admitted by the contained-task package loader exactly as `task-run` admits one, by its path
+/// and structurally (`resource_package_invalid`). Workflow #336 PKG-S1: no digest is computed
+/// or compared and no name is read as an identity; the field carries no reference, so none is
+/// recorded.
 pub(super) fn validate_resource_packages(
     configured: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, InstanceResourcePackage>, ResourcePackageRejection> {
@@ -897,34 +895,8 @@ pub(super) fn validate_resource_packages(
             )
         };
         let kind = if metadata.is_dir() {
-            if let Some(digest) = digest_named(&path) {
-                let expected = PackageRef::ContentDirectory(ContentDirectory {
-                    schema_version: ContentDirectoryVersion::V1,
-                    sha256: digest.to_owned(),
-                });
-                PreparedContainedTask::load_path(
-                    alias,
-                    &path,
-                    &expected,
-                    None,
-                    Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
-                )
-                .map_err(loader_refused)?;
-            }
             InstanceResourcePackageKind::Directory
         } else if metadata.is_file() {
-            let bytes = fs::read(&path).map_err(|error| {
-                invalid(SharedCode::PackageReadFailed.as_str(), error.to_string())
-            })?;
-            let expected =
-                ExternalExpectedSha256::parse_hex(&format!("{:x}", Sha256::digest(&bytes)))
-                    .map_err(|error| {
-                        invalid(
-                            SharedCode::PackageReferenceInvalid.as_str(),
-                            error.to_string(),
-                        )
-                    })?;
-            PreparedContainedTask::load(alias, &bytes, expected).map_err(loader_refused)?;
             InstanceResourcePackageKind::File
         } else {
             return Err(rejected(
@@ -933,6 +905,14 @@ pub(super) fn validate_resource_packages(
                 None,
             ));
         };
+        PreparedContainedTask::load_path(
+            alias,
+            &path,
+            &PackageRef::default(),
+            None,
+            Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
+        )
+        .map_err(loader_refused)?;
         admitted.insert(
             alias.clone(),
             InstanceResourcePackage {
@@ -1054,10 +1034,10 @@ pub(super) fn load_for(
     }
     let bytes = match installation {
         Some(selected) => selected.config_bytes().map_err(|error| error.code())?,
-        None => fs::read(path).map_err(|_| ActingdCode::ConfigReadFailed.code())?,
+        None => fs::read(path).map_err(|_| SharedCode::ConfigReadFailed.code())?,
     };
     let mut config = serde_json::from_slice::<ActingdConfigFile>(&bytes)
-        .map_err(|_| ActingdCode::ConfigDecodeFailed.code())?;
+        .map_err(|_| SharedCode::ConfigDecodeFailed.code())?;
     config.source_root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1323,10 +1303,6 @@ impl ActingdConfigFile {
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
-        let policy_monitor = policy
-            .as_ref()
-            .map(|policy| policy.monitor.settings)
-            .unwrap_or_default();
         let policy = if let Some(policy) = policy {
             // Workflow #369 E3 (#670 ruling 1): a restart closes a scheduled dispatch whose run
             // was cut before its first task event; the host tells them apart by these refs.
@@ -1350,7 +1326,6 @@ impl ActingdConfigFile {
             host,
             provider,
             policy,
-            policy_monitor,
             manifest,
             resource_packages,
             ignored_env_overrides,
@@ -1369,9 +1344,11 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
         .collect()
 }
 
-/// The text one env-override warning has in `check-config`'s v1 `warnings` and in the
-/// `env_overrides` manifest subsystem reason, `env_override_ignored:<VAR>`. The one boundary of
-/// that text: A3 and A6a replace both places with the outcome itself.
+/// The text one env-override warning has in `check-config`'s v1 `warnings`,
+/// `env_override_ignored:<VAR>`: the one boundary of that text, which A6a replaces with the
+/// outcome itself. Since ledger revision 3 the startup record carries the warnings as `note`
+/// links of the `env_overrides` subsystem's outcome, and its `config.subsystems` row names the
+/// variables under `ignored_variables` (never silent).
 pub(super) fn env_override_warning_v1(warning: &Outcome) -> String {
     let variable = warning
         .value("variable")
@@ -1846,7 +1823,17 @@ impl InstanceConfig {
         ) {
             return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
+        // #398 R1 §5.1 (RD-3i): scrcpy is selectable on a real device only.
+        if !capture_requested.allowed_on(self.device_kind()) {
+            return Err(ActingdCode::DeviceConfigInvalid.code());
+        }
         Ok((requested, capture_requested))
+    }
+
+    /// #398 R1 §3.1: the instance's device kind. RD-1b adds the key `device.kind`; until then
+    /// every configured instance is an emulator.
+    fn device_kind(&self) -> DeviceKind {
+        DeviceKind::Emulator
     }
 
     fn device_backend(self) -> Result<InstanceSpec, Code> {
@@ -1911,8 +1898,11 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
         let target = DeviceTarget {
-            serial: self.serial,
+            serial: self
+                .serial
+                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
             host,
             port: port.unwrap_or(0),
             connect,
@@ -2271,11 +2261,19 @@ mod tests {
         use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
         use actingcommand_runtime_host::RuntimeHost;
 
-        for (capture, endpoint) in [
-            (false, "127.0.0.1:16384"),
-            (true, "198.51.100.42:16416"),
-            (true, "[2001:db8::42]:16416"),
-            (true, "device.example.test:16416"),
+        // Workflow #398 RD-1a: a configured serial is bound for the whole test process and
+        // redacted wherever it appears, so the serial rows are neutral fake serials. A target
+        // configured by host and port is labelled `HOST:PORT` and kept as it is, so the address
+        // forms (IPv4, IPv6, host name) are rows configured that way (train 3 review fix).
+        for (capture, by_serial, endpoint) in [
+            (false, true, "TESTSERIAL0006"),
+            (true, true, "TESTSERIAL0007"),
+            (true, true, "TESTSERIAL0008"),
+            (true, true, "TESTSERIAL0009"),
+            (false, false, "127.0.0.1:16384"),
+            (true, false, "198.51.100.42:16416"),
+            (true, false, "[2001:db8::42]:16416"),
+            (true, false, "device.example.test:16416"),
         ] {
             let root = TempDir::new().expect("tempdir");
             let id = IdentifierIssuer::new()
@@ -2283,17 +2281,25 @@ mod tests {
                 .mint_instance_id()
                 .expect("instance id");
             let missing_adb = root.path().join("missing-adb.exe");
+            let mut instance = json!({
+                "alias": "neutral.device", "instance_id": id.transport(),
+                "application_id": "neutral.application", "adb_path": missing_adb,
+                "connect": false,
+                "touch_backend": "adb_shell_input", "capture_backend": "adb"
+            });
+            if by_serial {
+                instance["serial"] = json!(endpoint);
+            } else {
+                let (host, port) = endpoint.rsplit_once(':').expect("HOST:PORT");
+                instance["host"] = json!(host);
+                instance["port"] = json!(port.parse::<u16>().expect("port"));
+            }
             let value = json!({
                 "schema_version": CONFIG_SCHEMA_VERSION,
                 "state_root": root.path(),
                 "bind_host": "127.0.0.1", "bind_port": 0,
                 "secret_fingerprint_salt": "0123456789abcdef",
-                "instances": [{
-                    "alias": "neutral.device", "instance_id": id.transport(),
-                    "application_id": "neutral.application", "adb_path": missing_adb,
-                    "serial": endpoint, "connect": false,
-                    "touch_backend": "adb_shell_input", "capture_backend": "adb"
-                }]
+                "instances": [instance]
             });
             let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
             let assembly = config.assemble().expect("runtime assembly");
@@ -2348,21 +2354,33 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(failures.len(), 1);
             let failure = failures[0];
+            // Ledger revision 3: the native cause is a link of the failure's outcome that
+            // carries the device's text as `raw_text`.
+            fn foreign_text(
+                outcome: &actingcommand_contract::outcome::Outcome,
+            ) -> Option<&actingcommand_contract::outcome::Outcome> {
+                if outcome.value("raw_text").is_some() {
+                    return Some(outcome);
+                }
+                outcome
+                    .causes()
+                    .iter()
+                    .find_map(|link| foreign_text(link.outcome()))
+            }
             let details = events
                 .iter()
                 .filter_map(|event| {
-                    let EventPayload::Runtime(RuntimePayload::Failed(outcome)) = event.payload()
+                    let EventPayload::Runtime(RuntimePayload::Failed(payload)) = event.payload()
                     else {
                         return None;
                     };
-                    outcome
-                        .lifecycle_failure()
-                        .filter(|detail| detail.native_detail().is_some())
-                        .map(|detail| (event, detail))
+                    let lifecycle = payload.lifecycle_failure()?;
+                    foreign_text(payload.outcome())
+                        .map(|native| (event, payload, lifecycle, native))
                 })
                 .collect::<Vec<_>>();
             assert_eq!(details.len(), 1, "one private native cause per operation");
-            let (event, lifecycle) = details[0];
+            let (event, payload, lifecycle, native) = details[0];
             assert_eq!(lifecycle.entered_event_id(), Some(*failure.event_id()));
             assert_eq!(
                 event.links().correlation_id(),
@@ -2381,20 +2399,28 @@ mod tests {
                 }
             );
             assert_eq!(detail.operation(), "ensure_device");
+            // Ledger revision 3: the device's text is foreign text, declared sensitive.
             assert_eq!(
-                detail.declared_sensitivity(),
-                if capture {
-                    Sensitivity::Sensitive
-                } else {
-                    Sensitivity::Internal
-                }
+                payload.outcome().foreign_text_sensitivity(),
+                Some(Sensitivity::Sensitive)
             );
-            let native = lifecycle.native_detail().expect("native cause");
-            assert!(!native.truncated());
-            assert!(native.text().contains("failed to spawn adb"));
-            assert!(native.text().contains(endpoint));
+            assert!(native.value("raw_text_truncated").is_none());
+            let text = native
+                .value("raw_text")
+                .and_then(serde_json::Value::as_str)
+                .expect("native cause");
+            assert!(text.contains("failed to spawn adb"));
+            // Workflow #398 RD-1a (model-398 v1.1 §3.5 rules 2 and 4): a configured serial
+            // reaches the native cause only as its label token; a `HOST:PORT` target keeps its
+            // address there, as before.
+            if by_serial {
+                assert!(!text.contains(endpoint));
+                assert!(text.contains("[device:handset:neutral.device]"));
+            } else {
+                assert!(text.contains(endpoint));
+            }
             if !capture {
-                assert!(native.text().contains("child_operation=ensure_device"));
+                assert!(text.contains("child_operation=ensure_device"));
             }
             let public = serde_json::to_string(&event.payload().public_projection())
                 .expect("public payload");
@@ -2429,12 +2455,17 @@ mod tests {
             }]
         });
         for (configured, enabled, source, reason) in [
-            (None, true, ConfigParameterSource::Default, "flag absent"),
+            (
+                None,
+                true,
+                ConfigParameterSource::Default,
+                ActingdCode::ConfigSubsystemFlagAbsent,
+            ),
             (
                 Some(false),
                 false,
                 ConfigParameterSource::Explicit,
-                "configured off",
+                ActingdCode::ConfigSubsystemConfiguredOff,
             ),
         ] {
             let mut value = value.clone();
@@ -2560,7 +2591,7 @@ mod tests {
                 .find(|subsystem| subsystem.name == "frame_retention")
                 .expect("frame retention subsystem");
             assert_eq!(retention.enabled, enabled);
-            assert_eq!(retention.reason, reason);
+            assert_eq!(retention.outcome, Outcome::new(reason));
             let parameter = assembly
                 .manifest
                 .parameters
@@ -2728,6 +2759,36 @@ mod tests {
         );
     }
 
+    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance is refused as
+    /// `device_config_invalid` (every configured instance is an emulator until RD-1b adds
+    /// `device.kind`).
+    #[test]
+    fn scrcpy_capture_on_an_emulator_instance_is_refused() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "node.a",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "touch_backend": "maatouch",
+                "capture_backend": "scrcpy"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err().map(Code::as_str),
+            Some(ActingdCode::DeviceConfigInvalid.as_str())
+        );
+    }
+
     #[test]
     fn fixture_backend_is_device_free_and_has_a_bounded_input_budget() {
         let id = IdentifierIssuer::new()
@@ -2810,20 +2871,38 @@ mod tests {
             b"",
         )
         .expect("runtime placeholder");
+        // Ledger revision 3 (acceptance CA-M1): a `models` entry that is a file, so listing it
+        // fails with an OS error.
+        fs::create_dir_all(root.path().join("models-file")).expect("vision root fixture");
+        fs::write(root.path().join("models-file").join("models"), b"").expect("models file");
         let vision = |root: &str| json!({"execution_provider": "cpu", "root": root});
-        for (index, vision, expected) in [
+        // Each refusal with the `io_op` of the `foreign_os_error` link it carries, if any.
+        for (index, vision, expected, os_link) in [
             (
                 0,
                 Some(vision("missing-root")),
                 Some("vision_root_unavailable"),
+                Some("canonicalize"),
             ),
             (
                 1,
                 Some(vision("no-runtime")),
                 Some("vision_runtime_unavailable"),
+                None,
             ),
-            (2, Some(vision("no-models")), Some("vision_models_empty")),
-            (3, None, None),
+            (
+                2,
+                Some(vision("no-models")),
+                Some("vision_models_empty"),
+                None,
+            ),
+            (
+                4,
+                Some(vision("models-file")),
+                Some("vision_root_unavailable"),
+                Some("read_dir"),
+            ),
+            (3, None, None, None),
         ] {
             let state_root = root.path().join(format!("state-{index}"));
             let mut config = serde_json::from_value::<ActingdConfigFile>(json!({
@@ -2887,12 +2966,35 @@ mod tests {
                     panic!("native failure missing")
                 };
                 assert!(!failure.module.is_empty());
-                assert!(!failure.code.is_empty());
-                assert!(!failure.message.is_empty());
+                // Ledger revision 3: the native failure is the refusal's outcome; the OS text
+                // of an unavailable root is its foreign link, never public.
+                assert_eq!(Some(failure.outcome.code().as_str()), expected);
+                // The OS error behind a refusal is its `caused_by` link, as `foreign_os_error`
+                // with the failed I/O verb.
+                let os_links = failure
+                    .outcome
+                    .causes()
+                    .iter()
+                    .filter(|link| link.outcome().code().as_str() == "foreign_os_error")
+                    .map(|link| {
+                        link.outcome()
+                            .value("io_op")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(os_links, os_link.map(Some).into_iter().collect::<Vec<_>>());
                 let public =
                     serde_json::to_string(&provider_terminal.0.payload().public_projection())
                         .expect("public projection");
-                assert!(!public.contains(&failure.message));
+                for link in failure.outcome.causes() {
+                    if let Some(text) = link
+                        .outcome()
+                        .value("raw_text")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        assert!(!public.contains(text));
+                    }
+                }
                 assert!(!snapshot.events().iter().any(|event| matches!(
                     event.event_type(),
                     EventType::RuntimeStarted | EventType::RuntimeTakeover

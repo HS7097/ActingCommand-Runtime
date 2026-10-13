@@ -124,8 +124,9 @@ pub enum PackageRef {
     ContentDirectory(ContentDirectory),
 }
 
-// Older policy payloads can omit the binding. Keep them decodable; every
-// admission/recovery validation rejects this unresolved value.
+// Older policy payloads can omit the binding. Keep them decodable; every recovery validation
+// rejects this unresolved value. Workflow #336 PKG-S1: package admission only records a
+// reference, so a caller with none to record (an instance resource package) passes this one.
 impl Default for PackageRef {
     fn default() -> Self {
         Self::LegacyZipSha256(String::new())
@@ -159,17 +160,13 @@ impl PackageRef {
         }
     }
 
+    /// The ZIP digest a legacy reference carries. Workflow #336 PKG-S1: a reference no longer
+    /// chooses how a package is read; containment reads every package by its path.
     pub fn legacy_sha256(&self) -> Option<&str> {
         match self {
             Self::LegacyZipSha256(value) => Some(value),
             Self::GitSourceTree(_) | Self::ContentDirectory(_) => None,
         }
-    }
-
-    /// The locator is handed to containment, which reads it by path (a directory or a content
-    /// container file, Workflow #336), rather than read here as a ZIP file.
-    pub fn is_directory_source(&self) -> bool {
-        matches!(self, Self::GitSourceTree(_) | Self::ContentDirectory(_))
     }
 
     pub fn parse_argument(value: &str) -> RuntimeContractResult<Self> {
@@ -262,28 +259,11 @@ fn lower_hex(value: &str) -> bool {
         .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-/// The final path segment when it has the digest form (64 lowercase hex digits).
-pub fn digest_named(path: &std::path::Path) -> Option<&str> {
-    path.file_name()?
-        .to_str()
-        .filter(|name| name.len() == 64 && lower_hex(name))
-}
-
-/// Workflow #336: the final path segment without its content container extension (`.zip` or
-/// `.json`, ASCII case-insensitive) when what remains has the digest form.
-pub fn digest_named_stem(path: &std::path::Path) -> Option<&str> {
-    let (stem, extension) = path.file_name()?.to_str()?.rsplit_once('.')?;
-    (["zip", "json"]
-        .iter()
-        .any(|container| extension.eq_ignore_ascii_case(container))
-        && stem.len() == 64
-        && lower_hex(stem))
-    .then_some(stem)
-}
-
 /// The single `content-directory.v1` digest: SHA-256 over the domain line followed by one
 /// `<hex sha256 of the bytes>  <path>\n` line per regular file, ordered by the UTF-8 bytes
 /// of the `/`-separated relative path. Callers supply distinct, already admitted paths.
+/// Workflow #336 PKG-S1: no admission computes or compares it; only the designated measuring
+/// and authoring callers use it.
 pub fn content_directory_digest<'a>(
     files: impl IntoIterator<Item = (&'a str, [u8; 32])>,
 ) -> String {

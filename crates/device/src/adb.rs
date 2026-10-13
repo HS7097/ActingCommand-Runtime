@@ -20,7 +20,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-mod recovery;
+pub(crate) mod recovery;
 pub use recovery::{
     AdbCommandEvidence, AdbRecoveryPath, AdbRecoveryPhase, AdbRecoveryStep, AdbRecoveryText,
     AdbTargetRecovery, AdbTransportState, MAX_ADB_RECOVERY_STEPS, MAX_ADB_RECOVERY_TEXT_BYTES,
@@ -669,8 +669,8 @@ fn activity_record_package(record: &str) -> Option<String> {
 
 /// Workflow #191 E1: every line the parser can read (all three markers) plus dumpsys' own
 /// exit status, so "no marker" stays `Ok(None)` and a failed dumpsys stays an error.
-const FOREGROUND_QUERY: &str = "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc=";
-const FOREGROUND_STATUS: &str = "ac_dumpsys_rc=";
+pub(crate) const FOREGROUND_QUERY: &str = "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc=";
+pub(crate) const FOREGROUND_STATUS: &str = "ac_dumpsys_rc=";
 
 /// The filtered query's verdict: the text before the last status marker is parsed, a
 /// missing or non-integer status and a non-zero dumpsys status are errors.

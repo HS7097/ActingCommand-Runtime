@@ -13,7 +13,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
     };
     use actingcommand_device::{
         AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureMumuContext,
-        CaptureSelectionContext, DeviceTarget, InputSelectionContext, MaaTouchConfig,
+        CaptureSelectionContext, DeviceSerial, DeviceTarget, InputSelectionContext, MaaTouchConfig,
         MumuInstallSource, TouchBackendChoice, TouchBackendConfig, TouchBackendName,
     };
     use actingcommand_recognition_pack::{
@@ -369,38 +369,43 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .count(),
                 usize::from(matches!(mode, 0 | 4 | 7))
             );
-            // The client carries only the host code; the native detail is in the target ledger.
-            let native = ledger
+            // The client carries only the host code; the cause is in the target ledger. Ledger
+            // revision 3 (#378 A3): the lifecycle failure's outcome names it as a link (the
+            // ledger's `ledger_prefix_beyond_head`); the store's own sentence is not persisted.
+            let failures = ledger
                 .events()
                 .iter()
                 .filter_map(|event| match event.payload() {
                     EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(
                         outcome,
-                    )) => outcome
-                        .lifecycle_failure()
-                        .and_then(|lifecycle| lifecycle.native_detail())
-                        .map(|detail| detail.text().to_owned()),
+                    )) if outcome.lifecycle_failure().is_some() => Some(outcome.outcome()),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
             if mode == 6 {
-                let expected = format!(
-                    "through_sequence {} exceeds head {source_head}",
-                    binding.through_sequence + 100_000
-                );
                 assert!(
-                    native.iter().any(|text| text.contains(&expected)),
-                    "{native:?}"
+                    failures.iter().any(|outcome| {
+                        outcome.code().as_str() == "saved_source_incomplete"
+                            && outcome
+                                .codes()
+                                .iter()
+                                .any(|code| code.as_str() == "ledger_prefix_beyond_head")
+                    }),
+                    "{failures:?}"
                 );
             }
             if mode == 8 {
                 let artifact = serde_json::to_string(&binding.artifact.artifact_id).unwrap();
                 let expected = format!("no eviction recorded through head {source_head}");
+                // Ledger revision 3 (#378 A3): the failed read's native text is `raw_text` on a
+                // foreign link of the lifecycle failure's outcome.
                 assert!(
-                    native
-                        .iter()
-                        .any(|text| text.contains(&artifact) && text.contains(&expected)),
-                    "{native:?}"
+                    failures.iter().any(|outcome| {
+                        outcome_raw_texts(outcome)
+                            .iter()
+                            .any(|text| text.contains(&artifact) && text.contains(&expected))
+                    }),
+                    "{failures:?}"
                 );
             }
         }
@@ -533,8 +538,9 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .transition_capture_after_input
             .store(successful, Ordering::Release);
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target = DeviceTarget {
-            serial: Some("127.0.0.1:16384".to_owned()),
+            serial: Some(DeviceSerial::handset("TESTSERIAL0003", "neutral.instance")),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -831,7 +837,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 value["observations"][0]["frame_id"]
             );
             let terminals = events.iter().filter(|event| matches!(event.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { outcome: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
+                if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result: TaskOutcome::Failure, .. }))).collect::<Vec<_>>();
             assert_eq!(terminals.len(), 1);
             assert_eq!(terminals[0].links().run_id(), Some(&projection.run_id()));
             assert!(host.fatal_error().unwrap().is_none());
@@ -898,8 +904,12 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             mumu: None,
         });
         let configured_instance = instance_id();
+        // A neutral fake serial: a bound serial is redacted for the whole test process.
         let target_config = DeviceTarget {
-            serial: Some("neutral-recovery".to_owned()),
+            serial: Some(DeviceSerial::handset(
+                "TESTSERIAL0004",
+                "fixture01.instance",
+            )),
             ..DeviceTarget::default()
         };
         let adb = AdbConfig {
@@ -1152,8 +1162,8 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     .iter()
                     .filter(|fact| matches!(fact,
                         TaskSemanticFact::EntryRecognition {
-                            phase: TaskEntryRecognitionPhase::Initial, required_page, matched,
-                        } if required_page == "neutral/home" && *matched == starts_home
+                            phase: TaskEntryRecognitionPhase::Initial, required_pages, matched, ..
+                        } if required_pages == &["neutral/home"] && *matched == starts_home
                     ))
                     .count(),
                 1
@@ -1169,10 +1179,10 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                     | TaskSemanticFact::StepStarted { .. }
             )));
             assert!(facts.iter().any(|fact| matches!(fact,
-                TaskSemanticFact::EntryTargetDisposition { disposition, failure_code }
-                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && failure_code.is_none())
+                TaskSemanticFact::EntryTargetDisposition { disposition, outcome }
+                    if (*disposition == TaskEntryTargetDisposition::Started && starts_home && outcome.is_none())
                         || (*disposition == TaskEntryTargetDisposition::FailClosed && !starts_home
-                            && failure_code.as_deref() == Some("contained_task_home_entry_not_matched"))
+                            && outcome.as_ref().map(|outcome| outcome.code().as_str()) == Some("contained_task_home_entry_not_matched"))
             )));
         }
         let terminals = events
@@ -1196,7 +1206,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(matches!(
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
+                    task_result: TaskOutcome::Success,
                     executed_steps: Some(0),
                     ..
                 }
@@ -1309,7 +1319,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             assert!(matches!(
                 terminals[0].1,
                 TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
+                    task_result: TaskOutcome::Failure,
                     executed_steps: Some(0),
                     ..
                 }
