@@ -353,8 +353,9 @@ fn a_full_frame_single_template_search_prints_its_time() {
             elapsed.as_millis()
         ));
     }
-    // Written past the test harness's capture, so that the CI log shows it.
-    std::io::stderr()
+    // Written to stdout past the test harness's capture, so that the CI log shows it; Runtime
+    // crates never write to stderr (`runtime_domain_never_writes_stderr`).
+    std::io::stdout()
         .write_all(report.as_bytes())
         .expect("benchmark report");
 }
