@@ -228,7 +228,7 @@ fn gate_record_stop_refuses_a_page_that_does_not_match_its_own_frame() {
         "{details}"
     );
     let after: Value =
-        serde_json::from_slice(&fs::read(&file).expect("recording file")).expect("recording");
+        serde_json::from_slice(&fs::read(file).expect("recording file")).expect("recording");
     assert_eq!(after["status"], "active");
     assert!(after["artifact"].is_null(), "{}", after["artifact"]);
 }

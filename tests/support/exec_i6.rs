@@ -188,7 +188,7 @@ pub fn write_pack(directory: &Path, pack: &I6Pack) {
             });
         fs::create_dir_all(path.parent().expect("fixture file parent")).expect("fixture directory");
         fs::write(
-            &path,
+            path,
             serde_json::to_vec_pretty(&value).expect("fixture JSON"),
         )
         .expect("fixture file");
