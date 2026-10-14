@@ -2,6 +2,7 @@
 
 //! Candidate durable medium. Typed semantics remain in EventStore/GlobalLedger.
 
+use super::index::{IndexChange, IndexRows};
 use super::projection::EventIndexes;
 use super::read_only::check_read_budget;
 use super::retention::{LedgerOpenTiming, elapsed_ms};
@@ -653,8 +654,9 @@ pub(super) fn open_formal(
     };
     let mut store = EventStore::recovered(backend, next, events)?;
     // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
-    // left is imported after the ledger is verified and before any new record.
-    if let Err(error) = store.attach_write_failure(config.write_failure.clone()) {
+    // left is imported after the ledger is verified and before any new record; AO-2 (§10, §12
+    // step 5): then the previous epoch's unconfirmed tail.
+    if let Err(error) = store.open_running(&config, stale.is_some()) {
         return Err(error.with_close_result(store.backend.close()));
     }
     if let Some(owner) = stale
@@ -903,8 +905,9 @@ impl SqliteLedgerStore {
         };
         let mut store = Self::recovered(backend, next, events)?;
         // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
-        // running Runtime's writer does (`contracts/ledger-observer.md` §9).
-        if let Err(error) = store.attach_write_failure(config.write_failure.clone()) {
+        // running Runtime's writer does (`contracts/ledger-observer.md` §9); AO-2: and records
+        // the previous epoch's unconfirmed tail (§10).
+        if let Err(error) = store.open_running(&config, stale_owner.is_some()) {
             return Err(error.with_close_result(store.backend.close()));
         }
         if let Some(previous_owner) = stale_owner
@@ -918,25 +921,51 @@ impl SqliteLedgerStore {
 }
 
 impl SqliteStorage {
-    fn persist_joint(
+    /// Workflow #383 AO-2 (`contracts/ledger-observer.md` §8.1, §11.4): one transaction commits
+    /// `events` (consecutive, from the head's next sequence), their index rows and, for a joint
+    /// record, its state work, under `sync`. The head moves only once the commit returned.
+    fn persist_batch_rows(
         &mut self,
-        event: &PersistedEvent,
+        events: &[PersistedEvent],
+        rows: &IndexRows,
         work: Option<&dyn super::LedgerTransactionWork>,
         sync: CommitSync,
     ) -> GlobalLedgerResult<Option<u64>> {
-        let next = increment_sequence(event.sequence())?;
-        if event.sequence() != increment_sequence(self.head)? {
-            return Err(failure(
-                LedgerCode::SequenceDiscontinuity.code(),
-                LedgerLocation::AppendSqliteEvent.location(),
+        let (Some(first), Some(last)) = (events.first(), events.last()) else {
+            return Ok(None);
+        };
+        if work.is_some() && events.len() != 1 {
+            return Err(GlobalLedgerError::request(
+                LedgerCode::LedgerJointTransactionUnsupported.code(),
+                LedgerLocation::AppendTransaction.location(),
             ));
         }
-        let projected = project_record(&self.database, event, self.head_hash.as_deref())?;
+        let mut expected = increment_sequence(self.head)?;
+        for event in events {
+            if event.sequence() != expected {
+                return Err(failure(
+                    LedgerCode::SequenceDiscontinuity.code(),
+                    LedgerLocation::AppendSqliteEvent.location(),
+                ));
+            }
+            expected = increment_sequence(expected)?;
+        }
+        let next = increment_sequence(last.sequence())?;
+        let projected = project_batch(&self.database, events, self.head_hash.as_deref())?;
+        let last_hash = projected
+            .last()
+            .map(|record| record.hash.clone())
+            .ok_or_else(|| {
+                failure(
+                    LedgerCode::SequenceDiscontinuity.code(),
+                    LedgerLocation::AppendSqliteEvent.location(),
+                )
+            })?;
         let started = Instant::now();
         let mut connection = self
             .database
             .connection(LedgerLocation::AppendSqliteEvent.location())?;
-        // An observational event commits under NORMAL for this one transaction; FULL is
+        // An observational batch commits under NORMAL for this one transaction; FULL is
         // restored and read back on every exit before the guard is released.
         if sync == CommitSync::Normal
             && let Err(error) = self
@@ -956,7 +985,7 @@ impl SqliteStorage {
         }
         let previous_meta = meta_row_with_marker(
             &self.database,
-            event.sequence(),
+            first.sequence(),
             self.head,
             self.head_hash.as_deref(),
             &self.marker,
@@ -964,11 +993,20 @@ impl SqliteStorage {
         let meta = meta_row_with_marker(
             &self.database,
             next,
-            event.sequence(),
-            Some(&projected.hash),
+            last.sequence(),
+            Some(&last_hash),
             &self.marker,
         );
-        let attempt = self.commit_joint(&mut connection, event, work, &projected, &meta);
+        let attempt = self.commit_batch(
+            &mut connection,
+            &BatchRows {
+                events,
+                projected: &projected,
+                rows,
+                meta: &meta,
+            },
+            work,
+        );
         let restored = match sync {
             CommitSync::Full => Ok(()),
             CommitSync::Normal => self.database.set_commit_sync(&connection, CommitSync::Full),
@@ -976,14 +1014,14 @@ impl SqliteStorage {
         let commit_failure = match attempt {
             JointCommit::Committed => {
                 if let Err(restore) = restored {
-                    // The event is committed but the connection stays refused; the head
+                    // The batch is committed but the connection stays refused; the head
                     // does not advance and the failure does not establish absence.
                     let mut failed = GlobalLedgerError::from(restore);
                     failed.detail = Some(match failed.detail.take() {
                         Some(detail) => {
-                            format!("committed sequence={}; {detail}", event.sequence())
+                            format!("committed sequence={}; {detail}", last.sequence())
                         }
-                        None => format!("committed sequence={}", event.sequence()),
+                        None => format!("committed sequence={}", last.sequence()),
                     });
                     return Err(failed);
                 }
@@ -997,7 +1035,7 @@ impl SqliteStorage {
         if let Some(mut original) = commit_failure {
             // The consumed transaction/guard must be released before any readback.
             drop(connection);
-            if let Some(work) = work {
+            if let (Some(work), Some(record)) = (work, projected.first()) {
                 let observed: GlobalLedgerResult<&str> = (|| {
                     let mut connection = self
                         .database
@@ -1013,8 +1051,8 @@ impl SqliteStorage {
                         Instant::now() + std::time::Duration::from_secs(2),
                     ));
                     let mut bytes = 0;
-                    let sequence = encode(event.sequence());
-                    let rows = read_rows(
+                    let sequence = encode(first.sequence());
+                    let event_rows = read_rows(
                         &snapshot,
                         &format!(
                             "SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence={sequence}"
@@ -1051,14 +1089,14 @@ impl SqliteStorage {
                             failed
                         })?;
                     check_read_budget(budget, bytes, 0)?;
-                    let observed = if rows == vec![projected.event.clone()]
-                        && links == vec![projected.links.clone()]
-                        && artifacts == projected.artifacts
+                    let observed = if event_rows == vec![record.event.clone()]
+                        && links == vec![record.links.clone()]
+                        && artifacts == record.artifacts
                         && observed_meta == meta
                         && state == super::TransactionStateObservation::Applied
                     {
                         "committed"
-                    } else if rows.is_empty()
+                    } else if event_rows.is_empty()
                         && links.is_empty()
                         && artifacts.is_empty()
                         && observed_meta == previous_meta
@@ -1085,21 +1123,26 @@ impl SqliteStorage {
         let elapsed = Instant::now()
             .checked_duration_since(started)
             .and_then(|value| u64::try_from(value.as_nanos()).ok());
-        self.head = event.sequence();
-        self.head_hash = Some(projected.hash);
+        self.head = last.sequence();
+        self.head_hash = Some(last_hash);
+        // Workflow #383 AO-2: a test gate may observe each committed batch and its sync level.
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::write_fault::committed_batch(
+            self.database.root(),
+            events.iter().map(PersistedEvent::sequence).collect(),
+            sync == CommitSync::Full,
+        );
         // The common store updates indexes/statistics only after this durable return.
         Ok(elapsed)
     }
 
-    /// Begin through commit of one event transaction on the caller's guard; the caller
-    /// restores the commit synchronization afterwards, whatever the outcome.
-    fn commit_joint(
+    /// Begin through commit of one batch transaction on the caller's guard; the caller restores
+    /// the commit synchronization afterwards, whatever the outcome.
+    fn commit_batch(
         &self,
         connection: &mut Connection,
-        event: &PersistedEvent,
+        batch: &BatchRows<'_>,
         work: Option<&dyn super::LedgerTransactionWork>,
-        projected: &ProjectedRecord,
-        meta: &SqlRow,
     ) -> JointCommit {
         let transaction = match connection.transaction_with_behavior(TransactionBehavior::Immediate)
         {
@@ -1113,10 +1156,11 @@ impl SqliteStorage {
         };
         let prepared: GlobalLedgerResult<()> = (|| {
             let current = read_meta_columns(&transaction, self.meta_has_marker, None, &mut 0)?;
+            let first = batch.events.first().map_or(0, PersistedEvent::sequence);
             if current
                 != meta_row_with_marker(
                     &self.database,
-                    event.sequence(),
+                    first,
                     self.head,
                     self.head_hash.as_deref(),
                     &self.marker,
@@ -1127,19 +1171,21 @@ impl SqliteStorage {
                     LedgerLocation::AppendSqliteEvent.location(),
                 ));
             }
-            insert_row(
-                &transaction,
-                "ledger_events",
-                EVENT_COLUMNS,
-                &projected.event,
-            )?;
-            insert_row(&transaction, "ledger_links", LINK_COLUMNS, &projected.links)?;
-            for artifact in &projected.artifacts {
-                insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
+            for projected in batch.projected {
+                insert_row(
+                    &transaction,
+                    "ledger_events",
+                    EVENT_COLUMNS,
+                    &projected.event,
+                )?;
+                insert_row(&transaction, "ledger_links", LINK_COLUMNS, &projected.links)?;
+                for artifact in &projected.artifacts {
+                    insert_row(&transaction, "ledger_artifacts", ARTIFACT_COLUMNS, artifact)?;
+                }
             }
             let changed = transaction.execute(
             "UPDATE ledger_meta SET schema_version=?2,next_sequence=?3,head_sequence=?4,head_record_sha256=?5,storage_backend=?6,migration_id=?7,cutover_state=?8,integer_encoding=?9,integrity_tag=?10,migration_record=?11 WHERE singleton=?1",
-            params_from_iter(meta.iter()),
+            params_from_iter(batch.meta.iter()),
         ).map_err(|error| sql_error(error, LedgerLocation::UpdateSqliteHead.location()))?;
             if changed != 1 {
                 return Err(failure(
@@ -1147,7 +1193,8 @@ impl SqliteStorage {
                     LedgerLocation::UpdateSqliteHead.location(),
                 ));
             }
-            if let Some(work) = work {
+            write_index_rows(&transaction, batch)?;
+            if let (Some(work), Some(event)) = (work, batch.events.first()) {
                 work.apply(&self.database.borrow_transaction(&transaction), event)
                     .map_err(GlobalLedgerError::work_failure)?;
             }
@@ -1183,6 +1230,141 @@ impl SqliteStorage {
             )),
         }
     }
+}
+
+/// One batch's rows: its records, their projections, the index rows they change and the head
+/// they leave.
+struct BatchRows<'a> {
+    events: &'a [PersistedEvent],
+    projected: &'a [ProjectedRecord],
+    rows: &'a IndexRows,
+    meta: &'a SqlRow,
+}
+
+/// The projections of a batch, each record chained to the one before it.
+fn project_batch(
+    database: &RuntimeDatabase,
+    events: &[PersistedEvent],
+    head_hash: Option<&str>,
+) -> GlobalLedgerResult<Vec<ProjectedRecord>> {
+    let mut previous = head_hash.map(str::to_owned);
+    let mut projected = Vec::with_capacity(events.len());
+    for event in events {
+        let record = project_record(database, event, previous.as_deref())?;
+        previous = Some(record.hash.clone());
+        projected.push(record);
+    }
+    Ok(projected)
+}
+
+// The positions of the `ledger_links` columns (LINK_COLUMNS) the index reads.
+const LINK_REQUEST_ID: usize = 2;
+const LINK_ACTION_ID: usize = 9;
+// The positions of the `ledger_events` columns (EVENT_COLUMNS) the index reads.
+const EVENT_SEQUENCE: usize = 0;
+const EVENT_ID: usize = 1;
+
+/// Workflow #383 AO-2 (`contracts/ledger-observer.md` §11.1, §11.4): the batch's index rows, in
+/// its transaction. A `state`, `open`, `request` or `lifecycle` row is overwritten by its key's
+/// latest record; an intent's result deletes the `open` rows of the intents with its action id;
+/// the `request` rows keep the latest `request_index_records`.
+fn write_index_rows(connection: &Connection, batch: &BatchRows<'_>) -> GlobalLedgerResult<()> {
+    let mut requests = false;
+    for change in batch.rows.changes() {
+        match change {
+            IndexChange::State { key, at } => {
+                upsert_index_row(connection, batch, "state", SqlValue::Text(key.clone()), *at)?;
+            }
+            IndexChange::Open { at } => {
+                let key = column(&batch.projected[*at].event, EVENT_ID)?;
+                upsert_index_row(connection, batch, "open", key, *at)?;
+            }
+            IndexChange::Close { at } => {
+                let action = column(&batch.projected[*at].links, LINK_ACTION_ID)?;
+                connection
+                    .execute(
+                        "DELETE FROM ledger_index WHERE role='open' AND sequence IN (SELECT sequence FROM ledger_links WHERE action_id=?1)",
+                        params_from_iter([action]),
+                    )
+                    .map_err(|error| {
+                        sql_error(error, LedgerLocation::LedgerIndexRows.location())
+                    })?;
+            }
+            IndexChange::Request { at } => {
+                let key = column(&batch.projected[*at].links, LINK_REQUEST_ID)?;
+                upsert_index_row(connection, batch, "request", key, *at)?;
+                requests = true;
+            }
+            IndexChange::Lifecycle { slot, at } => {
+                upsert_index_row(
+                    connection,
+                    batch,
+                    "lifecycle",
+                    SqlValue::Text(slot.key().to_owned()),
+                    *at,
+                )?;
+            }
+        }
+    }
+    if requests {
+        let skip = i64::try_from(batch.rows.request_ring().saturating_sub(1)).unwrap_or(i64::MAX);
+        connection
+            .execute(
+                "DELETE FROM ledger_index WHERE role='request' AND sequence < (SELECT sequence FROM ledger_index WHERE role='request' ORDER BY sequence DESC LIMIT 1 OFFSET ?1)",
+                params_from_iter([skip]),
+            )
+            .map_err(|error| sql_error(error, LedgerLocation::LedgerIndexRows.location()))?;
+    }
+    Ok(())
+}
+
+fn upsert_index_row(
+    connection: &Connection,
+    batch: &BatchRows<'_>,
+    role: &'static str,
+    key: SqlValue,
+    at: usize,
+) -> GlobalLedgerResult<()> {
+    let projected = &batch.projected[at];
+    let source = batch.events[at]
+        .capture()
+        .and_then(|capture| capture.source);
+    let lineage = source
+        .and_then(|source| super::index::id_text(&source.lineage))
+        .map_or(SqlValue::Null, SqlValue::Text);
+    let revision = source.map_or(SqlValue::Null, |source| {
+        SqlValue::Integer(encode(source.revision))
+    });
+    let changed = connection
+        .execute(
+            "INSERT INTO ledger_index (role,key,sequence,event_id,value_sha256,source_lineage,source_revision) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(role,key) DO UPDATE SET sequence=excluded.sequence,event_id=excluded.event_id,value_sha256=excluded.value_sha256,source_lineage=excluded.source_lineage,source_revision=excluded.source_revision",
+            params_from_iter([
+                SqlValue::Text(role.to_owned()),
+                key,
+                column(&projected.event, EVENT_SEQUENCE)?,
+                column(&projected.event, EVENT_ID)?,
+                SqlValue::Text(projected.hash.clone()),
+                lineage,
+                revision,
+            ]),
+        )
+        .map_err(|error| sql_error(error, LedgerLocation::LedgerIndexRows.location()))?;
+    if changed != 1 {
+        return Err(failure(
+            LedgerCode::LedgerInsertIncomplete.code(),
+            LedgerLocation::LedgerIndexRows.location(),
+        ));
+    }
+    Ok(())
+}
+
+fn column(row: &SqlRow, position: usize) -> GlobalLedgerResult<SqlValue> {
+    row.get(position).cloned().ok_or_else(|| {
+        failure(
+            LedgerCode::InvalidEventColumn.code(),
+            LedgerLocation::LedgerIndexRows.location(),
+        )
+    })
 }
 
 /// Workflow #383 AO-1: the outcome a test gate's fault gives the attempt in progress.
@@ -1316,20 +1498,38 @@ impl DurableStorage for SqliteStorage {
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
-        self.persist_joint(event, None, crate::durability::commit_sync(event.payload()))
+        self.persist_batch_rows(
+            std::slice::from_ref(event),
+            &IndexRows::default(),
+            None,
+            crate::durability::commit_sync(event.payload()),
+        )
     }
 
-    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1; `ledger-store.md`: a failed
-    /// append is not proof of absence): reads the database head and the event's row. A head
-    /// still where the write left it means the event is absent; a head that names exactly this
-    /// event means it is committed, and the store's head moves to it; anything else is an
-    /// integrity failure.
-    fn read_back(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<ReadBack> {
-        let next = increment_sequence(event.sequence())?;
-        let projected = project_record(&self.database, event, self.head_hash.as_deref())?;
+    fn persist_batch(
+        &mut self,
+        write: &super::storage::BatchWrite<'_>,
+    ) -> GlobalLedgerResult<Option<u64>> {
+        self.persist_batch_rows(write.events, write.rows, write.work, write.sync)
+    }
+
+    /// Workflow #383 AO-1, AO-2 (`contracts/ledger-observer.md` §9.1; `ledger-store.md`: a failed
+    /// append is not proof of absence): reads the database head and the batch's last row. A head
+    /// still where the write left it means the batch is absent (one transaction commits all of it
+    /// or nothing); a head that names exactly its last record means it is committed, and the
+    /// store's head moves to it; anything else is an integrity failure.
+    fn read_back_batch(&mut self, events: &[PersistedEvent]) -> GlobalLedgerResult<ReadBack> {
+        let (Some(first), Some(last)) = (events.first(), events.last()) else {
+            return Ok(ReadBack::Absent);
+        };
+        let next = increment_sequence(last.sequence())?;
+        let projected = project_batch(&self.database, events, self.head_hash.as_deref())?;
+        let Some(last_record) = projected.last() else {
+            return Ok(ReadBack::Absent);
+        };
         let previous_meta = meta_row_with_marker(
             &self.database,
-            event.sequence(),
+            first.sequence(),
             self.head,
             self.head_hash.as_deref(),
             &self.marker,
@@ -1337,8 +1537,8 @@ impl DurableStorage for SqliteStorage {
         let committed_meta = meta_row_with_marker(
             &self.database,
             next,
-            event.sequence(),
-            Some(&projected.hash),
+            last.sequence(),
+            Some(&last_record.hash),
             &self.marker,
         );
         let (meta, rows) = {
@@ -1346,7 +1546,7 @@ impl DurableStorage for SqliteStorage {
                 .database
                 .connection(LedgerLocation::ReadBackLedgerWrite.location())?;
             let meta = read_meta_columns(&connection, self.meta_has_marker, None, &mut 0)?;
-            let sequence = encode(event.sequence());
+            let sequence = encode(last.sequence());
             let rows = read_rows(
                 &connection,
                 &format!("SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence={sequence}"),
@@ -1359,23 +1559,15 @@ impl DurableStorage for SqliteStorage {
         if meta == previous_meta && rows.is_empty() {
             return Ok(ReadBack::Absent);
         }
-        if meta == committed_meta && rows == vec![projected.event] {
-            self.head = event.sequence();
-            self.head_hash = Some(projected.hash);
+        if meta == committed_meta && rows == vec![last_record.event.clone()] {
+            self.head = last.sequence();
+            self.head_hash = Some(last_record.hash.clone());
             return Ok(ReadBack::Committed);
         }
         Err(failure(
             LedgerCode::LedgerMetaMismatch.code(),
             LedgerLocation::ReadBackLedgerWrite.location(),
         ))
-    }
-
-    fn persist_transaction(
-        &mut self,
-        event: &PersistedEvent,
-        work: &dyn super::LedgerTransactionWork,
-    ) -> GlobalLedgerResult<Option<u64>> {
-        self.persist_joint(event, Some(work), CommitSync::Full)
     }
 
     fn close(&mut self) -> GlobalLedgerResult<()> {

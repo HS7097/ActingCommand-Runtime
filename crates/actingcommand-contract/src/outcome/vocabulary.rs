@@ -4,7 +4,10 @@
 //! contract enums. The outcome guard (G7) checks each against the catalog's `vocabularies`.
 
 use super::VocabularyToken;
-use crate::{InstallSlot, InstallTransitionPhase, RuntimeReceiptState, Sensitivity};
+use crate::{
+    InstallSlot, InstallTransitionPhase, LedgerSegmentEdge, LedgerSource, RuntimeReceiptState,
+    Sensitivity,
+};
 
 crate::outcome_vocabulary! {
     /// How a link relates to the outcome it is attached to (vocabulary `cause_relation`).
@@ -228,6 +231,32 @@ impl VocabularyToken for RuntimeReceiptState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Workflow #383 AO-2: the source a ledger observer code names (`ledger_store_revision_skipped`).
+impl VocabularyToken for LedgerSource {
+    const VOCABULARY: &'static str = "ledger_source";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::InstanceFacts => "instance_facts",
+            Self::RuntimeFacts => "runtime_facts",
+            Self::DecisionMemory => "decision_memory",
+            Self::FactRefreshTransitions => "fact_refresh_transitions",
+        }
+    }
+}
+
+/// Workflow #383 AO-2: the edge of a reported watermark or spill segment.
+impl VocabularyToken for LedgerSegmentEdge {
+    const VOCABULARY: &'static str = "segment_edge";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Ended => "ended",
         }
     }
 }

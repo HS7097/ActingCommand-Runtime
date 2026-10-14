@@ -21,6 +21,8 @@ pub(crate) struct LedgerEventMetadata {
     payload: EventPayload,
     artifacts: Vec<ProjectedArtifactReference>,
     artifact_evictions: Vec<actingcommand_contract::ArtifactEvictionProof>,
+    /// Workflow #383 AO-2 (register L4): the stored record's capture.
+    capture: Option<RecordCapture>,
 }
 
 /// Read-only fields shared by material-verified facts and ledger-verified metadata.
@@ -158,6 +160,7 @@ impl StoredEventRecord {
                 .map(StoredArtifactRecord::projected)
                 .collect(),
             artifact_evictions: Vec::new(),
+            capture: self.capture,
         };
         validate(&event)?;
         Ok(event)
@@ -254,6 +257,7 @@ impl LedgerEventMetadata {
             payload: self.payload,
             artifacts,
             artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+            capture: self.capture,
         };
         event.validate()?;
         Ok(event)

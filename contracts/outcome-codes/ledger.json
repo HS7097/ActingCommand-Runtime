@@ -7863,6 +7863,62 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Writing every unflushed record into the dump file, then stopping fatally (Workflow #383 AO-1, ledger observer §9.2)."
+    },
+    "configure_ledger_capture": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking the capture queue policy (budget, tiers, spill batch, flush batches, request ring, tagged workbench keys) the ledger writer is opened with (Workflow #383 AO-2, ledger observer §7, §15)."
+    },
+    "ledger_capture_record": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Taking one record into the capture queue: its capture number, its place and the watermark check (Workflow #383 AO-2, ledger observer §7)."
+    },
+    "ledger_spill_records": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The spill thread appending the oldest memory records of the capture queue to the dump file (Workflow #383 AO-2, ledger observer §7)."
+    },
+    "ledger_flush_captured": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The flush thread assembling, checking and committing the records it took from the capture queue (Workflow #383 AO-2, ledger observer §8)."
+    },
+    "ledger_index_rows": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Maintaining the rows of the index table ledger_index in the transaction of a batch (Workflow #383 AO-2, ledger observer §11.1, §11.4)."
+    },
+    "ledger_tail_gap": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Recording at the start the unconfirmed tail of a previous run that ended without its close and without a complete dump (Workflow #383 AO-2, ledger observer §10)."
+    },
+    "ledger_read_spilled": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The flush thread reading the spilled records of the capture queue back from the dump file (Workflow #383 AO-2, ledger observer §7, §8.1)."
     }
   }
 }

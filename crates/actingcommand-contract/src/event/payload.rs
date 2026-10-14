@@ -10102,6 +10102,21 @@ enum LedgerDraftKind {
         outcome: Outcome,
         audit: AuditInput,
     },
+    /// Workflow #383 AO-2: the single-record gap of a record the flush thread refused
+    /// (register L1, `record_rejected`).
+    RejectedGap {
+        captured_at_unix_ms: u64,
+        event_id: EventId,
+        source: Option<SourceRevision>,
+        outcome: Outcome,
+        audit: AuditInput,
+    },
+    /// Workflow #383 AO-2: a finding of the capture queue or the flush thread (register L2).
+    Health {
+        outcome: Outcome,
+        segment_edge: Option<LedgerSegmentEdge>,
+        audit: AuditInput,
+    },
 }
 
 pub struct LedgerPayloadDraft(LedgerDraftKind);
@@ -10156,6 +10171,39 @@ impl LedgerPayloadDraft {
             gap_start_unix_ms,
             gap_end_unix_ms,
             outcome,
+            audit,
+        })
+    }
+
+    /// Workflow #383 AO-2 (`ledger-observer.md` §10): the single-record gap of the record
+    /// `event_id`, captured at `captured_at_unix_ms`, that failed assembly or sanitizing;
+    /// `source` is its revisioned source; `outcome` is `ledger_record_rejected` (register L1).
+    pub fn rejected_gap(
+        captured_at_unix_ms: u64,
+        event_id: EventId,
+        source: Option<SourceRevision>,
+        outcome: Outcome,
+        audit: AuditInput,
+    ) -> Self {
+        Self(LedgerDraftKind::RejectedGap {
+            captured_at_unix_ms,
+            event_id,
+            source,
+            outcome,
+            audit,
+        })
+    }
+
+    /// Workflow #383 AO-2 (`ledger-observer.md` §14.1): one finding, `outcome` carrying its
+    /// values; a watermark or spill finding names the edge of its segment (register L2).
+    pub fn health(
+        outcome: Outcome,
+        segment_edge: Option<LedgerSegmentEdge>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(LedgerDraftKind::Health {
+            outcome,
+            segment_edge,
             audit,
         })
     }
@@ -11642,6 +11690,28 @@ impl EventPayloadDraft {
                     gap_kind,
                     (gap_start_unix_ms, gap_end_unix_ms),
                     outcome,
+                    audit.sanitize(fingerprinter)?,
+                )?),
+                LedgerDraftKind::RejectedGap {
+                    captured_at_unix_ms,
+                    event_id,
+                    source,
+                    outcome,
+                    audit,
+                } => LedgerPayload::GapRecorded(LedgerGapPayload::rejected(
+                    captured_at_unix_ms,
+                    event_id,
+                    source,
+                    outcome,
+                    audit.sanitize(fingerprinter)?,
+                )?),
+                LedgerDraftKind::Health {
+                    outcome,
+                    segment_edge,
+                    audit,
+                } => LedgerPayload::HealthObserved(LedgerHealthPayload::new(
+                    outcome,
+                    segment_edge,
                     audit.sanitize(fingerprinter)?,
                 )?),
             }),
