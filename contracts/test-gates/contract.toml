@@ -179,6 +179,27 @@ tests = [
 ]
 incident = ["#389 U-1"]
 
+# The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
+# unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
+# the reader bounds hold at 256 viewports, 64 members and 64 unknown positions
+[[gate]]
+key = "K19"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_v1_records_keep_their_bytes_and_single_frame_on_empty_paths_round_trip",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_every_scan_path_shape_round_trips",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_1_refuses_a_decision_its_coverage_cannot_hold",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_2_refuses_a_scan_that_does_not_begin_with_its_start_viewport",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_3_refuses_an_unknown_count_or_bound_the_unknown_list_does_not_bear",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_4_ties_unknown_instances_blocking_to_empty_or_insufficient_with_an_unknown",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_5_ties_outranked_possible_to_a_bound_above_the_chosen_score",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_6_refuses_verdicts_beside_an_aborted_scan_decision",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_path_rule_7_ties_the_confirmation_to_an_unblocked_choice_and_its_projection",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_scan_records_keep_the_v2_member_rules",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::l4a_reader_bounds_are_256_viewports_64_members_and_64_unknown_positions",
+]
+incident = ["#308 SEL-L4a"]
+
 # Per-operation receipt waits by their contract values
 [[gate]]
 key = "R1"
@@ -379,3 +400,34 @@ tests = [
     "actingcommand-actinglab-architecture::workspace_guards::r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture",
 ]
 incident = []
+
+# The v0.12.0 shapes: readers, validation and round trips (v012-register SH-1 rows, §1.18)
+[[gate]]
+key = "K18"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::sh1::l1_gap_records_read_back_and_keep_each_gap_kinds_shape",
+    "actingcommand-contract::lib::event::tests::sh1::l2_l3_probe_findings_and_dump_imports_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l4_a_record_capture_names_its_record_time",
+    "actingcommand-contract::lib::event::tests::sh1::l5_l6_tagged_state_phases_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l7_l14_decision_memory_value_records_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l8_a_wake_obligation_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::l9_dispatch_records_read_input_fact_revisions_or_a_non_zero_position",
+    "actingcommand-contract::lib::event::tests::sh1::l9_selection_records_read_input_fact_revisions_or_a_non_zero_position",
+    "actingcommand-contract::lib::event::tests::sh1::l13_the_view_lists_gain_the_new_record_types",
+    "actingcommand-contract::lib::event::tests::sh1::d1_a_fact_refresh_transition_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::s1_a_condition_settled_failure_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::s2_p7_w4_cancelled_terminals_name_blackout_stop_and_performance_yield",
+    "actingcommand-contract::lib::event::tests::sh1::s3_a_blackout_suppression_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::p1_p3_pacing_transitions_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p4_perf_summary_pacing_members_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p5_p8_task_timing_steps_and_package_load_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p6_execution_records_carry_wall_and_budget_time",
+    "actingcommand-contract::lib::event::tests::sh1::u1_command_records_name_their_channel_and_via_on_lab_only",
+    "actingcommand-contract::lib::event::tests::sh1::u3_pack_registry_keys_read_back_their_entries",
+    "actingcommand-contract::lib::event::tests::sh1::a1_reserved_wake_kinds_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::a2_a_response_record_may_name_its_report_artifact",
+    "actingcommand-contract::lib::event::tests::sh1::a4_only_a_dispatch_intent_carries_priority_locked",
+    "actingcommand-contract::lib::event::tests::sh1::h1_the_reserved_path_drag_decodes_validates_and_redacts",
+]
+incident = ["#383 SH-1"]

@@ -151,7 +151,9 @@ impl<F: InputBackendFactory> SemanticInputExecutor for PortSemanticInput<'_, F> 
             InputAction::Text { text } => {
                 Box::new(move |port: &mut dyn LabInputPort| port.text(&text))
             }
-            InputAction::SingleTouchDragWithVerticalBrakeV1 { .. } | InputAction::Reset => {
+            InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+            | InputAction::SingleTouchPathDragV1 { .. }
+            | InputAction::Reset => {
                 return Err(LabError::usage(
                     "Lab input port performs only tap, long tap, swipe, key and text actions",
                 ));

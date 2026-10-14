@@ -74,5 +74,217 @@
   },
   "host_claims": {
     "renewal_slack_ms": 1000
+  },
+  "performance": {
+    "monitor": {
+      "sample_interval_ms": 2000,
+      "context_window_ms": 30000,
+      "summary_interval_ms": 60000,
+      "max_pipeline_samples": 4096,
+      "process_coverage_min_bp": 9900,
+      "max_system_samples": 64,
+      "max_consecutive_failures": 3,
+      "control_freshness_multiplier": 2,
+      "stutter_frame_gap_ms": 1000
+    },
+    "load": {
+      "heavy_threshold_milli": 1500
+    },
+    "pressure_start_samples": 3,
+    "pressure_end_samples": 3,
+    "pressure": {
+      "thresholds": {
+        "cpu": [8500, 7000],
+        "ram": [9000, 8000],
+        "gpu": [9000, 7500],
+        "disk_queue_milli": [4000, 2000],
+        "disk_latency_us": [50000, 25000],
+        "process_cpu_bp": 4000,
+        "process_io_bps": 67108864
+      },
+      "severity": {
+        "critical_bp": 9700,
+        "elevated_bp": 9200,
+        "third_party_critical": [3, 8000],
+        "third_party_elevated": [2, 6000]
+      },
+      "gpu_aggregate": "max_engine_type"
+    },
+    "responsiveness": {
+      "window_ms": 30000,
+      "min_window_samples": 3,
+      "ewma_alpha_milli": 300,
+      "emu_stale_ms": 120000,
+      "host_probe": {
+        "timer": {
+          "enabled": true,
+          "interval_ms": 1000,
+          "burst": 5,
+          "period_ms": 15,
+          "initial_baseline_us": 16000,
+          "allowance_milli": 2000,
+          "slack_us": 10000
+        },
+        "message": {
+          "enabled": true,
+          "interval_ms": 1000,
+          "burst": 5,
+          "initial_baseline_us": 1000,
+          "allowance_milli": 3000,
+          "slack_us": 20000
+        }
+      },
+      "signals": {
+        "capture_acquire": {
+          "enabled": true,
+          "initial_baseline_us": {"default": 15000, "nemu_ipc": 15000, "adb": 400000},
+          "allowance_milli": 3000,
+          "slack_us": 10000
+        },
+        "touch_response": {
+          "enabled": true,
+          "initial_baseline_us": {"default": 50000},
+          "allowance_milli": 3000,
+          "slack_us": 30000,
+          "score_gestures": false
+        },
+        "recognition": {
+          "enabled": false
+        },
+        "page_settle": {
+          "record": true,
+          "enabled": false
+        }
+      },
+      "emu_freeze_while_paused": true,
+      "baseline": {
+        "min_samples": 50,
+        "window_samples": 500,
+        "quantile": 50,
+        "clamp_min_milli": 250,
+        "clamp_max_milli": 2000,
+        "persist_delta_milli": 100,
+        "persist_min_interval_ms": 600000
+      }
+    },
+    "pacing": {
+      "mode": "observe",
+      "interpolate": "linear",
+      "curve": [
+        {"r_bp": 10000, "stage": "S0", "factor_milli": 1000, "extra_retries": 0, "share_milli": 1000},
+        {"r_bp": 9000, "stage": "S0", "factor_milli": 1000, "extra_retries": 0, "share_milli": 1000},
+        {"r_bp": 7500, "stage": "S1", "factor_milli": 1500, "extra_retries": 1, "share_milli": 1000},
+        {"r_bp": 6000, "stage": "S2", "factor_milli": 2500, "extra_retries": 2, "share_milli": 1000},
+        {"r_bp": 4500, "stage": "S3", "factor_milli": 3250, "extra_retries": 3, "share_milli": 500},
+        {"r_bp": 3000, "stage": "S3", "factor_milli": 4000, "extra_retries": 3, "share_milli": 0},
+        {"r_bp": 0, "stage": "S3", "factor_milli": 4000, "extra_retries": 3, "share_milli": 0}
+      ],
+      "max_factor_milli": 5000,
+      "hysteresis_bp": 500,
+      "degrade_sustain_ms": 4000,
+      "recover_sustain_ms": 30000,
+      "pause_sustain_ms": 60000,
+      "resume_sustain_ms": 60000,
+      "pause_cooldown_ms": 10000,
+      "pre_input_wait_base_ms": 300,
+      "inter_run_gap_base_ms": 0,
+      "pressure_floor": {
+        "kinds": ["cpu", "ram", "gpu", "disk_io", "third_party", "fullscreen_contention", "ledger_backlog"],
+        "min_severity": "elevated",
+        "factor_milli": 1250,
+        "extra_retries": 1
+      },
+      "tax_exempt_from_stage": "S1",
+      "heavy_dispatch_limit": {
+        "normal": 2,
+        "paused": 1
+      },
+      "clock_jump_ms": 30000,
+      "hold": {
+        "max_ms": 300000,
+        "poll_ms": 250,
+        "probe_capture_interval_ms": 5000,
+        "on_partial_pause": false
+      },
+      "pause_probe": {
+        "interval_ms": 30000,
+        "frames": 3
+      }
+    },
+    "calibration": {
+      "apply": "auto",
+      "band_bp": 500,
+      "trouble_codes": [
+        "contained_task_page_unknown",
+        "page_confirmation_failed",
+        "recognition_sample_deadline_exceeded"
+      ],
+      "learn_min_days": 3,
+      "learn_min_active_ms": 43200000,
+      "learning_max_stage": "S2",
+      "learning_backstop_bp": 2000,
+      "interval_ms": 86400000,
+      "min_state_steps": 200,
+      "tolerance": {
+        "s0": 10,
+        "s1": 50,
+        "s2": 150,
+        "stop": 400
+      },
+      "bounds": {
+        "s1": [7000, 9700],
+        "s2": [5000, 8500],
+        "s3": [3000, 7000],
+        "s4": [1000, 5000]
+      },
+      "max_shift_bp": 500,
+      "pressure_max_stage": "S2"
+    }
+  },
+  "scheduling": {
+    "recognition": {
+      "sample_timeout_retries": 2
+    },
+    "rerun": {
+      "condition_codes": [
+        "recognition_sample_budget_insufficient",
+        "candidate_sample_budget_insufficient",
+        "recognition_sample_deadline_exceeded",
+        "candidate_sample_deadline_exceeded",
+        "blackout_run_stopped",
+        "perf_run_yielded",
+        "perf_hold_expired",
+        "cost_commit_time_insufficient"
+      ],
+      "max_per_occurrence": 2,
+      "resume_stage": "s2",
+      "resume_settle_ms": 60000,
+      "promote": true,
+      "refund_counts": true,
+      "expires": "window_end"
+    },
+    "cost_commit": {
+      "promote": true,
+      "max_stage": "s2",
+      "margin_ms": 60000
+    },
+    "blackout": {
+      "host": [],
+      "quiet_margin_ms": 60000,
+      "hard_quiet_ms": 0,
+      "stop_in_flight_at_start": true
+    },
+    "feature_lock": {
+      "locked_valid_for_ms": 86400000,
+      "codes": ["contained_task_feature_locked"]
+    },
+    "not_run": {
+      "diagnose_rows": 10
+    },
+    "random_delay": {
+      "enabled": false,
+      "min_ms": 60000,
+      "max_ms": 3600000
+    }
   }
 }

@@ -22,12 +22,14 @@ use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
+use actingcommand_runtime_config::performance::{monitor, pacing};
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, CatalogTransitionRequest, DiscoverySpec, ExecutionBackendProvider,
     ExecutionBackendRegistration, ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy,
-    InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
-    ProcedureBinding, ProcedureManifest, ProviderAssembly, RecognitionVisionProvider,
-    RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
+    HandsetEndpoint, InstanceMode, InstanceSpec, PerformanceControlConfig,
+    PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot, ProcedureBinding,
+    ProcedureManifest, ProviderAssembly, RecognitionVisionProvider, RuntimeHostConfig,
+    RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionListingCode,
@@ -43,6 +45,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
+mod device_binding;
+pub(crate) use device_binding::DeviceRefusal;
 mod manifest;
 #[cfg(test)]
 pub(crate) use manifest::env_overrides_subsystem;
@@ -131,9 +135,11 @@ pub(super) struct ActingdConfigFile {
     /// Explicit MuMu install root: the highest-priority `MuMuManager.exe` discovery source.
     #[serde(default)]
     mumu_root: Option<PathBuf>,
-    /// Workflow #318 (cfg2): performance monitor tunables that had no file field.
+    /// Workflow #318 (cfg2): the pressure streaks; Workflow #385 P-c: the whole `performance`
+    /// section (`crates/runtime-config`), the streaks keeping their members, each member
+    /// optional; the defaults file holds every default.
     #[serde(default)]
-    performance: Option<PerformanceConfigFile>,
+    performance: Option<actingcommand_runtime_config::PerformanceFile>,
     /// Workflow #318 (cfg2): daemon-level device tool paths, applied to every device
     /// instance's backend configuration; absent fields keep today's env / discovery /
     /// bundled-tool behaviour.
@@ -165,6 +171,10 @@ pub(super) struct ActingdConfigFile {
     recovery_ladder: Option<actingcommand_runtime_config::RecoveryLadderFile>,
     #[serde(default)]
     host_claims: Option<actingcommand_runtime_config::HostClaimsFile>,
+    /// Workflow #386 SR-1: the scheduling rules (`scheduling.*`), each member optional; the
+    /// defaults file holds every default.
+    #[serde(default)]
+    scheduling: Option<actingcommand_runtime_config::SchedulingFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -330,19 +340,40 @@ fn assemble_return_home_packages(
     Ok(packages)
 }
 
-/// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PerformanceConfigFile {
-    #[serde(default)]
-    pressure_start_samples: Option<u16>,
-    #[serde(default)]
-    pressure_end_samples: Option<u16>,
+/// Workflow #385 P-c: the values of the `performance` section the start-up assembly reads
+/// (PERF §10.1, §10.3), from the rows the configuration mechanism resolved: the monitor's
+/// pressure streaks, and the controller's clock jump and heavy-dispatch limits, which the host
+/// took from code constants until now.
+fn performance_settings(
+    parameters: &[actingcommand_contract::ConfigParameter],
+) -> Result<(PerformanceMonitorConfig, PerformanceControlConfig), Code> {
+    let value = |key: &str| {
+        parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .map(|parameter| &parameter.value)
+    };
+    let small = |key: &str| match value(key) {
+        Some(actingcommand_contract::FactScalar::Integer(number)) => {
+            u16::try_from(*number).map_err(|_| ActingdCode::ConfigManifestInvalid.code())
+        }
+        _ => Err(ActingdCode::ConfigManifestInvalid.code()),
+    };
+    let clock_jump = match value(pacing::CLOCK_JUMP_MS) {
+        Some(actingcommand_contract::FactScalar::DurationMs(ms)) => Duration::from_millis(*ms),
+        _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
+    };
+    let monitor_config = PerformanceMonitorConfig::default()
+        .with_pressure_start_samples(small(monitor::PRESSURE_START_SAMPLES)?)
+        .with_pressure_end_samples(small(monitor::PRESSURE_END_SAMPLES)?);
+    let control_config = PerformanceControlConfig::default()
+        .with_clock_jump_threshold(clock_jump)
+        .with_heavy_dispatch_limits(
+            small(pacing::HEAVY_DISPATCH_LIMIT_NORMAL)?,
+            small(pacing::HEAVY_DISPATCH_LIMIT_PAUSED)?,
+        );
+    Ok((monitor_config, control_config))
 }
-
-/// The upper bound `PerformanceMonitorConfig::validate` applies to both pressure streaks;
-/// checked here so the refusal carries `invalid_pressure_samples` before host validation.
-const MAX_PRESSURE_STREAK_SAMPLES: u16 = 30;
 
 /// Daemon-level device tool paths. Each set path must be absolute and exist
 /// (`device_path_invalid`); it is then passed to the backend configuration it names.
@@ -784,8 +815,20 @@ struct InstanceConfig {
     /// `1..=86400`).
     #[serde(default)]
     stuck_recovery_cooldown_secs: Option<u32>,
+    /// Workflow #405 (parsed by #386 SR-1): the instance's own random delay
+    /// (`scheduling.random_delay.*`); a member it leaves out is the `scheduling` section's.
+    #[serde(default)]
+    scheduling: Option<actingcommand_runtime_config::InstanceSchedulingFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
+    /// `{kind, transport}`; absent is an emulator.
+    #[serde(default)]
+    device: Option<device_binding::InstanceDeviceConfigFile>,
+    /// Workflow #398 RD-1b: a handset's device from the private binding file, bound or unbound,
+    /// set by `assemble`; `None` for an emulator.
+    #[serde(skip)]
+    handset: Option<HandsetEndpoint>,
     /// The daemon-level `device_paths`, copied in by `assemble` so a deferred instance
     /// registered after discovery applies the same paths as an explicit one.
     #[serde(skip)]
@@ -866,6 +909,12 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #337: the install root's adb and the instances that use it, checked by
     /// `ac_adb::require` before any side effect. Internal; never a configuration field.
     pub(super) adb_requirement: ac_adb::AdbRequirement,
+    /// Workflow #398 RD-1b: the handset instances the private binding file binds no device to,
+    /// in configuration order: registered unbound at a start, refused by `check-config`.
+    pub(super) unbound_handsets: Vec<String>,
+    /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
+    /// of the configuration has, in file order (`check-config` notes).
+    pub(super) unused_device_bindings: Vec<String>,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1170,29 +1219,25 @@ impl ActingdConfigFile {
         failed_run_retention
             .validate()
             .map_err(|_| SharedCode::InvalidFailedRunRetentionPolicy.code())?;
-        let mut performance_monitor = PerformanceMonitorConfig::default();
-        let (pressure_start_samples, pressure_end_samples) =
-            self.performance
+        // Workflow #318 cfg2: a pressure streak outside 1..=30 keeps its own refusal; a value of
+        // another type is the configuration mechanism's (`config_value_invalid`, below).
+        for key in [
+            monitor::PRESSURE_START_SAMPLES,
+            monitor::PRESSURE_END_SAMPLES,
+        ] {
+            let out_of_range = self
+                .performance
                 .as_ref()
-                .map_or((None, None), |performance| {
-                    (
-                        performance.pressure_start_samples,
-                        performance.pressure_end_samples,
-                    )
+                .and_then(|section| section.value_at(key))
+                .filter(|value| value.is_i64() || value.is_u64())
+                .is_some_and(|value| {
+                    !value.as_i64().is_some_and(|samples| {
+                        (1..=monitor::MAX_PRESSURE_STREAK_SAMPLES).contains(&samples)
+                    })
                 });
-        for samples in [pressure_start_samples, pressure_end_samples]
-            .into_iter()
-            .flatten()
-        {
-            if !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&samples) {
+            if out_of_range {
                 return Err(ActingdCode::InvalidPressureSamples.code());
             }
-        }
-        if let Some(samples) = pressure_start_samples {
-            performance_monitor = performance_monitor.with_pressure_start_samples(samples);
-        }
-        if let Some(samples) = pressure_end_samples {
-            performance_monitor = performance_monitor.with_pressure_end_samples(samples);
         }
         let device_paths = self.device_paths.unwrap_or_default();
         device_paths.validate()?;
@@ -1213,7 +1258,16 @@ impl ActingdConfigFile {
         // Workflow #387 D1b: the members of the per-instance section as the file names them, the
         // file layer the configuration mechanism resolves (`instances[]` by `instance_id`).
         let mut instance_members = Vec::with_capacity(instances.len());
+        // Workflow #398 RD-1b: the handset instances, in configuration order.
+        let mut handsets = Vec::new();
         for instance in &mut instances {
+            if instance.fixture_backend.is_none()
+                && device_binding::check_device(instance)
+                    .map_err(|_| ActingdCode::DeviceConfigInvalid.code())?
+                    == DeviceKind::Handset
+            {
+                handsets.push(instance.alias.clone());
+            }
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
             if instance.fixture_backend.is_none() {
@@ -1250,6 +1304,19 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS.to_owned(),
                 serde_json::json!(instance.stuck_recovery_cooldown_secs),
             );
+            members.insert(
+                actingcommand_runtime_config::scheduling::SECTION.to_owned(),
+                serde_json::to_value(&instance.scheduling)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
+            // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
+            if let Some(device) = &instance.device {
+                members.insert(
+                    "device".to_owned(),
+                    serde_json::to_value(device)
+                        .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+                );
+            }
             instance_members.push(serde_json::Value::Object(members));
             instance_ids.push(instance_id);
             if let Some(path) = instance.resource_package.take() {
@@ -1271,6 +1338,18 @@ impl ActingdConfigFile {
                 );
             }
         }
+        // Workflow #398 RD-1b (model-398 v1.1 §3.2, §3.6): the private binding file, read once
+        // and only when a handset is configured.
+        let (unbound_handsets, unused_device_bindings) = if handsets.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let mut bound = device_binding::bind_handsets(&self.state_root, &handsets)
+                .map_err(|refused| refused.code())?;
+            for instance in &mut instances {
+                instance.handset = bound.endpoints.remove(&instance.alias);
+            }
+            (bound.unbound, bound.unused)
+        };
         let configured_aliases = instances
             .iter()
             .map(|instance| instance.alias.clone())
@@ -1326,7 +1405,6 @@ impl ActingdConfigFile {
                     self.bind_port.unwrap_or_default(),
                 ))
                 .with_policy_cadence(policy_cadence.clone())
-                .with_performance_monitor(performance_monitor)
                 .with_governance_policy(governance_policy);
         let instances_startup_package_count = startup_packages.len();
         // Workflow #387 D1c: the sections the configuration mechanism resolves, as the file
@@ -1338,6 +1416,10 @@ impl ActingdConfigFile {
             "host_claims": serde_json::to_value(&self.host_claims)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "standard_packs": serde_json::to_value(&self.standard_packs)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "performance": serde_json::to_value(&self.performance)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "scheduling": serde_json::to_value(&self.scheduling)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
@@ -1353,8 +1435,9 @@ impl ActingdConfigFile {
             })
             .transpose()?;
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
-        // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections, then
-        // the per-instance section), from the members the file named.
+        // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
+        // the `performance` section; #386 SR-1: `scheduling`; then the per-instance section), from
+        // the members the file named.
         let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
             .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
         let mechanism_parameters = actingcommand_runtime_config::render_parameters(
@@ -1382,7 +1465,13 @@ impl ActingdConfigFile {
                     config_sha256,
                     defaults_sha256: actingcommand_runtime_config::shipped_defaults_sha256(),
                 });
+        // Workflow #385 P-c: the monitor and the controller take the section's values in
+        // effect.
+        let (performance_monitor, performance_control) =
+            performance_settings(&mechanism_parameters)?;
         host = host
+            .with_performance_monitor(performance_monitor)
+            .with_performance_control(performance_control)
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
             .with_prerequisite_packages(prerequisite_packages)
@@ -1399,8 +1488,6 @@ impl ActingdConfigFile {
             dedup_error_explicit: self.frame_retention_dedup_error.is_some(),
             dedup_lab_explicit: self.frame_retention_dedup_lab.is_some(),
             capacity_thresholds_explicit: self.capacity_thresholds.is_some(),
-            pressure_start_samples_explicit: pressure_start_samples.is_some(),
-            pressure_end_samples_explicit: pressure_end_samples.is_some(),
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
             mumu_root: provider.mumu_root(),
             device_paths: device_paths.entries(),
@@ -1464,7 +1551,34 @@ impl ActingdConfigFile {
             resource_packages,
             ignored_env_overrides,
             adb_requirement,
+            unbound_handsets,
+            unused_device_bindings,
         })
+    }
+
+    /// Workflow #398 RD-1b: the device refusal `assemble` meets first, if any, with its detail:
+    /// the same checks in the same order (each device instance's `device`, then the private
+    /// binding file when a handset is configured). `check-config` and the start attach it when
+    /// `assemble` refuses with its code.
+    pub(super) fn device_refusal(&self) -> Option<DeviceRefusal> {
+        let mut handsets = Vec::new();
+        for instance in self
+            .instances
+            .iter()
+            .filter(|instance| instance.fixture_backend.is_none())
+        {
+            match device_binding::check_device(instance) {
+                Ok(DeviceKind::Handset) => handsets.push(instance.alias.clone()),
+                Ok(DeviceKind::Emulator) => {}
+                Err(refused) => return Some(DeviceRefusal::Config(refused)),
+            }
+        }
+        if handsets.is_empty() {
+            return None;
+        }
+        device_binding::bind_handsets(&self.state_root, &handsets)
+            .err()
+            .map(DeviceRefusal::BindingFile)
     }
 }
 
@@ -1857,6 +1971,12 @@ impl InstanceConfig {
     fn backend(self) -> Result<ConfiguredInstance, Code> {
         if self.fixture_backend.is_some() {
             self.fixture_backend().map(ConfiguredInstance::Spec)
+        } else if self.handset.is_some() {
+            // Workflow #398 RD-1b: a handset is addressed by its serial; it has no host or port.
+            let adb_path = self.configured_adb_path()?;
+            self.device_registration(adb_path, default_device_host(), None)
+                .map(InstanceSpec::real)
+                .map(ConfiguredInstance::Spec)
         } else if let Some(key) = self.binding_key()? {
             self.deferred_backend(key)
         } else {
@@ -1957,27 +2077,22 @@ impl InstanceConfig {
         ) {
             return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
-        // #398 R1 §5.1 (RD-3i): scrcpy is selectable on a real device only.
-        if !capture_requested.allowed_on(self.device_kind()) {
-            return Err(ActingdCode::DeviceConfigInvalid.code());
-        }
+        // #398 R1 §5.1 (RD-3i) and §3.1 (RD-1b): which backends the instance's device kind
+        // has is checked with its `device` member (`device_binding::check_device`).
         Ok((requested, capture_requested))
     }
 
-    /// #398 R1 §3.1: the instance's device kind. RD-1b adds the key `device.kind`; until then
-    /// every configured instance is an emulator.
-    fn device_kind(&self) -> DeviceKind {
-        DeviceKind::Emulator
+    /// Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
+    /// `ac_adb::require`; outside an install root it is still refused.
+    fn configured_adb_path(&self) -> Result<String, Code> {
+        self.adb_path
+            .clone()
+            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
+            .ok_or(ActingdCode::InstanceConfigInvalid.code())
     }
 
     fn device_backend(self) -> Result<InstanceSpec, Code> {
-        // Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
-        // `ac_adb::require`; outside an install root it is still refused.
-        let adb_path = self
-            .adb_path
-            .clone()
-            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
-            .ok_or(ActingdCode::InstanceConfigInvalid.code())?;
+        let adb_path = self.configured_adb_path()?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
         self.device_registration(adb_path, host, Some(port))
@@ -2032,14 +2147,28 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
-        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
-        let target = DeviceTarget {
-            serial: self
-                .serial
-                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
-            host,
-            port: port.unwrap_or(0),
-            connect,
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`. RD-1b
+        // (model-398 v1.1 §3.1): a handset is addressed by its bound serial (an unbound one by
+        // the stand-in no session opens on) and is never `adb connect`ed.
+        let handset = self.handset.clone();
+        let target = match &handset {
+            Some(handset) => DeviceTarget {
+                serial: Some(handset.binding().map_or_else(
+                    || DeviceSerial::unbound_handset(&self.alias),
+                    |binding| binding.serial().clone(),
+                )),
+                host,
+                port: port.unwrap_or(0),
+                connect: false,
+            },
+            None => DeviceTarget {
+                serial: self
+                    .serial
+                    .map(|serial| DeviceSerial::handset(serial, &self.alias)),
+                host,
+                port: port.unwrap_or(0),
+                connect,
+            },
         };
         let mut maatouch = MaaTouchConfig::default();
         // The injected `ACTINGCOMMAND_MINITOUCH_PATH` (only under `allow_env_overrides`)
@@ -2102,6 +2231,10 @@ impl InstanceConfig {
             Some(index) => registration.with_nemu_app_index(index),
             None => Ok(registration),
         })
+        .map(|registration| match handset {
+            Some(handset) => registration.with_handset(handset),
+            None => registration,
+        })
         .map_err(|_| ActingdCode::InstanceRegistrationInvalid.code())
     }
 
@@ -2125,6 +2258,7 @@ impl InstanceConfig {
             || self.handshake_timeout_ms.is_some()
             || self.shutdown_timeout_ms.is_some()
             || self.tap_hold_ms.is_some()
+            || self.device.is_some()
         {
             return Err(ActingdCode::FixtureDeviceFieldsForbidden.code());
         }
@@ -2632,14 +2766,16 @@ mod tests {
                 .host
                 .performance_monitor()
                 .expect("assembled performance monitor");
+            // Workflow #385 P-c: the streaks are rows of the `performance` section, at the file
+            // members they had.
             for (key, expected, effective) in [
                 (
-                    "performance_monitor.pressure_start_samples",
+                    monitor::PRESSURE_START_SAMPLES,
                     if configured.is_some() { 5 } else { 3 },
                     performance_monitor.pressure_start_samples(),
                 ),
                 (
-                    "performance_monitor.pressure_end_samples",
+                    monitor::PRESSURE_END_SAMPLES,
                     if configured.is_some() { 7 } else { 3 },
                     performance_monitor.pressure_end_samples(),
                 ),
@@ -2649,8 +2785,8 @@ mod tests {
                 assert_eq!(parameter.value, FactScalar::Integer(i64::from(effective)));
                 assert_eq!(parameter.source, source);
             }
-            let sample_interval = parameter("performance_monitor.sample_interval_ms")
-                .expect("sample interval parameter");
+            let sample_interval =
+                parameter(monitor::SAMPLE_INTERVAL_MS).expect("sample interval parameter");
             assert_eq!(
                 sample_interval.value,
                 FactScalar::DurationMs(
@@ -2893,9 +3029,8 @@ mod tests {
         );
     }
 
-    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance is refused as
-    /// `device_config_invalid` (every configured instance is an emulator until RD-1b adds
-    /// `device.kind`).
+    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance (no `device`
+    /// member) is refused as `device_config_invalid`.
     #[test]
     fn scrcpy_capture_on_an_emulator_instance_is_refused() {
         let id = IdentifierIssuer::new()
@@ -3320,5 +3455,70 @@ mod tests {
             config.assemble().err().map(Code::as_str),
             Some("agent_dispatcher_config_invalid")
         );
+    }
+
+    /// Workflow #385 P-c, Tc-1 at start (PERF §10.3; P-c row: `with_performance_control` takes
+    /// the configuration): the host's controller takes `performance.pacing.clock_jump_ms` and
+    /// `.heavy_dispatch_limit.*` in effect, the model's defaults (30 000 ms, 2, 1) when the file
+    /// names none, the file's values otherwise; each row says where its value came from.
+    #[test]
+    fn tc_1_the_controller_takes_the_performance_section_s_clock_jump_and_dispatch_limits() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.fixture", "instance_id": id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}], "max_inputs": 1
+                }
+            }]
+        });
+        let mut named = base.clone();
+        named["performance"] = json!({
+            "pacing": {
+                "clock_jump_ms": 45_000,
+                "heavy_dispatch_limit": {"normal": 3, "paused": 2}
+            }
+        });
+        for (value, clock_jump_ms, normal, paused, source) in [
+            (base, 30_000, 2, 1, ConfigParameterSource::Default),
+            (named, 45_000, 3, 2, ConfigParameterSource::Explicit),
+        ] {
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            let assembly = config.assemble().expect("runtime assembly");
+            let control = assembly.host.performance_control();
+            assert_eq!(
+                control.clock_jump_threshold(),
+                Duration::from_millis(clock_jump_ms)
+            );
+            assert_eq!(control.normal_heavy_dispatch_limit(), normal);
+            assert_eq!(control.pressured_heavy_dispatch_limit(), paused);
+            for (key, reported) in [
+                (pacing::CLOCK_JUMP_MS, FactScalar::DurationMs(clock_jump_ms)),
+                (
+                    pacing::HEAVY_DISPATCH_LIMIT_NORMAL,
+                    FactScalar::Integer(i64::from(normal)),
+                ),
+                (
+                    pacing::HEAVY_DISPATCH_LIMIT_PAUSED,
+                    FactScalar::Integer(i64::from(paused)),
+                ),
+            ] {
+                let parameter = assembly
+                    .manifest
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == key)
+                    .unwrap_or_else(|| panic!("no parameter {key}"));
+                assert_eq!(parameter.value, reported, "{key}");
+                assert_eq!(parameter.source, source, "{key}");
+            }
+        }
     }
 }

@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::result_large_err)]
 
+mod codes;
 mod context;
 mod drive;
 mod drive_api;
@@ -22,6 +23,7 @@ mod lab_run;
 mod lab_run_api;
 mod ledger_port;
 mod maa_task_graph;
+mod ocr;
 mod package_api;
 mod package_build;
 mod package_validate;
@@ -34,6 +36,7 @@ mod recording_api;
 mod scheduling;
 mod state;
 
+pub use codes::LabCode;
 pub use context::*;
 pub use drive::*;
 pub use drive_api::*;
@@ -46,6 +49,7 @@ pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
     MaaTaskGraphStats, compile_maa_task_graph,
 };
+pub use ocr::LabOcr;
 pub use package_api::*;
 pub use ports::*;
 pub use projection::*;

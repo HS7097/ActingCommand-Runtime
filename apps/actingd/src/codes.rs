@@ -72,9 +72,19 @@ actingcommand_contract::outcome_codes! {
         CaptureBackendInvalid => "capture_backend_invalid": error / none,
         TouchBackendMustBeExplicit => "touch_backend_must_be_explicit": error / none,
         CaptureBackendMustBeExplicit => "capture_backend_must_be_explicit": error / none,
-        /// #398 R1 §5.1 (RD-3i): an instance's device fields do not fit its device kind, for
-        /// example `capture_backend: scrcpy` on an emulator.
+        /// #398 R1 §5.1 (RD-3i), §3.1 (RD-1b): an instance's device fields do not fit its device
+        /// kind, for example `capture_backend: scrcpy` on an emulator or `host` on a handset
+        /// (`alias`, `device_config_problem`).
         DeviceConfigInvalid => "device_config_invalid": error / none,
+        /// #398 R1 §3.6 (RD-1b): the private binding file binds no device to a handset instance
+        /// (`alias`). check-config refuses; a start registers the instance unavailable.
+        DeviceBindingMissing => "device_binding_missing": error / none,
+        /// #398 R1 §3.6 (RD-1b): the private binding file cannot be read or breaks its rules
+        /// (`path`, `device_binding_problem`); the start is refused.
+        DeviceBindingFileInvalid => "device_binding_file_invalid": error / none,
+        /// #398 R1 §3.2 (RD-1b): the private binding file binds an alias no handset instance of
+        /// the configuration has (`alias`); a check-config note, not a failure.
+        DeviceBindingUnused => "device_binding_unused": info / none,
         NemuAppIndexInvalid => "nemu_app_index_invalid": error / none,
         NemuPairedInputConfigurationMissing => "nemu_paired_input_configuration_missing": error / none,
         InstanceRegistrationInvalid => "instance_registration_invalid": error / none,
@@ -161,6 +171,28 @@ actingcommand_contract::outcome_codes! {
         ConfigSubsystemAlwaysOn => "config_subsystem_always_on": info / none,
         ConfigSubsystemDiscoveryBound => "config_subsystem_discovery_bound": info / none,
         ConfigSubsystemDiscoveryUnbound => "config_subsystem_discovery_unbound": info / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// What is wrong with an instance's device declaration (vocabulary `device_config_problem`,
+    /// Workflow #398 RD-1b, model-398 §10.1).
+    pub enum DeviceConfigProblem: "device_config_problem" {
+        /// `device.kind` is neither `emulator` nor `handset`.
+        KindUnknown => "kind_unknown",
+        /// `device.transport` is not `usb` on a handset (`tcp` is reserved), or is named on an
+        /// emulator.
+        TransportUnsupported => "transport_unsupported",
+        /// A handset names `host`, `port` or `connect`.
+        EndpointWithHandset => "endpoint_with_handset",
+        /// A handset names `serial`: its serial lives only in the private binding file.
+        SerialInConfig => "serial_in_config",
+        /// A handset names `instance_index`, `instance_name` or `nemu_app_index`.
+        DiscoveryKeyWithHandset => "discovery_key_with_handset",
+        /// The instance selects a backend its device kind does not allow.
+        BackendKindUnsupported => "backend_kind_unsupported",
+        /// A handset's alias is longer than 248 bytes, so its label would not fit a name.
+        AliasTooLong => "alias_too_long",
     }
 }
 

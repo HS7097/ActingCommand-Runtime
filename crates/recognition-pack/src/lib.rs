@@ -25,12 +25,15 @@ mod candidate_identity;
 mod candidate_layout;
 mod codes;
 mod target_consensus;
+// Workflow #396 REC-7.
+mod template_mask;
 // Workflow #396 REC-2.
 mod target_unique;
 mod text_locate;
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
+pub use template_mask::{TEMPLATE_FLAT_FIELD_MARGIN_MILLI, TEMPLATE_MASK_MIN_PIXELS};
 pub use text_locate::{
     OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
     OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
@@ -937,10 +940,12 @@ pub struct UnsupportedRecognitionTarget {
 }
 
 impl UnsupportedRecognitionTarget {
-    /// The unsupported semantics a template target declares; `None` when it declares none.
-    fn of_template(target: &TemplateTarget) -> Option<Self> {
+    /// The unsupported semantics a template target of a pack of `schema_version` declares;
+    /// `None` when it declares none. Workflow #396 REC-7: a schema `0.7` pack scores its masks
+    /// (admission refuses any but a gray range there).
+    fn of_template(target: &TemplateTarget, schema_version: &str) -> Option<Self> {
         let method = (target.method != RecognitionMethod::Ncc).then_some(target.method);
-        let mask = target.mask.is_some();
+        let mask = target.mask.is_some() && schema_version != SCHEMA_0_7;
         (method.is_some() || mask).then(|| Self {
             id: target.id.clone(),
             method,
@@ -1077,13 +1082,17 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
 }
 
 /// The search a joint template and relative color evaluation selects with: the direct joint
-/// search, or (Workflow #396 REC-2) the exact score map of a unique template.
+/// search, or (Workflow #396 REC-2, REC-7) the exact score map of a template that declares
+/// `unique` or `mask`, whose limit reports `stage`.
 pub(crate) enum JointSearch<'a> {
     Filter {
         template_png: &'a [u8],
         region: Option<recognition::Rect>,
     },
-    Map(&'a recognition::ExactScoreMap),
+    Map {
+        map: &'a recognition::ExactScoreMap,
+        stage: RecognitionPackLocation,
+    },
 }
 
 /// A template cache bound to one immutable Scene and its admitted evaluator.
@@ -1380,7 +1389,9 @@ impl RecognitionEvaluator {
 
         match target {
             RecognitionTarget::Template(target) => {
-                if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
+                if let Some(unsupported) =
+                    UnsupportedRecognitionTarget::of_template(target, &self.pack.schema_version)
+                {
                     return Err(RecognitionPackError::fatal(format!(
                         "template target '{}' uses unsupported recognition semantics: {unsupported}",
                         target.id
@@ -1412,7 +1423,9 @@ impl RecognitionEvaluator {
                 "recognition target '{target_id}' is not a template target"
             )));
         };
-        if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
+        if let Some(unsupported) =
+            UnsupportedRecognitionTarget::of_template(target, &self.pack.schema_version)
+        {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' uses unsupported recognition semantics: {unsupported}",
                 target.id
@@ -1423,6 +1436,13 @@ impl RecognitionEvaluator {
         if target.unique.is_some() {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' declares unique, which template-region batch evaluation does not check",
+                target.id
+            )));
+        }
+        // Workflow #396 REC-7: nor does it score a mask.
+        if target.mask.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' declares mask, which template-region batch evaluation does not score",
                 target.id
             )));
         }
@@ -1774,9 +1794,17 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
-        // Workflow #396 REC-2.
-        if let Some(unique) = target.unique {
-            return self.evaluate_unique_template(context, target, unique, &template_png, region);
+        // Workflow #396 REC-2 and REC-7: a unique or masked template is scored exactly.
+        let mask = template_mask::scored_mask(&self.pack.schema_version, target);
+        if target.unique.is_some() || mask.is_some() {
+            return self.evaluate_exact_template(
+                context,
+                target,
+                target.unique,
+                mask,
+                &template_png,
+                region,
+            );
         }
         if target
             .color_check
@@ -1953,9 +1981,9 @@ impl RecognitionEvaluator {
                     &mut accept,
                 )
                 .map_err(|err| primitive_error(&target.id, err))?,
-            JointSearch::Map(map) => map
+            JointSearch::Map { map, stage } => map
                 .select(threshold, &mut accept)
-                .map_err(|err| target_unique::search_error(&target.id, err))?,
+                .map_err(|err| target_unique::search_error(&target.id, stage, err))?,
         };
         let matched = selection.accepted.unwrap_or(selection.best_template);
         let passed = selection.accepted.is_some();
@@ -2380,7 +2408,7 @@ pub fn unsupported_recognition_targets(
         .iter()
         .filter_map(|target| match target {
             RecognitionTarget::Template(target) => {
-                UnsupportedRecognitionTarget::of_template(target)
+                UnsupportedRecognitionTarget::of_template(target, &pack.schema_version)
             }
             RecognitionTarget::Color(_)
             | RecognitionTarget::ClickOnly(_)
@@ -2473,7 +2501,11 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         })?;
         let allowed = match target_type {
             "template" => {
-                if matches!(schema, "0.6" | SCHEMA_0_7) && object.contains_key("mask") {
+                // Workflow #396 REC-7: schema 0.7 scores a gray-range mask; 0.6 still refuses
+                // every mask.
+                if schema == SCHEMA_0_7 {
+                    template_mask::validate_mask_wire(object, index)?;
+                } else if schema == "0.6" && object.contains_key("mask") {
                     return Err(RecognitionPackError::fatal_with_code(
                         RecognitionPackErrorCode::UnsupportedTarget,
                         format!(
@@ -2826,7 +2858,9 @@ fn validate_pack(
                             target.method
                         ));
                     }
-                    if target.mask.is_some() {
+                    // Workflow #396 REC-7: schema 0.7 masks are checked with the other mask
+                    // rules below.
+                    if target.mask.is_some() && !schema_0_7 {
                         errors.push(format!(
                             "target[{index}] mask is deprecated_in_vNext and cannot be declared by schema {}",
                             pack.schema_version
@@ -3060,6 +3094,8 @@ fn validate_pack(
     }
     // Workflow #396 REC-2.
     target_unique::validate_unique_declarations(pack, errors);
+    // Workflow #396 REC-7.
+    template_mask::validate_mask_declarations(pack, errors);
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region

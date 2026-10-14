@@ -920,6 +920,8 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
         digest.update(match field {
             SecretField::AccountIdentity => b"account_identity".as_slice(),
             SecretField::AuthenticationMaterial => b"authentication_material".as_slice(),
+            // Workflow #398 RD-1b (model-398 v1.1 §3.4): a handset's serial.
+            SecretField::DeviceSerial => b"device_serial".as_slice(),
         });
         digest.update([0]);
         digest.update(original.as_bytes());

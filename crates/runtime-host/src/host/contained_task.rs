@@ -19,7 +19,7 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, ExecutionKernelCode,
-    ResourceReadingValue,
+    ResourceReadingValue, StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1031,9 +1031,19 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.diagnostic_pages(phase, results)?;
         self.inner.record_capture_recognition(results)
     }
-    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
-        self.inner.ensure_active()?;
-        Ok(true)
+    /// Workflow #386 SR-1 (scheduling model §2.2): the Runtime samples.
+    fn sampling_supported(&self) -> bool {
+        true
+    }
+
+    /// Workflow #386 SR-1: a cancellation (deadline, client, operator pause) under its own code.
+    fn candidate_sampling_checkpoint(&mut self) -> Result<(), Self::Error> {
+        self.inner.ensure_active()
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the run's step pacing.
+    fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
+        self.inner.step_pacing()
     }
 
     fn record_candidate_evaluation(
@@ -1852,7 +1862,11 @@ impl RuntimeContainedTask<'_> {
                 RuntimeErrorCode::ContainedTaskPaused.code(),
                 RuntimeErrorCode::ContainedTaskPaused,
             ),
-            ContainedTaskCancellationReason::RecoveredAfterRestart => {
+            // No control asks for a blackout stop or a performance yield before SR-4b and P-k /
+            // P-h write them (register S2, P7): a run's control holding one is invalid state.
+            ContainedTaskCancellationReason::RecoveredAfterRestart
+            | ContainedTaskCancellationReason::BlackoutStop
+            | ContainedTaskCancellationReason::PerformanceYield => {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
                         HostCode::ContainedTaskCancellationStateInvalid,
@@ -2846,9 +2860,26 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
 
-    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
-        self.ensure_active()?;
-        Ok(true)
+    /// Workflow #386 SR-1 (scheduling model §2.2): the Runtime samples.
+    fn sampling_supported(&self) -> bool {
+        true
+    }
+
+    /// Workflow #386 SR-1: a cancellation (deadline, client, operator pause) under its own code;
+    /// a run never loses its permission while it holds its lease (scheduling model §2.2).
+    fn candidate_sampling_checkpoint(&mut self) -> Result<(), Self::Error> {
+        self.ensure_active()
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the configured base of observe-only
+    /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step; the pacing
+    /// curve's extra retries join with performance slice P-k.
+    fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
+        let retries = self
+            .host
+            .sample_timeout_retries()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(StepPacing::new(retries))
     }
 
     /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).
@@ -4297,15 +4328,19 @@ fn contained_task_declaration_failure(
     request: &ContainedTaskRequest,
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
-    let mut failure = RequestFailure::request(
-        RuntimeHostError::relayed_request(
-            error.code().as_str(),
-            ContractLocation::RunContainedTask.as_str(),
-            RuntimeErrorCode::PackageInvalid,
-        ),
-        RuntimeReceiptState::Denied,
-        None,
+    let mut refused = RuntimeHostError::relayed_request(
+        error.code().as_str(),
+        ContractLocation::RunContainedTask.as_str(),
+        RuntimeErrorCode::PackageInvalid,
     );
+    // Workflow #386 SR-1: `recognition_sample_budget_invalid` keeps its `required_ms`,
+    // `limit_ms` and `pack_operation_id` on the refusal.
+    if error.has_values() {
+        let values = error.outcome();
+        refused =
+            refused.with_outcome_values(|_| values.operation(ContractLocation::RunContainedTask));
+    }
+    let mut failure = RequestFailure::request(refused, RuntimeReceiptState::Denied, None);
     if let Some(detail) = resource_reading_failure_detail(error.code().as_str(), error.detail()) {
         let refused = *failure.error;
         failure.error = Box::new(refused.with_native_detail(detail));
@@ -6136,6 +6171,15 @@ impl HostShared {
                         RuntimeErrorCode::BackendOperationFailed
                     },
                 );
+                // Workflow #386 SR-1: a kernel failure that carries the values its code declares (a
+                // sampling timeout's `attempts`, `timeout_ms` and `stage`; a sampling budget's
+                // `required_ms` and `remaining_ms`) keeps them on the terminal and the receipt.
+                if error.has_values() {
+                    let values = error.outcome();
+                    task_error = task_error.with_outcome_values(|_| {
+                        values.operation(ContractLocation::RunContainedTask)
+                    });
+                }
                 // Ledger revision 3: the terminal carries the task failure as its outcome.
                 let task_outcome = task_error.outcome();
                 let event = self.append_contained_task_terminal(

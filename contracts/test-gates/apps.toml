@@ -287,3 +287,14 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top",
 ]
 incident = ["#378 A5", "#378 RK-1"]
+
+# actingctl refuses a flag a subcommand does not take, a flag given twice and a stray word, naming it (Workflow #382 A1-FLAG)
+[[gate]]
+key = "44"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_it_does_not_take_naming_it",
+    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_flag_given_twice_naming_it",
+    "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it",
+]
+incident = ["#382 A1-FLAG"]

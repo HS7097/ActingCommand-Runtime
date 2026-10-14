@@ -53,7 +53,8 @@ having the shape and bounds of an activity window (`scheduling/v2/activity.schem
 `window`): `weekdays` 1–7 (unique, at least one), `utc_offset_minutes` within ±840,
 both minutes within 0–1439, an `end` at or before `start` crossing midnight. `id` is unique
 in the list. An entry that breaks a rule fails check-config and startup with
-`blackout_config_invalid` (`field` points at the member). The default list is empty; an
+`blackout_config_invalid` (`field` points at the member, `blackout_id` names the entry; SR-1
+checks the entries from v0.12.0 on). The default list is empty; an
 installation adds entries for its own needs, for example its planned machine restarts, or a
 night period. Entries have no `applies_to`: every blackout is complete silence.
 

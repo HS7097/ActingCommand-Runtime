@@ -592,9 +592,16 @@ pub(super) struct FakeProvider {
     provenance: ExecutionBackendProvenance,
     vision_provider: Option<Arc<dyn VisionProvider>>,
     resolved_override: Option<Arc<std::sync::Mutex<ResolvedExecutionInstance>>>,
+    // Workflow #398 RD-1b: one entry's own resolution (`with_resolved_for`), ahead of the
+    // others.
+    resolved_for: BTreeMap<String, ResolvedExecutionInstance>,
     // INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
     // own (`with_device_endpoints`).
     device_endpoints: bool,
+    // Workflow #383 AO-4q: the scripted answer of an on-demand instance discovery
+    // (`with_discovery`); without one the provider refuses discovery as a provider without a
+    // discovery surface does.
+    discovery: Option<ProviderInstanceDiscovery>,
 }
 
 impl FakeProvider {
@@ -614,8 +621,22 @@ impl FakeProvider {
             provenance: ExecutionBackendProvenance::PhysicalDevice,
             vision_provider: None,
             resolved_override: None,
+            resolved_for: BTreeMap::new(),
             device_endpoints: false,
+            discovery: None,
         }
+    }
+
+    /// Workflow #383 AO-4q: answers an on-demand instance discovery with `discovery`.
+    fn with_discovery(mut self, discovery: ProviderInstanceDiscovery) -> Self {
+        self.discovery = Some(discovery);
+        self
+    }
+
+    /// Workflow #398 RD-1b: `instance_alias` resolves as `resolved`; the other entries as before.
+    fn with_resolved_for(mut self, instance_alias: &str, resolved: ResolvedExecutionInstance) -> Self {
+        self.resolved_for.insert(instance_alias.to_owned(), resolved);
+        self
     }
 
     /// INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
@@ -706,6 +727,9 @@ impl ExecutionBackendProvider for FakeProvider {
                 entry.instance_id,
                 entry.state.emulator.bound_port(),
             ));
+        }
+        if let Some(resolved) = self.resolved_for.get(instance_alias) {
+            return Some(resolved.clone());
         }
         if let Some(resolved) = &self.resolved_override {
             return Some(
@@ -973,6 +997,24 @@ impl ExecutionBackendProvider for FakeProvider {
                     )
             })?;
         entry.state.emulator.read_state()
+    }
+
+    /// Workflow #383 AO-4q: the scripted discovery answer, else the typed refusal of a provider
+    /// without a discovery surface.
+    fn discover_instances(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        self.discovery.clone().ok_or_else(|| {
+            Box::new(InstanceDiscoveryFailure {
+                code: actingcommand_contract::codes::SharedCode::InstanceDiscoveryUnavailable
+                    .as_str(),
+                error: DeviceError::fatal("instance discovery unsupported by this provider")
+                    .with_diagnostic(
+                        DeviceErrorCategory::Protocol,
+                        actingcommand_contract::codes::ContractLocation::InstanceDiscoveryUnsupported,
+                    ),
+            })
+        })
     }
 
     /// Workflow #369 review C-2: `Some(port)` binds the fake's discovered endpoint again,

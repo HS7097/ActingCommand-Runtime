@@ -7,8 +7,8 @@ use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
-    EventSeverity, EventType, FrameId, ProjectedArtifactReference, RetentionClass, RunId,
-    SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
+    EventSeverity, EventType, FrameId, ProjectedArtifactReference, RecordCapture, RetentionClass,
+    RunId, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -17,6 +17,8 @@ mod artifact;
 pub use artifact::{ArtifactAvailability, LedgerArtifactReference};
 mod metadata;
 pub(crate) use metadata::{LedgerEventMetadata, LedgerEventRead};
+#[cfg(test)]
+mod capture_tests;
 
 /// A ledger-assigned fact. Consumers can inspect and serialize it, but cannot construct or
 /// deserialize one.
@@ -189,6 +191,10 @@ pub(crate) struct StoredEventRecord {
     payload_schema: String,
     payload: EventPayload,
     artifacts: Vec<StoredArtifactRecord>,
+    /// Workflow #383 (register L4): the record's capture, written from AO-2 on; the record's
+    /// `timestamp_unix_ms` is its capture time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture: Option<RecordCapture>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -300,6 +306,17 @@ impl StoredEventRecord {
                 .iter()
                 .map(StoredArtifactRecord::from_reference)
                 .collect(),
+            capture: None,
+        }
+    }
+
+    /// Workflow #383 (register L4): a stored capture names its record's own time.
+    fn validate_capture(&self) -> Result<(), FactValidationError> {
+        match &self.capture {
+            Some(capture) => capture
+                .validate(self.timestamp_unix_ms)
+                .map_err(|error| FactValidationError::new(error.code())),
+            None => Ok(()),
         }
     }
 
@@ -345,6 +362,7 @@ impl StoredEventRecord {
         self,
         artifacts: Vec<LedgerArtifactReference>,
     ) -> Result<PersistedEvent, FactValidationError> {
+        self.validate_capture()?;
         let event = PersistedEvent {
             schema_version: self.schema_version,
             event_id: self.event_id,

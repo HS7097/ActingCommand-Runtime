@@ -10,13 +10,18 @@
 //! The FFT's absolute error is far below one half for these sizes, so both give the same integer,
 //! and the window sums come from the same exact integral images: the raw `f32` score of every
 //! position is bit for bit the direct scorer's.
+//!
+//! Workflow #396 REC-7: a masked template scores only the pixels its mask selects. Its three
+//! sums `sum_m(T * I)`, `sum_m(I)` and `sum_m(I^2)` are integers as well (at most
+//! `255^2 * 921,600`), summed directly or by three FFT cross-correlations rounded to integers:
+//! the masked template and the mask with the region, and the mask with the region's squares.
 
 use super::{
-    IntegralImages, MatchMetric, RecognitionError, RecognitionResult, TemplateMatch,
+    IntegralImages, MatchMetric, RecognitionError, RecognitionResult, TemplateMask, TemplateMatch,
     TemplateMatchDeadline, TemplateMatchSelection, TemplateMatchTimingStage, TemplateStats,
     normalize_ncc_score, score_from_sums,
 };
-use image::GrayImage;
+use image::{GrayImage, Luma};
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
@@ -85,20 +90,38 @@ pub struct RegionSpectra {
 struct RegionSpectrum {
     /// The region's left, top, width and height in the frame.
     bounds: (u32, u32, u32, u32),
+    plane: Plane,
     values: Vec<Complex<f64>>,
+}
+
+/// What a transform reads of each pixel: its gray value, or (Workflow #396 REC-7, the window
+/// sums of a masked template) its square.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plane {
+    Gray,
+    Squared,
 }
 
 impl RegionSpectra {
     fn index_or_insert(
         &mut self,
         bounds: (u32, u32, u32, u32),
+        plane: Plane,
         compute: impl FnOnce() -> RecognitionResult<Vec<Complex<f64>>>,
     ) -> RecognitionResult<usize> {
-        if let Some(index) = self.entries.iter().position(|entry| entry.bounds == bounds) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.bounds == bounds && entry.plane == plane)
+        {
             return Ok(index);
         }
         let values = compute()?;
-        self.entries.push(RegionSpectrum { bounds, values });
+        self.entries.push(RegionSpectrum {
+            bounds,
+            plane,
+            values,
+        });
         Ok(self.entries.len() - 1)
     }
 }
@@ -134,11 +157,12 @@ impl Transforms {
         }
     }
 
-    /// The forward transform of `image` padded with zeros, column after column: the value of
-    /// frequency column `k` and row `y` is at `k * height + y`.
+    /// The forward transform of `plane` of `image` padded with zeros, column after column: the
+    /// value of frequency column `k` and row `y` is at `k * height + y`.
     fn forward(
         &self,
         image: &GrayImage,
+        plane: Plane,
         deadline: &TemplateMatchDeadline,
         stage: TemplateMatchTimingStage,
     ) -> RecognitionResult<Vec<Complex<f64>>> {
@@ -151,7 +175,11 @@ impl Transforms {
             deadline.check(label, stage)?;
             row.fill(0.0);
             for (slot, value) in row.iter_mut().zip(pixels) {
-                *slot = f64::from(*value);
+                let value = f64::from(*value);
+                *slot = match plane {
+                    Plane::Gray => value,
+                    Plane::Squared => value * value,
+                };
             }
             self.row_forward
                 .process(&mut row, &mut row_spectrum)
@@ -256,11 +284,71 @@ fn direct_sums(
     Ok(sums)
 }
 
+/// Workflow #396 REC-7: the three sums of a masked template at every valid position,
+/// row-major, over the template pixels the mask selects.
+pub(crate) struct MaskedSums {
+    /// `sum_m(T * I)`.
+    pub(crate) products: Vec<f64>,
+    /// `sum_m(I)`.
+    pub(crate) image: Vec<f64>,
+    /// `sum_m(I^2)`.
+    pub(crate) squared: Vec<f64>,
+}
+
+/// The masked sums of every valid position, summed directly in integers.
+fn direct_masked_sums(
+    search: &GrayImage,
+    template: &GrayImage,
+    mask: TemplateMask,
+    positions: (usize, usize),
+    deadline: &TemplateMatchDeadline,
+    stage: TemplateMatchTimingStage,
+) -> RecognitionResult<MaskedSums> {
+    let label = deadline_label(stage);
+    let (columns, rows) = positions;
+    let search_width = search.width() as usize;
+    let template_width = template.width() as usize;
+    // Each selected template pixel: its offset inside a window of the search, and its value.
+    let mut selected = Vec::new();
+    for (ty, template_row) in template.as_raw().chunks_exact(template_width).enumerate() {
+        for (tx, value) in template_row.iter().enumerate() {
+            if mask.selects(*value) {
+                selected.push((ty * search_width + tx, u64::from(*value)));
+            }
+        }
+    }
+    let search_pixels = search.as_raw();
+    let mut sums = MaskedSums {
+        products: Vec::with_capacity(columns * rows),
+        image: Vec::with_capacity(columns * rows),
+        squared: Vec::with_capacity(columns * rows),
+    };
+    for y in 0..rows {
+        deadline.check(label, stage)?;
+        for x in 0..columns {
+            let origin = y * search_width + x;
+            let (mut products, mut image, mut squared) = (0_u64, 0_u64, 0_u64);
+            for (offset, value) in &selected {
+                let pixel = u64::from(search_pixels[origin + offset]);
+                products += pixel * value;
+                image += pixel;
+                squared += pixel * pixel;
+            }
+            sums.products.push(products as f64);
+            sums.image.push(image as f64);
+            sums.squared.push(squared as f64);
+        }
+    }
+    Ok(sums)
+}
+
 /// One template search: the region's gray image and its place in the frame.
 pub(crate) struct ScoreSearch<'a> {
     pub(crate) search: &'a GrayImage,
     pub(crate) template: &'a GrayImage,
     pub(crate) metric: MatchMetric,
+    /// Workflow #396 REC-7: the template pixels scored; all when `None`.
+    pub(crate) mask: Option<TemplateMask>,
     pub(crate) offset_x: u32,
     pub(crate) offset_y: u32,
 }
@@ -298,18 +386,78 @@ pub(crate) fn dot_sums(
             let owned;
             let region: &[Complex<f64>] = match spectra {
                 Some(cache) => {
-                    let index = cache.index_or_insert(bounds, || {
-                        transforms.forward(search.search, deadline, stage)
+                    let index = cache.index_or_insert(bounds, Plane::Gray, || {
+                        transforms.forward(search.search, Plane::Gray, deadline, stage)
                     })?;
                     cache.entries[index].values.as_slice()
                 }
                 None => {
-                    owned = transforms.forward(search.search, deadline, stage)?;
+                    owned = transforms.forward(search.search, Plane::Gray, deadline, stage)?;
                     owned.as_slice()
                 }
             };
-            let template = transforms.forward(search.template, deadline, stage)?;
+            let template = transforms.forward(search.template, Plane::Gray, deadline, stage)?;
             transforms.correlate(region, &template, positions, deadline, stage)
+        }
+    }
+}
+
+/// Workflow #396 REC-7: the masked sums of every valid position, row-major, from `engine`. The
+/// transform engine correlates the masked template and the mask with the region's gray values,
+/// and the mask with their squares: two forward transforms of the template, three inverse ones,
+/// and the region's two transforms shared through `spectra`.
+pub(crate) fn masked_sums(
+    search: &ScoreSearch<'_>,
+    mask: TemplateMask,
+    engine: DotEngine,
+    spectra: Option<&mut RegionSpectra>,
+    deadline: &TemplateMatchDeadline,
+    stage: TemplateMatchTimingStage,
+) -> RecognitionResult<MaskedSums> {
+    let positions = search.positions();
+    match engine {
+        DotEngine::Direct => direct_masked_sums(
+            search.search,
+            search.template,
+            mask,
+            positions,
+            deadline,
+            stage,
+        ),
+        DotEngine::Transform => {
+            let transforms = Transforms::new(search.search.width(), search.search.height());
+            let bounds = (
+                search.offset_x,
+                search.offset_y,
+                search.search.width(),
+                search.search.height(),
+            );
+            let masked =
+                GrayImage::from_fn(search.template.width(), search.template.height(), |x, y| {
+                    let value = search.template.get_pixel(x, y)[0];
+                    Luma([if mask.selects(value) { value } else { 0 }])
+                });
+            let selected =
+                GrayImage::from_fn(search.template.width(), search.template.height(), |x, y| {
+                    Luma([u8::from(mask.selects(search.template.get_pixel(x, y)[0]))])
+                });
+            let mut owned = RegionSpectra::default();
+            let cache = spectra.unwrap_or(&mut owned);
+            let gray = cache.index_or_insert(bounds, Plane::Gray, || {
+                transforms.forward(search.search, Plane::Gray, deadline, stage)
+            })?;
+            let squares = cache.index_or_insert(bounds, Plane::Squared, || {
+                transforms.forward(search.search, Plane::Squared, deadline, stage)
+            })?;
+            let masked = transforms.forward(&masked, Plane::Gray, deadline, stage)?;
+            let selected = transforms.forward(&selected, Plane::Gray, deadline, stage)?;
+            let gray = cache.entries[gray].values.as_slice();
+            let squares = cache.entries[squares].values.as_slice();
+            Ok(MaskedSums {
+                products: transforms.correlate(gray, &masked, positions, deadline, stage)?,
+                image: transforms.correlate(gray, &selected, positions, deadline, stage)?,
+                squared: transforms.correlate(squares, &selected, positions, deadline, stage)?,
+            })
         }
     }
 }
@@ -335,24 +483,52 @@ impl ExactScoreMap {
         stage: TemplateMatchTimingStage,
     ) -> RecognitionResult<Self> {
         let label = deadline_label(stage);
-        let stats = TemplateStats::new(search.template, search.metric)?;
-        let sums = dot_sums(&search, engine, spectra, &deadline, stage)?;
-        let integrals = IntegralImages::new(search.search);
         let (columns, rows) = search.positions();
         let mut raw_scores = Vec::with_capacity(columns * rows);
-        for (y, row) in sums.chunks_exact(columns).enumerate() {
-            deadline.check(label, stage)?;
-            for (x, dot) in row.iter().enumerate() {
-                let (x, y) = (x as u32, y as u32);
-                raw_scores.push(score_from_sums(
-                    &stats,
-                    search.metric,
-                    *dot,
-                    integrals.sum(x, y, stats.width, stats.height),
-                    integrals.squared_sum(x, y, stats.width, stats.height),
-                ));
+        let stats = match search.mask {
+            // Workflow #396 REC-7: the window sums are those of the selected pixels too.
+            Some(mask) => {
+                let stats = TemplateStats::masked(search.template, mask, search.metric)?;
+                let sums = masked_sums(&search, mask, engine, spectra, &deadline, stage)?;
+                for ((products, images), squares) in sums
+                    .products
+                    .chunks_exact(columns)
+                    .zip(sums.image.chunks_exact(columns))
+                    .zip(sums.squared.chunks_exact(columns))
+                {
+                    deadline.check(label, stage)?;
+                    for ((product, image), squared) in products.iter().zip(images).zip(squares) {
+                        raw_scores.push(score_from_sums(
+                            &stats,
+                            search.metric,
+                            *product,
+                            *image,
+                            *squared,
+                        ));
+                    }
+                }
+                stats
             }
-        }
+            None => {
+                let stats = TemplateStats::new(search.template, search.metric)?;
+                let sums = dot_sums(&search, engine, spectra, &deadline, stage)?;
+                let integrals = IntegralImages::new(search.search);
+                for (y, row) in sums.chunks_exact(columns).enumerate() {
+                    deadline.check(label, stage)?;
+                    for (x, dot) in row.iter().enumerate() {
+                        let (x, y) = (x as u32, y as u32);
+                        raw_scores.push(score_from_sums(
+                            &stats,
+                            search.metric,
+                            *dot,
+                            integrals.sum(x, y, stats.width, stats.height),
+                            integrals.squared_sum(x, y, stats.width, stats.height),
+                        ));
+                    }
+                }
+                stats
+            }
+        };
         Ok(Self {
             offset_x: search.offset_x,
             offset_y: search.offset_y,
@@ -553,3 +729,8 @@ pub fn score_milli(score: f32) -> u32 {
 #[cfg(test)]
 #[path = "exact_score_tests.rs"]
 mod tests;
+
+// Workflow #396 REC-7.
+#[cfg(test)]
+#[path = "exact_score_mask_tests.rs"]
+mod mask_tests;

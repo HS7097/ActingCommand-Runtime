@@ -484,3 +484,68 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
 ]
 incident = ["#387"]
+
+# Status reads append no ledger record, and their state source names the ledger's committed head with or without the two stores' revisions (Workflow #383 AO-4q, AO4-c; register W1)
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_ao4q::ao4_c_status_reads_append_no_record_and_name_the_committed_head",
+    "actingcommand-contract::lib::runtime_observation::tests::ao4_c_the_state_source_reads_back_with_or_without_the_store_revisions",
+]
+incident = ["#383"]
+
+# The performance configuration surface: every key of PERF §10 in the defaults file and in config.parameters with its source, the curve's and the calibration's rules refusing check-config and the start with perf_config_invalid naming the key and exit code 1, mode observe when the file names none, a curve of at most 70 points by file and by instruction (coordinator ruling 2026-10-14), and the controller taking the section's clock jump and dispatch limits (Workflow #385 P-c, Tc-1, Tc-2, Tc-4, Tc-5)
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::perf_tests::tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with_its_source",
+    "actingcommand-runtime-config::lib::perf_tests::tc_2_a_curve_that_breaks_a_rule_is_refused_naming_the_curve",
+    "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_observe",
+    "actingcommand-runtime-config::lib::perf_tests::tc_5_calibration_values_that_break_a_rule_are_refused_naming_the_key",
+    "actingcommand-runtime-config::lib::perf_tests::a_curve_of_seventy_points_is_accepted_and_seventy_one_are_refused_by_file_and_by_instruction",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::tc_1_the_controller_takes_the_performance_section_s_clock_jump_and_dispatch_limits",
+    "actingcommand-actingd::process::tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_exit_one",
+]
+incident = ["#385"]
+
+# A handset is bound to its device only by the private binding file: its targets use the bound serial and never adb connect, its binding records the device by fingerprint and no host or port, a broken file refuses the start, a missing binding fails check-config and leaves only that handset unavailable, device fields that do not fit are refused, fingerprints group a handset's instances beside the port map, emulator control refuses a handset, an emulator-only configuration is unchanged, and nothing that exports, archives or diagnoses reads the private file (Workflow #398 RD-1b)
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t1_a_bound_handset_targets_its_serial_and_never_connects",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t2_a_handset_binding_records_its_device_by_fingerprint_without_host_or_port",
+    "actingcommand-ledger::lib::global::tests::rd1b_t3_a_device_serial_fingerprint_follows_the_salt_and_never_is_the_serial",
+    "actingcommand-actingd::process::rd1b_t4_check_config_refuses_a_handset_without_a_binding",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t4_an_unbound_handset_is_unavailable_and_the_other_instance_runs",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t5_a_broken_private_binding_file_refuses_the_start",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t6_device_fields_that_do_not_fit_a_handset_are_refused",
+    "actingcommand-ledger-forensics::lib::bindings::tests::rd1b_t7_a_device_fingerprint_groups_its_instances_beside_the_port_map",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t8_emulator_control_refuses_a_handset",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t9_an_emulator_only_configuration_assembles_and_binds_as_before",
+    "actingcommand-actingd::process::rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged",
+    "actingcommand-actinglab-architecture::workspace_guards::rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings",
+]
+incident = ["#398"]
+
+# Workflow #386 SR-1 and #405: every scheduling key has its model default and is settable; values that break a rule are refused at start (host blackout entries as blackout_config_invalid with their member) and through an instruction; an instance's random delay is checked as the pair in effect
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c1_every_scheduling_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c2_scheduling_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect",
+]
+incident = ["#386", "#405"]
+
+# The reserved single-touch path drag is refused before any effect (v012-register §1.18; Workflow #383 SH-1, numbered 54 on its branch, renumbered 58 by train 6)
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
+]
+incident = ["#383 SH-1"]

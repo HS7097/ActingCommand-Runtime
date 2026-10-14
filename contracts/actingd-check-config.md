@@ -144,7 +144,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance.monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -197,7 +197,8 @@ revision.
 - `instances` lists the assembled registry in alias order. `mode` is
   `device_registry` or `fixture_simulation`. `binding` is `explicit` for a
   configured entry, whose `adb_host` and `adb_port` are the configured ADB
-  target of a device entry and `null` for a fixture entry, or
+  target of a device entry and `null` for a fixture entry and for a handset
+  (Workflow #398 RD-1b: addressed by its serial, see "Devices"), or
   `discovery_pending` for an instance bound by `instance_index` or
   `instance_name`, which echoes that key (the other key is `null`) and carries
   no ADB fields: the target is completed by one `MuMuManager` discovery inside
@@ -234,8 +235,8 @@ revision.
   `pressure_end_samples`, each `{ value, source }` with `source` `explicit`
   when the file's `performance` section named it and `default` otherwise. The
   values are read from the manifest, so they equal the
-  `performance_monitor.pressure_*` parameters there and what
-  `actingctl status --config` shows after startup.
+  `performance.pressure_start_samples` / `performance.pressure_end_samples`
+  parameters there and what `actingctl status --config` shows after startup.
 - `device_paths` echoes the daemon-level device tool paths, always with all
   five names (`nemu_folder`, `nemu_ipc_dll`, `droidcast_apk`,
   `minitouch_path`, `maatouch_path`): `{ path, source: "explicit" }` for a
@@ -290,7 +291,7 @@ revision.
     - `device_diagnostic` and `performance_monitor`: always on
       (`config_subsystem_always_on`). The mode and the sample interval are the
       parameters `device_diagnostic_mode` and
-      `performance_monitor.sample_interval_ms`.
+      `performance.monitor.sample_interval_ms`.
     - `mumu_discovery` and `emulator_control`: on only when at least one
       instance is bound by `instance_index` or `instance_name`
       (`config_subsystem_discovery_bound` with `count`, else
@@ -324,14 +325,15 @@ revision.
     and device paths"), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package),
     the per-instance keys below, the
-    `capacity_thresholds.*` bytes, the performance monitor's
-    `performance_monitor.pressure_start_samples` /
-    `performance_monitor.pressure_end_samples`, with a `policy` section the
+    `capacity_thresholds.*` bytes, every key of the `performance` section
+    (Workflow #385 P-c, [runtime-config.md](runtime-config.md), "The performance
+    section"; the pressure streaks are `performance.pressure_start_samples` /
+    `performance.pressure_end_samples`), with a `policy` section the
     `policy.monitor.*` settings (Workflow #397, described above) and, when the section is
     present, the `agent_dispatcher.*` budget; plus the values the daemon
     applies without a file field: `scheduler.*`, `policy_cadence.*`,
-    `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
-    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Per
+    `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.escalation_samples`,
+    `.recovery_samples`, `.transition_cooldown_ms` and `mumu_manager.*`. Per
     configured instance, in declaration order (Workflow #318, cfg3):
     `instance.<instance_id>.stuck_recovery` (boolean) and
     `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer), keyed by
@@ -339,7 +341,10 @@ revision.
     exceed the 128-byte key bound), each `explicit` when the instance named
     the field; since Workflow #387 D1b the configuration mechanism resolves
     them (`instances[]` entry with the same `instance_id`); a field the
-    instance does not name takes the `recovery_ladder` section's value. They form
+    instance does not name takes the `recovery_ladder` section's value. Workflow #398
+    RD-1b adds `instance.<instance_id>.device_kind` (string, `emulator` or `handset`,
+    not settable) for an instance that names `device`, and nothing for one that does
+    not (see "Devices"). They form
     the section `instance`, which with every other section counts against its own
     256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
     D1c adds, before the per-instance keys, the sections the mechanism resolves:
@@ -386,7 +391,9 @@ revision.
   is off, in the order of "Environment overrides", and empty otherwise. A
   warning is not a failure: `status` stays `ok`. Workflow #373 NAV-6 adds one
   `<code>:<game>` per broken standard-pack game root, and the bare code when
-  the root itself cannot be listed (see "Standard packs").
+  the root itself cannot be listed (see "Standard packs"). Workflow #398 RD-1b
+  adds one `device_binding_unused:<alias>` per alias the private binding file
+  binds that no handset of the configuration has, in file order (see "Devices").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
@@ -411,7 +418,9 @@ revision.
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
 `config_manifest_incomplete`, `vision_provider_manifest_retired`,
 `vision_config_invalid`, the `prerequisite_package*` and `return_home_package*` codes
-of "Prerequisite packages", and after the typed assembly the install root's
+of "Prerequisite packages", the device codes `device_config_invalid`,
+`device_binding_file_invalid` and, after the typed assembly, `device_binding_missing`
+of "Devices", and after the typed assembly the install root's
 adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
@@ -426,7 +435,8 @@ that order. The
 secret fingerprint salt is never printed.
 
 A `resource_package` failure, an `adb_install_missing` /
-`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a
+`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a device
+failure (stage `assemble`, see "Devices"), a
 `vision` failure and a `policy_state` failure (see "Catalog plan") also carry
 `error.detail`; no other failure does:
 
@@ -669,11 +679,15 @@ here exactly as at startup, at stage `assemble`.
 performance monitor's pressure streaks (`PerformanceMonitorConfig` in
 `crates/runtime-host/src/performance.rs`): the consecutive samples above a start
 threshold before a pressure is recorded, and below an end threshold before it
-is ended. Each is optional, default `3`, range `1..=30`; a value outside the
-range fails with `invalid_pressure_samples` before host validation. The
-effective values appear as `performance` here and as the manifest parameters
-`performance_monitor.pressure_start_samples` /
-`performance_monitor.pressure_end_samples` (`explicit` when named).
+is ended. Each is optional, default `3` (from `actingd.defaults.json`), range
+`1..=30`; a value outside the range fails with `invalid_pressure_samples` before
+host validation. The effective values appear as `performance` here and as the
+manifest parameters `performance.pressure_start_samples` /
+`performance.pressure_end_samples` (`explicit` when named). Since Workflow #385
+P-c the `performance` section holds every key of performance pacing
+([runtime-config.md](runtime-config.md), "The performance section"); a rule the
+section breaks fails with `perf_config_invalid` at stage `assemble`, as at
+startup.
 
 `device_paths { nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path,
 maatouch_path }` names the device tool paths every device instance's backend
@@ -788,6 +802,35 @@ ignored variable is named both here and in the ledger. No
 never printed. When the flag is `true` nothing is ignored and `warnings` is
 empty; a bad injected value fails where it is used (for example
 `mumu_root_unresolved` below, or the backend open).
+
+## Devices
+
+Workflow #398 RD-1b ([device-binding.md](device-binding.md)). An instance entry's
+optional `device { kind, transport }` names the kind of device it drives:
+`emulator` (also when `device` is absent) or `handset`, a real phone on `usb`.
+Checked here exactly as at startup, at stage `assemble`:
+
+- the declaration (`device_config_invalid`, `error.detail` `{alias,
+  device_config_problem}`): a known `kind`; `transport` `usb` or absent on a
+  handset and absent on an emulator; on a handset no `serial`, `host`, `port`,
+  `connect`, `instance_index`, `instance_name` or `nemu_app_index`, only the
+  input backends `adb_shell_input`, `maatouch`, `minitouch` and the capture
+  backends `adb`, `scrcpy`, and an alias of at most 248 bytes; `scrcpy` on an
+  emulator is refused the same way (#402);
+- when a handset is configured, the private binding file
+  `<state root>\private\device-bindings.json`, read once and never written
+  (`device_binding_file_invalid`, `error.detail` `{path,
+  device_binding_problem}`);
+- after the typed assembly, each handset's binding (`device_binding_missing`,
+  `error.detail` `{alias}` of the first handset without one). A start does not
+  refuse it: it registers that handset unbound and unavailable and runs the
+  others.
+
+A handset is addressed by its bound serial: its `instances[]` entry has
+`binding` `explicit` and `adb_host` / `adb_port` `null`, and no serial is
+printed anywhere in the report. An alias the private file binds that no handset
+has is the warning `device_binding_unused:<alias>`. An emulator-only
+configuration reads no private file and reports what it reported before.
 
 ## Discovery-bound instances
 

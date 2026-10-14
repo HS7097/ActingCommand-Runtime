@@ -1948,6 +1948,7 @@ fn policy_failure_payload_rejects_impossible_retry_combinations() {
         runtime_ms: 1_000,
         sensitive: false,
         perf_context: Box::new(PerformanceContext::unavailable(1_752_147_201_000)),
+        condition: None,
     };
     let event = |failure| {
         PolicyPayloadDraft::execution_recorded(
@@ -2094,6 +2095,7 @@ fn legacy_policy_failure_defaults_preserve_streak_and_explicitly_mark_context_un
         runtime_ms: 1_000,
         sensitive: false,
         perf_context: Box::new(PerformanceContext::unavailable(1_752_147_201_000)),
+        condition: None,
     };
     let mut legacy = serde_json::to_value(&failure).expect("failure JSON");
     let object = legacy.as_object_mut().expect("failure object");
@@ -3134,7 +3136,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
             selection: Box::new(TaskSelectionRecord {
                 layout_id: "slots/main".to_owned(),
                 page_id: "list_page".to_owned(),
-                projection,
+                projection: projection.into(),
                 policy: TaskSelectionPolicy {
                     path: "policy.json".to_owned(),
                     package_sha256: "c".repeat(64),
@@ -3143,6 +3145,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                 },
                 fact_snapshot_id: "snapshot-a".to_owned(),
                 input_ledger_position: 1,
+                input_fact_revisions: None,
                 now_unix_ms: 1_752_147_200_000,
                 input_sha256: format!("sha256:{}", "e".repeat(64)),
                 selection_result: TaskSelectionOutcome::Selected { count: 1 },
@@ -3159,6 +3162,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                 }],
                 reasons: vec![PolicyReasonRecord(Outcome::relayed("selection_selected"))],
                 confirmation,
+                unknown_check: None,
             }),
         },
         AuditInput::new(),
@@ -3989,3 +3993,7 @@ fn every_payload_variant_keeps_outcome_for_the_envelope_only() {
         }
     }
 }
+
+// Workflow #383 SH-1: the readers, validation and round trips of the v0.12.0 shapes.
+#[path = "sh1_tests.rs"]
+mod sh1;

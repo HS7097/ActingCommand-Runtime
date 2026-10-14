@@ -193,6 +193,13 @@ It reads the instance's active record of scope `instance { instance_id:
   snapshot id and digest of the configured value) as a new observation at the
   host clock. An instance configured `available = false` therefore stays
   `false`.
+- Workflow #398 RD-1b: a handset the private binding file binds no device to
+  ([device-binding.md](device-binding.md), "Unbound handset") is unavailable
+  whatever its self-check says: the startup withdrawal and every decision
+  publish `false` with `source_detector` `runtime.device-link` and
+  `source_snapshot_id` `device_link:unbound` (the device link's state, beside
+  `backend_selfcheck:`), unless that record is already in effect; a passing
+  self-check never restores it.
 
 **Lifecycle.** At startup every device self-checked policy instance starts
 unavailable (`backend_selfcheck:unchecked`, published right before its

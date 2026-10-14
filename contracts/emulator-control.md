@@ -265,7 +265,8 @@ represents that instance from then on; older events keep the port they were reco
 The registry (`ExecutionBackendRegistry::control_instance`) serves discovery-bound entries only,
 using the `MuMuManager.exe` path carried on the `DiscoveredInstanceBinding`; an explicit entry
 refuses with `emulator_control_binding` (host code `emulator_control_unavailable`,
-`invalid_request`, `denied`), a fixture instance likewise, and a provider without a control
+`invalid_request`, `denied`), a handset (`device.kind` `handset`, Workflow #398 RD-1b,
+[device-binding.md](device-binding.md)) and a fixture instance likewise, and a provider without a control
 surface keeps the trait default `emulator_control_support`
 (`emulator_control_unsupported`). No device session is opened or touched by the registry path.
 
@@ -766,8 +767,7 @@ involved, and nothing is bound, rebound or registered.
   "discovery": {
     "provider_version": "<MuMuManager version>",
     "source": {
-      "event_id": "<command.validated event>",
-      "sequence": 42,
+      "ledger_committed_head": 42,
       "sampled_started_at_unix_ms": 1790000000000,
       "sampled_completed_at_unix_ms": 1790000000800
     },
@@ -790,9 +790,11 @@ Instances are ordered by index without duplicates; each name is 1-256 bytes (the
 binding's `MAX_DISCOVERED_INSTANCE_NAME_BYTES`). `adb_host`, `adb_port`, `bound_alias` and
 `android_version` are omitted when absent. `bound_alias` is the registered instance whose
 discovery binding carries this index, else the explicit HOST:PORT instance configured with this
-ADB port. No `MuMuManager` path, install root or resolution source is on the wire. The request records one `command.validated` event carrying the
-`InstanceDiscovery` state observation (`runtime-state-observation.md`) and `source` points at
-it; the receipt is `completed` without a terminal, like `Status`.
+ADB port. No `MuMuManager` path, install root or resolution source is on the wire. An
+answered request appends no ledger record (Workflow #383 AO-4q): `source` is the state source
+of `runtime-state-observation.md` (the ledger's committed head and the sampling interval; the
+two store revisions are absent until AO-3), and the receipt is `completed` without a terminal,
+like `Status`.
 
 A refusal appends `command.rejected` (the receipt terminal, diagnostic
 `backend_operation_failed` or `runtime_diagnostic`, effect `not_performed`) plus one

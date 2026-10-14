@@ -18,6 +18,7 @@ use actingcommand_pack_containment::source::{
 use actingcommand_policy::{
     CatalogDocumentSource, SchedulingDocumentKind, validate_catalog_declaration,
 };
+use actingcommand_resource_tooling::{DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata};
@@ -163,6 +164,9 @@ struct DeclarationReader {
     root: PathBuf,
     read_bytes: u64,
     read_files: BTreeSet<String>,
+    /// Workflow #396 TOOL-2: the repository's `declaration-exclusions.json`, read once, when a
+    /// path without a mapped parser first needs it.
+    exclusions: Option<DeclarationExclusions>,
 }
 
 impl DeclarationReader {
@@ -178,6 +182,7 @@ impl DeclarationReader {
             root,
             read_bytes: 0,
             read_files: BTreeSet::new(),
+            exclusions: None,
         })
     }
 
@@ -304,7 +309,7 @@ impl DeclarationReader {
                 "pools.json" => SchedulingDocumentKind::Pools,
                 "activity.json" => SchedulingDocumentKind::Activity,
                 "timeline.json" => SchedulingDocumentKind::Timeline,
-                _ => return Err(invalid(path, "scheduling declaration has no mapped parser")),
+                _ => return self.unmapped(path, "scheduling declaration has no mapped parser"),
             };
             validate_catalog_declaration(
                 &CatalogDocumentSource::new(path_text(path), bytes.clone()),
@@ -331,6 +336,9 @@ impl DeclarationReader {
             validate_bundle_maintenance_declarations(&maintenance)
                 .map_err(|error| invalid(path, &error.to_string()))?;
             "maintenance"
+        } else if path == Path::new(DECLARATION_EXCLUSIONS_FILE) {
+            DeclarationExclusions::parse(&bytes)?;
+            "declaration_exclusions"
         } else if path == Path::new(STANDARD_PACK_PAGES_FILE) {
             // Workflow #373 NAV-6: the standard-pack page list, with the Runtime's own checks;
             // the bundle generator checks the packages it names (M-373 §3.9).
@@ -356,10 +364,7 @@ impl DeclarationReader {
         } else if let Some(family) = self.validate_task_dependency(path)? {
             family
         } else {
-            return Err(invalid(
-                path,
-                "program declaration family has no mapped parser",
-            ));
+            return self.unmapped(path, "program declaration family has no mapped parser");
         };
         Ok(json!({"path": path_text(path), "status": "valid", "family": family}))
     }
@@ -591,10 +596,7 @@ impl DeclarationReader {
                     }
                 }
             } else if !name.starts_with("procedure-manifest.") {
-                return Err(invalid(
-                    path,
-                    "removed scheduling declaration has no mapped parser",
-                ));
+                return self.unmapped(path, "removed scheduling declaration has no mapped parser");
             }
         } else if [
             ".pack.json",
@@ -667,17 +669,47 @@ impl DeclarationReader {
             && parent.file_name().is_some_and(|p| p == "env-detection"))
             && name != "control.json"
             && !is_applications_table(path)
+            && path != Path::new(DECLARATION_EXCLUSIONS_FILE)
         {
-            return Err(invalid(
+            return self.unmapped(
                 path,
                 "removed declaration has no mapped current-reference check",
-            ));
+            );
         }
         Ok(json!({
             "path": path_text(path), "status": "removed",
             "reference_scope": "current_local_declaration_dependencies",
             "checked_declarations": checked,
         }))
+    }
+
+    /// Workflow #396 TOOL-2: a path no declaration parser is mapped to is `excluded` when it
+    /// lies inside a directory of the repository's `declaration-exclusions.json`, and refused
+    /// with `reason` otherwise. A repository without the file declares no directory; a file that
+    /// does not parse is refused.
+    fn unmapped(&mut self, path: &Path, reason: &str) -> CliOutcome<Value> {
+        let exclusions = match self.exclusions.take() {
+            Some(exclusions) => exclusions,
+            None => {
+                let file = Path::new(DECLARATION_EXCLUSIONS_FILE);
+                if self.existing_file(file)? {
+                    let bytes = self.read(file, MAX_DOCUMENT_BYTES)?;
+                    DeclarationExclusions::parse(&bytes)?
+                } else {
+                    DeclarationExclusions::default()
+                }
+            }
+        };
+        let covered = exclusions.covers(path);
+        self.exclusions = Some(exclusions);
+        if covered {
+            Ok(json!({
+                "path": path_text(path), "status": "excluded",
+                "reason": "repository_declared_exclusion",
+            }))
+        } else {
+            Err(invalid(path, reason))
+        }
     }
 
     fn existing_file(&self, relative: &Path) -> CliOutcome<bool> {

@@ -1124,7 +1124,7 @@
                       "fact": {
                         "kind": "package_admitted",
                         "package_label": "golden.task",
-                        "package_sha256": "f6b59c89976e0c8c7222579ba4e054e529fab66cf18abe082e7ec4315c1e1b42",
+                        "package_sha256": "be9354ef0712abb2c3d5eab9515e5cce3775f4d3526f8cfa8efdcd999bac6d46",
                         "response_deadline_monotonic_ms": "<TIME>",
                         "task_label": "task"
                       },
@@ -3609,13 +3609,13 @@
                                     },
                                     "record_index": 2,
                                     "result": "ok",
-                                    "returned_bytes": 425
+                                    "returned_bytes": 410
                                   },
                                   "max_us": "<MICROSECONDS>",
                                   "status": {
                                     "state": "observed"
                                   },
-                                  "successful_returned_bytes": 801,
+                                  "successful_returned_bytes": 786,
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "framing": {

@@ -2563,8 +2563,10 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
         .iter()
         .map(|client| client.snapshot().expect("project snapshot"))
         .collect::<Vec<_>>();
+    // Workflow #383 AO-4q: a project read appends no record, so a later read sees the same or
+    // a later position.
     for pair in snapshots.windows(2) {
-        assert!(pair[1].ledger_position > pair[0].ledger_position);
+        assert!(pair[1].ledger_position >= pair[0].ledger_position);
         let mut expected = pair[0].clone();
         expected.ledger_position = pair[1].ledger_position;
         expected.decision_page = actingcommand_contract::ProjectDecisionPage::new(
@@ -2581,9 +2583,9 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
     assert_eq!(status.instances()[0].instance_alias(), "instance-neutral");
     assert!(snapshots[0].project.is_none());
     assert!(snapshots[0].catalog.is_none());
-    let status_source = status.source().expect("committed runtime status source");
+    let status_source = status.source().expect("runtime status source");
     let mut previous_position = snapshots.last().expect("client snapshots").ledger_position;
-    assert!(status_source.sequence > previous_position);
+    assert!(status_source.ledger_committed_head >= previous_position);
     for version in [
         actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2,
         actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1,
@@ -2591,8 +2593,8 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
         let snapshot = clients[0]
             .snapshot_with_versions(vec![version.to_owned()])
             .expect("legacy project snapshot");
-        assert!(snapshot.ledger_position > previous_position);
-        assert!(snapshot.ledger_position >= status_source.sequence);
+        assert!(snapshot.ledger_position >= previous_position);
+        assert!(snapshot.ledger_position >= status_source.ledger_committed_head);
         previous_position = snapshot.ledger_position;
         assert!(!snapshot.decision_page.has_more());
     }

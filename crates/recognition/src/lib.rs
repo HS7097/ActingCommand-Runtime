@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 mod codes;
 pub mod color_digest;
-// Workflow #396 REC-2.
+// Workflow #396 REC-2; REC-7 masks.
 mod exact_score;
 
 pub use codes::ColorDigestErrorCode;
@@ -177,6 +177,72 @@ pub enum MatchMetric {
     CorrelationCoefficientNormalized,
 }
 
+/// Workflow #396 REC-7: the gray range of a template's own pixels that takes part in scoring
+/// (a pack's `{"type": "range", "lower", "upper"}` mask). A template pixel whose gray value,
+/// read as a search reads the template, lies in `lower..=upper` is scored; any other pixel is
+/// ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateMask {
+    pub lower: u8,
+    pub upper: u8,
+}
+
+impl TemplateMask {
+    /// Whether a template pixel of gray value `value` is scored.
+    pub fn selects(self, value: u8) -> bool {
+        (self.lower..=self.upper).contains(&value)
+    }
+}
+
+/// Workflow #396 REC-7: the integer sums over a template's scored pixels (every pixel, or the
+/// pixels its mask selects), read from its gray image as a search reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplatePixelSums {
+    /// The number of scored pixels.
+    pub count: u64,
+    /// `sum(T)` over them.
+    pub sum: u64,
+    /// `sum(T^2)` over them.
+    pub squared_sum: u64,
+}
+
+impl TemplatePixelSums {
+    /// The sums of the template `template_png` decodes to.
+    pub fn of_png(template_png: &[u8], mask: Option<TemplateMask>) -> RecognitionResult<Self> {
+        let template = decode_template(template_png)?;
+        let mut sums = Self {
+            count: 0,
+            sum: 0,
+            squared_sum: 0,
+        };
+        for value in template.as_raw() {
+            if mask.is_none_or(|mask| mask.selects(*value)) {
+                let value = u64::from(*value);
+                sums.count += 1;
+                sums.sum += value;
+                sums.squared_sum += value * value;
+            }
+        }
+        Ok(sums)
+    }
+
+    /// The `ccorr_normed` score of this template at any window of one constant, non-zero
+    /// brightness: `sum(T) / sqrt(count * sum(T^2))`, which does not depend on that brightness.
+    /// 0 when every scored pixel is black (the score of every window is then 0).
+    pub fn flat_field_score(&self) -> f64 {
+        if self.squared_sum == 0 {
+            return 0.0;
+        }
+        self.sum as f64 / (self.count as f64 * self.squared_sum as f64).sqrt()
+    }
+
+    /// Whether the scored pixels are not all of one value, as a `ccoeff_normed` template needs.
+    pub fn has_variance(&self) -> bool {
+        u128::from(self.count) * u128::from(self.squared_sum)
+            > u128::from(self.sum) * u128::from(self.sum)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorMatch {
     pub distance: f32,
@@ -312,6 +378,7 @@ impl Scene {
                             search: &search,
                             template: &template,
                             metric,
+                            mask: None,
                             offset_x,
                             offset_y,
                         },
@@ -354,6 +421,7 @@ impl Scene {
                 search: &search,
                 template: &template,
                 metric,
+                mask: None,
                 offset_x,
                 offset_y,
             },
@@ -368,14 +436,17 @@ impl Scene {
     /// Workflow #396 REC-2: the exact score of every position of `template_png` in `region`
     /// (the whole frame when `None`), within the 5 s search limit read on `clock`. `stage`
     /// names the search a passed limit reports: `Exact`, or `JointTemplateColor` when the
-    /// selection also checks a relative color. The region's transform is kept in `spectra`
-    /// for the next template searched in the same region of this frame.
+    /// selection also checks a relative color. The region's transforms are kept in `spectra`
+    /// for the next template searched in the same region of this frame. REC-7: with `mask`,
+    /// only the template pixels it selects are scored.
+    #[allow(clippy::too_many_arguments)]
     pub fn exact_score_map(
         &self,
         template_png: &[u8],
         region: Option<Rect>,
         metric: MatchMetric,
         stage: TemplateMatchTimingStage,
+        mask: Option<TemplateMask>,
         spectra: &mut RegionSpectra,
         clock: &SearchClock,
     ) -> RecognitionResult<ExactScoreMap> {
@@ -388,6 +459,7 @@ impl Scene {
                 search: &search,
                 template: &template,
                 metric,
+                mask,
                 offset_x,
                 offset_y,
             },
@@ -506,14 +578,7 @@ impl Scene {
         template_png: &[u8],
         region: Option<Rect>,
     ) -> RecognitionResult<(GrayImage, GrayImage, u32, u32)> {
-        let template = image::load_from_memory_with_format(template_png, ImageFormat::Png)
-            .map_err(|err| decode_error("template PNG", err))?
-            .to_luma8();
-        if template.width() == 0 || template.height() == 0 {
-            return Err(RecognitionError::fatal(
-                "template dimensions must be non-zero",
-            ));
-        }
+        let template = decode_template(template_png)?;
 
         let (search, offset_x, offset_y) = match region {
             Some(rect) => {
@@ -967,6 +1032,57 @@ impl TemplateStats {
             centered_norm_sq,
         })
     }
+
+    /// Workflow #396 REC-7: the statistics over the pixels `mask` selects; `values` holds 0 for
+    /// every other pixel.
+    fn masked(
+        template: &GrayImage,
+        mask: TemplateMask,
+        metric: MatchMetric,
+    ) -> RecognitionResult<Self> {
+        let values = template
+            .as_raw()
+            .iter()
+            .map(|value| {
+                if mask.selects(*value) {
+                    f64::from(*value)
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
+        let selected = template
+            .as_raw()
+            .iter()
+            .filter(|value| mask.selects(**value))
+            .count();
+        if selected == 0 {
+            return Err(RecognitionError::fatal(
+                "template mask selects no template pixel",
+            ));
+        }
+        let count = selected as f64;
+        let sum: f64 = values.iter().sum();
+        let squared_sum: f64 = values.iter().map(|value| value * value).sum();
+        let mean = sum / count;
+        let centered_norm_sq = squared_sum - (sum * sum / count);
+        if metric == MatchMetric::CorrelationCoefficientNormalized
+            && centered_norm_sq <= f64::EPSILON
+        {
+            return Err(RecognitionError::fatal(
+                "ccoeff_normed template must have non-zero variance inside its mask",
+            ));
+        }
+        Ok(Self {
+            width: template.width(),
+            height: template.height(),
+            count,
+            values,
+            mean,
+            squared_sum,
+            centered_norm_sq,
+        })
+    }
 }
 
 struct IntegralImages {
@@ -1147,6 +1263,19 @@ fn validate_pixels(
 
 fn decode_error(label: &str, err: ImageError) -> RecognitionError {
     RecognitionError::fatal(format!("failed to decode {label}: {err}"))
+}
+
+/// A template's gray image, as every search reads it.
+fn decode_template(template_png: &[u8]) -> RecognitionResult<GrayImage> {
+    let template = image::load_from_memory_with_format(template_png, ImageFormat::Png)
+        .map_err(|err| decode_error("template PNG", err))?
+        .to_luma8();
+    if template.width() == 0 || template.height() == 0 {
+        return Err(RecognitionError::fatal(
+            "template dimensions must be non-zero",
+        ));
+    }
+    Ok(template)
 }
 
 fn euclidean_distance(mean: [u8; 3], expected: [u8; 3]) -> f32 {

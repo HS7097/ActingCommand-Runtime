@@ -580,3 +580,66 @@ tests = [
     "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t8_every_command_the_checks_can_send_is_on_the_whitelist",
 ]
 incident = ["#398"]
+
+# Workflow #386 SR-1: an observation whose sampling timed out is made again in a new window and never repeats an input; spent retries end with the timeout and its attempts; no time for another window ends with the budget code; the sampling deadline is checked before the intent only; a cancellation keeps its own code and permission-lost is retired; admission refuses unfittable sampling as budget_invalid; a runtime without sampling keeps its single frame
+[[gate]]
+key = "45"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t1_a_timed_out_observation_is_made_again_in_a_new_window",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t1_spent_retries_end_the_run_with_the_timeout_and_its_attempts",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2_a_retry_never_repeats_an_input_or_a_step_start",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2b_the_sampling_deadline_is_checked_before_the_intent_only",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2c_a_candidate_sampling_timeout_is_observed_again_by_the_same_rule",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t3_no_time_for_another_window_ends_with_the_budget_code",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t4_a_cancellation_ends_the_run_under_its_own_code_and_permission_lost_is_retired",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t5_admission_refuses_sampling_beyond_the_timeouts_as_budget_invalid",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t33_a_runtime_without_sampling_keeps_the_single_frame_and_refuses_sampling",
+]
+incident = ["#386"]
+
+# Template masks score only the pixels they select and are admitted with at least 16 of them; verify_templates take absolute and relative color checks; a ccorr_normed threshold lies at least 50 milli above the template's flat-field score, checked where the package is admitted
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::exact_score::mask_tests::masked_scores_are_the_masked_formulas_at_every_position_on_both_engines",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_schema_0_6_pack_still_refuses_a_mask_and_schema_0_7_reads_its_gray_range",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_mask_that_selects_fewer_than_16_template_pixels_is_refused",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_ccoeff_mask_whose_pixels_have_no_variance_is_refused",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_masked_see_through_text_strip_matches_on_a_new_background_where_the_plain_template_fails",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_ccorr_threshold_below_the_flat_field_floor_is_refused_and_one_at_it_is_admitted",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_zero_threshold_is_not_checked_against_the_floor",
+    "actingcommand-recognition-pack::lib::template_mask::tests::ccoeff_templates_have_no_threshold_floor",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_floor_refusal_of_an_inherited_threshold_points_at_the_default",
+    "actingcommand-pack-containment::rec7_template_masks::a_mask_range_pair_and_a_mask_object_derive_the_same_pack_mask",
+    "actingcommand-pack-containment::rec7_template_masks::verify_templates_take_absolute_and_relative_color_checks_and_their_targets_check_the_color",
+    "actingcommand-pack-containment::rec7_template_masks::a_template_below_its_flat_field_floor_is_refused_where_the_package_is_admitted",
+]
+incident = ["#396"]
+
+# actinglab and the Lab load the Runtime's OCR provider (CPU, the vision root's model folders, the vision section); observe and the Lab self-test evaluate OCR targets with it; without an OCR model OCR is unavailable under lab_ocr_unavailable with its cause: a command that evaluates an OCR target refuses, and observe's actions and the dry-run replay keep their outcome and report it
+[[gate]]
+key = "47"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::tests::lab3_a_vision_root_with_an_ocr_model_folder_gives_the_runtime_provider",
+    "actingcommand-lab::lib::ocr::tests::lab3_without_a_usable_ocr_model_ocr_is_unavailable_with_its_cause",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_runtime_configuration_vision_section_names_the_vision_root",
+    "actingcommand-lab::lib::ocr::tests::lab3_an_ocr_target_without_a_model_is_refused_with_its_code_never_skipped",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_mark_self_test_evaluates_an_ocr_mark_on_every_frame",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::lab3_tests::lab3_observe_evaluates_an_action_ocr_target_and_names_it_not_evaluated_without_a_model",
+    "actingcommand-actinglab::package_offline::package_dry_run_without_an_ocr_model_keeps_its_decision_and_reports_ocr_unavailable",
+]
+incident = ["#396"]
+
+# Resource validation: a repository's declared directories admit its regression case families in place of the "no mapped parser" refusal; unknown JSON elsewhere and a malformed declaration are refused (#396 TOOL-2)
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::declaration_exclusions::tests::declared_directories_cover_only_files_inside_them",
+    "actingcommand-resource-tooling::lib::declaration_exclusions::tests::malformed_exclusion_declarations_are_refused_with_the_field_pointer",
+    "actingcommand-actinglab::bin:actinglab::tests::resource_validate_excludes_declared_regression_cases_and_refuses_unknown_json_elsewhere",
+]
+incident = []

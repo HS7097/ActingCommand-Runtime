@@ -158,7 +158,9 @@ are not gated.
 Rule (ADB baseline, Alice 09-19): whatever other connection is open, the ADB endpoint must
 stay bound and answering; Nemu never replaces ADB as instance identity (the port, #322) or as
 the health anchor. The per-input query is that health probe while inputs flow; no separate
-periodic ADB probe is added by this slice.
+periodic ADB probe is added by this slice. A handset's baseline (Workflow #398 RD-1b,
+[device-binding.md](device-binding.md)) is its USB transport, addressed by its bound serial:
+no path runs `adb connect` against it, the ADB baseline probe included.
 
 ## The startup package hook
 

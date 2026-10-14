@@ -19,6 +19,12 @@ pub const MAX_AGENT_PROJECTION_EVENTS: u16 = 32;
 pub enum AgentWakeKind {
     TimelineReached,
     DriftPredicted,
+    /// Reserved (Workflow #383 register A1, AGT-1): a periodic review is due.
+    PeriodicReview,
+    /// Reserved (register A1, AGT-1): an instance's recovery ladder ran out of rungs.
+    LadderExhausted,
+    /// Reserved (register A1, AGT-1): a task was paused.
+    TaskPaused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

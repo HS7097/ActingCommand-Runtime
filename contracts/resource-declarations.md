@@ -8,7 +8,8 @@ validates the selected program declarations. `--changed-path` is repeatable.
 `--changed-paths-file <relative-path>` accepts the NUL-terminated status/path pairs from
 native Git (git diff --name-status --no-renames -z), relative to the same repository root. An empty Git selection is
 reported with an empty `entries` array. Each supplied path has a result; unknown
-JSON/YAML declaration families fail rather than count as validated.
+JSON/YAML declaration families fail rather than count as validated, except inside a directory
+the repository declares in `declaration-exclusions.json` (below).
 
 `actinglab --json operation validate --repo <root> --operation-dir <relative-dir>`
 uses the same task and resource-table declaration parsers and retains the existing
@@ -31,6 +32,7 @@ and `operation explain` keep their existing behavior.
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | `maintenance.json` (repository root only) | Shared `Vec<BundleMaintenance>` decoding and `validate_bundle_maintenance_declarations`; reported with family `maintenance` |
 | `pages.json` (repository root only) | The standard-pack page list (`actingcommand.pages.v1`, Workflow #373 NAV-6): the contract crate's `parse_standard_pack_pages`, the Runtime reader's own check; reported with family `standard_pack_pages` |
+| `declaration-exclusions.json` (repository root only) | Resource tooling's `DeclarationExclusions::parse` (`actingcommand.declaration-exclusions.v1`, Workflow #396 TOOL-2); reported with family `declaration_exclusions` |
 | `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
@@ -85,6 +87,29 @@ safety/migration notes, task annotations/catalog, Home-fact templates, recovery
 notes and recognition overrides. The formal resource reader consumes the
 materialized operation declarations and generated recognition/navigation files.
 Adding another program consumer requires mapping its declaration parser.
+
+A repository names the directories of its own non-declaration material, such as its
+regression case families, in the root file `declaration-exclusions.json` (Workflow #396
+TOOL-2):
+
+```json
+{"schema_version": "actingcommand.declaration-exclusions.v1", "directories": ["regression"]}
+```
+
+No other member is accepted. `directories` holds 1-64 distinct repository-relative
+directories, each written as `/`-separated normal segments (no empty, `.` or `..` segment, no
+leading or trailing `/`, no `\`, `:` or control character) of at most 1024 bytes. A selected
+path inside one of them, at any depth and compared segment by segment as Git spells it, to
+which no declaration parser is mapped (a path that would otherwise fail with "no mapped
+parser", or on removal with "no mapped current-reference check") has the `excluded` result
+with reason `repository_declared_exclusion`. A mapped family inside a declared directory (for
+example a `*.pack.json` or a `control.json`) is still validated, and an unmapped JSON/YAML
+file outside every declared directory still fails. The declaration is read from the selected
+tree once per run, when the first unmapped path needs it: a repository without it declares
+nothing, and a declaration that does not parse fails that path with
+`resource_declaration_invalid` and the declaration's own issue (`declaration_file`
+`declaration-exclusions.json`, its JSON pointer and reason). Its removal needs no other
+document.
 
 Only explicit Git D entries are removal requests; missing added/modified files
 fail. For removed operation declarations or JSON dependencies, the reader validates
@@ -147,8 +172,8 @@ rule or an operation guard references as one target. The page matches only when 
 
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
-| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches) |
-| Template with color | `anchors[].color_check` | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
+| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks) |
+| Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
@@ -241,6 +266,64 @@ and the target never passes on a partial search: a guard's evaluation fails
 (`contained_task_guard_evaluation_failed`, the code as its `cause=` token). The joint
 relative-color search and the `ccoeff_normed` search of a bounded region use the same exact
 scores for every target, with their results unchanged.
+
+### Task schema `0.9` template masks, `verify_templates` color checks and the threshold floor
+
+Workflow #396 REC-7. Task schema `0.9` accepts a gray-range mask on `anchors[]` and
+`verify_templates[]` entries: the MAA form `"maskRange": [lower, upper]` or the object
+`"mask": {"type": "range", "lower", "upper"}`, one of the two, with integer bounds from 0 to 255 and
+`lower <= upper` (`InvalidType` or `InvalidValue` at the offending member; `InvalidValue` at
+`maskRange` when both forms are declared). An older task schema refuses either with
+`UnconsumedField`, and operations still refuse both. Both forms derive the template target's
+`"mask": {"type": "range", "lower", "upper"}`, and a source that uses a mask derives pack schema
+`0.7`; a source that does not derives every document byte for byte as before. In the
+recognition pack, schema `0.7` accepts a template `mask` of `type` `range` only (another `type`
+is `InvalidValue` at `/targets/<i>/mask/type`, bounds outside 0..=255 or `lower > upper`
+`InvalidValue`); schema `0.6` still refuses every mask with `UnconsumedField`, and schemas `0.1` to
+`0.5` keep loading one as a semantic this build cannot evaluate.
+
+A template pixel whose gray value, as every search reads the template, lies in
+`lower..=upper` is scored, and every other pixel is ignored. Over the `n` selected pixels,
+`ccorr_normed = sum_m(T*I) / sqrt(sum_m(T^2) * sum_m(I^2))` and
+`ccoeff_normed = (sum_m(T*I) - sum_m(T) * sum_m(I) / n) / sqrt((sum_m(T^2) - sum_m(T)^2 / n) * (sum_m(I^2) - sum_m(I)^2 / n))`,
+0 when the denominator is 0. A masked template is scored on the exact score map (section Task
+schema `0.9` unique matches): the three sums stay exact integers, summed directly or by FFT
+cross-correlations rounded to integers. Its search keeps the five-second limit; past it,
+evaluation fails with `target_match_search_incomplete` at the stage `target_match_exact`
+(`target_match_unique` when the target also declares `unique`). The mask holds wherever the
+target is evaluated (page rules, guards, clicks, OCR anchors, checks, `target_consensus` and
+candidate layout slots) and combines with `color_check` and `unique`. A `repeated_anchor` anchor
+and a candidate layout feature read at an offset are searched over every template pixel, so a
+masked template is refused in either role when the evaluator is built; template-region batch
+evaluation refuses a masked target too.
+
+Task schema `0.9` `verify_templates[]` entries take `color_check` as `anchors[]` entries do:
+absolute or `template_relative`, with an optional `max_distance` (`template-relative-color.md`).
+An older task schema refuses it with `UnconsumedField`. The derived template target carries the
+check, so a guard whose `verify_template` names that target checks the color with the template.
+
+Where a package is admitted with its bytes (the Runtime, `actinglab package digest` and
+`actinglab package bundle`), admission reads the template of every target this build can
+evaluate; the declaration gate and metadata-only validation read no image.
+
+- A mask selects at least 16 template pixels (a contract constant), and under `ccoeff_normed`
+  they are not all of one value.
+- Under `ccorr_normed` (the pack's `defaults.match_metric`, or the Runtime default), a threshold
+  above 0 is at least the template's flat-field score in milli plus 50
+  (`TEMPLATE_FLAT_FIELD_MARGIN_MILLI`, a contract constant). The flat-field score is
+  `sum(T) / sqrt(n * sum(T^2))` over the scored pixels (the masked ones when the target declares a
+  mask), the score of the template at any region of one non-zero brightness, in milli rounded
+  down, and 0 for a template whose scored pixels are all black. A threshold of 0 declares a target
+  that always passes and is not checked; `ccoeff_normed` scores a region of one brightness 0 and
+  has no floor.
+
+A refusal is `resource_declaration_invalid`, reason `InvalidValue`, at the recognition pack's
+`/targets/<i>/mask`, or at the threshold in effect: `/targets/<i>/threshold`, or
+`/defaults/template_threshold` when the target declares none. A pack derived from source writes
+every template's threshold on its target, so the refusal names the derived pack's target; the
+developer text names every template below its floor with its ID, `flat_score_milli` and floor.
+This rule refuses packages that were admitted before it: run `actinglab package bundle` over a
+resource repository before deploying a build that has it.
 
 Color digest and check IDs share one namespace with every other target ID. The same ID with
 an identical definition, repeated by several tasks, is kept once; any other reuse of the ID

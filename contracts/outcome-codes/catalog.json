@@ -1545,6 +1545,14 @@
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     },
+    "device_config_problem": {
+      "type": "vocab:device_config_problem",
+      "description": "What is wrong with an instance's device declaration (Workflow #398 RD-1b)."
+    },
+    "device_binding_problem": {
+      "type": "vocab:device_binding_problem",
+      "description": "What is wrong with the private device-binding file (Workflow #398 RD-1b)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -1632,6 +1640,14 @@
     "media_type": {
       "type": "name",
       "description": "The media type of a material, for example image/png."
+    },
+    "yield_cause": {
+      "type": "vocab:yield_cause",
+      "description": "Why a held or lengthened policy run was ended to be rerun."
+    },
+    "held_ms": {
+      "type": "duration_ms",
+      "description": "How long a policy run was held at its pace checkpoint, in milliseconds."
     }
   },
   "vocabularies": {
@@ -2101,6 +2117,12 @@
         "policy.planning": {
           "description": "Policy planning."
         },
+        "policy.control_state": {
+          "description": "Policy control state."
+        },
+        "policy.fact_refresh": {
+          "description": "Policy fact refresh."
+        },
         "catalog.activate": {
           "description": "Catalog activate."
         },
@@ -2274,6 +2296,9 @@
         },
         "ledger.recovery": {
           "description": "Ledger recovery."
+        },
+        "ledger.probe": {
+          "description": "Ledger probe."
         },
         "signature.register": {
           "description": "Signature register."
@@ -2779,6 +2804,18 @@
           "description": "Perf balance changed.",
           "category": "info"
         },
+        "perf.pacing_changed": {
+          "description": "Perf pacing changed.",
+          "category": "info"
+        },
+        "perf.dispatch_share_changed": {
+          "description": "Perf dispatch share changed.",
+          "category": "info"
+        },
+        "perf.run_hold": {
+          "description": "Perf run hold.",
+          "category": "info"
+        },
         "fact.published": {
           "description": "Fact published.",
           "category": "info"
@@ -2841,6 +2878,18 @@
         },
         "policy.planning_signal_observed": {
           "description": "Policy planning signal observed.",
+          "category": "info"
+        },
+        "policy.control_state_recorded": {
+          "description": "Policy control state recorded.",
+          "category": "info"
+        },
+        "policy.activity_state_recorded": {
+          "description": "Policy activity state recorded.",
+          "category": "info"
+        },
+        "policy.fact_refresh_transition": {
+          "description": "Policy fact refresh transition.",
           "category": "info"
         },
         "catalog.transition_intent": {
@@ -3163,9 +3212,25 @@
           "description": "Agent session escalated.",
           "category": "warning"
         },
+        "agent.wake_obligation_recorded": {
+          "description": "Agent wake obligation recorded.",
+          "category": "info"
+        },
         "ledger.recovered": {
           "description": "Ledger recovered.",
           "category": "warning"
+        },
+        "ledger.gap_recorded": {
+          "description": "Ledger gap recorded.",
+          "category": "warning"
+        },
+        "ledger.health_observed": {
+          "description": "Ledger health observed.",
+          "category": "warning"
+        },
+        "ledger.dump_imported": {
+          "description": "Ledger dump imported.",
+          "category": "info"
         },
         "signature.registered": {
           "description": "Signature registered.",
@@ -4352,6 +4417,10 @@
     "ledger_source": {
       "description": "A revisioned source whose changes the ledger records (Workflow #383).",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSource"
+      },
       "tokens": {
         "instance_facts": {
           "description": "The instance fact store."
@@ -4370,6 +4439,10 @@
     "segment_edge": {
       "description": "The edge of a reported stretch of a condition.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSegmentEdge"
+      },
       "tokens": {
         "started": {
           "description": "The condition started."
@@ -4420,6 +4493,10 @@
     "pacing_stage": {
       "description": "A performance pacing stage of an instance (Workflow #385): s0 is normal pacing, each later stage a worse responsiveness band.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/pacing.rs",
+        "enum": "PerformancePacingStage"
+      },
       "tokens": {
         "s0": {
           "description": "Normal: no slowdown, no pause."
@@ -4491,6 +4568,52 @@
         },
         "settings": {
           "description": "settings get of a screen-timeout setting."
+        }
+      }
+    },
+    "device_config_problem": {
+      "description": "What is wrong with an instance's device declaration (model-398 section 10.1).",
+      "tokens": {
+        "kind_unknown": {
+          "description": "device.kind is neither emulator nor handset."
+        },
+        "transport_unsupported": {
+          "description": "device.transport is not usb on a handset (tcp is reserved), or is named on an emulator."
+        },
+        "endpoint_with_handset": {
+          "description": "A handset names host, port or connect."
+        },
+        "serial_in_config": {
+          "description": "A handset names serial: its serial lives only in the private binding file."
+        },
+        "discovery_key_with_handset": {
+          "description": "A handset names instance_index, instance_name or nemu_app_index."
+        },
+        "backend_kind_unsupported": {
+          "description": "The instance selects a backend its device kind does not allow."
+        },
+        "alias_too_long": {
+          "description": "A handset's alias is longer than 248 bytes, so its label would not fit a name."
+        }
+      }
+    },
+    "device_binding_problem": {
+      "description": "What is wrong with the private device-binding file (model-398 section 10.1).",
+      "tokens": {
+        "unreadable": {
+          "description": "The file exists but cannot be read as a file."
+        },
+        "malformed": {
+          "description": "The file is not JSON of the file's shape and schema, is larger than its bound, or names an alias no instance could have."
+        },
+        "duplicate_alias": {
+          "description": "Two bindings name the same alias."
+        },
+        "duplicate_serial": {
+          "description": "Two bindings name the same serial: one device is bound to one instance only."
+        },
+        "serial_invalid": {
+          "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
         }
       }
     },
@@ -4817,6 +4940,18 @@
         },
         "duplicate_task": {
           "description": "A task named more than once in the document."
+        }
+      }
+    },
+    "yield_cause": {
+      "description": "Why performance pacing ended a policy run to be rerun (Workflow #385).",
+      "review": "pending",
+      "tokens": {
+        "wall_ceiling": {
+          "description": "The run reached its wall-clock ceiling after pacing lengthened it."
+        },
+        "preempted": {
+          "description": "The run was preempted while it was held."
         }
       }
     }
@@ -6476,6 +6611,10 @@
     ],
     "per_": [
       "actinglab"
+    ],
+    "perf_": [
+      "runtime-config",
+      "runtime-host"
     ],
     "performance_": [
       "contract",

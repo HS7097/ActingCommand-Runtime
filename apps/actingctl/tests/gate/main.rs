@@ -11,6 +11,8 @@ mod emulator_controller;
 mod held_runtime;
 
 mod emulator_restart;
+// Workflow #382 A1-FLAG: flags a subcommand does not take, flags given twice, stray words.
+mod flag_refusals;
 mod install_transition;
 // Workflow #389 MCP-7: `actingctl diagnose` ↔ `ac_diagnose`.
 mod mcp_diagnose_parity;

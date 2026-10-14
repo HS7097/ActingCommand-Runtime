@@ -4,11 +4,10 @@
 //!
 //! One explicit User+Ui or Cli request re-runs the provider's instance discovery once and
 //! reports every instance it found, each with the alias of the registered instance bound to
-//! it. No lease, admission guard, device session or binding is touched. The answer is
-//! committed as one `RuntimeStateFact::Observed` (`InstanceDiscovery`) in the request's
-//! `command.validated` event and the response carries that event as `source`. A refusal
-//! appends `command.rejected` (the receipt terminal) plus one `runtime.failed` whose native
-//! detail keeps the provider's device error.
+//! it. No lease, admission guard, device session or binding is touched. The answer appends no
+//! ledger record (Workflow #383 AO-4q): its `source` is the sampled state source (the ledger's
+//! committed head and the sampling interval). A refusal appends `command.rejected` (the receipt
+//! terminal) plus one `runtime.failed` whose native detail keeps the provider's device error.
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -25,7 +24,7 @@ impl HostShared {
         &self,
         validated: &ValidatedRuntimeRequest<'_>,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let (state, source) = self.observe_runtime_state(validated, || {
+        let (state, source) = self.observe_runtime_state(|| {
             let discovery = match self.execution()?.discover_instances() {
                 Ok(discovery) => discovery,
                 Err(failure) => {

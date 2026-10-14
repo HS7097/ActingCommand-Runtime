@@ -344,6 +344,117 @@ not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h)
 `contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
 `pack_logic_mismatch`) for NAV-5 to emit.
 
+### 1.18 Touch module (#406, approved 2026-10-14)
+
+The touch module's 0.12.x slice T-3 adds a box-confined, multi-turn, single-touch drag. `InputAction`
+is a wire shape (`runtime.rs`) and a ledger-validated one (an input intent's `provenance`, a task
+effect's action), so by ORD §3.5 item 12 v0.12.0 already decodes it. Its other parts add no
+persisted shape: centre-hotspot sampling records the same sampled region and landing point as
+today, and the least-recently-used landing-point history lives in memory only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| H1 | `InputAction::SingleTouchPathDragV1 {box_x, box_y, box_width, box_height, points: [{x, y}], segment_duration_ms: [ms], corner_hold_ms}` | reserved enum value (wire and ledger) | SH-1 (decodable) | #406 T-3 (0.12.x) | the box lies on the screen and is not empty; 2 to 32 points (`MAX_PATH_DRAG_POINTS`), each on the screen and inside the box; exactly `points.len() - 1` segment durations, each 1..=60 000 ms (the input duration bound), and `corner_hold_ms` at most 60 000; event action `input.swipe`, as the existing drag's; `Debug` redacted; before T-3 nothing writes or executes it: the host refuses an input request that names it with `input_action_unsupported` (runtime-host, error, `none`, pending), and the kernel's and the Lab port's paths refuse it too |
+
+### 1.19 SEL-L4a: the selector's record shapes (#308, selector model S0 v2.1 §1.9, §3.4)
+
+SEL-L4a writes the types, the readers, the validation and the round-trip tests of these shapes,
+never a writer (S0 §6 row L4a). They are part of revision 3 because they merge before the v0.12.0
+tag (S0 §1.9, revision rule): `task.selection_evaluated` and its projection deny unknown fields, so
+no 0.12.x build may add a member to them. The scan session writes them: SEL-L3 (`dry_run_scan`)
+and SEL-L4b (select over a scan, and a single-frame select's `on_empty`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SL1 | `task.selection_evaluated` `projection` | changed member: tagged by `schema_version`, `actingcommand.candidate-projection.v1` (bytes unchanged) or `actingcommand.candidate-projection.v2` (`ScanCandidateProjection`, new) | SEL-L4a | SEL-L3, SEL-L4b | v2 is `{schema_version, page_id, layout_id, layout_kind: repeated_anchor, axis (vertical, horizontal), frame, coverage {state (not_started, incomplete, early_stopped, complete), start? (start_check, rewind_check), end? (end_check), extent_px?}, viewports [≤256] {motion (start, forward, corrective), content_offset_px, tracked_instances, readable_instances, unknown_instances, frame_id}, reposition {rewind_viewports, return_viewports}, candidates [≤64] {id, instance_index, actionable: true, content_rect, fixed_viewport, features}, unknown [≤64] {position_index, content_rect, first_read_viewport, cause (identity_unread, feature_unread, contradicted, unknown_dropped), identity?, identity_unknown?}, gated_out {count, identities_sha256}, candidate_set_sha256}`. The coverage state decides its members (`not_started` none, `incomplete` `start`, `early_stopped` `start` and `extent_px`, `complete` all three); `identity` is present exactly when the cause is not `identity_unread`; viewport indices name held viewports. Reader bounds 256 / 64 / 64, refused as `candidate_projection_budget_exceeded` (`scan_viewports`, `scan_candidates`, `scan_unknown`); the writer's byte budget is 32 KiB (`projection_bytes`). `candidate_set_sha256` covers `schema_version`, `page_id`, `layout_id`, `layout_kind`, `axis`, `frame`, `coverage.state`, `candidates`, `unknown` and `gated_out`, features as in v1, and leaves out the scan's path: `viewports`, `reposition`, the other coverage members, `fixed_viewport` and `first_read_viewport` |
+| SL2 | `TaskSelectionConfirmation` `identity_matched {candidate_id, frame_id, content_offset_px}`, `identity_unconfirmed {identity_state (absent, unknown, different), observed_identity?, identity_unknown?}`, `reposition_failed {outcome, stage (return, confirm)}` | new variants, v2 only | SEL-L4a | SEL-L4b | `reposition_failed` carries its failure as `outcome`, as `guard_failed` and `capture_failed` do (E3), where S0 wrote `code`; it is the record's outcome and codes only in the public projection (E9). `identity_matched` names the selected candidate; `observed_identity` is present exactly when the state is `different`; `matched` and `mismatched` stay v1 only |
+| SL3 | `task.selection_evaluated` `unknown_check` | new optional member | SEL-L4a | SEL-L4b | `{unknown_instances, blocking (none, unknown_instances, outranked_possible), upper_bound {kind: none_unknown \| none_eligible \| max {milli} \| unbounded}}`; present exactly when the step declares `scan` or `on_empty`, so every v2 record has it (`invalid_task_selection_record`, field `unknown_check`) |
+| SL4 | `task.selection_evaluated` validation | the seven path rules of S0 §1.9 (review-2 M3) | SEL-L4a | — | refused as `invalid_task_selection_record` with the field `path_rule_1` … `path_rule_6`, and `confirmation` for rule 7; rule 2 is the v2 projection's own (`invalid_candidate_projection`, `viewports`). A record with `unknown_check` chooses exactly one candidate (`selected`). A v1 record keeps rules 3–7 without the `unknown[]` and `verdicts` clauses, and without `unknown_check` only "attempted iff selected" |
+
+### 1.20 Wave 6 slice RD-1b (#398 model-398 v1.1 §3, §11, §12)
+
+RD-1b brings its own shapes and writes them; [device-binding.md](device-binding.md) is the
+contract. No member carries a device serial: a handset is recorded by its fingerprint and shown
+by its label `handset:<alias>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RB1 | `runtime.instance_bound` + `device?` (`RuntimeInstanceDeviceBinding`) | new optional member | RD-1b | RD-1b | `{kind, fingerprint?, bound_at_unix_ms?, bound_via?}` (`deny_unknown_fields`): `kind` `handset` (`InstanceDeviceKind`, `emulator` reserved for the record); `fingerprint` the ledger's salted SHA-256 of the serial (`sha256:<64 hex>`, field `device_serial`); `bound_via` `cli`, `mcp`, `ui` or `manual` (`DeviceBoundVia`); the last three present together for a bound handset and absent for an unbound one; only a handset records `device`, so an emulator's record is unchanged |
+| RB2 | `runtime.instance_bound` of an instance addressed by a serial | changed rule | RD-1b | RD-1b | no `adb_host` and no `adb_port` (model-398 §3.4: a configured `serial` recorded the default `127.0.0.1:16384` before); a `device` requires `serial_configured`, `binding_source` `explicit` and physical provenance; refused otherwise with `invalid_instance_binding_device` (contract, error) |
+| RB3 | `SecretField::DeviceSerial` | new enum value of the fingerprint fields | RD-1b | RD-1b | the fingerprint's domain label `device_serial` (`Sha256SecretFingerprinter`); not itself persisted |
+| RB4 | `session.instance.available` = `false` with `source_detector` `runtime.device-link`, `source_snapshot_id` `device_link:unbound` | new source of an existing instance fact record | RD-1b | RD-1b | a handset the private binding file binds no device to; RD-2 adds the other link states under the same prefix ([instance-fact-store.md](instance-fact-store.md), "Backend self-check availability") |
+| RB5 | `<state root>\private\device-bindings.json`, `actingcommand.device-bindings.v1` | private file format, not a ledger shape | RD-1b (reader) | RD-1c (`actingctl devices bind`), or a person | `{schema, bindings: [{alias, serial, bound_at_unix_ms, bound_via}]}`; never exported, archived or recorded (architecture guard RD-1b-T10) |
+| RB6 | `config.parameters.instance`: `instance.<instance id>.device_kind` | new per-instance configuration row | RD-1b | RD-1b | string `emulator` / `handset` from the entry's `device.kind`; default `none`, so only an instance that names `device` has the row (no row for an emulator-only configuration); not settable; key-table `file_path` `InstanceMemberAt("device.kind")` |
+| RB7 | check-config v1: `error.detail` `{alias, device_config_problem}` / `{path, device_binding_problem}` / `{alias}`; warning `device_binding_unused:<alias>`; a handset's `instances[]` `adb_host` / `adb_port` `null` | interface members | RD-1b | RD-1b | schema version stays `v1` (additive); [actingd-check-config.md](actingd-check-config.md), "Devices" |
+| RB8 | `ledger-forensics::InstanceBindings.devices` (fingerprint to instance ids, first-binding order) and `InstanceBinding.device_fingerprint` | read surface | RD-1b | RD-1b | beside the port map ([global-ledger-query.md](global-ledger-query.md)) |
+
+Configuration keys (§5): per instance `device { kind, transport }` (`kind` `emulator` or
+`handset`, absent = emulator; `transport` a handset's only, `usb` or absent; `tcp` reserved and
+refused), parsed, validated and reported by RD-1b, read by RD-1b; no default value (an instance
+without `device` is an emulator). With it the §5 row of `capture_backend` `scrcpy` takes effect:
+a handset may select `scrcpy`. A handset's alias is at most 248 bytes (coordinator ruling
+2026-10-13). The codes `device_config_invalid` (values added), `device_binding_missing`,
+`device_binding_file_invalid`, `device_binding_unused` (actingd), `invalid_instance_binding_device`
+(contract), the location `device_endpoint_unbound` (runtime-host), the keys
+`device_config_problem`, `device_binding_problem` and their vocabularies are catalog entries,
+not rows (§7). The `config.parameters` capacity (§5.1) gains one row per handset instance.
+
+### 1.21 Wave 6 slice REC-7 (#396, REC-M v1.2.1 §9)
+
+REC-7 brings and reads both rows; neither is a ledger shape, and no ledger record or persisted
+member changes ([resource-declarations.md](resource-declarations.md), section Task schema `0.9`
+template masks, `verify_templates` color checks and the threshold floor). The new location
+`target_match_exact` (the stage of a masked search past its limit) is a catalog entry, not a row.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RC1 | task schema `0.9` `anchors[]` and `verify_templates[]`: `mask` (`{"type": "range", "lower", "upper"}`) or `maskRange` (`[lower, upper]`); `verify_templates[].color_check`; recognition pack schema `0.7` template target `mask` (`type` `range` only) | new members (resource file format, not a ledger shape) | REC-7 | resource side | gray bounds 0..=255, `lower <= upper`; both source forms derive the same pack `mask` and pack schema `0.7`; pack schema `0.6` and task schemas before `0.9` refuse them (`UnconsumedField`); operations still refuse a mask |
+| RC2 | admission of a package with its bytes (Runtime, `actinglab package digest`, `package bundle`): a mask selects at least 16 template pixels, not all of one value under `ccoeff_normed`; a `ccorr_normed` threshold above 0 is at least the template's flat-field score in milli plus 50 | tightened rule (resource file format, not a ledger shape) | REC-7 | resource side | refusal `resource_declaration_invalid`, `InvalidValue` at the derived pack's `/targets/<i>/mask`, `/targets/<i>/threshold` or `/defaults/template_threshold`; packages admitted before may be refused, so the resource repositories are checked with `package bundle` before a build with REC-7 is deployed |
+
+### 1.23 Wave 6 slice SR-1 (#386 SCHED §2.1, §2.2, §2.4, §9; #405 random delay)
+
+SR-1 brings its own shapes and writes them; [runtime-config.md](runtime-config.md), "The
+`scheduling` section", and [business-identity-consensus.md](business-identity-consensus.md),
+"Observe-only retries", are the contract. No new event type and no new member of a persisted
+record: the sampling codes carry their registered values (spec §10, values not structure).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SQ1 | `config.parameters.scheduling` (21 rows: §5's 17 keys, `recognition.sample_timeout_retries` and `random_delay.{enabled, min_ms, max_ms}`); `config.parameters.instance` + `instance.<id>.scheduling.random_delay.{enabled, min_ms, max_ms}` (3 rows per instance) | new section of an existing fact family; new rows | SR-1 | SR-1 | lists as canonical JSON text; every key settable; a per-instance random-delay key defaults to `section:scheduling.random_delay.<member>` |
+| SQ2 | the outcomes of `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded` carry `attempts`, `timeout_ms`, `stage`; `recognition_sample_budget_insufficient` / `candidate_sample_budget_insufficient` carry `required_ms`, `remaining_ms`; `recognition_sample_budget_invalid` carries `required_ms`, `limit_ms`, `pack_operation_id?` | registered values on the `task.failed` terminal, the run's receipt and an admission refusal | SR-1 | SR-1 | `stage` is one of the kernel's new locations `observation_entry`, `observation_before_input`, `observation_after_input`, `observation_page_wait` |
+| SQ3 | `blackout_config_invalid` at start and in `check-config`, with `field` (a JSON pointer into the configuration) and `blackout_id?` | existing code (SR-0), first emitted | SR-1 | SR-1 | through an instruction the same entries are `config_value_invalid` (`section_check`) |
+| SQ4 | `recognition_sample_deadline_or_permission_lost` | code retired, `replaced_by` `recognition_sample_deadline_exceeded` | SR-1 | — | the kernel's checkpoint returns `Result<(), E>`; `sampling_supported()` says whether a runtime samples |
+
+Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
+row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
+(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14).
+`scheduling.rerun.condition_codes` lists SCHED §9's eight codes; `perf_run_yielded` and
+`perf_hold_expired` are registered by SH-1 (pending), since a code list entry must be a listed,
+active code (train 6).
+
+### 1.24 Wave 6 slice P-c (#385 PERF §10, §11)
+
+P-c brings the `performance` section of `crates/runtime-config` (one file per subsection,
+`src/performance/{monitor,responsiveness,pacing,calibration}.rs`) and writes it;
+[runtime-config.md](runtime-config.md), "The performance section", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PC1 | `config.parameters.performance` (97 rows) | new section of an existing fact family | P-c | P-c | every key of PERF §10 (§5 rows below), in row order monitor, responsiveness, pacing, calibration; lists and objects as canonical JSON text; settable: `performance.pacing.curve` and `performance.pacing.hold.*` only |
+| PC2 | `config.parameters.performance_monitor` gone (recorded empty once after an earlier start had it); `config.parameters.performance_control` keeps `escalation_samples`, `recovery_samples`, `transition_cooldown_ms` | rows of existing sections removed | P-c | P-c | `performance_monitor.sample_interval_ms` → `performance.monitor.sample_interval_ms`; `performance_monitor.pressure_start_samples` / `_end_samples` → `performance.pressure_start_samples` / `_end_samples` (file members unchanged); `performance_control.clock_jump_threshold_ms` → `performance.pacing.clock_jump_ms`; `performance_control.normal_heavy_dispatch_limit` / `pressured_heavy_dispatch_limit` → `performance.pacing.heavy_dispatch_limit.normal` / `.paused` |
+| PC3 | `perf_config_invalid` (error, ladder class `none`, `config_key`, `config_value_problem?`; domain `perf_`, owner `runtime-config`) | new code | P-c | P-c | a start and `check-config` refuse with it before the ledger opens (exit 1); through an instruction the same values are `config_value_invalid` |
+
+Configuration keys (§5): the `performance.*` rows of §5, every key of PERF §10, parsed, checked and
+defaulted in `distribution/windows/actingd.defaults.json`. §5's §10.4 count is corrected to 19
+(`bounds.*` are four keys). `performance.pacing.curve` holds at most 70 points (coordinator
+ruling 2026-10-14: the 8 KiB `ConfigureSettings` value limit). Deviations from §5's spellings: the pressure streaks keep their
+file members, so their keys are `performance.pressure_start_samples` / `_end_samples` rather than
+`performance.pressure.start_samples` / `.end_samples`; the stage boundaries are
+`performance.calibration.bounds.s1` to `.s4` (PERF writes `bounds.S1`; a configuration key is a
+lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.12.0 by P-c: the
+streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
+controller; before, code constants); every other key by its later slice.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -370,7 +481,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 
 | # | Shape | Revision | Slice | Notes |
 |---|---|---|---|---|
-| W1 | `RuntimeStateSource` = `{instance_facts? {lineage, revision}, runtime_facts? {lineage, revision}, ledger_committed_head, sampled_started_at_unix_ms, sampled_completed_at_unix_ms}` | runtime-client 2 | AO-4q | replaces `{event_id, sequence}`; store fields absent before AO-3 and readers accept that; status queries stop appending records |
+| W1 | `RuntimeStateSource` = `{instance_facts? {lineage, revision}, runtime_facts? {lineage, revision}, ledger_committed_head, sampled_started_at_unix_ms, sampled_completed_at_unix_ms}` | runtime-client 2 | AO-4q | replaces `{event_id, sequence}`; store fields absent before AO-3 and readers accept that; status queries stop appending records; **done (AO-4q):** each store field is a `RuntimeStateStoreRevision {lineage (owner epoch), revision}`; `Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` append nothing on success and read the committed head inside the sampling interval ([runtime-state-observation.md](runtime-state-observation.md)); a discovery refusal still records its refusal |
 | W2 | `RuntimeOperation::InstanceFactSnapshot { instance }` → `RuntimeResult::InstanceFactSnapshot { snapshot, source }` | runtime-client 2 | MCP-4 | general read, one instance's facts with observation and expiry times and the resolved scope; a new kind, not a parameter of `RuntimeFactSnapshot` (that kind stays field-less); U-1's classification table gains the row |
 | W3 | `ConfigureSettings { changes: [{key, value?}] }` and its receipt `{key, value, source}` | runtime-client 2 | D1b | M387 §5.6 |
 | W4 | `PerformanceYield`, `BlackoutStop` | runtime-client 2 | SH-1 | P7, S2 |
@@ -419,13 +530,14 @@ when it takes effect.
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
-| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c | P-m (v0.12.0) |
-| `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c | P-m (v0.12.0) |
-| `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c | P-k, P-s, P-h (0.12.x) |
-| `performance.calibration.*` | PERF §10.4 (18 keys) | PERF §10.4 | P-c | P-a (0.12.x) |
+| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
+| `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
+| `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
+| `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | P-c | P-c |
-| `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 | SR-1 (v0.12.0) |
-| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
+| `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
+| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
+| `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 | D2-S4 (v0.12.0) |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 | D2-S2 |
@@ -452,13 +564,13 @@ when it takes effect.
 | `ledger_observer.*` | 21 |
 | `recovery_ladder.*`, `host_claims.*` | 16 |
 | `performance.*`, `execution.defaults.*` | about 100 (some replace today's `performance_monitor.*` / `performance_control.*` rows) |
-| `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension) | 29 |
+| `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension, random_delay) | 32 |
 | Lab options | 2 |
-| per instance: `recognition_package`, `start_emulator` | 2 per instance |
-| **total** | **about 223 + 4 per instance** (three instances ≈ 235; five ≈ 243) |
+| per instance: `recognition_package`, `start_emulator`, `scheduling.random_delay.*` (#405) | 5 per instance |
+| **total** | **about 226 + 7 per instance** (three instances ≈ 247; five ≈ 261) |
 
-The total stays under 256 for up to eight instances (255 rows), with little room left; a ninth
-instance passes it. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
+The total stayed under 256 for up to eight instances (255 rows) before #405's three per-instance
+keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
 

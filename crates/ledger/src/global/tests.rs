@@ -423,6 +423,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             runtime_ms,
             sensitive: false,
             perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_400)),
+            condition: None,
         };
     let policy_failure = |class, runtime_ms| {
         policy_failure_of(
@@ -457,6 +458,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         runtime_ms: 0,
         sensitive: false,
         perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_350)),
+        condition: None,
     };
     let sanitize = |timestamp_unix_ms, severity, origin, links, payload: EventPayloadDraft| {
         EventDraft::new(
@@ -2570,6 +2572,27 @@ fn sha256_fingerprinter_returns_fixed_lowercase_fingerprint() {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     );
     assert!(!fingerprint.as_str().contains("secret-value"));
+}
+
+// Workflow #398 RD-1b, test row T3 (model-398 v1.1 §3.4, §12): a handset's serial is recorded
+// only as its fingerprint under the ledger's salt. The same salt and serial give the same
+// fingerprint, another salt gives another one, and the fingerprint is never the serial.
+#[test]
+fn rd1b_t3_a_device_serial_fingerprint_follows_the_salt_and_never_is_the_serial() {
+    const SERIAL: &str = "TESTSERIAL0001";
+    let fingerprint = |salt: &[u8], serial: &str| {
+        Sha256SecretFingerprinter::new(salt)
+            .expect("fingerprinter")
+            .fingerprint(SecretField::DeviceSerial, serial)
+            .expect("device serial fingerprint")
+    };
+    let first = fingerprint(b"neutral-salt-a", SERIAL);
+    assert_eq!(first, fingerprint(b"neutral-salt-a", SERIAL));
+    assert_ne!(first, fingerprint(b"neutral-salt-b", SERIAL));
+    assert_ne!(first, fingerprint(b"neutral-salt-a", "TESTSERIAL0002"));
+    assert_ne!(first.as_str(), SERIAL);
+    assert!(!first.as_str().contains(SERIAL));
+    assert!(first.as_str().starts_with("sha256:"));
 }
 
 #[test]

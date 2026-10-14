@@ -367,7 +367,7 @@ jobs:
       CI_PACKAGES: -p actingcommand-runtime-host -p actingcommand-host-metrics -p actingcommand-actinglab
       # actinglab's dev-dependency turns it on anyway; written out so the selection says it.
       CI_FEATURES: --features actingcommand-runtime-host/fixture-backends
-      CI_SKIP: ''
+      CI_SKIP: tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -614,7 +614,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
+      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup

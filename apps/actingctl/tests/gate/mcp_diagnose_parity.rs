@@ -551,6 +551,7 @@ fn policy_failure(failure: SharedCode, paused: bool) -> PolicyFailureRecord {
         runtime_ms: 1_000,
         sensitive: false,
         perf_context: Box::new(PerformanceContext::unavailable(SINCE_UNIX_MS)),
+        condition: None,
     }
 }
 

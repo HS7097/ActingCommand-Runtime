@@ -17,9 +17,12 @@ actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-page-detector = { workspace = true }
 actingcommand-policy = { workspace = true }
+# Workflow #396 LAB-3: the Runtime's in-process OCR engine over the vision root's model folders.
+actingcommand-ppocr-onnx-json-provider = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-resource-tooling = { workspace = true }
+actingcommand-vision-ffi = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

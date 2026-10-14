@@ -415,8 +415,10 @@ pub struct LadderConfig {
     digest: String,
 }
 
-/// Whether the embedded catalog lists a code, and how.
-enum Listed {
+/// Whether the embedded catalog lists a code, and how (also read by the `performance` section's
+/// calibration check, Workflow #385 P-c, and the `scheduling` section's code lists, Workflow #386
+/// SR-1).
+pub(crate) enum Listed {
     Active,
     Retired,
     Unlisted,
@@ -426,7 +428,7 @@ fn catalog_codes() -> Option<&'static Map<String, Value>> {
     catalog_json().ok()?.get("codes")?.as_object()
 }
 
-fn listed(spelling: &str) -> Listed {
+pub(crate) fn listed(spelling: &str) -> Listed {
     match catalog_codes().and_then(|codes| codes.get(spelling)) {
         None => Listed::Unlisted,
         Some(entry) if entry.get("status").and_then(Value::as_str) == Some("retired") => {

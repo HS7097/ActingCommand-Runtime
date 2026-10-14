@@ -822,6 +822,63 @@ impl Declaration<'_> {
         )
     }
 
+    /// Workflow #396 REC-7: the `mask` (`{"type": "range", "lower", "upper"}`) or MAA
+    /// `maskRange` (`[lower, upper]`) of an `anchors[]` or `verify_templates[]` entry of task
+    /// schema `0.9`: integer gray bounds in 0..=255 with `lower <= upper`, one of the two forms.
+    fn mask(
+        &self,
+        entry: &Map<String, Value>,
+        field: &str,
+        value: &Value,
+        pointer: &str,
+    ) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        if field == "maskRange" && entry.contains_key("mask") {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        let (lower, upper) = if field == "mask" {
+            let mask = self.object(value, pointer, &["type", "lower", "upper"])?;
+            let kind_pointer = child(pointer, "type");
+            let kind = self.required(mask, pointer, "type")?;
+            self.string(kind, &kind_pointer)?;
+            if kind.as_str() != Some("range") {
+                return Err(self.error(&kind_pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            (
+                (
+                    self.required(mask, pointer, "lower")?,
+                    child(pointer, "lower"),
+                ),
+                (
+                    self.required(mask, pointer, "upper")?,
+                    child(pointer, "upper"),
+                ),
+            )
+        } else {
+            let range = self.array(value, pointer)?;
+            if range.len() != 2 {
+                return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+            }
+            (
+                (&range[0], child(pointer, "0")),
+                (&range[1], child(pointer, "1")),
+            )
+        };
+        let bound = |(value, pointer): (&Value, String)| match value.as_u64() {
+            Some(gray) if gray <= u64::from(u8::MAX) => Ok(gray),
+            _ if value.is_i64() || value.is_u64() => {
+                Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue))
+            }
+            _ => Err(self.error(&pointer, ResourceDeclarationReason::InvalidType)),
+        };
+        if bound(lower)? > bound(upper)? {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
     fn method(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         if value.is_string() || value.as_i64().is_some() {
             super::normalize_maa_method(value)
@@ -946,6 +1003,7 @@ impl Declaration<'_> {
                 "mask",
                 "maskRange",
                 "rect_move",
+                "color_check",
                 "maa_task",
                 "maa_task_id",
                 "provenance",
@@ -1010,7 +1068,11 @@ impl Declaration<'_> {
                 "unique" => self.unique(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
-                "mask" | "maskRange" => {
+                // Workflow #396 REC-7: a gray-range mask of task schema 0.9.
+                "mask" | "maskRange" => self.mask(object, field, value, &pointer)?,
+                // Workflow #396 REC-7: `verify_templates[]` takes `color_check` from task
+                // schema 0.9 on.
+                "color_check" if family == "verify_templates" && self.schema != Some("0.9") => {
                     return Err(self.error(&pointer, ResourceDeclarationReason::UnconsumedField));
                 }
                 "color_check" if !value.is_null() => {

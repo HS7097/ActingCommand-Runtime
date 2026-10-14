@@ -8,9 +8,10 @@
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::recovery_ladder::LadderConfig;
+use crate::scheduling::SchedulingConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
-use crate::{host_claims, instance, recovery_ladder};
+use crate::{host_claims, instance, performance, recovery_ladder, scheduling};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
@@ -78,6 +79,10 @@ pub struct ConfigFailure {
     config_key: String,
     problem: Option<ConfigValueProblem>,
     range: Option<(i64, i64)>,
+    /// Workflow #386 SR-1: the member of a host blackout entry that breaks a rule (a JSON
+    /// pointer into the configuration file) and the entry's id when it has a usable one, the
+    /// values of `blackout_config_invalid`.
+    blackout: Option<(String, Option<String>)>,
 }
 
 impl ConfigFailure {
@@ -87,6 +92,21 @@ impl ConfigFailure {
             config_key: config_key.into(),
             problem: None,
             range: None,
+            blackout: None,
+        }
+    }
+
+    /// Workflow #386 SR-1: `blackout_config_invalid` for the host blackout entry member at
+    /// `field` of the key `config_key` (`scheduling.blackout.host`), with the entry's id when it
+    /// has a usable one.
+    pub fn blackout(
+        config_key: impl Into<String>,
+        field: impl Into<String>,
+        blackout_id: Option<String>,
+    ) -> Self {
+        Self {
+            blackout: Some((field.into(), blackout_id)),
+            ..Self::new(ConfigCode::BlackoutConfigInvalid, config_key)
         }
     }
 
@@ -111,9 +131,12 @@ impl ConfigFailure {
     /// whole request as `config_value_invalid`, keeping its key and why.
     fn into_instruction(self) -> Self {
         match self.code {
-            ConfigCode::RecoveryLadderConfigInvalid => Self {
+            ConfigCode::RecoveryLadderConfigInvalid
+            | ConfigCode::PerfConfigInvalid
+            | ConfigCode::BlackoutConfigInvalid => Self {
                 code: ConfigCode::ConfigValueInvalid,
                 problem: self.problem.or(Some(ConfigValueProblem::SectionCheck)),
+                blackout: None,
                 ..self
             },
             _ => self,
@@ -140,9 +163,28 @@ impl ConfigFailure {
         self.problem
     }
 
+    /// Workflow #386 SR-1: the member pointer of a host blackout entry that breaks a rule.
+    pub fn field(&self) -> Option<&str> {
+        self.blackout.as_ref().map(|(field, _)| field.as_str())
+    }
+
+    /// Workflow #386 SR-1: the id of a host blackout entry that breaks a rule, when it has one.
+    pub fn blackout_id(&self) -> Option<&str> {
+        self.blackout.as_ref().and_then(|(_, id)| id.as_deref())
+    }
+
     /// `outcome` with this failure's values: `config_key`, `config_value_problem` when the value
-    /// is refused and, for a bounded key, `range_min` and `range_max`.
+    /// is refused and, for a bounded key, `range_min` and `range_max`; for
+    /// `blackout_config_invalid` (Workflow #386 SR-1) `field` and `blackout_id` instead, the keys
+    /// that code declares.
     pub fn with_values(&self, outcome: Outcome) -> Outcome {
+        if let Some((field, blackout_id)) = &self.blackout {
+            let outcome = outcome.field(field.clone());
+            return match blackout_id {
+                Some(blackout_id) => outcome.blackout_id(blackout_id.clone()),
+                None => outcome,
+            };
+        }
         let outcome = outcome.config_key(self.config_key.clone());
         let outcome = match self.problem {
             Some(problem) => outcome.config_value_problem(problem),
@@ -331,6 +373,23 @@ impl EffectiveConfig {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
+    /// §10.4).
+    pub fn check_performance(&self) -> Result<(), ConfigFailure> {
+        performance::check(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #386 SR-1: the `scheduling` section in effect, read and checked whole.
+    pub fn scheduling(&self) -> Result<SchedulingConfig, ConfigFailure> {
+        SchedulingConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
+    /// number of observe-only retries the host hands the kernel at each step.
+    pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
+        scheduling::sample_timeout_retries(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)
@@ -429,7 +488,9 @@ impl EffectiveConfig {
 
     /// The whole-section checks of `sections` against the values in effect (§5.3), with the
     /// facts of other crates in `context`: the `recovery_ladder` section whole (D1c), the
-    /// `host_claims` slack (D1c) and each instance of the per-instance section (D1b).
+    /// `host_claims` slack (D1c), the `performance` section whole (Workflow #385 P-c), the
+    /// `scheduling` section whole (Workflow #386 SR-1) and each
+    /// instance of the per-instance section (D1b).
     fn check_sections(
         &self,
         sections: &BTreeSet<String>,
@@ -440,6 +501,12 @@ impl EffectiveConfig {
         }
         if sections.contains(host_claims::SECTION) {
             self.renewal_slack_ms()?;
+        }
+        if sections.contains(performance::SECTION) {
+            self.check_performance()?;
+        }
+        if sections.contains(scheduling::SECTION) {
+            self.scheduling()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

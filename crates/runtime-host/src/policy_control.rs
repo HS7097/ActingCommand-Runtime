@@ -588,6 +588,7 @@ impl PolicyControlState {
                         runtime_ms,
                         sensitive: task.sensitive,
                         perf_context: Box::new(perf_context.clone()),
+                        condition: None,
                     },
                 }
             }

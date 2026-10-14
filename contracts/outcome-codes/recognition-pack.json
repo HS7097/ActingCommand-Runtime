@@ -283,7 +283,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The exact score map of a template target that declares unique was not complete within the search limit timeout_ms (Workflow #396 REC-2). An evaluation error: the target never passes on a partial search.",
+      "description": "The exact score map of a template target that declares unique (Workflow #396 REC-2) or mask (Workflow #396 REC-7) was not complete within the search limit timeout_ms. An evaluation error: the target never passes on a partial search.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -460,6 +460,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Searching a second place within the declared margin of a unique target's best match, or the exact score map that search reads (Workflow #396 REC-2)."
+    },
+    "target_match_exact": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Scoring a masked template target that declares no unique on its exact score map (Workflow #396 REC-7)."
     }
   }
 }

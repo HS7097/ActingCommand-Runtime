@@ -19,6 +19,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
+mod scan;
+pub use scan::*;
+
 pub const CANDIDATE_PROJECTION_SCHEMA_VERSION: &str = "actingcommand.candidate-projection.v1";
 
 /// Candidates one layout yields on one frame.
@@ -398,11 +401,7 @@ impl CandidateProjection {
                     actionable: candidate.actionable,
                     rect: candidate.rect,
                     click: candidate.click,
-                    features: candidate
-                        .features
-                        .iter()
-                        .map(|(name, feature)| (name.as_str(), HashedFeature::from(feature)))
-                        .collect(),
+                    features: hashed_features(&candidate.features),
                 })
                 .collect(),
         };
@@ -737,15 +736,7 @@ fn validate_set_header(
             format!("`{schema_version}` is not `{CANDIDATE_PROJECTION_SCHEMA_VERSION}`"),
         ));
     }
-    if page_id.is_empty()
-        || page_id.len() > PAGE_ID_MAX_BYTES
-        || page_id.chars().any(char::is_control)
-    {
-        return Err(CandidateProjectionError::invalid(
-            "page_id",
-            "the page ID is empty, longer than 256 bytes or holds a control character",
-        ));
-    }
+    validate_page_id(page_id)?;
     validate_candidate_layout_id(layout_id)?;
     if frame.width == 0 || frame.height == 0 {
         return Err(CandidateProjectionError::invalid(
@@ -762,6 +753,24 @@ fn validate_set_header(
         ));
     }
     Ok(())
+}
+
+fn validate_page_id(page_id: &str) -> Result<(), CandidateProjectionError> {
+    if page_id.is_empty()
+        || page_id.len() > PAGE_ID_MAX_BYTES
+        || page_id.chars().any(char::is_control)
+    {
+        return Err(CandidateProjectionError::invalid(
+            "page_id",
+            "the page ID is empty, longer than 256 bytes or holds a control character",
+        ));
+    }
+    Ok(())
+}
+
+/// A business identity value or variant: 1 to 128 bytes without a control character.
+pub(crate) fn is_business_identity(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
 struct CandidateRow<'a> {
@@ -810,19 +819,29 @@ fn validate_candidate_row(
     let Some(features) = row.features else {
         return Ok(());
     };
+    validate_candidate_features(&expected, row.actionable, features)
+}
+
+/// The features of one candidate: the feature budget, none on a candidate that is not
+/// actionable, the feature names, and each business identity's bounds.
+fn validate_candidate_features(
+    candidate_id: &str,
+    actionable: bool,
+    features: &CandidateFeatureMap,
+) -> Result<(), CandidateProjectionError> {
     if features.len() > CANDIDATE_PROJECTION_MAX_FEATURES {
         return Err(CandidateProjectionError::budget_exceeded(
             "features",
             format!(
-                "candidate `{expected}` carries {} features above the {CANDIDATE_PROJECTION_MAX_FEATURES}-feature budget",
+                "candidate `{candidate_id}` carries {} features above the {CANDIDATE_PROJECTION_MAX_FEATURES}-feature budget",
                 features.len()
             ),
         ));
     }
-    if !row.actionable && !features.is_empty() {
+    if !actionable && !features.is_empty() {
         return Err(CandidateProjectionError::invalid(
             "features",
-            format!("candidate `{expected}` is not actionable and carries features"),
+            format!("candidate `{candidate_id}` is not actionable and carries features"),
         ));
     }
     for (name, feature) in features {
@@ -834,14 +853,10 @@ fn validate_candidate_row(
             confidence,
             ..
         } = feature
-            && (value.is_empty()
-                || value.len() > 128
-                || value.chars().any(char::is_control)
-                || variant.as_ref().is_some_and(|variant| {
-                    variant.is_empty()
-                        || variant.len() > 128
-                        || variant.chars().any(char::is_control)
-                })
+            && (!is_business_identity(value)
+                || variant
+                    .as_deref()
+                    .is_some_and(|variant| !is_business_identity(variant))
                 || *distance > 1000
                 || confidence.is_some_and(|value| !(0..=1000).contains(&value)))
         {
@@ -852,6 +867,15 @@ fn validate_candidate_row(
         }
     }
     Ok(())
+}
+
+/// A candidate's features as the candidate-set hash covers them: by name, each only its type
+/// and value.
+fn hashed_features(features: &CandidateFeatureMap) -> BTreeMap<&str, HashedFeature<'_>> {
+    features
+        .iter()
+        .map(|(name, feature)| (name.as_str(), HashedFeature::from(feature)))
+        .collect()
 }
 
 #[derive(Serialize)]

@@ -76,7 +76,8 @@ typed definitions; adding these interfaces does not install SQL views.
 
 The errors view selects Warning, Error and Fatal without changing the original
 severity. Observation and changes use the explicit families and event types in
-the definition. Health selects the performance and monitor families. Missing
+the definition. Health selects the performance and monitor families and, from ledger
+revision 3, the ledger's gap, probe and dump-import records (table below). Missing
 unload or clock-jump facts are not inferred from other lifecycle observations.
 
 Lab includes direct Lab sources and LabRequest events. Related Runtime events
@@ -103,7 +104,11 @@ emulator instance, so every `instance_id` ever bound to the same port through
 `ledger-forensics::instance_bindings` derives, at a snapshot, the latest binding
 per instance id and the port map (port to every instance id ever bound as
 HOST:PORT, in first-binding order); serial-configured instances and instances
-without a port stay out of the port map and are listed separately.
+without a port stay out of the port map and are listed separately. A device
+fingerprint is the identity of a handset (Workflow #398 RD-1b,
+[device-binding.md](device-binding.md)): `instance_bindings` also derives the
+device map, fingerprint to every instance id ever bound to it, in first-binding
+order, beside the port map, and each latest binding names its fingerprint.
 
 `EventQuery.exclude_event_types` excludes every event whose type is in the set,
 AND with every other condition (an empty set is no constraint and leaves the

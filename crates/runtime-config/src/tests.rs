@@ -123,7 +123,9 @@ fn d1_m2_a_file_naming_one_key_makes_it_explicit_and_leaves_the_rest_default() {
             find_row(&parameter.key).is_some_and(|(_, instance)| instance.is_some())
         })
         .count();
-    assert_eq!(per_instance, 4, "{parameters:?}");
+    // Two instances, each with its two stuck-recovery members and (Workflow #405, parsed by #386
+    // SR-1) its three random-delay members.
+    assert_eq!(per_instance, 10, "{parameters:?}");
     let named = parameter(&parameters, &instance_key(INSTANCE_A, STUCK_RECOVERY));
     assert_eq!(named.value, FactScalar::Boolean(false));
     assert_eq!(named.source, ConfigParameterSource::Explicit);
@@ -176,9 +178,9 @@ fn d1_m2_a_file_naming_one_key_makes_it_explicit_and_leaves_the_rest_default() {
     assert_eq!(defaulted[0].value, FactScalar::String("[1,2,3]".to_owned()));
     assert_eq!(defaulted[0].source, ConfigParameterSource::Default);
 
-    // An older key is found at its file path: the manifest's `performance_monitor.*` is the
-    // file's `performance.*`.
-    let key = "performance_monitor.pressure_start_samples";
+    // An older key is found at its file path: since Workflow #385 P-c the pressure streak is
+    // the `performance` section's and keeps the file member it had (register §5).
+    let key = "performance.pressure_start_samples";
     let (row, instance) = find_row(key).expect("the key is in the key table");
     assert_eq!(instance, None);
     let older = json!({"performance": {"pressure_start_samples": 5}});

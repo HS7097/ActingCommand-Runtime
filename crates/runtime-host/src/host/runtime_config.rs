@@ -363,6 +363,21 @@ impl HostShared {
             })
     }
 
+    /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
+    /// each step of a contained run (the kernel's `step_pacing()`).
+    pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .sample_timeout_retries()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
     fn record_config_fact(&self, mut record: RuntimeFactRecord) -> RuntimeHostResult<()> {

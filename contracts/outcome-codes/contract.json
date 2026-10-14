@@ -11894,6 +11894,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_instance_binding_device": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: a runtime.instance_bound record whose ADB target or device does not fit (Workflow #398 RD-1b): an instance addressed by its serial with an ADB host or port, or a handset device that is not an explicit physical binding addressed by its serial or records its fingerprint, binding time and channel only in part.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "invalid_runtime_fact_recorded_action": {
       "category": "error",
       "ladder_class": "none",

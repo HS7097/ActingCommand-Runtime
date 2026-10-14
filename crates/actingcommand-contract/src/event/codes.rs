@@ -106,6 +106,9 @@ closed_code!(EventAction {
     PolicyDispatch => "policy.dispatch",
     PolicyExecution => "policy.execution",
     PolicyPlanning => "policy.planning",
+    // Workflow #383 (register L7, L14; D1): the decision-memory and fact-refresh value records.
+    PolicyControlState => "policy.control_state",
+    PolicyFactRefresh => "policy.fact_refresh",
     CatalogActivate => "catalog.activate",
     CatalogRollback => "catalog.rollback",
     RuntimeDebugWait => "runtime.debug_wait",
@@ -164,6 +167,8 @@ closed_code!(EventAction {
     ResourcePromote => "resource.promote",
     CriticalTest => "critical.test",
     LedgerRecovery => "ledger.recovery",
+    // Workflow #383 (register L2): a probe finding of the ledger.
+    LedgerProbe => "ledger.probe",
     SignatureRegister => "signature.register",
     SignatureMatch => "signature.match",
     SignatureRetire => "signature.retire",

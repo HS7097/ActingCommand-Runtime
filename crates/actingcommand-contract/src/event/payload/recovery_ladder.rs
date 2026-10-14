@@ -270,6 +270,9 @@ pub enum RecoveryLadderSuppression {
     AlreadyRunning,
     PreparationSuperseded,
     AdmissionDenied,
+    /// Workflow #386 (register S3, SCHED §5.2a): the instance is inside a blackout, where no
+    /// ladder starts. SR-4a writes it.
+    Blackout,
 }
 
 /// §6.2: the trigger of `recovery_ladder_started` agrees with its stage.

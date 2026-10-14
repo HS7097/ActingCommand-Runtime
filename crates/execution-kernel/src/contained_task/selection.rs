@@ -15,8 +15,9 @@
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
-    ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, TaskControl,
-    TaskOperation, TaskProgram, safe_task_local_path, sampled_tap, scene_from_frame,
+    ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, SampleRetries,
+    TaskControl, TaskOperation, TaskProgram, safe_task_local_path, sample_budget_insufficient,
+    sampled_tap, scene_from_frame,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -146,6 +147,20 @@ pub(super) struct PreparedSelect {
     /// (Workflow #336 PKG-S1).
     package_sha256: String,
     policy: SelectionPolicy,
+}
+
+#[cfg(test)]
+impl PreparedSelect {
+    /// A prepared select step for the gate tests outside this module (Workflow #386 SR-1): the
+    /// layout `layout_id` and the sealed document `policy`.
+    pub(super) fn for_test(layout_id: &str, policy: SelectionPolicy) -> Self {
+        Self {
+            layout_id: layout_id.to_owned(),
+            path: "operations/task/policies/select.json".to_owned(),
+            package_sha256: "0".repeat(64),
+            policy,
+        }
+    }
 }
 
 /// A select step's confirmed candidate: the guard outcome on the confirmation frame, the
@@ -592,7 +607,7 @@ fn selection_record(
     Ok(TaskSelectionRecord {
         layout_id: projection.layout_id().to_owned(),
         page_id: projection.page_id().to_owned(),
-        projection: projection.clone(),
+        projection: projection.clone().into(),
         policy: TaskSelectionPolicy {
             path: prepared.path.clone(),
             package_sha256: prepared.package_sha256.clone(),
@@ -601,6 +616,7 @@ fn selection_record(
         },
         fact_snapshot_id: decision.fact_snapshot_id.clone(),
         input_ledger_position: snapshot.ledger_position,
+        input_fact_revisions: None,
         now_unix_ms,
         input_sha256: decision.input_sha256.clone(),
         selection_result: record_outcome(&decision.outcome)?,
@@ -609,6 +625,7 @@ fn selection_record(
         verdicts: record_verdicts(&decision.candidates)?,
         reasons: record_reasons(&decision.reasons),
         confirmation: TaskSelectionConfirmation::NotAttempted,
+        unknown_check: None,
     })
 }
 
@@ -638,8 +655,10 @@ impl PreparedContainedTask {
         if !enhanced {
             return Ok((project(&self.evaluator, &first.scene, &layout.id)?, None));
         }
-        let check_deadline = || {
-            if Instant::now() >= deadline {
+        // Workflow #386 SR-1 (scheduling model §2.1): the deadline is compared on the
+        // observation clock; past it the candidate sampling timed out.
+        let check_deadline = |now: Instant| {
+            if now >= deadline {
                 Err(ContainedTaskError::new(
                     ExecutionKernelCode::CandidateSampleDeadlineExceeded.code(),
                 ))
@@ -647,41 +666,44 @@ impl PreparedContainedTask {
                 Ok(())
             }
         };
-        check_deadline()?;
+        let insufficient = |required_ms: u64, now: Instant| {
+            sample_budget_insufficient(
+                ExecutionKernelCode::CandidateSampleBudgetInsufficient,
+                required_ms,
+                deadline.saturating_duration_since(now),
+            )
+        };
+        check_deadline(runtime.observation_now())?;
         if layout.has_consensus() {
-            if !runtime
-                .candidate_sampling_checkpoint()
-                .map_err(ContainedTaskRunError::operation::<R>)?
-            {
+            // Workflow #386 SR-1 (§2.2): whether the runtime samples is its own answer; the
+            // checkpoint only answers cancellation.
+            if !runtime.sampling_supported() {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::CandidateSamplingRuntimeUnsupported.code(),
                 )
                 .into());
             }
+            runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
             let transaction_ms = layout
                 .maximum_provider_and_wait_ms(&self.evaluator)
                 .saturating_add(
                     page_recognition_budget_ms(&self.evaluator, &self.detector, None)?
                         .saturating_mul(layout.required_frames().saturating_sub(1) as u64),
                 );
-            if Duration::from_millis(transaction_ms)
-                > deadline.saturating_duration_since(Instant::now())
-            {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
-                )
-                .into());
+            let now = runtime.observation_now();
+            if Duration::from_millis(transaction_ms) > deadline.saturating_duration_since(now) {
+                return Err(insufficient(transaction_ms, now).into());
             }
         }
         let mut frames = Vec::with_capacity(layout.required_frames().saturating_sub(1));
         for _ in 1..layout.required_frames() {
-            check_deadline()?;
+            check_deadline(runtime.observation_now())?;
             let interval = Duration::from_millis(u64::from(layout.sample_interval_ms));
-            if interval > deadline.saturating_duration_since(Instant::now()) {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
-                )
-                .into());
+            let now = runtime.observation_now();
+            if interval > deadline.saturating_duration_since(now) {
+                return Err(insufficient(u64::from(layout.sample_interval_ms), now).into());
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
@@ -696,7 +718,7 @@ impl PreparedContainedTask {
                 ended,
                 succeeded: true,
             });
-            check_deadline()?;
+            check_deadline(runtime.observation_now())?;
             let frame = self
                 .capture_frame(runtime, None, None, timing, None, Some(deadline))?
                 .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
@@ -725,13 +747,14 @@ impl PreparedContainedTask {
                 layout.required_frames().saturating_sub(1) as u64
                     * u64::from(layout.sample_interval_ms),
             );
-        if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(Instant::now()) {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
-            )
-            .into());
+        let now = runtime.observation_now();
+        if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(now) {
+            return Err(insufficient(provider_ms, now).into());
         }
         let mut recording_error = None;
+        // Workflow #386 SR-1 (§2.1): a candidate recognition that ran past the deadline is the
+        // candidate sampling's timeout, not a projection failure.
+        let mut deadline_passed = false;
         let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(deadline).project_candidates_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
                 let measured = super::ContainedTaskEvaluationTiming {
@@ -742,10 +765,19 @@ impl PreparedContainedTask {
                     recording_error = Some(error);
                     return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("runtime rejected candidate sample recording"));
                 }
-                check_deadline().map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code().as_str()))
+                check_deadline(runtime.observation_now()).map_err(|error| {
+                    deadline_passed = true;
+                    actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code().as_str())
+                })
             });
         if let Some(error) = recording_error {
             return Err(ContainedTaskRunError::Boundary(error));
+        }
+        if deadline_passed {
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::CandidateSampleDeadlineExceeded.code(),
+            )
+            .into());
         }
         let projection = projection.map_err(|failure| {
             ContainedTaskError::with_detail(failure.code(), failure.detail())
@@ -756,7 +788,7 @@ impl PreparedContainedTask {
                         .unwrap_or_default(),
                 )
         })?;
-        check_deadline()?;
+        check_deadline(runtime.observation_now())?;
         Ok((projection, frames.pop()))
     }
 
@@ -770,6 +802,10 @@ impl PreparedContainedTask {
     /// failure of the runtime's confirmation capture the record goes to the runtime as
     /// `run_ending` and the capture's error is returned unchanged: a failure to write that
     /// record, including the runtime's own validation of it, stays with the runtime.
+    ///
+    /// Workflow #386 SR-1: `sampling` is the step's observe-only retries and its window; a
+    /// confirmation that ended by a sampling timeout records that timeout with the retries made
+    /// so far.
     pub(super) fn select_attempt<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -777,6 +813,7 @@ impl PreparedContainedTask {
         observation: &PageObservation,
         step_index: u32,
         timing: ContainedTaskTimingContext,
+        sampling: (&SampleRetries, Duration),
     ) -> Result<SelectedCandidate, ContainedTaskRunError<R::Error>> {
         let prepared = operation.prepared_select.as_deref().ok_or_else(|| {
             ContainedTaskError::with_detail(
@@ -790,15 +827,18 @@ impl PreparedContainedTask {
             .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
         let deadline = timing.deadline();
         let sampling_budget = sampling_budget_ms(operation, &self.evaluator, &self.detector)?;
-        if let Some(required_ms) = sampling_budget
-            && (Instant::now() >= deadline
-                || Duration::from_millis(required_ms)
-                    > deadline.saturating_duration_since(Instant::now()))
-        {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::CandidateSampleBudgetInsufficient.code(),
-            )
-            .into());
+        if let Some(required_ms) = sampling_budget {
+            // Workflow #386 SR-1 (§2.3): too little time left for the selection ends the run
+            // before any capture, with what it needs and what is left.
+            let remaining = deadline.saturating_duration_since(runtime.observation_now());
+            if remaining.is_zero() || Duration::from_millis(required_ms) > remaining {
+                return Err(sample_budget_insufficient(
+                    ExecutionKernelCode::CandidateSampleBudgetInsufficient,
+                    required_ms,
+                    remaining,
+                )
+                .into());
+            }
         }
         let (projection, _) =
             self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
@@ -877,6 +917,7 @@ impl PreparedContainedTask {
                 candidate_id,
                 timing,
                 deadline,
+                sampling,
             )?,
         };
         record.confirmation = confirmation;
@@ -892,9 +933,10 @@ impl PreparedContainedTask {
             selection: Box::new(record),
             run_ending,
         });
+        let now = runtime.observation_now();
         match recorded {
             Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
-            Ok(()) if result.is_ok() && sampling_budget.is_some() && Instant::now() >= deadline => {
+            Ok(()) if result.is_ok() && sampling_budget.is_some() && now >= deadline => {
                 Err(ContainedTaskError::new(
                     ExecutionKernelCode::CandidateSampleDeadlineExceeded.code(),
                 )
@@ -912,6 +954,7 @@ impl PreparedContainedTask {
     /// `projection`. A failure of the runtime's capture that it classifies nonfatal or fatal
     /// is the confirmation `capture_failed`, returned unchanged after the record; any other
     /// boundary failure returns as the outer error.
+    #[allow(clippy::too_many_arguments)]
     fn confirm<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -920,7 +963,12 @@ impl PreparedContainedTask {
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
         deadline: Instant,
+        sampling: (&SampleRetries, Duration),
     ) -> Result<Confirmation<R::Error>, ContainedTaskRunError<R::Error>> {
+        // Workflow #386 SR-1: a failure's outcome as the record names it, a sampling timeout with
+        // the retries made so far.
+        let (retries, window) = sampling;
+        let outcome_of = |error: &ContainedTaskError| retries.outcome(error, window);
         let prepared = operation
             .prepared_select
             .as_deref()
@@ -938,7 +986,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::CaptureFailed {
-                        outcome: error.code().outcome(),
+                        outcome: outcome_of(&error),
                     },
                     Err(error.into()),
                 ));
@@ -1001,7 +1049,7 @@ impl PreparedContainedTask {
             Err(ContainedTaskRunError::Task(error)) => {
                 return Ok((
                     TaskSelectionConfirmation::GuardFailed {
-                        outcome: error.code().outcome(),
+                        outcome: outcome_of(&error),
                     },
                     Err(error.into()),
                 ));
@@ -1028,7 +1076,7 @@ impl PreparedContainedTask {
                             Err(ContainedTaskRunError::Task(error)) => {
                                 return Ok((
                                     TaskSelectionConfirmation::GuardFailed {
-                                        outcome: error.code().outcome(),
+                                        outcome: outcome_of(&error),
                                     },
                                     Err(error.into()),
                                 ));
@@ -1041,7 +1089,7 @@ impl PreparedContainedTask {
                 Err(ContainedTaskRunError::Task(error)) => {
                     return Ok((
                         TaskSelectionConfirmation::CaptureFailed {
-                            outcome: error.code().outcome(),
+                            outcome: outcome_of(&error),
                         },
                         Err(error.into()),
                     ));

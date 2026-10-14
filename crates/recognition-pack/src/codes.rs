@@ -78,6 +78,9 @@ actingcommand_contract::outcome_locations! {
         // Workflow #396 REC-2.
         /// Checking that a target declaring `unique` has no second place within its margin.
         TargetMatchUnique => "target_match_unique",
+        // Workflow #396 REC-7.
+        /// Scoring a masked template target that declares no `unique` on its exact score map.
+        TargetMatchExact => "target_match_exact",
     }
 }
 

@@ -23,6 +23,7 @@ use super::store::{
     read_old_record, read_verified, save_recording, task_id_valid_for_lab, with_details,
     write_content_addressed,
 };
+use crate::LabOcr;
 use actingcommand_contract::{LabError, LabResult};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -605,11 +606,13 @@ pub(crate) struct BatchResult {
     pub(crate) rejections: Vec<MarkRejection>,
 }
 
-/// Self-test of every own and reused mark of the target on its live frames, checks last.
+/// Self-test of every own and reused mark of the target on its live frames, checks last; OCR
+/// marks with the Lab's OCR provider (Workflow #396 LAB-3).
 fn evaluate_batch(
     session: &Session,
     batch: &MarkBatch,
     live: &[RecordedFrame],
+    ocr: &LabOcr,
 ) -> LabResult<BatchResult> {
     let frames = live
         .iter()
@@ -636,7 +639,7 @@ fn evaluate_batch(
             Some(bytes) => Some(bytes.clone()),
             None => stored_crop(mark)?,
         };
-        let (test, failure) = evaluate_mark(mark, crop.as_deref(), &frames, defaults)?;
+        let (test, failure) = evaluate_mark(mark, crop.as_deref(), &frames, defaults, ocr)?;
         if let Some(detail) = failure {
             rejections.push(MarkRejection::new(
                 &mark.id,
@@ -658,7 +661,7 @@ fn evaluate_batch(
             continue;
         }
         let crop = stored_crop(&mark)?;
-        let (test, failure) = evaluate_mark(&mark, crop.as_deref(), &frames, defaults)?;
+        let (test, failure) = evaluate_mark(&mark, crop.as_deref(), &frames, defaults, ocr)?;
         if let Some(detail) = failure {
             rejections.push(MarkRejection::new(
                 id,
@@ -937,6 +940,7 @@ pub(crate) struct MarkApplied {
 pub(crate) fn apply_marks(
     session: &mut Session,
     request: &super::model::MarkRequest,
+    ocr: &LabOcr,
 ) -> LabResult<MarkApplied> {
     let local = FrameMeta::local();
     let mut opened = false;
@@ -1136,7 +1140,7 @@ pub(crate) fn apply_marks(
 
     // self-test
     let total = batch.own.len() + batch.reused.len();
-    let result = evaluate_batch(session, &batch, &live)?;
+    let result = evaluate_batch(session, &batch, &live, ocr)?;
     rejections.extend(result.rejections);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
@@ -1571,6 +1575,7 @@ pub(crate) fn apply_transition(
     session: &mut Session,
     request: &super::model::MarkRequest,
     spec: &super::model::TransitionSpec,
+    ocr: &LabOcr,
 ) -> LabResult<TransitionApplied> {
     use super::model::TransitionSpec;
     let index = request.step.ok_or_else(|| {
@@ -1673,7 +1678,7 @@ pub(crate) fn apply_transition(
     )?;
     add_reuse(session, &mut batch, reuse, None)?;
     let total = batch.own.len() + batch.reused.len();
-    let result = evaluate_batch(session, &batch, &frames)?;
+    let result = evaluate_batch(session, &batch, &frames, ocr)?;
     rejections.extend(result.rejections);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));

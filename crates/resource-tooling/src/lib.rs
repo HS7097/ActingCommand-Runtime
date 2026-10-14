@@ -11,6 +11,7 @@ mod api;
 mod authoring;
 mod business_catalog;
 mod codes;
+mod declaration_exclusions;
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;
@@ -22,6 +23,9 @@ pub use api::*;
 pub use authoring::*;
 pub use business_catalog::*;
 pub use codes::ResourceToolingCode;
+pub use declaration_exclusions::{
+    DECLARATION_EXCLUSIONS_FILE, DECLARATION_EXCLUSIONS_SCHEMA, DeclarationExclusions,
+};
 pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
     MaaTaskGraphStats, compile_maa_task_graph,

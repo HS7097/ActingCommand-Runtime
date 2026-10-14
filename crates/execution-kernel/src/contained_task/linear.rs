@@ -20,11 +20,11 @@ use super::{
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
     MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageCandidates, PageObservation, PostAdmissionOcrCollector,
-    PreparedContainedTask, TaskControl, TaskOperation, TaskProgram, resolve_page_reference,
-    selection,
+    PreparedContainedTask, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
+    resolve_page_reference, sample_budget_invalid, selection,
 };
 use crate::RunOperationPolicy;
-use crate::codes::ExecutionKernelCode;
+use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{
@@ -159,17 +159,25 @@ impl LinearPlan {
         if evaluator.pack().target_consensus.is_empty() {
             return Ok(());
         }
-        let check = |pages: &[&str], limit_ms: u64, phase: &str| {
+        // Workflow #386 SR-1 (scheduling model §2.4 item 1): a wait whose sampling cannot fit
+        // its budget is `recognition_sample_budget_invalid`, naming the operation whose wait it
+        // is (none for the entry).
+        let check = |pages: &[&str], limit_ms: u64, phase: &str, operation: Option<&str>| {
             let required_ms =
                 selection::page_recognition_budget_ms(evaluator, detector, Some(pages))?;
             let limit_ms = limit_ms.min(control.task_timeout().milliseconds);
             if required_ms > limit_ms {
-                return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
-                    format!(
-                        "phase={phase} pages={} requires {required_ms}ms across page calls and waits; limit={limit_ms}ms",
-                        pages.join(",")
+                return Err(sample_budget_invalid(
+                    ContainedTaskError::with_detail(
+                        ExecutionKernelCode::RecognitionSampleBudgetInvalid.code(),
+                        format!(
+                            "phase={phase} pages={} requires {required_ms}ms across page calls and waits; limit={limit_ms}ms",
+                            pages.join(",")
+                        ),
                     ),
+                    required_ms,
+                    limit_ms,
+                    operation,
                 ));
             }
             Ok(())
@@ -183,6 +191,7 @@ impl LinearPlan {
                     &[page.as_str()],
                     control.step_timeout().milliseconds,
                     "entry",
+                    None,
                 )?;
             }
             let candidates = self.candidates(index, &handled);
@@ -196,9 +205,15 @@ impl LinearPlan {
                 }
                 _ => arrival_ms,
             };
-            check(&candidates.pages, arrival_ms, "arrival")?;
+            let operation_id = Some(operation.id.as_str());
+            check(&candidates.pages, arrival_ms, "arrival", operation_id)?;
             if let Some(LinearTransition::Page { page, timeout, .. }) = &step.transition {
-                check(&[page.as_str()], timeout.as_millis() as u64, "transition")?;
+                check(
+                    &[page.as_str()],
+                    timeout.as_millis() as u64,
+                    "transition",
+                    operation_id,
+                )?;
             }
             if let LinearFrom::Page(page) = &step.from
                 && matches!(step.effect, LinearEffect::Click)
@@ -216,6 +231,7 @@ impl LinearPlan {
                         &candidates.pages,
                         operation.effective_timing(control).timeout.milliseconds,
                         "retry_arrival",
+                        operation_id,
                     )?;
                 }
                 let mut retry_pages = match &step.transition {
@@ -223,7 +239,12 @@ impl LinearPlan {
                     _ => candidates.pages,
                 };
                 retry_pages.push(page.as_str());
-                check(&retry_pages, control.step_timeout().milliseconds, "retry")?;
+                check(
+                    &retry_pages,
+                    control.step_timeout().milliseconds,
+                    "retry",
+                    operation_id,
+                )?;
             }
         }
         Ok(())
@@ -320,6 +341,8 @@ pub(super) struct LinearRun {
     pub(super) step_timeout: Duration,
     pub(super) capture_interval: Duration,
     pub(super) timing: ContainedTaskTimingContext,
+    /// Workflow #386 SR-1: the pacing of the run's entry, then of the step in progress.
+    pub(super) pacing: StepPacing,
 }
 
 /// What a wait is for: its sleep boundary and the stage of a task timeout inside it.
@@ -338,6 +361,16 @@ impl LinearWaitPurpose {
         match self {
             Self::Entry | Self::RetryDecision => TaskTimingBoundary::PageRecognitionWait,
             Self::AfterInput => TaskTimingBoundary::PostconditionWait,
+        }
+    }
+
+    /// Workflow #386 SR-1: the observation a sampling timeout of this wait names (`stage`).
+    const fn observation(self) -> ExecutionKernelLocation {
+        match self {
+            Self::Entry => ExecutionKernelLocation::ObservationEntry,
+            Self::AfterInput | Self::RetryDecision => {
+                ExecutionKernelLocation::ObservationAfterInput
+            }
         }
     }
 
@@ -800,7 +833,7 @@ impl PreparedContainedTask {
                         run.step_timeout,
                         run.capture_interval,
                         LinearWaitPurpose::Entry,
-                        run.timing,
+                        run,
                     )?
                     .ok_or_else(|| {
                         ContainedTaskError::with_detail(ENTRY_UNMATCHED, format!("page={page}"))
@@ -894,7 +927,17 @@ impl PreparedContainedTask {
         mut observation: Option<PageObservation>,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
-        let step_timing = run.timing.with_deadline(Instant::now() + run.step_timeout);
+        // Workflow #386 SR-1 (scheduling model §2.1 item 4): the step's pacing, taken once at
+        // its start; its observation window opens on the observation clock.
+        let run = LinearRun {
+            pacing: runtime
+                .step_pacing()
+                .map_err(ContainedTaskRunError::operation::<R>)?,
+            ..run
+        };
+        let step_timing = run
+            .timing
+            .with_deadline(runtime.observation_now() + run.step_timeout);
         // The dispatched logical step, as the page-graph path counts it; a retry adds none.
         runtime.update_run_progress(step_index.saturating_add(1));
         let policy = operation.retry_policy(
@@ -1015,7 +1058,7 @@ impl PreparedContainedTask {
                 run.step_timeout,
                 run.capture_interval,
                 LinearWaitPurpose::RetryDecision,
-                run.timing,
+                run,
             )?;
             match decided {
                 Some(frame) if frame.page_label != *own_page => {
@@ -1118,21 +1161,59 @@ impl PreparedContainedTask {
         step_timing: ContainedTaskTimingContext,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
-        let (guard, target) = operation.guard_outcome(
-            &self.control,
-            observation,
-            &self.evaluator,
-            runtime,
-            Some(step_timing),
-        )?;
-        let action_seed = runtime
-            .action_seed(step_index, &operation.id)
-            .map_err(ContainedTaskRunError::operation::<R>)?;
-        let click = operation.click.as_ref().ok_or_else(|| {
-            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
-        })?;
-        let (action, sampling) =
-            click.input_action(&self.control.resolution, target.as_ref(), action_seed)?;
+        // Workflow #386 SR-1 (scheduling model §2.1 items 1-3): the guard's observation whose
+        // sampling timed out is made again in a new window (a fresh frame of the step's page)
+        // and guarded again, never repeating an input; the one sampling deadline check before
+        // the input precedes the effect intent.
+        let mut retries =
+            SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationBeforeInput);
+        let mut step_timing = step_timing;
+        let mut again: Option<PageObservation> = None;
+        let (guard, action, sampling, input_context) = loop {
+            let frame = again.as_ref().unwrap_or(observation);
+            let page = frame.page_label.clone();
+            let guarded = operation.guard_outcome(
+                &self.control,
+                frame,
+                &self.evaluator,
+                runtime,
+                Some(step_timing),
+            );
+            let (guard, target) = match guarded {
+                Ok(guarded) => guarded,
+                Err(failure) => {
+                    retries.retry(failure, run.step_timeout)?;
+                    let (frame, timing) =
+                        self.linear_observe_before_input(runtime, run, &page, &mut retries)?;
+                    again = Some(frame);
+                    step_timing = timing;
+                    continue;
+                }
+            };
+            let action_seed = runtime
+                .action_seed(step_index, &operation.id)
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            let click = operation.click.as_ref().ok_or_else(|| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+            })?;
+            let (action, sampling) =
+                click.input_action(&self.control.resolution, target.as_ref(), action_seed)?;
+            if frame.sampling.is_some() && runtime.observation_now() >= step_timing.deadline() {
+                let timeout = ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                );
+                retries.retry(
+                    ContainedTaskRunError::<R::Error>::Task(timeout),
+                    run.step_timeout,
+                )?;
+                let (frame, timing) =
+                    self.linear_observe_before_input(runtime, run, &page, &mut retries)?;
+                again = Some(frame);
+                step_timing = timing;
+                continue;
+            }
+            break (guard, action, sampling, frame.input_context.clone());
+        };
         runtime
             .record(ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -1142,21 +1223,44 @@ impl PreparedContainedTask {
                 guard,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if observation.sampling.is_some() && Instant::now() >= step_timing.deadline() {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
-            )
-            .into());
-        }
         if Instant::now() >= deadline {
             return Err(self
                 .task_timeout_error(TaskTimingStage::BeforeInput, deadline, None)
                 .into());
         }
         runtime
-            .input(action, observation.input_context.clone())
+            .input(action, input_context)
             .map_err(ContainedTaskRunError::operation::<R>)?;
         Self::linear_effect_completed(runtime, run, step_index, operation)
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 items 1-2): the guard's observation of a step
+    /// whose page is `page`, made again in a new window of the step timeout: a fresh frame on
+    /// which only `page` is evaluated. A frame on which it does not pass is
+    /// `contained_task_page_unknown`; a sampling timeout uses up another of `retries`.
+    fn linear_observe_before_input<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        run: LinearRun,
+        page: &str,
+        retries: &mut SampleRetries,
+    ) -> Result<(PageObservation, ContainedTaskTimingContext), ContainedTaskRunError<R::Error>>
+    {
+        loop {
+            let step_timing = run
+                .timing
+                .with_deadline(runtime.observation_now() + run.step_timeout);
+            match self.linear_observe_scene(runtime, &[page], step_timing) {
+                Ok(Ok(observation)) => return Ok((observation, step_timing)),
+                Ok(Err(_)) => {
+                    return Err(ContainedTaskError::new(
+                        SharedCode::ContainedTaskPageUnknown.code(),
+                    )
+                    .into());
+                }
+                Err(failure) => retries.retry(failure, run.step_timeout)?,
+            }
+        }
     }
 
     /// An application step's effect (§5.3 b–d): no guard, no effect intent and no input; the
@@ -1288,7 +1392,7 @@ impl PreparedContainedTask {
                     *timeout,
                     *interval,
                     LinearWaitPurpose::AfterInput,
-                    run.timing,
+                    run,
                 )? {
                     // The next step's arrival budget starts at the frame that showed the page.
                     Some(_) => self.linear_arrival(
@@ -1341,7 +1445,7 @@ impl PreparedContainedTask {
                 budget,
                 interval,
                 LinearWaitPurpose::AfterInput,
-                run.timing,
+                run,
             )?
             .ok_or_else(|| LinearMiss {
                 kind: miss,
@@ -1376,6 +1480,8 @@ impl PreparedContainedTask {
             .last()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let settle = candidates.settle;
+        let mut retries =
+            SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationAfterInput);
         let mut started = Instant::now();
         loop {
             if Instant::now() >= deadline {
@@ -1395,7 +1501,17 @@ impl PreparedContainedTask {
                 run.timing.with_deadline(observation_deadline)
             };
             let captured = Instant::now();
-            let observation = self.linear_observe_scene(runtime, &candidates.pages, timing)?;
+            let observation = match self.linear_observe_scene(runtime, &candidates.pages, timing) {
+                Ok(observation) => observation,
+                Err(failure) => {
+                    // Workflow #386 SR-1 (scheduling model §2.1 item 1): a sampling timeout
+                    // starts the wait over in a new window, without any input.
+                    retries.retry(failure, budget)?;
+                    started = Instant::now();
+                    seen = None;
+                    continue;
+                }
+            };
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1522,6 +1638,8 @@ impl PreparedContainedTask {
 
     /// Captures until one of `candidates` passes, at most `budget` after the first capture;
     /// `None` once the budget is spent. A task deadline inside the wait fails the task.
+    /// Workflow #386 SR-1 (scheduling model §2.1): an observation whose sampling timed out is
+    /// made again in a new window of `budget`, as the run's pacing allows.
     fn linear_wait<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1529,16 +1647,18 @@ impl PreparedContainedTask {
         budget: Duration,
         interval: Duration,
         purpose: LinearWaitPurpose,
-        timing: ContainedTaskTimingContext,
+        run: LinearRun,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
-        let deadline = timing.deadline();
-        let base_timing = timing;
+        let deadline = run.timing.deadline();
+        let base_timing = run.timing;
+        let mut retries = SampleRetries::new(run.pacing, purpose.observation());
         let mut started = Instant::now();
+        let mut window_started = runtime.observation_now();
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
             } else {
-                base_timing.with_deadline(started + budget)
+                base_timing.with_deadline(window_started + budget)
             };
             if Instant::now() >= deadline {
                 return Err(self
@@ -1549,7 +1669,15 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
-            let observation = self.linear_observe_scene(runtime, candidates, timing)?;
+            let observation = match self.linear_observe_scene(runtime, candidates, timing) {
+                Ok(observation) => observation,
+                Err(failure) => {
+                    retries.retry(failure, budget)?;
+                    started = Instant::now();
+                    window_started = runtime.observation_now();
+                    continue;
+                }
+            };
             if Instant::now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -1568,6 +1696,7 @@ impl PreparedContainedTask {
             // handled.
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
                 started += paused;
+                window_started += paused;
                 continue;
             }
             if started.elapsed() >= budget {

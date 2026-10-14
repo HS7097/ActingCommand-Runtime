@@ -52,6 +52,14 @@ impl DeviceSerial {
         Self::new(raw, handset_label(alias))
     }
 
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.6): the stand-in serial of the handset instance
+    /// `alias` while the private binding file has none for it. It binds nothing and its adb
+    /// argument is empty: the registry refuses every session on such an instance before any adb
+    /// command runs.
+    pub fn unbound_handset(alias: &str) -> Self {
+        Self::new(String::new(), handset_label(alias))
+    }
+
     /// The raw serial, for the adb command line only.
     pub fn adb_arg(&self) -> &str {
         &self.raw

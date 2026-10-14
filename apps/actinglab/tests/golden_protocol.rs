@@ -1752,6 +1752,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                 }"#,
             ),
             ("resources/operations/task/assets/HOME.png", scene),
+            // Workflow #396 REC-7: the one-color template is flat (its flat-field score is 1000
+            // milli), so only a threshold of 0, a target that always passes, is admitted.
             (
                 "resources/recognition/arknights.cn.pack.json",
                 br#"{
@@ -1765,7 +1767,7 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                         "id":"page/home",
                         "template_path":"operations/task/assets/HOME.png",
                         "region":{"x":0,"y":0,"width":2,"height":2},
-                        "threshold":0.9
+                        "threshold":0.0
                     }]
                 }"#,
             ),

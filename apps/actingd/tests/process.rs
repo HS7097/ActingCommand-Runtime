@@ -3388,6 +3388,66 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
     );
 }
 
+/// Workflow #385 P-c, Tc-2 and Tc-5 at the process (PERF §4.1, §10.4, §11): a `performance`
+/// section that breaks a rule refuses `check-config` and the start alike with
+/// `perf_config_invalid` and exit code 1, before any ledger is opened.
+#[test]
+fn tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_exit_one() {
+    let curve_below_factor_one = json!([
+        {"r_bp": 10_000, "stage": "S0", "factor_milli": 1_000, "extra_retries": 0, "share_milli": 1_000},
+        {"r_bp": 5_000, "stage": "S1", "factor_milli": 900, "extra_retries": 1, "share_milli": 1_000},
+        {"r_bp": 0, "stage": "S3", "factor_milli": 4_000, "extra_retries": 3, "share_milli": 500}
+    ]);
+    for (case, section) in [
+        (
+            "a curve point below factor one",
+            json!({"pacing": {"curve": curve_below_factor_one}}),
+        ),
+        (
+            "a pressure-only state allowed to S3",
+            json!({"calibration": {"pressure_max_stage": "S3"}}),
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let config_path = root.path().join("actingd.json");
+        write_config(&config_path, root.path(), instance_id(), false);
+        let mut config: Value =
+            serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config");
+        config["performance"] = section;
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).expect("config JSON"),
+        )
+        .expect("write config");
+        let config_argument = config_path.to_str().expect("config path");
+
+        let checked = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args(["check-config", "--config", config_argument])
+            .output()
+            .expect("run actingd check-config");
+        assert_eq!(checked.status.code(), Some(1), "{case}: check-config");
+        let report: Value = serde_json::from_slice(&checked.stdout)
+            .unwrap_or_else(|error| panic!("{case}: check-config report: {error}"));
+        assert_eq!(report["status"], "failed", "{case}");
+        assert_eq!(report["error"]["code"], "perf_config_invalid", "{case}");
+
+        let started = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args(["--config", config_argument])
+            .output()
+            .expect("run actingd");
+        assert_eq!(started.status.code(), Some(1), "{case}: startup");
+        assert!(
+            String::from_utf8_lossy(&started.stderr).contains("perf_config_invalid"),
+            "{case}: {}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+        assert!(
+            !root.path().join("runtime-state.sqlite").exists(),
+            "{case}: no ledger may be opened"
+        );
+    }
+}
+
 /// Every client of these process tests keeps the production I/O budget (5 s, the
 /// `RuntimeClientConfig` default; test plan §4 #11 retired the 500 ms test clients): a reply
 /// delayed behind the single ledger writer does not latch the client.
@@ -3446,6 +3506,103 @@ fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient 
             }
         }
     }
+}
+
+/// `actingd check-config --config <path>`: whether it succeeded, and its report.
+fn rd1b_check_config(config_path: &Path) -> (bool, Value) {
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args([
+            "check-config",
+            "--config",
+            config_path.to_str().expect("config path"),
+        ])
+        .output()
+        .expect("run actingd check-config");
+    let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "check-config report: {error}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (output.status.success(), report)
+}
+
+/// Workflow #398 RD-1b, test row T4, check-config (model-398 v1.1 §3.6): a handset instance the
+/// private binding file binds no device to (here there is no file at all) fails the check with
+/// `device_binding_missing` at stage `assemble`, naming the instance.
+#[test]
+fn rd1b_t4_check_config_refuses_a_handset_without_a_binding() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let config = json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": root.path(),
+        "bind_host": "127.0.0.1",
+        "bind_port": 0,
+        "secret_fingerprint_salt": PROCESS_TEST_SALT,
+        "instances": [{
+            "alias": "neutral.handset",
+            "instance_id": instance_id(),
+            "application_id": "neutral.application",
+            "adb_path": "adb",
+            "touch_backend": "adb_shell_input",
+            "capture_backend": "adb",
+            "device": {"kind": "handset", "transport": "usb"}
+        }]
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+
+    let (succeeded, report) = rd1b_check_config(&config_path);
+    assert!(!succeeded, "{report}");
+    assert_eq!(report["status"], "failed");
+    assert_eq!(
+        report["error"],
+        json!({
+            "code": "device_binding_missing",
+            "stage": "assemble",
+            "detail": {"alias": "neutral.handset"}
+        })
+    );
+}
+
+/// Workflow #398 RD-1b, test row T9, check-config (model-398 v1.1 §12): an emulator-only
+/// configuration checks as before RD-1b: its instance entry has exactly the members it had, with
+/// its HOST:PORT, there is no warning, and the manifest reports no device kind.
+#[test]
+fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_config(&config_path, root.path(), instance_id(), false);
+
+    let (succeeded, report) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{report}");
+    assert_eq!(
+        report["instances"],
+        json!([{
+            "alias": INSTANCE_ALIAS,
+            "mode": "device_registry",
+            "binding": "explicit",
+            "adb_host": "127.0.0.1",
+            "adb_port": 16384,
+            "startup_package": null,
+            "stuck_recovery": true,
+            "stuck_recovery_cooldown_secs": 600
+        }])
+    );
+    assert_eq!(report["warnings"], json!([]));
+    let parameters = report["config_manifest"]["parameters"]
+        .as_array()
+        .expect("manifest parameters");
+    assert!(
+        parameters.iter().all(|parameter| !parameter["key"]
+            .as_str()
+            .is_some_and(|key| key.ends_with(".device_kind"))),
+        "{parameters:?}"
+    );
 }
 
 fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatcher_enabled: bool) {

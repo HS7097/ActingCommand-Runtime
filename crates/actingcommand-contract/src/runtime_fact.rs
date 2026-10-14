@@ -108,6 +108,102 @@ pub fn validate_runtime_fact_key(key: &str) -> Result<(), SanitizationError> {
     Ok(())
 }
 
+/// The prefix of the loaded-package table's workbench keys (Workflow #389 §6.5, register U3).
+/// They are not tagged: `host.pack_registry.` is re-observed every session.
+pub const PACK_REGISTRY_FACT_PREFIX: &str = "host.pack_registry.";
+/// The key of an instance's startup package entry (instance scope, register U3).
+pub const PACK_REGISTRY_STARTUP_FACT_KEY: &str = "host.pack_registry.startup";
+/// The prefix of a prerequisite package's entry (runtime scope, register U3).
+pub const PACK_REGISTRY_PREREQUISITE_FACT_PREFIX: &str = "host.pack_registry.prerequisite.";
+
+/// Which entry of the loaded-package table a workbench record names (Workflow #389 §6.5,
+/// register U3): a procedure binding by its `package_id` (runtime scope,
+/// `host.pack_registry.<package_id>`), an instance's startup package (instance scope,
+/// `host.pack_registry.startup`) or a prerequisite package by its `package_id` (runtime scope,
+/// `host.pack_registry.prerequisite.<package_id>`). U-3 writes the records; a value never
+/// carries a package digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackRegistryFactKey {
+    Procedure { package_id: String },
+    Startup { instance_id: InstanceId },
+    Prerequisite { package_id: String },
+}
+
+impl PackRegistryFactKey {
+    /// Where the entry's record applies.
+    pub fn scope(&self) -> RuntimeFactScope {
+        match self {
+            Self::Procedure { .. } | Self::Prerequisite { .. } => RuntimeFactScope::Runtime,
+            Self::Startup { instance_id } => RuntimeFactScope::Instance {
+                instance_id: *instance_id,
+            },
+        }
+    }
+
+    /// The entry's workbench key. A procedure's `package_id` that would read back as a
+    /// prerequisite key is refused, as is a key no runtime fact may have.
+    pub fn fact_key(&self) -> Result<String, SanitizationError> {
+        let key = match self {
+            Self::Procedure { package_id } => {
+                if package_id.starts_with("prerequisite.") {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidRuntimeFactKey,
+                        "key",
+                    ));
+                }
+                format!("{PACK_REGISTRY_FACT_PREFIX}{package_id}")
+            }
+            Self::Startup { .. } => PACK_REGISTRY_STARTUP_FACT_KEY.to_owned(),
+            Self::Prerequisite { package_id } => {
+                format!("{PACK_REGISTRY_PREREQUISITE_FACT_PREFIX}{package_id}")
+            }
+        };
+        if Self::package_id_text(&key).is_empty() {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidRuntimeFactKey,
+                "key",
+            ));
+        }
+        validate_runtime_fact_key(&key)?;
+        Ok(key)
+    }
+
+    /// The entry a workbench record of `scope` and `key` names: the reader of the key the
+    /// constructors build.
+    pub fn from_fact(scope: &RuntimeFactScope, key: &str) -> Result<Self, SanitizationError> {
+        validate_runtime_fact_key(key)?;
+        let invalid = || SanitizationError::new(SanitizationCode::InvalidRuntimeFactKey, "key");
+        let rest = key
+            .strip_prefix(PACK_REGISTRY_FACT_PREFIX)
+            .ok_or_else(invalid)?;
+        let entry = match scope {
+            RuntimeFactScope::Instance { instance_id } if key == PACK_REGISTRY_STARTUP_FACT_KEY => {
+                Self::Startup {
+                    instance_id: *instance_id,
+                }
+            }
+            RuntimeFactScope::Instance { .. } => return Err(invalid()),
+            RuntimeFactScope::Runtime => match rest.strip_prefix("prerequisite.") {
+                Some(package_id) if !package_id.is_empty() => Self::Prerequisite {
+                    package_id: package_id.to_owned(),
+                },
+                Some(_) => return Err(invalid()),
+                None if !rest.is_empty() => Self::Procedure {
+                    package_id: rest.to_owned(),
+                },
+                None => return Err(invalid()),
+            },
+        };
+        Ok(entry)
+    }
+
+    fn package_id_text(key: &str) -> &str {
+        key.strip_prefix(PACK_REGISTRY_PREREQUISITE_FACT_PREFIX)
+            .or_else(|| key.strip_prefix(PACK_REGISTRY_FACT_PREFIX))
+            .unwrap_or_default()
+    }
+}
+
 /// Where a runtime fact applies.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

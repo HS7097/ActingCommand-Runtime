@@ -4,29 +4,43 @@
 
 use crate::codes::SanitizationCode;
 use crate::{
-    EventId, OwnerEpoch, RuntimeControlPlaneStatus, RuntimeDiscoveredInstance,
-    RuntimeInstanceDiscovery, RuntimeMonitorInstanceStatus, RuntimeMonitorRegistryStatus,
-    RuntimeMonitorState, SanitizationError,
+    OwnerEpoch, RuntimeControlPlaneStatus, RuntimeDiscoveredInstance, RuntimeInstanceDiscovery,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorRegistryStatus, RuntimeMonitorState,
+    SanitizationError,
 };
 use serde::{Deserialize, Serialize};
 
 pub const MAX_RUNTIME_OBSERVED_INSTANCES: usize = 1_024;
 pub const MAX_MONITOR_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
 
+/// One memory store's (lineage, revision) as a status read sampled it (Workflow #383, register
+/// W1): the store's lineage, a fresh identity per owner epoch, and its revision in that lineage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeStateStoreRevision {
+    pub lineage: OwnerEpoch,
+    pub revision: u64,
+}
+
+/// Where a status read's answer comes from (Workflow #383 AO-4q, register W1): the two memory
+/// stores' (lineage, revision), the ledger's committed head and the sampling interval. A status
+/// read appends no ledger record. The store members stay absent until AO-3 gives the stores
+/// their revisions, and a reader accepts their absence. `ledger_committed_head` is the highest
+/// committed sequence when the state was sampled, 0 for an empty ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeStateSource {
-    pub event_id: EventId,
-    pub sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_facts: Option<RuntimeStateStoreRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_facts: Option<RuntimeStateStoreRevision>,
+    pub ledger_committed_head: u64,
     pub sampled_started_at_unix_ms: u64,
     pub sampled_completed_at_unix_ms: u64,
 }
 
 impl RuntimeStateSource {
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        if self.sequence == 0 {
-            return Err(invalid("sequence"));
-        }
         validate_interval(
             self.sampled_started_at_unix_ms,
             self.sampled_completed_at_unix_ms,
@@ -48,7 +62,7 @@ pub enum RuntimeObservedState {
         fatal: bool,
     },
     /// One `DiscoverInstances` answer. It has no `source` field: the response adds the
-    /// committed one (`RuntimeInstanceDiscovery`).
+    /// sampled one (`RuntimeInstanceDiscovery`).
     InstanceDiscovery {
         owner_epoch: OwnerEpoch,
         provider_version: String,
@@ -262,4 +276,74 @@ fn validate_interval(started: u64, completed: u64) -> Result<(), SanitizationErr
 
 fn invalid(field: &'static str) -> SanitizationError {
     SanitizationError::new(SanitizationCode::InvalidRuntimeStateFact, field)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IdentifierIssuer;
+    use serde_json::json;
+
+    // Workflow #383 AO-4q, test row AO4-c (register W1; ledger-observer.md §13): a status read's
+    // source is the two stores' (lineage, revision), the committed head (0 for an empty ledger)
+    // and the sampling interval. Before AO-3 the store members are absent, and a reader accepts
+    // the source with them and without them.
+    #[test]
+    fn ao4_c_the_state_source_reads_back_with_or_without_the_store_revisions() {
+        let issuer = IdentifierIssuer::new().expect("issuer");
+        let lineage = *issuer.mint_owner_epoch().expect("owner epoch").transport();
+
+        let without_stores = RuntimeStateSource {
+            instance_facts: None,
+            runtime_facts: None,
+            ledger_committed_head: 0,
+            sampled_started_at_unix_ms: 1_790_000_000_000,
+            sampled_completed_at_unix_ms: 1_790_000_000_003,
+        };
+        let encoded = serde_json::to_value(&without_stores).expect("encode the source");
+        assert_eq!(
+            encoded,
+            json!({
+                "ledger_committed_head": 0,
+                "sampled_started_at_unix_ms": 1_790_000_000_000_u64,
+                "sampled_completed_at_unix_ms": 1_790_000_000_003_u64,
+            })
+        );
+        let decoded: RuntimeStateSource =
+            serde_json::from_value(encoded).expect("a source without store revisions decodes");
+        decoded
+            .validate()
+            .expect("a source without store revisions is valid");
+        assert_eq!(decoded, without_stores);
+
+        let with_stores = RuntimeStateSource {
+            instance_facts: Some(RuntimeStateStoreRevision {
+                lineage,
+                revision: 12,
+            }),
+            runtime_facts: Some(RuntimeStateStoreRevision {
+                lineage,
+                revision: 40,
+            }),
+            ledger_committed_head: 42,
+            ..without_stores
+        };
+        let encoded = serde_json::to_value(&with_stores).expect("encode the source");
+        assert_eq!(
+            encoded,
+            json!({
+                "instance_facts": {"lineage": lineage, "revision": 12},
+                "runtime_facts": {"lineage": lineage, "revision": 40},
+                "ledger_committed_head": 42,
+                "sampled_started_at_unix_ms": 1_790_000_000_000_u64,
+                "sampled_completed_at_unix_ms": 1_790_000_000_003_u64,
+            })
+        );
+        let decoded: RuntimeStateSource =
+            serde_json::from_value(encoded).expect("a source with store revisions decodes");
+        decoded
+            .validate()
+            .expect("a source with store revisions is valid");
+        assert_eq!(decoded, with_stores);
+    }
 }

@@ -120,6 +120,9 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     }
     let (arguments, install_held) = parse_install_held_arguments(arguments)?;
     let config_path = parse_arguments(arguments)?;
+    let file = config::load(&config_path).map_err(ActingdError::config)?;
+    // Workflow #398 RD-1b: a device refusal names its instance or file on the developer line.
+    let device_refusal = file.device_refusal();
     let RuntimeAssembly {
         host,
         provider,
@@ -127,9 +130,13 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         resource_packages,
         adb_requirement,
         ..
-    } = config::load(&config_path)
-        .and_then(config::ActingdConfigFile::assemble)
-        .map_err(ActingdError::config)?;
+    } = file.assemble().map_err(|code| {
+        let error = ActingdError::config(code);
+        match device_refusal.filter(|refused| refused.code() == code) {
+            Some(refused) => error.with_detail(refused.to_string()),
+            None => error,
+        }
+    })?;
     // Workflow #337: the install root's adb check of `check-config`, before any side effect.
     config::ac_adb::require(&adb_requirement).map_err(|rejection| {
         ActingdError::config(rejection.code()).with_detail(rejection.to_string())

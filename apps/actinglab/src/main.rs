@@ -174,6 +174,7 @@ mod lab_package_control;
 mod lab_run;
 mod maa_task_graph;
 mod monitor_stream;
+mod offline_ocr;
 mod package_build;
 mod package_cli;
 pub mod project_interface;

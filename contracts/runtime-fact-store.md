@@ -508,12 +508,14 @@ the backend self-check facts (source `device-proxy` or `capture`).
     and is not produced yet), `settable` (boolean: whether an instruction may
     change the key while the Runtime runs; Workflow #387 D1b). Values are effective values, not raw file contents: since Workflow
     #318 cfg2 every one is read back from the assembled `RuntimeHostConfig`
-    (scheduler, policy cadence, performance control, performance monitor
-    including `performance_monitor.pressure_start_samples` /
-    `performance_monitor.pressure_end_samples`, I/O timeout, frame bound,
-    capacity thresholds, frame retention), and a host that cannot report one
-    fails assembly with `config_manifest_incomplete` instead of writing a
-    default. Configured daemon-level device tool paths appear as
+    (scheduler, policy cadence, performance control, I/O timeout, frame
+    bound, capacity thresholds, frame retention), and a host that cannot report
+    one fails assembly with `config_manifest_incomplete` instead of writing a
+    default; the sections the configuration mechanism resolves (Workflow #387
+    D1b on; since Workflow #385 P-c the `performance` section, the pressure
+    streaks `performance.pressure_start_samples` /
+    `performance.pressure_end_samples` among its keys) are the values the host
+    is assembled with. Configured daemon-level device tool paths appear as
     `device_paths.<name>` (`explicit`); unconfigured ones are omitted. The
     secret fingerprint salt is never a value: only
     `secret_fingerprint_salt_bytes`, its byte length, is reported. Since
