@@ -154,6 +154,7 @@ field:
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
 | A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
 | Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
+| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on; an older task schema refuses it with `UnconsumedField`, and a `repeated_anchor` layout with `UnknownField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. | `/candidate_layouts/i/shared_ocr` and its fields | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
 | A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
@@ -165,7 +166,9 @@ full page-set ID `<game>/<page>` that the page set declares and the load-site ch
 exactly (an ID that already holds `/` is kept as written), and the fields of a layout, a
 feature, a slot and a rectangle are written in the order of the examples below; a slot's
 `targets` keep their declared order. A feature writes `name`, `value`, `target` and `offset`,
-then `identity`, `consensus` and `integer` as declared. Layouts are written in the order the tasks declare them,
+then `identity`, `consensus` and `integer` as declared. A layout writes its `shared_ocr` last,
+with its region in the pack's form (a rectangle or `full_frame`) and its other members as
+declared. Layouts are written in the order the tasks declare them,
 after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
 projection) are checked by the recognition pack when the derived pack is validated or loaded
 (section Rules).
@@ -233,6 +236,45 @@ relative to the match's top-left corner:
 - A layout declares no privacy. A candidate's privacy derives from the targets its features
   read ([candidate-projection.md](candidate-projection.md)).
 
+### Shared OCR read
+
+Workflow #396 REC-8. A `fixed_slots` layout may declare one OCR detection read that its slots
+share:
+
+```json
+{"id": "layout/roster", "page_id": "list_page", "kind": "fixed_slots",
+ "features": [{"name": "member", "value": "identity", "identity": {}}],
+ "slots": [],
+ "shared_ocr": {"region": {"x": 40, "y": 120, "width": 1200, "height": 480},
+                "languages": ["en"], "timeout_ms": 5000,
+                "model_ref": "<model>", "model_sha256": "<64 hex>",
+                "blocks": "detect", "line_merge": {"gap_factor": 0}}}
+```
+
+- The read runs the detector in its region, a rectangle or `full_frame`, and reads every box on
+  its own, with the declared line merge (`blocks` and `line_merge` as for located text,
+  [ocr-fields.md](ocr-fields.md), section Located text).
+- An OCR target without `locate` that a slot or a feature reads takes its text from the read
+  when its `model_ref`, `model_sha256` and `languages` equal the read's and its region lies
+  entirely inside the read's region. The region is the one the sample reads: moved to the slot
+  origin plus the feature's offset, shifted by the sample's jitter, or placed at its anchor's
+  match. The target's text is that of the blocks whose center `(x + floor(w/2), y + floor(h/2))`
+  lies in its region, in the sorted order `(y, x, height, width, text)`, joined with `\n`; its
+  confidence is the lowest of theirs, and absent without blocks or when one block has none.
+  Without blocks the text is empty, and the feature's existing rules make it Unknown. The
+  target's verdict and evidence are those of an OCR target that read this text. Every other OCR
+  target reads on its own.
+- One projection calls the provider once for each frame whose read serves a target; the read's
+  PP-OCR reports go with the first target it serves.
+- When the detector found more boxes than the model folder's `max_boxes`, the projection fails
+  with `candidate_feature_failed`, whose cause is the evaluation error
+  `text_read_blocks_truncated` (stage `text_read_shared`, `count` boxes detected, `limit_count`
+  the folder's `max_boxes`): a slot may lack its blocks.
+- The read counts as one provider evaluation for each frame it serves, and a target it serves
+  counts none ([candidate-projection.md](candidate-projection.md), section Budgets). Admission
+  knows a target's region before the frame unless it is `template_relative`; such a target
+  keeps its own evaluation in the count, and the frame may still serve it.
+
 ### Rules
 
 The recognition pack checks every rule that needs only the pack when its evaluator is built.
@@ -253,7 +295,8 @@ Each failure message starts with the pointer of the offending field.
 | The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
-| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read. One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
+| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
+| Workflow #396 REC-8: only a `fixed_slots` layout declares `shared_ocr`. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
 
 `coordinate_space` is required for every pack schema, so layouts need no rule of their own for
 it.
@@ -302,7 +345,7 @@ step with `lab_run_select_unsupported`.
 ```json
 {"id": "choose_slot", "from": "list_page", "to": "detail_page",
  "select": {"layout_id": "layout/main_slots",
-            "policy": {"path": "policies/main_slots.json", "sha256": "<64 lowercase hex>"}},
+            "policy": {"path": "policies/main_slots.json"}},
  "guard": {"page_id": "list_page", "target_id": "ui/close",
            "expected_rect": {"x": 1124, "y": 86, "width": 30, "height": 31},
            "verify_template": "assets/close.png"},
@@ -315,10 +358,11 @@ step with `lab_run_select_unsupported`.
   refuses it with `UnconsumedField` at `/operations/<i>/select`.
 - `layout_id` names a candidate layout that the same task declares on the step's `from` page.
 - `policy` is a selection-policy document ([selection-policy.md](selection-policy.md)) at
-  `policies/<name>.json` in the task's directory, with a declared `sha256` (64 lowercase hex
-  digits). Workflow #336 PKG-S1: the `sha256` stays required and format-checked, and nothing
-  compares it with the document's bytes (PKG-S2 makes it optional). The document is part of
-  the package like every task file.
+  `policies/<name>.json` in the task's directory. Workflow #336 PKG-S2 (option 丙): a `sha256`
+  the policy may still declare is optional and ignored, whatever its value: it is neither
+  validated nor compared, and no record carries it (PKG-S1b refuses the key again once the
+  resource repositories no longer carry it). The document is part of the package like every
+  task file.
 - `guard` is required. It may be any guard the parser and admission accept:
   `verify_template`, `color_probe` (a color or a color digest target) or `check`. The rule
   that a `target`, `target_center` or `offset` click needs a template guard does not apply. The
@@ -333,7 +377,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | --- | --- | --- |
 | `select` holds exactly `layout_id` and `policy`, of the right JSON types. | the field | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
-| `policy` is `{path, sha256}`: a safe task-local `policies/<name>.json` path and 64 lowercase hex digits. | `…/select/policy/path`, `…/select/policy/sha256` | `task.json` |
+| `policy` is `{path}`: a safe task-local `policies/<name>.json` path (an optional `sha256` is ignored). | `…/select/policy/path` | `task.json` |
 | No other effect is declared. | `/operations/<i>/select` | `task.json` |
 | `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
 | The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
@@ -450,6 +494,17 @@ and the decision fingerprint binds it, only when a select step was evaluated; ev
 result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
 one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
 
+`actinglab replay --package <path> --frames <directory> [--facts <file>]` (Workflow #308
+SEL-L6a) replays the whole package over a saved frame sequence, the PNG files of the directory
+in file-name order, with the production interpreter. Every capture takes the next frame: a
+select step's confirmation frame is the frame after the one it was evaluated on, and every
+sample of a multi-frame consensus is a frame of its own. A select step evaluates the snapshot of
+`--facts`, the instance answer of `actingctl facts --instance` or MCP `ac_facts` read without a
+key prefix (`replay_facts_invalid` otherwise), at that answer's `read_at_unix_ms`; without
+`--facts` it evaluates the empty offline snapshot at the instant the replay started. The replay
+reports each step's decision record, its inputs, which perform nothing, and the page it reached;
+a run that does not complete exits with `replay_run_refused`, its end's outcome in the details.
+
 ## Records
 
 ### `task.selection_evaluated`
@@ -473,7 +528,6 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `layout_id`, `page_id` | The evaluated layout and its page; equal to the projection's. |
 | `projection` | The full core candidate projection of the step's frame ([candidate-projection.md](candidate-projection.md)), including its `candidate_set_sha256`. |
 | `policy.path` | The package-relative path of the policy document the step declares, `operations/<task>/<declared path>` below the resource root. |
-| `policy.package_sha256` | SHA-256 of the document's bytes in the package, the step's declared `sha256` (64 lowercase hex). |
 | `policy.policy_sha256` | The evaluator's canonical document identity, `sha256:<hex>`. |
 | `policy.policy_id` | The document's `policy_id`. |
 | `fact_snapshot_id`, `input_ledger_position` | The instance fact snapshot the evaluation read and its ledger position. |
@@ -529,9 +583,9 @@ A record is checked when it is written and when it is read:
 
 - the projection is valid and its sealed hash equals the recomputed one; `layout_id` and
   `page_id` equal the projection's;
-- `policy.package_sha256` is 64 lowercase hex, `policy_sha256` and `input_sha256` are
-  `sha256:<hex>`, `fact_snapshot_id` is a token, `input_ledger_position` and `now_unix_ms` are
-  positive;
+- `policy_sha256` and `input_sha256` are `sha256:<hex>`, `fact_snapshot_id` is a token,
+  `input_ledger_position` and `now_unix_ms` are positive; `policy` has no other member
+  (Workflow #336 PKG-S2: a record that carries `policy.package_sha256` is not read);
 - at most 64 verdicts, each for a distinct actionable candidate of the projection;
 - `selected` holds exactly `count` distinct IDs of `ranked` verdicts for a `selected` outcome
   and nothing otherwise; `selected` has a positive count and `insufficient` fewer survivors

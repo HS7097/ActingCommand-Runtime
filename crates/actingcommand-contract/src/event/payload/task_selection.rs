@@ -39,14 +39,13 @@ pub const SELECTION_RECORD_TOO_LARGE: crate::outcome::Code =
 const INVALID: crate::outcome::Code =
     crate::codes::SanitizationCode::InvalidTaskSelectionRecord.code();
 
-/// The selection policy the step evaluated.
+/// The selection policy the step evaluated. Workflow #336 PKG-S2 (option 丙): no pin the step
+/// may declare for the document is recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSelectionPolicy {
     /// The package-relative document path the step declares.
     pub path: String,
-    /// SHA-256 of the document's bytes in the package: the step's declared `sha256`.
-    pub package_sha256: String,
     /// The evaluator's canonical identity of the parsed document, `sha256:<hex>`.
     pub policy_sha256: String,
     pub policy_id: String,
@@ -700,9 +699,6 @@ impl TaskSelectionRecord {
 impl TaskSelectionPolicy {
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_task_semantic_label(&self.path, "policy_path")?;
-        if !is_candidate_set_sha256(&self.package_sha256) {
-            return Err(invalid("policy_package_sha256"));
-        }
         validate_policy_digest(&self.policy_sha256, "policy_sha256")?;
         validate_task_semantic_label(&self.policy_id, "policy_id")
     }

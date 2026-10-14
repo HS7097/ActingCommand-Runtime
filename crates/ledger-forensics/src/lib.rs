@@ -1979,8 +1979,11 @@ fn render_export(
                         ));
                     }
                 }
-                EffectiveConfigurationFacts::EntryRecovery { package_sha256, .. } => {
-                    if package_sha256.validate().is_err()
+                EffectiveConfigurationFacts::EntryRecovery { package_label, .. } => {
+                    // Workflow #336 PKG-S2: the layer's `package_id`, bounded as a task label.
+                    if package_label.is_empty()
+                        || package_label.len() > 256
+                        || package_label.chars().any(char::is_control)
                         || record.source_sequence.is_some()
                         || record.frame_id.is_some()
                         || record.action_id.is_some()

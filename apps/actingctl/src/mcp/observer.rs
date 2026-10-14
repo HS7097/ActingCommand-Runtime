@@ -4,22 +4,22 @@
 //! CLI's reads they record no client.action. Every fact comes from the Runtime and
 //! runtime-client unchanged; this module only selects, pages and bounds it. ac_events lives in
 //! `events` (Workflow #389 MCP-1). Errors and warnings are outcomes (Workflow #378 A5).
+//! ac_overview is `actingctl overview` (`crate::overview`, Workflow #389 MCP-8): the same read
+//! and result, cut here to the output budget in the order of the MCP-0 command table §4.9.
 
-use super::runs;
-use super::runtime::{Connected, Location, read_bounded};
+use super::runtime::{self, Connected};
 use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
     invalid_argument, out_of_range,
 };
 use crate::codes::{ActingctlCode, ArgumentProblem, MaterialLimit, MaterialState};
-use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{CauseRelation, Outcome, RawSource};
+use crate::overview::{self, Failure, OverviewRequest, Place, Sections, Warning};
+use actingcommand_contract::outcome::{CauseRelation, Outcome};
 use actingcommand_contract::{
     ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition,
     MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectionProfile,
     RuntimeEventQueryPageRequest, RuntimeInstanceStatus, RuntimeMaterialReadFailure,
     RuntimeMaterialReadLimit, RuntimeMaterialReadRequest, RuntimeMaterialReadState,
-    RuntimeMonitorInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeMaterialCompleteResult, RuntimeMaterialSelection};
 use serde_json::{Map, Value, json};
@@ -28,8 +28,23 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-/// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+/// MCP-0 command table §4.9: the top-level blocks ac_overview cuts first, in this order, when its
+/// answer does not fit the output budget. A slice that adds an overview block registers its place
+/// here in the same PR; a block the answer does not hold is passed over.
+const CUT_BLOCKS: [&str; 9] = [
+    "fact_refresh",
+    "host",
+    "startup",
+    "tagged_state",
+    "ledger",
+    "performance",
+    "watchdog",
+    "catalog",
+    "config_generation",
+];
+/// Then each instance row's `run`, from the last row back, then each row's `monitor`, the same
+/// way; then `install.build`.
+const CUT_ROW_BLOCKS: [&str; 2] = ["run", "monitor"];
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
@@ -37,147 +52,135 @@ const MAX_EXPORT_BYTES: usize = crate::material_export::MAX_EXPORT_BYTES;
 /// Time kept back from the call budget for writing the exported file.
 const EXPORT_WRITE_RESERVE: Duration = Duration::from_secs(2);
 
+/// ac_overview: `actingctl overview` over MCP (Workflow #389 MCP-8). Its arguments are the CLI's
+/// flags (R2; `sections` a list where the CLI takes a comma-separated value); the server's
+/// location stands for the CLI's `--root` and `--state-root`. The result is the CLI's stdout JSON
+/// without its `warnings`, which go beside it, cut to the output budget (`cut_to_fit`).
 pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let arguments = Arguments::new(arguments, &["instance"])?;
-    let selector = arguments.string("instance")?;
-    let location = context.runtime.locate();
-    let mut warnings = Vec::new();
-    let install = install_view(&location, &mut warnings);
-    let lab_present = location
-        .install_root
-        .as_ref()
-        .is_some_and(|root| root.join("tools").join("actinglab.exe").is_file());
-    let mut result = Map::new();
-    let connected = match context.runtime.connect() {
-        Ok(connected) => connected,
-        Err(error) => {
-            // No instance data at all, rather than an empty list that reads as an empty
-            // system: the daemon section says why, as the tool error `{class, outcome}`.
-            result.insert(
-                "daemon".to_owned(),
-                json!({"online": false, "error": error.into_value()}),
-            );
-            result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
-            result.insert("install".to_owned(), install);
-            return Ok(ToolSuccess {
-                result: Value::Object(result),
-                warnings,
-            });
+    let arguments = Arguments::new(arguments, &["instance", "sections"])?;
+    let instance = arguments.string("instance")?.map(str::to_owned);
+    let sections = match arguments.value("sections") {
+        None => Sections::ALL,
+        Some(Value::Array(names)) if names.is_empty() => {
+            return Err(invalid_argument("sections", ArgumentProblem::ValueMissing));
         }
-    };
-    let status = connected
-        .client
-        .status()
-        .map_err(|error| context.runtime.failure(&connected, &error))?;
-    let selected = match selector {
-        Some(selector) => Some(select_instance(status.instances(), selector)?.instance_alias()),
-        None => None,
-    };
-    let mut incomplete = false;
-    let monitors = match connected.client.monitor_status() {
-        Ok(monitors) => Some(monitors),
-        Err(error) => {
-            warnings.push(context.runtime.failure(&connected, &error).into_warning());
-            incomplete = true;
-            None
-        }
-    };
-    let window = runs::default_window()?;
-    let mut instances = Vec::new();
-    for instance in status
-        .instances()
-        .iter()
-        .filter(|instance| selected.is_none_or(|alias| instance.instance_alias() == alias))
-    {
-        let monitor = monitors.as_ref().and_then(|monitors| {
-            monitors
-                .instances()
+        Some(Value::Array(names)) => {
+            let names = names
                 .iter()
-                .find(|monitor| monitor.instance_alias() == instance.instance_alias())
-        });
-        let mut row = instance_row(instance, monitor);
-        // At most one brief run status per instance: its newest admitted run in the window,
-        // which is the open one when a run is open.
-        match runs::latest_run(context, &connected, instance, window) {
-            Ok(latest) => {
-                if latest.incomplete {
-                    incomplete = true;
-                    row["run_incomplete"] = json!(true);
-                }
-                if let Some(run) = latest.runs.first() {
-                    row["run"] = json!(run);
-                }
-            }
-            Err(error) => {
-                incomplete = true;
-                row["run_incomplete"] = json!(true);
-                warnings.push(error.into_warning());
-            }
+                .map(|name| {
+                    name.as_str()
+                        .ok_or_else(|| invalid_argument("sections", ArgumentProblem::WrongType))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Sections::parse(names)
+                .ok_or_else(|| invalid_argument("sections", ArgumentProblem::NotRecognised))?
         }
-        instances.push(row);
-    }
-    result.insert(
-        "daemon".to_owned(),
-        json!({"online": true, "owner_epoch": status.owner_epoch()}),
-    );
-    if let Some(pause) = status.scheduling_pause() {
-        result.insert("global_pause".to_owned(), json!(pause));
-    }
-    result.insert("instances".to_owned(), Value::Array(instances));
-    result.insert("run_window".to_owned(), json!({"since_unix_ms": window}));
-    result.insert("lab_tool".to_owned(), json!({"present": lab_present}));
-    result.insert("install".to_owned(), install);
-    if incomplete {
-        result.insert("incomplete".to_owned(), json!(true));
-    }
-    Ok(ToolSuccess {
-        result: Value::Object(result),
-        warnings,
-    })
+        Some(_) => return Err(invalid_argument("sections", ArgumentProblem::WrongType)),
+    };
+    let request = OverviewRequest { instance, sections };
+    let location = context.runtime.locate();
+    let place = Place {
+        root: location.root.as_deref(),
+        install_root: location.install_root.as_deref(),
+        state_root: location.state_root.as_deref().ok(),
+    };
+    let connected = context.runtime.connect();
+    // No connection: the daemon block says why, as the tool error `{class, outcome}`.
+    let client = match &connected {
+        Ok(connected) => Ok(&connected.client),
+        Err(error) => Err(error.to_value()),
+    };
+    let answer =
+        overview::read(client, &request, &place, context.deadline).map_err(
+            |failure| match &failure {
+                Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
+                Failure::Selector { .. } => ToolError::outcome("usage", failure.outcome()),
+                Failure::Install(_) | Failure::Clock => {
+                    ToolError::outcome("runtime", failure.outcome())
+                }
+                Failure::Runtime(error) => runtime_failure(context, connected.as_ref().ok(), error),
+            },
+        )?;
+    let warnings = answer
+        .warnings
+        .into_iter()
+        .map(|warning| match warning {
+            Warning::Outcome(outcome) => tools::warning(&outcome),
+            Warning::Runtime(error) => {
+                runtime_failure(context, connected.as_ref().ok(), &error).into_warning()
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut result = Value::Object(answer.result);
+    // The envelope is `{ok, result, warnings}`; this wrapper is a little larger, so an answer it
+    // lets through always fits.
+    cut_to_fit(&mut result, |result| {
+        tools::fits_success(&json!({"result": result, "warnings": warnings}))
+    });
+    Ok(ToolSuccess { result, warnings })
 }
 
-fn instance_row(
-    instance: &RuntimeInstanceStatus,
-    monitor: Option<&RuntimeMonitorInstanceStatus>,
-) -> Value {
-    let mut row = Map::new();
-    row.insert("alias".to_owned(), json!(instance.instance_alias()));
-    row.insert("instance_id".to_owned(), json!(instance.instance_id()));
-    if let Some(port) = instance.adb_port() {
-        row.insert("adb_port".to_owned(), json!(port));
+/// A Runtime read failure as a tool error: on the server's connection, which is dropped when the
+/// client locked it.
+fn runtime_failure(
+    context: &ToolContext<'_>,
+    connected: Option<&Connected>,
+    error: &actingcommand_runtime_client::RuntimeClientError,
+) -> ToolError {
+    match connected {
+        Some(connected) => context.runtime.failure(connected, error),
+        None => runtime::client_error(error),
     }
-    if let Some(game_id) = instance.game_id() {
-        row.insert("game_id".to_owned(), json!(game_id));
+}
+
+/// Cuts `result`, an ac_overview answer, one block at a time in the order of the MCP-0 command
+/// table §4.9 until `fits` takes it: the top-level blocks of [`CUT_BLOCKS`], then each instance
+/// row's `run` from the last row back, then each row's `monitor` the same way, then
+/// `install.build`. Each cut block leaves `<block>_truncated: true` where it was. The daemon, the
+/// global pause, each row's identity, `pause`, `lease_active` and `queued`, and `incomplete` are
+/// never cut: an answer that still does not fit when nothing is left to cut is returned as it is,
+/// and the call answers `output_budget_exceeded` (`tools::call_result`).
+pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
+    while !fits(result) {
+        if !cut_next(result) {
+            return;
+        }
     }
-    row.insert("lease_active".to_owned(), json!(instance.lease_active()));
-    row.insert("queued".to_owned(), json!(instance.queued_request_count()));
-    if let Some(pause) = instance.pause() {
-        // Data members whose names a code would take (`stage`, `*_reason`) are inserted by
-        // name, outside `json!`.
-        let mut members = Map::new();
-        members.insert("revision".to_owned(), json!(pause.revision));
-        members.insert("stage".to_owned(), json!(pause.stage));
-        members.insert("pause_reason".to_owned(), json!(pause.pause_reason));
-        row.insert("pause".to_owned(), Value::Object(members));
+}
+
+/// The next cut of [`cut_to_fit`]; false when nothing is left to cut.
+fn cut_next(result: &mut Value) -> bool {
+    let Some(members) = result.as_object_mut() else {
+        return false;
+    };
+    for block in CUT_BLOCKS {
+        if members.remove(block).is_some() {
+            members.insert(format!("{block}_truncated"), json!(true));
+            return true;
+        }
     }
-    // Workflow #403: an instance an unconfirmed close fenced, and whether it waits for a person.
-    if let Some(fence) = instance.resource_fence() {
-        row.insert(
-            "resource_fence".to_owned(),
-            json!({
-                "cause": fence.cause,
-                "since_unix_ms": fence.since_unix_ms,
-                "awaiting_person": fence.awaiting_person,
-            }),
-        );
+    for block in CUT_ROW_BLOCKS {
+        let rows = members
+            .get_mut(overview::Section::Instances.name())
+            .and_then(Value::as_array_mut);
+        for row in rows.into_iter().flatten().rev() {
+            if let Some(row) = row.as_object_mut()
+                && row.remove(block).is_some()
+            {
+                row.insert(format!("{block}_truncated"), json!(true));
+                return true;
+            }
+        }
     }
-    if let Some(monitor) = monitor.filter(|monitor| monitor.policy().is_some()) {
-        row.insert(
-            "monitor".to_owned(),
-            json!({"policy": monitor.policy(), "state": monitor.state()}),
-        );
+    if let Some(install) = members
+        .get_mut(overview::Section::Install.name())
+        .and_then(Value::as_object_mut)
+        && install.remove("build").is_some()
+    {
+        install.insert("build_truncated".to_owned(), json!(true));
+        return true;
     }
-    Value::Object(row)
+    false
 }
 
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
@@ -188,53 +191,6 @@ pub(super) fn select_instance<'s>(
 ) -> Result<&'s RuntimeInstanceStatus, ToolError> {
     crate::instance_selector::select(instances, selector)
         .map_err(|miss| ToolError::outcome("usage", miss.outcome(selector)))
-}
-
-fn install_view(location: &Location, warnings: &mut Vec<Value>) -> Value {
-    let mut install = Map::new();
-    if let Some(root) = &location.root {
-        install.insert("root".to_owned(), json!(root.display().to_string()));
-    }
-    if let Ok(state_root) = &location.state_root {
-        install.insert(
-            "state_root".to_owned(),
-            json!(state_root.display().to_string()),
-        );
-    }
-    let manifest = location
-        .root
-        .as_ref()
-        .map(|root| root.join("runtime").join("BUILD-MANIFEST.json"))
-        .filter(|manifest| manifest.is_file());
-    if let Some(manifest) = manifest {
-        // An unreadable manifest is the warning `install_build_manifest_unreadable` (`path`),
-        // caused by the read failure or the parser's `foreign_data_error`.
-        let document = read_bounded(&manifest, MAX_MANIFEST_BYTES).and_then(|bytes| {
-            serde_json::from_slice::<Value>(&bytes).map_err(|error| {
-                Outcome::new(ContractCode::ForeignDataError)
-                    .raw_source(RawSource::Json)
-                    .raw_text(error.to_string())
-                    .path(&manifest)
-            })
-        });
-        match document {
-            Ok(document) => {
-                let mut build = Map::new();
-                for key in ["commit_sha", "source_artifact_name"] {
-                    if let Some(value) = document.get(key).filter(|value| value.is_string()) {
-                        build.insert(key.to_owned(), value.clone());
-                    }
-                }
-                install.insert("build".to_owned(), Value::Object(build));
-            }
-            Err(cause) => warnings.push(tools::warning(
-                &Outcome::new(ActingctlCode::InstallBuildManifestUnreadable)
-                    .path(&manifest)
-                    .caused_by(cause),
-            )),
-        }
-    }
-    Value::Object(install)
 }
 
 fn text_of(value: Value) -> String {

@@ -66,11 +66,11 @@ a file is opened without following a link. Admission runs in this order under on
 
 1. The locator must be absolute. The caller's reference (a request's, a configuration's or a
    Lab flag's) is recorded on the admitted package as the caller gave it and compared with
-   nothing: from PKG-S1 to PKG-S4 the fields that still carry a package digest (the
-   `package_sha256` of `PackageAdmitted` and of the entry-recovery facts, the Lab evidence's
-   expected and actual package references, `PackageDebugSummary.verified_sha256`) hold that
-   given value, not a verified one; PKG-S2 and PKG-S4 delete them. A Git source-tree
-   reference is refused (`source_tree_loader_retired`).
+   nothing: until PKG-S4 the one field that still carries a package digest,
+   `PackageDebugSummary.verified_sha256`, holds that given value, not a verified one. Since
+   PKG-S2 the ledger and the evidence name a package by its `package_id` (`package_label`:
+   `PackageAdmitted`, the entry-recovery facts, the Lab and observation evidence) and carry
+   no package digest. A Git source-tree reference is refused (`source_tree_loader_retired`).
 2. The content is read into memory exactly once, as a table of `/`-separated relative paths
    and their bytes. A directory contributes every regular file at any depth; empty
    directories do not contribute. A regular file is read whole and treated by its extension
@@ -413,8 +413,10 @@ content container file instead of a directory ("Containers"), including a proced
 binding's `scheduled_execution.package_path`. Evidence replay continues to use its
 independent evidence ZIP hash.
 
-Runtime requests, prepared observations, effective configuration, task/recovery facts,
-Lab results and `EvidencePackage` carry the complete reference. `scheduled_execution`
+Runtime requests carry the complete reference. Workflow #336 PKG-S2 (option 丙): prepared
+observations, effective configuration, task/recovery facts and Lab results name the package
+by its `package_id` (`package_label`), and `EvidencePackage` by its file name; none of them
+carries a package digest, and a stored record that still carries one is not read. `scheduled_execution`
 uses its existing `package_path` locator and the procedure binding's typed
 `package_digest`; the run's identity check compares the request's reference with the
 binding's until PKG-S3, and admission records it and compares it with nothing (Workflow

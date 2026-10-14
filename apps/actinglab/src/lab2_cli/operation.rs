@@ -283,9 +283,9 @@ fn commit_record_click(
         })
     };
     let prepared = &record.prepared;
+    // Workflow #336 PKG-S2 (option 丙): the carrier package by its `package_id`.
     let carrier = json!({
-        "package_ref": prepared.expected_package_sha256,
-        "actual": prepared.actual_package_sha256
+        "package_label": prepared.package_label
     });
     let request = CommitClickRequest {
         effect: if matches!(record.effect, EffectDisposition::Performed) {

@@ -430,6 +430,32 @@ fn load_fixture_sequence(paths: &[PathBuf]) -> CliOutcome<LoadedFixtureSequence>
     })
 }
 
+/// Workflow #308 SEL-L6a: one recorded frame read and decoded as a dry-run fixture is, under
+/// the same per-fixture bounds, for a replay that reads its sequence one frame at a time.
+pub(crate) fn read_fixture_frame(path: &Path) -> CliOutcome<Frame> {
+    let png = read_regular_file_bounded(
+        path,
+        MAX_OFFLINE_FIXTURE_BYTES,
+        "offline_fixture",
+        "fixture",
+    )?;
+    let (width, height) = parse_png_dimensions(&png).map_err(|error| {
+        offline_error(
+            "offline_fixture_invalid",
+            format!("failed to inspect fixture {}: {error}", path.display()),
+        )
+    })?;
+    decoded_rgba_bytes(width, height)?;
+    let mut frame = Frame::from_png(png, CaptureBackendName::AdbScreencap).map_err(|error| {
+        offline_error(
+            "offline_fixture_invalid",
+            format!("failed to decode fixture {}: {error}", path.display()),
+        )
+    })?;
+    frame.original_png = None;
+    Ok(frame)
+}
+
 fn read_regular_file_bounded(
     path: &Path,
     maximum_bytes: u64,

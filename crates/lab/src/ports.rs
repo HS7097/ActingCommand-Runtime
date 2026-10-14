@@ -259,3 +259,70 @@ pub trait LabPorts {
     fn clock(&self) -> &Self::Time;
     fn config(&self) -> &Self::Config;
 }
+
+// Workflow #387 D1c-F: Lab's input port performs taps, long taps, swipes, keys and text only, and
+// Lab builds no other action. A single-touch drag with a vertical brake handed to the port is
+// refused with `validation_failed` (class `none`) before any port opens.
+#[cfg(test)]
+mod d1cf_tests {
+    use super::*;
+    use actingcommand_contract::codes::SharedCode;
+    use actingcommand_contract::outcome::LadderClass;
+    use actingcommand_device::{AdbConfig, DeviceTarget, MaaTouchConfig};
+    use std::cell::Cell;
+
+    // A factory that counts the ports it is asked to open and opens none.
+    #[derive(Default)]
+    struct CountingFactory {
+        opens: Cell<usize>,
+    }
+
+    impl InputBackendFactory for CountingFactory {
+        fn open(&self, _request: InputBackendRequest) -> LabResult<Box<dyn LabInputPort>> {
+            self.opens.set(self.opens.get() + 1);
+            Err(LabError::device("no input port opens in this test"))
+        }
+    }
+
+    #[test]
+    fn d1cf_the_lab_port_refuses_a_segmented_swipe_before_any_port_opens() {
+        let factory = CountingFactory::default();
+        let input = PortSemanticInput {
+            factory: &factory,
+            instance_alias: Some("neutral.instance".to_owned()),
+            config: TouchBackendConfig::new(
+                AdbConfig::default(),
+                DeviceTarget {
+                    serial: None,
+                    host: "neutral.host".to_owned(),
+                    port: 1,
+                    connect: false,
+                },
+                MaaTouchConfig::default(),
+            ),
+            lease: None,
+        };
+        let error = input
+            .execute(InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1: 10,
+                y1: 200,
+                x2: 100,
+                y2: 200,
+                x3: 100,
+                y3: 100,
+                horizontal_duration_ms: 200,
+                corner_hold_ms: 150,
+                brake_distance_px: 100,
+                brake_duration_ms: 200,
+                slope_in: 2,
+                slope_out: 0,
+            })
+            .expect_err("the port refuses the segmented swipe");
+        assert_eq!(error.code, SharedCode::ValidationFailed.as_str());
+        assert_eq!(
+            SharedCode::ValidationFailed.ladder_class(),
+            LadderClass::NotApplicable
+        );
+        assert_eq!(factory.opens.get(), 0);
+    }
+}

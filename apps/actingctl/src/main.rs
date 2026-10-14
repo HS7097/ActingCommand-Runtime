@@ -47,6 +47,10 @@ mod child;
 mod diagnose;
 // ---- Workflow #389 MCP-7 (end) ----
 
+// ---- Workflow #389 MCP-8 (begin): `overview` (MCP `ac_overview`), with the read both share.
+mod overview;
+// ---- Workflow #389 MCP-8 (end) ----
+
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -162,6 +166,12 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-7 (end) ----
+    // ---- Workflow #389 MCP-8 (begin): `overview` takes the instance selector of MCP, `--root`
+    // and `--sections`, and leaves before `Invocation::parse`. ----
+    if let Some(exit) = overview::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-8 (end) ----
     match run(arguments, detail) {
         Ok(Done {
             members,

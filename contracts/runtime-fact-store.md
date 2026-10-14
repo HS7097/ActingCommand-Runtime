@@ -532,7 +532,10 @@ the backend self-check facts (source `device-proxy` or `capture`).
     back from the host's per-instance stuck-recovery settings and `explicit`
     when the instance named the field; they are keyed by the registry's bounded
     `instance_id` (`instance_<32 hex>`), never by the alias, which may exceed
-    the 128-byte key bound. `allow_env_overrides` (`boolean`, default `false`)
+    the 128-byte key bound. Workflow #369 S6a adds
+    `instance.<instance_id>.start_emulator` (`boolean`, `explicit`, not
+    settable) for an instance whose entry names `start_emulator`, and nothing
+    for one that does not (off). `allow_env_overrides` (`boolean`, default `false`)
     reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the
     `env_overrides` subsystem's reason names every set but ignored variable as
     `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,

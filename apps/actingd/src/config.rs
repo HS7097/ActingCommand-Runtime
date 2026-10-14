@@ -828,6 +828,11 @@ struct InstanceConfig {
     /// (`scheduling.random_delay.*`); a member it leaves out is the `scheduling` section's.
     #[serde(default)]
     scheduling: Option<actingcommand_runtime_config::InstanceSchedulingFile>,
+    /// Workflow #369 S6a (ORD §3.5 item 17): `true` lets the daemon start this instance's
+    /// emulator when it is stopped at daemon start (S6c); discovery-bound instances only
+    /// (`start_emulator_requires_discovery_binding`); absent is off.
+    #[serde(default)]
+    start_emulator: Option<bool>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -934,6 +939,10 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// of the configuration has, in file order (`check-config` notes).
     pub(super) unused_device_bindings: Vec<String>,
+    /// Workflow #369 S6a: the discovery-bound instances whose `start_emulator` is `true`, in
+    /// configuration order: the daemon starts their stopped emulators at its start (S6c);
+    /// `check-config` reports each instance's value.
+    pub(super) emulator_autostart: Vec<String>,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1268,6 +1277,9 @@ impl ActingdConfigFile {
         let mut instance_members = Vec::with_capacity(instances.len());
         // Workflow #398 RD-1b: the handset instances, in configuration order.
         let mut handsets = Vec::new();
+        // Workflow #369 S6a: the instances whose emulator the daemon starts, in configuration
+        // order.
+        let mut emulator_autostart = Vec::new();
         for instance in &mut instances {
             if instance.fixture_backend.is_none()
                 && device_binding::check_device(instance)
@@ -1297,6 +1309,13 @@ impl ActingdConfigFile {
                 .validate()
                 .map_err(|_| ActingdCode::StuckRecoveryCooldownInvalid.code())?;
             }
+            // Workflow #369 S6a: only a discovery-bound instance has an emulator to start.
+            if instance.start_emulator == Some(true) {
+                if instance.start_emulator_refused()? {
+                    return Err(ActingdCode::StartEmulatorRequiresDiscoveryBinding.code());
+                }
+                emulator_autostart.push(instance.alias.clone());
+            }
             let instance_id = manifest::instance_id_text(instance.instance_id)?;
             instance_aliases.push((instance.alias.clone(), instance_id.clone()));
             let mut members = serde_json::Map::new();
@@ -1316,6 +1335,11 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::scheduling::SECTION.to_owned(),
                 serde_json::to_value(&instance.scheduling)
                     .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
+            // Workflow #369 S6a: reported as `instance.<id>.start_emulator` when the file names it.
+            members.insert(
+                actingcommand_runtime_config::START_EMULATOR.to_owned(),
+                serde_json::json!(instance.start_emulator),
             );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
@@ -1578,6 +1602,7 @@ impl ActingdConfigFile {
             adb_requirement,
             unbound_handsets,
             unused_device_bindings,
+            emulator_autostart,
         })
     }
 
@@ -1604,6 +1629,19 @@ impl ActingdConfigFile {
         device_binding::bind_handsets(&self.state_root, &handsets)
             .err()
             .map(DeviceRefusal::BindingFile)
+    }
+
+    /// Workflow #369 S6a: the alias of the first instance whose `start_emulator: true`
+    /// `assemble` refuses with `start_emulator_requires_discovery_binding`, the refusal's
+    /// `alias`. `check-config` attaches it when `assemble` refuses with that code.
+    pub(super) fn start_emulator_refusal(&self) -> Option<String> {
+        self.instances
+            .iter()
+            .find(|instance| {
+                instance.start_emulator == Some(true)
+                    && matches!(instance.start_emulator_refused(), Ok(true))
+            })
+            .map(|instance| instance.alias.clone())
     }
 }
 
@@ -2024,6 +2062,13 @@ impl InstanceConfig {
                 Ok(Some(InstanceBindingKey::Name(name.to_owned())))
             }
         }
+    }
+
+    /// Workflow #369 S6a: whether `start_emulator: true` is refused on this instance, which has
+    /// no emulator the daemon can start: a fixture, or an instance bound otherwise than by
+    /// discovery (`start_emulator_requires_discovery_binding`).
+    fn start_emulator_refused(&self) -> Result<bool, Code> {
+        Ok(self.fixture_backend.is_some() || self.binding_key()?.is_none())
     }
 
     /// Validates everything that does not need discovery; the ADB target is completed later.
@@ -2949,6 +2994,42 @@ mod tests {
         assert_eq!(
             config.assemble().err().map(Code::as_str),
             Some("application_identity_missing")
+        );
+    }
+
+    /// Workflow #369 S6a (model 369 v3.1 H-5, #643's test): only a discovery-bound instance has
+    /// an emulator the daemon can start, so `start_emulator: true` on an instance bound by its
+    /// port is refused with `start_emulator_requires_discovery_binding`, naming the instance.
+    #[test]
+    fn start_emulator_requires_a_discovery_binding() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.instance",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "port": 16384,
+                "touch_backend": "maatouch",
+                "capture_backend": "adb",
+                "start_emulator": true
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.start_emulator_refusal().as_deref(),
+            Some("neutral.instance")
+        );
+        assert_eq!(
+            config.assemble().err().map(Code::as_str),
+            Some("start_emulator_requires_discovery_binding")
         );
     }
 

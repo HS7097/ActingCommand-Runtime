@@ -178,6 +178,10 @@ impl TryFrom<InputAction> for PreparedInputAction {
         else {
             return Ok(Self::Direct(action));
         };
+        // Workflow #387 D1c-F: every producer refuses an invalid segmented swipe under its own
+        // code before it gets here (a pack at admission, a request by its contract check), so a
+        // plan that cannot be prepared is a Runtime-internal defect of this one action. No device
+        // work has happened: the error carries no device severity and no resource disposition.
         let plan = prepare_segmented_swipe(SegmentedSwipeAction {
             points: [(x1, y1), (x2, y2), (x3, y3)],
             horizontal_duration_ms,
@@ -187,11 +191,8 @@ impl TryFrom<InputAction> for PreparedInputAction {
             slope_in,
             slope_out,
         })
-        .map_err(|error| {
-            ExecutionKernelError::device(
-                ExecutionKernelCode::InputPlanPreparationFailed.code(),
-                &error,
-            )
+        .map_err(|_| {
+            ExecutionKernelError::fatal(ExecutionKernelCode::InputPlanPreparationFailed.code())
         })?;
         Ok(Self::SegmentedSwipe(plan))
     }

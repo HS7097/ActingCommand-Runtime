@@ -385,7 +385,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. incomplete true means part of the snapshot could not be read (see warnings). It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. sections (global_pause, instances, run_window, lab_tool, install; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings). An answer larger than the output budget is cut, one block at a time until it fits: each instance row's run (the last row first), then each row's monitor, then install.build; each cut block leaves <block>_truncated: true where it was. The daemon, the global pause, each row's identity, pause, lease_active and queued, and incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -1008,7 +1008,19 @@ fn instance_argument() -> Value {
 fn overview_input() -> Value {
     json!({
         "type": "object",
-        "properties": {"instance": instance_argument()},
+        "properties": {
+            "instance": instance_argument(),
+            // Workflow #389 MCP-8: `--sections`, a list here.
+            "sections": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "enum": crate::overview::Section::ALL.map(crate::overview::Section::name),
+                },
+                "description": "Only these blocks (default all); daemon and incomplete are always answered.",
+            },
+        },
         "additionalProperties": false,
     })
 }
@@ -1043,6 +1055,9 @@ fn overview_result() -> Value {
                         "monitor": {"type": "object"},
                         "run": run_status_schema(),
                         "run_incomplete": {"type": "boolean"},
+                        // Workflow #389 MCP-8: cut to the output budget.
+                        "run_truncated": {"const": true},
+                        "monitor_truncated": {"const": true},
                     },
                     "required": ["alias", "instance_id", "lease_active", "queued"],
                 },
@@ -1063,11 +1078,13 @@ fn overview_result() -> Value {
                     "root": {"type": "string"},
                     "state_root": {"type": "string"},
                     "build": {"type": "object"},
+                    "build_truncated": {"const": true},
                 },
             },
             "incomplete": {"type": "boolean"},
         },
-        "required": ["daemon", "lab_tool", "install"],
+        // Workflow #389 MCP-8: `sections` may leave out every block but the daemon.
+        "required": ["daemon"],
     })
 }
 
@@ -1130,8 +1147,8 @@ fn run_status_schema() -> Value {
             "instance_id": {"type": "string"},
             "dispatch": {"type": "string", "enum": ["manual", "scheduled", "unknown"]},
             "origin": {"type": "string", "enum": ["cli", "ui", "lab", "scheduler", "unknown"]},
-            "package_ref": {},
-            "recovery_packages": {"type": "array"},
+            "package_label": {"type": "string"},
+            "recovery_package_labels": {"type": "array", "items": {"type": "string"}},
             "state": {
                 "type": "string",
                 "enum": [
@@ -1154,7 +1171,7 @@ fn run_status_schema() -> Value {
             "request_id",
             "dispatch",
             "origin",
-            "recovery_packages",
+            "recovery_package_labels",
             "state",
             "evidence",
         ],

@@ -59,9 +59,9 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| S1 | policy execution record, failure part: `condition` | new optional member | SH-1 | SR-2b (SR-2a reads) | `{refunded, count, expires_at_unix_ms}`; replay only — the rerun state loads from L7 |
+| S1 | policy execution record, failure part: `condition` | new optional member | SH-1 | SR-2b (SR-2a reads) | `{refunded, count, expires_at_unix_ms}`; replay only — the rerun state loads from L7; **done (SR-2a):** the settlement takes it from the record, as it takes `perf_context` (`policy_control.rs`, `commit_execution` and `preview_settlement`), never from the configuration. A run with it adds to no failure streak and no escalation (the record keeps the pair's previous counters, 0 when there are none, and `failure_streaks` keeps the latest real failure), continues (retry attempt 0, no retry time), is never re-judged `policy_runtime_budget_exceeded`, adds no runtime to the task or activity window, and with `refunded` gives back the task daily, task window, activity daily and activity window counts its admission took. Only a recoverable failure of a task that is not sensitive takes it; any other pairing is `policy_execution_record_mismatch`. `count` and `expires_at_unix_ms` are SR-2b's (the rerun state); the live settlement writes no `condition` before SR-2b |
 | S2 | `ContainedTaskCancellationReason::BlackoutStop` | new enum value (wire and ledger) | SH-1 (runtime-client 2) | SR-4b | `from_failure_code`: `blackout_run_stopped` → `BlackoutStop` |
-| S3 | `RecoveryLadderSuppression::Blackout` | new enum value | SH-1 | SR-4a (SR-2a decodes) | — |
+| S3 | `RecoveryLadderSuppression::Blackout` | new enum value | SH-1 | SR-4a (SR-2a decodes) | **done (SR-2a):** a v0.12.0 start reads a `recovery_ladder_suppressed` record with `reason: "blackout"` (SH-1's decoder; no Runtime reader branches on the reason); [emulator-control.md](emulator-control.md) lists the value. The host sets no blackout before SR-4a |
 
 No other new event type (`disposition` gains no value). The pack schedule `session.pack.schedule`
 and the feature locks `session.feature.<key>` are ordinary `fact.published` records (§4).
@@ -568,6 +568,57 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.31 Wave 9 slice PKG-S2 (#336 option 丙, M-PKG v1.1 §4.3)
+
+PKG-S2 removes the package digests of §2's PKG-S2 row from the ledger and the evidence and
+names every package by its `package_id` (`package_label`). It adds no record type. A stored
+record that still carries a removed member does not decode, so replay refuses it
+(`corrupt_ledger_record`, location `decode_sqlite_record`) and the ledger does not open; no
+reader of the old form exists. The rows below fix what §2 leaves open: which members are
+optional, and what replaces each removed one.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P2-1 | `TaskSemanticFact::PackageAdmitted {package_label, task_label, response_deadline_monotonic_ms?}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `package_label` is the package's `package_id` (a task semantic label, `invalid_task_semantic_label`); the code `invalid_task_package_fingerprint` is deleted (pending) |
+| P2-2 | `EntryRecoveryPackageAdmitted.package_label`, `EntryRecoveryCompleted.package_label` (required), `EntryRecoveryFailed.package_label` (optional, omitted when absent) | changed persisted members (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | each the layer's own `package_id`; a failure has none only when the layer's package was refused before its `package_id` was read (a request's own recovery binding names a path only); the run recovery view pairs a failure with a later completion of the same label; the failure identity's `pre:` scope is `pre:<I>`, `I` the id hash of that label (§2 format v2 scope; the rest of the format stays with PKG-S3) |
+| P2-3 | `EffectiveConfigurationFacts::EntryRecovery.package_label` | changed artifact member (`package_sha256` → `package_label`) | PKG-S2 | PKG-S2 | ledger-forensics refuses an empty, overlong or control-character label (`effective_configuration_fields_invalid`) |
+| P2-4 | `TaskSelectionPolicy {path, policy_sha256, policy_id}` | removed persisted member `package_sha256` | PKG-S2 | PKG-S2 | `policy_sha256` is the evaluator's identity of the document, not a package digest; it stays |
+| P2-5 | `ResourceDeclarationRejection {package_label?, program_version, issue}` | removed members `declared_package`, `verified_package`; new optional `package_label` | PKG-S2 | PKG-S2 | present when preparation read the refused package's control `package_id`; validated as a label (`invalid_resource_declaration_identity`) |
+| P2-6 | `LabOperationPrepared.package_label?`, `ContainedObservationEvidence.package_label?`, `ContainedPageObservation.package_label?` | removed members `expected_package_sha256`, `actual_package_sha256`; new optional `package_label` | PKG-S2 | PKG-S2 | the package's control `package_id`, absent when the control declares none (a Lab observation package may omit it); the client checks that the evidence and the receipt name the same label; `resource restore` pairs records with the original package by it and refuses a package that declares none or another one; the restore provenance and report carry `package_label` |
+| P2-7 | `EvidencePackage {file_name, verification}` | removed member `sha256` | PKG-S2 | PKG-S2 | evidence archive manifest (`actingcommand.evidence.v2`) |
+| P2-8 | post-admission OCR comparison report (`truth_set_path`, …) and runtime-client `RuntimeOfficialOcrComparison` | removed member `truth_set_sha256` | PKG-S2 | PKG-S2 | the reader refuses a report that carries it (`deny_unknown_fields`) |
+| P2-9 | run status `actingcommand.run-status.v1` `{package_label?, recovery_package_labels}`; run summary `actingcommand.run-summary.v1` `package_label` | changed wire members (`package_ref`, `recovery_packages`, `package_digest` → labels) | PKG-S2 | PKG-S2 | the summary names the one admitted package (`run_summary_package_fact_count_invalid` stays); `run_summary_package_digest_invalid` and `_mismatch` are deleted (pending); a settlement-interrupted summary names no package; the MCP status schema follows |
+| P2-10 | reading facts' `resource_bundle_hash` | changed value, shape unchanged | PKG-S2 | PKG-S2 | lowercase hex SHA-256 of `package:<package_id>` (D8) |
+| P2-11 | resource files: a select step's `policy.sha256`, an OCR dictionary reference's `sha256`, a truth set's `sha256` | optional and ignored, whatever the value | PKG-S2 | resource side | contract type `IgnoredPin`; never validated, compared, recorded or echoed; PKG-S1b refuses the keys again |
+
+### 1.35 Wave 9 slice REC-8 (#396, REC-M v1.2.1 §10)
+
+REC-8 brings and reads both rows; neither is a ledger shape. No ledger record type or task
+diagnostic member is added: a target the shared read serves keeps the OCR evaluation row it had,
+with the read's blocks. The new location `text_read_shared` is a catalog entry, not a row.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R8-1 | task schema `0.9` `candidate_layouts[].shared_ocr` and recognition pack schema `0.7` `candidate_layouts[].shared_ocr`: `{region, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge?}` | new member of a `fixed_slots` layout (resource file format, not a ledger shape) | REC-8 | resource side | [selection-graph.md](selection-graph.md), section Shared OCR read; the region is a rectangle or `full_frame` (the source's `rect` / `full_frame` region form, derived into the pack's), `blocks` must be `detect` with a `line_merge`; a `repeated_anchor` layout refuses it (`UnknownField`), task schemas before `0.9` too (`UnconsumedField`); a shared read no slot or feature target uses is refused; one projection counts it as one provider evaluation per frame it serves, and the targets it serves none; the `package` interface revision for it is declared once by A8 |
+| R8-2 | the text read budget of a page recognition (`ocr-fields.md`, section Located text) | tightened rule (resource file format, not a ledger shape) | REC-8 | resource side | REC-6 left open how the field, reading and `0.7` collection targets a page gate names count: each such target a page names, directly or through a check, is one read of its own region (its observation is kept by target), at admission (`resource_declaration_invalid`, `InvalidValue` at `/pages/<i>` of the page that exceeds the budget) and at run time (`text_read_budget_exceeded` before the gate's provider call); a task whose gates name more than four of them, or more than one frame of their summed area with the page set's other reads, is refused where it was admitted since REC-6 |
+
+### 1.36 Wave 9 slice S6a (#369 model v3.1 §7 row 6, H-5; ORD §3.5 item 17)
+
+S6a brings and writes the configuration key `start_emulator` and its report;
+[runtime-config.md](runtime-config.md) and [actingd-check-config.md](actingd-check-config.md) are
+the contract. No ledger record type or persisted member is added. host-metrics'
+`network_connectivity()` is an in-memory read with no persisted shape; its reason vocabulary
+`connectivity_reason`, the code `start_emulator_requires_discovery_binding` and the domain
+`start_emulator_` are catalog entries, not rows (§7). Nothing acts on the key before S6c.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| E6-1 | `config.parameters.instance`: `instance.<instance id>.start_emulator` | new per-instance configuration row | S6a | S6a | boolean from the entry's `start_emulator`; default `none`, so an entry that does not name it has no row and is off; not settable (read once at assembly); `true` only on a discovery-bound instance, otherwise the start and `check-config` refuse with `start_emulator_requires_discovery_binding` (actingd, error, ladder class `none`, `alias`) |
+| E6-2 | check-config v1: `instances[]` member `start_emulator` (boolean) on a `discovery_pending` entry; `error.detail` `{alias}` of `start_emulator_requires_discovery_binding` | interface members | S6a | S6a | schema version stays `v1` (additive); an `explicit` entry has no such member |
+
+Configuration keys (§5): the per-instance `start_emulator` row, parsed, checked and reported by
+S6a; S6c reads it.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -575,7 +626,7 @@ readers in one PR.
 
 | Slice | Removed or changed |
 |---|---|
-| PKG-S2 | `PackageAdmitted.package_sha256` (keep `package_label`, `task_label`); `EntryRecoveryPackageAdmitted/Completed/Failed.package_sha256` → `package_label`; effective configuration `EntryRecovery.package_sha256` → `package_label`; `TaskSelectionPolicy.package_sha256`; Lab declared refusal `declared_package`, `verified_package` → optional `package_label`; Lab evidence `expected_package_sha256` / `actual_package_sha256` → `package_label`; `EvidencePackage.sha256`; OCR comparison report `truth_set_sha256` and its runtime-client reader; run status `package_ref` / `recovery_packages` → `package_label` / `recovery_package_labels`; run summary digest checks; reading facts' `resource_bundle_hash` = SHA-256(`"package:" + package_id`) (shape unchanged) |
+| PKG-S2 | `PackageAdmitted.package_sha256` (keep `package_label`, `task_label`); `EntryRecoveryPackageAdmitted/Completed/Failed.package_sha256` → `package_label`; effective configuration `EntryRecovery.package_sha256` → `package_label`; `TaskSelectionPolicy.package_sha256`; Lab declared refusal `declared_package`, `verified_package` → optional `package_label`; Lab evidence `expected_package_sha256` / `actual_package_sha256` → `package_label`; `EvidencePackage.sha256`; OCR comparison report `truth_set_sha256` and its runtime-client reader; run status `package_ref` / `recovery_packages` → `package_label` / `recovery_package_labels`; run summary digest checks; reading facts' `resource_bundle_hash` = SHA-256(`"package:" + package_id`) (shape unchanged). **Done (PKG-S2):** all of them, §1.31 P2-1 to P2-11; also the run summary's `package_digest` (now `package_label`), the in-package `sha256` keys made optional and ignored (D5), and request replay by `package_label` (a recorded label must be the request's package's, or a configured prerequisite package's or the recovery binding's `package_id`, each admitted again) |
 | PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart` |
 | PKG-S4 | IPC `expected_sha256` of `PackageDebugRequest`, `ContainedTaskRecoveryBinding`, `ContainedTaskRequest`, the Lab operation, online observation and saved-artifact OCR requests; `PackageDebugSummary.verified_sha256`; configuration `startup_package.expected_sha256`, `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`, the resource declaration's `package_digest` |
 | PKG-S5 | bundle v4 `packs[] {package_id, server, entry_task_id, path = "packs/<package_id>", file_count, byte_count}` (the bundle-level maintenance declaration stays, coordinator 10-12); `RecordingArtifact.digest` / `.sha256` → `package_id`; `PackageRef`, `ContentDirectory` and the `sha256:` serializers |
@@ -657,7 +708,7 @@ when it takes effect.
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
-| per instance | `start_emulator` | ORD §3.5 item 17 | S6a | S6a |
+| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 | PKG-S3; SR-3 |

@@ -6,7 +6,7 @@
 use super::*;
 use crate::codes::ClientCode;
 use actingcommand_contract::{
-    ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, PackageRef, TaskRunIdentity,
+    ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, TaskRunIdentity,
 };
 
 const RUN_STATUS_SCHEMA: &str = "actingcommand.run-status.v1";
@@ -89,13 +89,11 @@ pub struct ContainedRunStatus {
     pub instance_id: Option<InstanceId>,
     pub dispatch: RunDispatch,
     pub origin: RunOrigin,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_package_ref"
-    )]
-    pub package_ref: Option<PackageRef>,
-    #[serde(serialize_with = "serialize_package_refs")]
-    pub recovery_packages: Vec<PackageRef>,
+    /// Workflow #336 PKG-S2 (option 丙): the admitted package's `package_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_label: Option<String>,
+    /// The `package_id` of each prerequisite or recovery package the run admitted, in order.
+    pub recovery_package_labels: Vec<String>,
     pub state: ContainedRunState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<ContainedRunTerminal>,
@@ -616,7 +614,7 @@ impl RuntimeClient {
         let mut origin = None;
         let mut admitted = None;
         let mut terminal = None;
-        let mut recovery_packages = Vec::new();
+        let mut recovery_package_labels = Vec::new();
         let mut progress = None;
         let mut step_started = false;
         let mut first_fact = None;
@@ -644,18 +642,18 @@ impl RuntimeClient {
                 _ => {}
             }
             match payload.fact() {
-                TaskSemanticFact::PackageAdmitted { package_sha256, .. } => {
+                TaskSemanticFact::PackageAdmitted { package_label, .. } => {
                     let found = (
                         event.sequence,
-                        package_sha256.clone(),
+                        package_label.clone(),
                         event.links.lease_id().copied(),
                     );
                     if admitted.replace(found).is_some() {
                         return Err(status_error(ClientCode::RunStatusPackageFactCountInvalid));
                     }
                 }
-                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256, .. } => {
-                    recovery_packages.push(package_sha256.clone());
+                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, .. } => {
+                    recovery_package_labels.push(package_label.clone());
                 }
                 TaskSemanticFact::StepStarted {
                     step_index,
@@ -771,8 +769,8 @@ impl RuntimeClient {
                 instance_id,
                 dispatch,
                 origin,
-                package_ref: admitted.map(|(_, package, _)| package),
-                recovery_packages,
+                package_label: admitted.map(|(_, package, _)| package),
+                recovery_package_labels,
                 state,
                 terminal,
                 lease,
@@ -952,8 +950,8 @@ impl ContainedRunStatus {
             instance_id: None,
             dispatch: RunDispatch::Unknown,
             origin: RunOrigin::Unknown,
-            package_ref: None,
-            recovery_packages: Vec::new(),
+            package_label: None,
+            recovery_package_labels: Vec::new(),
             state: ContainedRunState::NotFound,
             terminal: None,
             lease: None,
@@ -1018,19 +1016,31 @@ fn is_lease_terminal(event: &ProjectedEvent, lease_id: LeaseId) -> bool {
     ) && event.links.lease_id() == Some(&lease_id)
 }
 
-fn serialize_package_ref<S: serde::Serializer>(
-    value: &Option<PackageRef>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    value
-        .as_ref()
-        .map(PackageRef::prefixed_wire_value)
-        .serialize(serializer)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn serialize_package_refs<S: serde::Serializer>(
-    values: &[PackageRef],
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(values.iter().map(PackageRef::prefixed_wire_value))
+    // Workflow #336 PKG-S2 (M-PKG v1.1 §4.3 S2-T3): run status names the run's packages by
+    // `package_id` and carries no package digest.
+    #[test]
+    fn s2_t3_run_status_names_its_packages_by_label_without_a_digest() {
+        let mut status = ContainedRunStatus::not_found(None, None, 1);
+        status.package_label = Some("neutral.main".to_owned());
+        status.recovery_package_labels =
+            vec!["neutral.outer".to_owned(), "neutral.inner".to_owned()];
+        let value = serde_json::to_value(&status).expect("run status JSON");
+        assert_eq!(value["package_label"], "neutral.main");
+        assert_eq!(
+            value["recovery_package_labels"],
+            serde_json::json!(["neutral.outer", "neutral.inner"])
+        );
+        for member in [
+            "package_ref",
+            "recovery_packages",
+            "package_sha256",
+            "package_digest",
+        ] {
+            assert!(value.get(member).is_none(), "{member}");
+        }
+    }
 }

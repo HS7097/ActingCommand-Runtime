@@ -142,6 +142,8 @@ that Scene. The text reads of locate targets (section Located text) and of value
 within that Scene. The observation a page gate makes of a field or reading target (or of a
 `0.7` collection target) is kept by target and taken once by that frame's collection or
 reading, with its execution evidence; its PP-OCR reports stay with the gate's evaluation.
+The gate's provider call for such a target counts in the page recognition's text read budget
+(section Located text, Workflow #396 REC-8).
 Other OCR output is not cached, and callers cannot import an old template result.
 The context is bounded by admitted target identities and is released with the frame.
 Best-match score, threshold and the existing color check govern the anchor. An anchor that
@@ -218,14 +220,15 @@ The other value type is:
 ```json
 {
   "type": "dictionary_entry",
-  "dictionary": { "path": "words.json", "sha256": "<64 lowercase hex digits>" }
+  "dictionary": { "path": "words.json" }
 }
 ```
 
 The path is relative to the task's operation directory, bounded to 256 bytes and cannot
-escape it. Workflow #336 PKG-S1: `sha256` stays required and must be 64 lowercase hex
-digits, but nothing compares it with the dictionary's bytes (PKG-S2 makes it optional).
-The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
+escape it. Workflow #336 PKG-S2 (option 丙): a `sha256` the reference may still carry is
+optional and ignored, whatever its value; it is neither validated nor compared, and no
+report echoes it (PKG-S1b refuses the key again once the resource repositories no longer
+carry it). The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
 (`items`, optional `aliases` with `observed`/`canonical`). Trim/lowercase matching selects
 one canonical item, preserving the item's declared spelling. Alias canonical references
 must exactly name a declared item. Duplicate normalized items, duplicate/conflicting
@@ -233,11 +236,10 @@ aliases and invalid canonical references fail admission as ambiguous. Unknown ob
 remain unresolved; no tolerant substitution or retry is applied to fields.
 
 Dictionary and post-admission truth-set preparation read the exact resource-relative
-path from the admitted bundle. Workflow #336 PKG-S1: no hash is compared at any step. The
-declared `sha256` must still be well formed (a malformed dictionary reference fails
-`ocr_fields_dictionary_reference_invalid`, a malformed truth-set one
-`contained_task_post_admission_ocr_truth_invalid`), a manifest's per-file hashes are not
-read, and only the existing size limits apply to the bytes: dictionaries above the field
+path from the admitted bundle. Workflow #336 PKG-S2: no hash is compared or validated at any
+step; a declared `sha256` of a dictionary or a truth set is ignored, a manifest's per-file
+hashes are not read, and the comparison report names its truth set by `truth_set_path` only
+(it has no `truth_set_sha256`). Only the existing size limits apply to the bytes: dictionaries above the field
 declaration's `max_total_bytes` fail `ocr_fields_dictionary_limit_exceeded`, a truth set above
 it `contained_task_post_admission_ocr_truth_mismatch`.
 
@@ -422,7 +424,11 @@ error on its recognition error row.
 
 Reads are counted per consumer: one page recognition (every page rule of the page set) or
 one guard evaluation. The reads are those of locate targets and (Workflow #396 REC-6) of value
-tests' sides, which read an ordinary OCR target as one request of its own region. A consumer
+tests' sides, which read an ordinary OCR target as one request of its own region. Workflow #396
+REC-8: a page recognition also reads each field, reading or `0.7` collection target of its task
+that a page names, directly or as a member of a check; since that observation is kept by
+target, each such target is one read of its own region, even when another read has the same
+request. Other ordinary OCR targets are not reads. A consumer
 reads with at most 4 provider calls and at most one frame
 of summed region area, each distinct request once; requests are the same when their
 resolved region, model, languages, timeout, `blocks` and `line_merge` are equal. Within one

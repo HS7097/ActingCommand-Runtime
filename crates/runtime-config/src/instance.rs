@@ -11,6 +11,9 @@
 //! entry's `device.kind` (model-398 v1.1 §11.2): reported only for an instance that names it,
 //! read at assembly. Workflow #384 D2-S2 adds `recognition_package`, the entry's
 //! `recognition_package.package`: reported only for an instance that names it, read at assembly.
+//! Workflow #369 S6a adds `start_emulator` (ORD §3.5 item 17): `true` lets the daemon start the
+//! instance's stopped emulator at its start (S6c); default `none`, so a file that does not name
+//! it leaves it off and reports no row; read at assembly.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
@@ -35,6 +38,9 @@ pub const DEVICE_KIND_TOKENS: &[&str] = &["emulator", "handset"];
 /// Workflow #384 D2-S2 (D2 model §3.2, v1.4.2): the instance's recognition maintenance package,
 /// `recognition_package.package` in its entry: a location only, never a digest.
 pub const RECOGNITION_PACKAGE: &str = "recognition_package";
+/// Workflow #369 S6a: whether the daemon starts the instance's stopped emulator at its start, the
+/// entry's `start_emulator`; discovery-bound instances only, off unless the file names it.
+pub const START_EMULATOR: &str = "start_emulator";
 
 pub(crate) static ROWS: &[KeyRow] = &[
     KeyRow {
@@ -81,6 +87,16 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::None,
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "D2-S2",
+        since: "0.12.0",
+    },
+    KeyRow {
+        name: KeyName::PerInstance(START_EMULATOR),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::Boolean,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "S6c",
         since: "0.12.0",
     },
 ];

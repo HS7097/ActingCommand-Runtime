@@ -33,7 +33,7 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         RuntimeOperation::RunContainedTask {
             instance_alias: "neutral.instance".to_owned(),
             holder_id: token.holder_id(),
-            request: ContainedTaskRequest::new(package.display().to_string(), expected.clone())
+            request: ContainedTaskRequest::new(package.display().to_string(), expected)
                 .expect("task request"),
         },
     );
@@ -45,7 +45,6 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         TaskSemanticFact::PackageAdmitted {
             package_label: "neutral.semantic.task".to_owned(),
             task_label: "task".to_owned(),
-            package_sha256: expected.into(),
             response_deadline_monotonic_ms: None,
         },
     )

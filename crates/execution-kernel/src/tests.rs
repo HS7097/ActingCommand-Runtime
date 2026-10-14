@@ -23,6 +23,9 @@ mod gate_381b;
 // Workflow #373 NAV-3b, test rows N3b-1 and N3b-2.
 mod gate_373_nav3b;
 
+// Workflow #387 D1c-F: a plan that fails to prepare is a Runtime-internal error.
+mod gate_387_d1cf;
+
 /// A scheduler-shaped step witness for driving the kernel's write entries directly.
 #[cfg(test)]
 fn step_witness() -> Arc<actingcommand_contract::FencedWrite> {
