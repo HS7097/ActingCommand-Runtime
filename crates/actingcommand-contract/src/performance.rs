@@ -45,6 +45,12 @@ pub enum PerformancePressureKind {
     DiskIo,
     Gpu,
     ThirdParty,
+    /// Workflow #383 register X1 (PERF §3.4, §8 D11; first writer P-s): a fullscreen
+    /// foreground with third-party load; its peak is the `process_load` of that load.
+    FullscreenContention,
+    /// Workflow #383 register X1 (PERF §3.4; first writer P-s): the ledger's capture buffer
+    /// above its first watermark tier; its peak is `ledger_backlog`.
+    LedgerBacklog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -136,6 +142,26 @@ pub enum PerformancePressureValue {
         peak_cpu_basis_points: u16,
         peak_io_bytes_per_second: u64,
     },
+    /// Workflow #383 register X1 (PERF §3.4): the capture buffer's watermark tier, 1 to 3,
+    /// and what the buffer held at the peak.
+    LedgerBacklog {
+        tier: u8,
+        buffer_bytes: u64,
+        buffer_records: u64,
+    },
+}
+
+impl PerformancePressureValue {
+    /// The severity a ledger backlog tier stands for (PERF §3.4): tier 1 is elevated, tier 2
+    /// (spilling) high and tier 3 critical; any other tier is not a backlog.
+    pub const fn ledger_backlog_severity(tier: u8) -> Option<PerformancePressureSeverity> {
+        match tier {
+            1 => Some(PerformancePressureSeverity::Elevated),
+            2 => Some(PerformancePressureSeverity::High),
+            3 => Some(PerformancePressureSeverity::Critical),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,13 +354,28 @@ impl PerformancePressureRecord {
                 },
             ) if *queue_depth_milli > 0 || *latency_micros > 0 => Ok(()),
             (
-                PerformancePressureKind::ThirdParty,
+                PerformancePressureKind::ThirdParty | PerformancePressureKind::FullscreenContention,
                 PerformancePressureValue::ProcessLoad {
                     process_count,
                     peak_cpu_basis_points,
                     ..
                 },
             ) if *process_count > 0 && *peak_cpu_basis_points <= 10_000 => Ok(()),
+            // A backlog's tier names its severity, and a buffer above a tier holds records.
+            (
+                PerformancePressureKind::LedgerBacklog,
+                PerformancePressureValue::LedgerBacklog {
+                    tier,
+                    buffer_bytes,
+                    buffer_records,
+                },
+            ) if PerformancePressureValue::ledger_backlog_severity(*tier)
+                == Some(self.severity)
+                && *buffer_bytes > 0
+                && *buffer_records > 0 =>
+            {
+                Ok(())
+            }
             _ => Err(SanitizationError::new(
                 SanitizationCode::InvalidPerformancePressureValue,
                 "performance_pressure",

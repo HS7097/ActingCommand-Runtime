@@ -81,6 +81,7 @@ fn rd1a_t1_stored_adb_command_evidence_round_trips_raw_text_redacted() {
         stderr_lossy_decode: false,
         state: AdbTransportState::Unknown,
         raw_text_redacted: true,
+        outcome: None,
     };
     let encoded = serde_json::to_value(&redacted).expect("encode");
     assert_eq!(encoded.get("raw_text_redacted"), Some(&Value::Bool(true)));

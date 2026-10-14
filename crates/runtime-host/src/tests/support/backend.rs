@@ -467,6 +467,7 @@ impl CaptureBackend for FakeCapture {
             },
             sampled_at: std::time::SystemTime::now(),
             frame_transform: None,
+            safe_insets: None,
         }))
     }
 

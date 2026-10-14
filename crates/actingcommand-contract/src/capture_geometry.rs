@@ -93,6 +93,22 @@ pub struct CaptureGeometry {
     pub sampled_at: SystemTime,
     /// None for a display-only read that did not transform a captured frame.
     pub frame_transform: Option<CaptureFrameTransform>,
+    /// Workflow #383 register X6 (model 392 §8.2; first writer DA-4): the display cutout's
+    /// insets at this rotation, in device-frame pixels. Absent when they were not read or the
+    /// display reports no cutout section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_insets: Option<CaptureInsets>,
+}
+
+/// Workflow #383 register X6: how far the safe area lies inside each edge of the device
+/// frame, in device-frame pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureInsets {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +191,16 @@ pub struct CaptureFrameCrop {
 }
 
 impl CaptureGeometry {
+    /// Workflow #383 register X6: recorded insets leave a safe area inside the logical
+    /// display, which the device frame shows in its own orientation (model 392 §2.2).
+    pub fn safe_insets_fit_display(&self) -> bool {
+        let display = self.logical_display_extent;
+        self.safe_insets.is_none_or(|insets| {
+            u64::from(insets.left) + u64::from(insets.right) < u64::from(display.width())
+                && u64::from(insets.top) + u64::from(insets.bottom) < u64::from(display.height())
+        })
+    }
+
     /// #402 RD-3i (model #398 R1 §5.3): whether a delivered frame of `extent` shows this
     /// geometry's logical display. A recorded crop must name exactly the frame's size and lie
     /// inside the display; every other transform keeps the proportional comparison, so a frame

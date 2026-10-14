@@ -3590,6 +3590,7 @@ fn revision_3_geometry_failures_round_trip() {
                         outcome: failure.clone(),
                         event_id: None,
                     }),
+                    display_map: None,
                 }),
             },
             AuditInput::new(),
@@ -3997,3 +3998,6 @@ fn every_payload_variant_keeps_outcome_for_the_envelope_only() {
 // Workflow #383 SH-1: the readers, validation and round trips of the v0.12.0 shapes.
 #[path = "sh1_tests.rs"]
 mod sh1;
+// Workflow #383 SH-2: the same for the shapes of the 10-14 shape re-check (register §1.25).
+#[path = "sh2_tests.rs"]
+mod sh2;

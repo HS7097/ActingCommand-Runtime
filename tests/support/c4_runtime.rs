@@ -516,6 +516,7 @@ pub fn physical_geometry_16x9(serial: &str) -> actingcommand_contract::CaptureGe
         },
         sampled_at: std::time::SystemTime::now(),
         frame_transform: None,
+        safe_insets: None,
     })
 }
 

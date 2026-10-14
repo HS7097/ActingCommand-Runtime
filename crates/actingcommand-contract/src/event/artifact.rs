@@ -260,6 +260,20 @@ pub struct TaskDiagnosticTargetData {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniqueness: Option<TaskDiagnosticUniquenessData>,
+    /// Workflow #383 register X9 (model 392 §5.3, §8.4; first writer DA-2): how far the match
+    /// lay from its mapped region in the correction window; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<TaskDiagnosticCorrectionData>,
+}
+
+/// Workflow #383 register X9: the match's top-left corner minus the mapped region's, in
+/// scale-frame pixels (base pixels, like REC-5's `scale_milli`), so the resource side can
+/// compare it with the package's numbers. The correction radius bounds it (at most 64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticCorrectionData {
+    pub dx: i16,
+    pub dy: i16,
 }
 
 /// Workflow #396 REC-2: the best match's score and the declared margin, in milli, and the
