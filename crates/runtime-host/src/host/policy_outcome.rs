@@ -981,11 +981,9 @@ impl HostShared {
                     ledger_error(HostLocation::ProjectPolicyOutcome)
                 }
             })?;
-        // Workflow #390 OUT-1 (FCM O-03): the run's outcome is one its package declares; the
-        // catalog may reference only some of them, so an outcome it does not reference is no
-        // mismatch.
         if projection.ledger_position() < terminal.sequence
             || projection.scheduling_result().identity() != &identity
+            || !expected_keys.contains(projection.scheduling_result().disposition().outcome_key())
         {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeProjectionMismatch,

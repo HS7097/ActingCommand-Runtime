@@ -818,10 +818,7 @@ pub fn ocr_confidence_milli(confidence: Option<f32>) -> Option<u16> {
 }
 
 impl OcrFieldsDeclaration {
-    /// A task without input can only collect fields on the terminal pages of its fields outcome.
-    /// Workflow #390 OUT-1 (FCM O-05): it may declare several outcomes, each mapping terminal
-    /// pages without a designated effect; its target pages are all of those terminal pages, and
-    /// a run that ends on another outcome's page collects no field.
+    /// A task without input can only collect fields on its declared terminal pages.
     pub fn validate_zero_input_task(
         &self,
         game: &str,
@@ -834,21 +831,14 @@ impl OcrFieldsDeclaration {
         scheduling
             .validate()
             .map_err(|_| TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code())?;
-        // Outcome keys are unique in a valid declaration.
-        let Some(fields_mapping) = scheduling
-            .mappings()
-            .iter()
-            .find(|mapping| mapping.outcome_key() == self.outcome_key)
-        else {
+        let [mapping] = scheduling.mappings() else {
             return Err(TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code());
         };
         if execution_mode != "navigable_route"
             || !stop_on_confirmation
             || scheduling.designated_operation().is_some()
-            || scheduling
-                .mappings()
-                .iter()
-                .any(|mapping| mapping.effect() != SchedulingEffectCondition::NoDesignatedEffect)
+            || mapping.outcome_key() != self.outcome_key
+            || mapping.effect() != SchedulingEffectCondition::NoDesignatedEffect
         {
             return Err(TaskflowCode::OcrFieldsZeroInputOutcomeInvalid.code());
         }
@@ -861,23 +851,13 @@ impl OcrFieldsDeclaration {
         };
         let targets = canonical(target_pages);
         let fields = canonical(&self.page_ids);
-        let fields_terminals = canonical(fields_mapping.terminal_pages());
-        let declared_terminals = scheduling
-            .mappings()
-            .iter()
-            .map(|mapping| mapping.terminal_pages().len())
-            .sum::<usize>();
-        let terminals = scheduling
-            .mappings()
-            .iter()
-            .flat_map(|mapping| canonical(mapping.terminal_pages()))
-            .collect::<std::collections::BTreeSet<_>>();
+        let terminals = canonical(mapping.terminal_pages());
         if targets.is_empty()
             || targets.iter().any(|page| page.is_empty() || page == "any")
             || targets.len() != target_pages.len()
             || fields.len() != self.page_ids.len()
-            || terminals.len() != declared_terminals
-            || fields != fields_terminals
+            || terminals.len() != mapping.terminal_pages().len()
+            || targets != fields
             || targets != terminals
         {
             return Err(TaskflowCode::OcrFieldsZeroInputPagesInvalid.code());

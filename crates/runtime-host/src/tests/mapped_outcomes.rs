@@ -2276,8 +2276,7 @@ fn an_outcome_key_the_new_catalog_no_longer_lists_reads_as_unknown_while_other_i
 
     // Restart with the producer's new package and switch to v2: the same task id now lists B and
     // its alternate instead of A, and the consumer reads B. (The mapped package declares a key
-    // and its alternate, and v2 lists both; v1's keys are not listed, so the v1 run projects
-    // nothing under v2.)
+    // and its alternate, and a catalog must list exactly the keys its package declares.)
     advance_manual_clock_to(&clock, POLICY_RESTART_UNIX_MS);
     let restarted = start_key_change_host(
         &root,

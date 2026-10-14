@@ -2461,12 +2461,6 @@ impl PreparedContainedTask {
         self.post_admission_ocr.is_some() || self.post_admission_fields.is_some()
     }
 
-    /// Workflow #390 OUT-1 (FCM O-05): whether the task collects OCR fields. A successful run
-    /// of it that passes no field page has no OCR observation and no fields report.
-    pub const fn has_ocr_fields(&self) -> bool {
-        self.post_admission_fields.is_some()
-    }
-
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
@@ -4309,15 +4303,16 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
-            // Workflow #390 OUT-1 (FCM O-05): the collector reads a frame of every field page
-            // the run recognizes, so a run without one never passed a field page. Only a path
-            // through a field page needs fields; this one ends with no fields report.
-            if report.frames_collected != 0 {
-                runtime
-                    .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
-                    .map_err(ContainedTaskRunError::Boundary)?;
-                ocr_collector.fields_report_recorded = true;
+            if report.frames_collected == 0 {
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrObservationMissing.code(),
+                )
+                .into());
             }
+            runtime
+                .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            ocr_collector.fields_report_recorded = true;
             None
         } else {
             match std::mem::take(ocr_collector).finish()? {

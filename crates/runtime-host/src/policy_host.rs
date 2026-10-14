@@ -483,10 +483,6 @@ pub(crate) struct CompletedPolicyRunIdentity {
     pub(crate) execution_outcome: PolicyExecutionOutcome,
     pub(crate) completion_sequence: u64,
     pub(crate) activity_window_id: String,
-    /// Workflow #390 OUT-1 (FCM O-04): the outcome keys the run's own catalog referenced for
-    /// its task. Admission refuses a key the package does not declare, so the package declared
-    /// every one of them.
-    pub(crate) referenced_outcome_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2326,17 +2322,17 @@ impl PolicyHost {
             )
         })?;
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let referenced_outcome_keys = catalog
+        let completed_run = if catalog
             .compiled()
-            .referenced_outcome_keys(&dispatch.data.task_id);
-        let completed_run = if referenced_outcome_keys.is_empty() {
+            .referenced_outcome_keys(&dispatch.data.task_id)
+            .is_empty()
+        {
             None
         } else {
             Some(completed_policy_run_identity(
                 completion,
                 &dispatch.data,
                 execution,
-                referenced_outcome_keys,
             )?)
         };
         self.pinned_dispatches.remove(decision_id);
@@ -2669,17 +2665,17 @@ impl PolicyHost {
                         )
                     })?;
                     let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-                    let referenced_outcome_keys = catalog
+                    dispatch.completed_run = if catalog
                         .compiled()
-                        .referenced_outcome_keys(&dispatch.data.task_id);
-                    dispatch.completed_run = if referenced_outcome_keys.is_empty() {
+                        .referenced_outcome_keys(&dispatch.data.task_id)
+                        .is_empty()
+                    {
                         None
                     } else {
                         Some(completed_policy_run_identity(
                             &event,
                             &dispatch.data,
                             execution,
-                            referenced_outcome_keys,
                         )?)
                     };
                 }
@@ -3376,7 +3372,6 @@ fn completed_policy_run_identity(
     event: &PersistedEvent,
     data: &PolicyDispatchEventData,
     execution: &PolicyExecutionEventData,
-    referenced_outcome_keys: BTreeSet<String>,
 ) -> RuntimeHostResult<CompletedPolicyRunIdentity> {
     let EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)) = event.payload() else {
         return Err(fatal(
@@ -3425,7 +3420,6 @@ fn completed_policy_run_identity(
         execution_outcome: execution.outcome.clone(),
         completion_sequence: event.sequence(),
         activity_window_id: admission.activity.window_id.clone(),
-        referenced_outcome_keys,
     })
 }
 

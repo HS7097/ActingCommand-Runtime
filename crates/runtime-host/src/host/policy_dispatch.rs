@@ -1032,28 +1032,13 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeUnavailable,
                 ));
             }
-            // Workflow #390 OUT-1 (FCM O-04): admission refuses a catalog key the package does
-            // not declare, so the package declared every key the run's own catalog referenced.
-            // Each of them that the run did not produce and the active catalog still references
-            // was declared and not produced: it evaluates `false`.
-            let produced_key = outcome.disposition().outcome_key();
-            let produced_listed = expected_keys.contains(produced_key);
-            let unproduced_keys = expected_keys
-                .iter()
-                .filter(|key| {
-                    key.as_str() != produced_key
-                        && expected_run.referenced_outcome_keys.contains(key.as_str())
-                })
-                .cloned()
-                .collect::<Vec<_>>();
             // Workflow #400: the pair's latest outcome carries a key the active catalog no longer
-            // lists for its task, and the active catalog lists none of the other keys the run's
-            // catalog referenced (a later catalog changed the task's outcome keys). Like a latest
+            // lists for its task (a later catalog changed the task's outcome keys). Like a latest
             // completion without a run identity (#399), the pair has no usable outcome: it
             // projects nothing, so the evaluator reads the keys it references as
             // `outcome_missing` until the task completes under this catalog. Other pairs and
             // instances project as before.
-            if !produced_listed && unproduced_keys.is_empty() {
+            if !expected_keys.contains(outcome.disposition().outcome_key()) {
                 continue;
             }
             if !base_facts
@@ -1140,31 +1125,21 @@ impl HostShared {
                         )
                     })
             };
-            // A settled run whose outcome the active catalog references projects it and two
-            // settlement records that share its observation instant, activity window and expiry
-            // (Workflow #313 goal 5). Each unproduced key projects `Boolean(false)` with the same
-            // instant, window and expiry (OUT-1).
+            // Every settled run projects its outcome and two settlement records that share its
+            // observation instant, activity window and expiry (Workflow #313 goal 5).
+            let outcome_key = outcome.disposition().outcome_key();
             let observed_at_unix_ms = outcome.terminal_timestamp_unix_ms();
-            let mut records = Vec::new();
-            if produced_listed {
-                records.extend([
-                    (produced_key.to_owned(), PolicyFactValue::Boolean(true)),
-                    (
-                        format!("{produced_key}.duration_ms"),
-                        settlement_value(*runtime_ms)?,
-                    ),
-                    (
-                        format!("{produced_key}.completed_at_unix_ms"),
-                        settlement_value(observed_at_unix_ms)?,
-                    ),
-                ]);
-            }
-            for key in unproduced_keys {
-                if !records.iter().any(|(recorded, _)| *recorded == key) {
-                    records.push((key, PolicyFactValue::Boolean(false)));
-                }
-            }
-            for (outcome_key, value) in records {
+            for (outcome_key, value) in [
+                (outcome_key.to_owned(), PolicyFactValue::Boolean(true)),
+                (
+                    format!("{outcome_key}.duration_ms"),
+                    settlement_value(*runtime_ms)?,
+                ),
+                (
+                    format!("{outcome_key}.completed_at_unix_ms"),
+                    settlement_value(observed_at_unix_ms)?,
+                ),
+            ] {
                 base_facts.outcomes.push(ObservedOutcome {
                     task_id: identity.catalog_task_id().to_owned(),
                     instance_id: identity.instance_alias().to_owned(),

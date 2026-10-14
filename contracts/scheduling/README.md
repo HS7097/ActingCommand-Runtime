@@ -628,21 +628,6 @@ decision identities derived from it follow; this is not a wire change. The
 policy input structures, the ledger event set and the decision identity rules
 are unchanged.
 
-**Outcomes a successful run did not produce** (Workflow #390 OUT-1, forced
-compromise O-04). Admission refuses a catalog that references an outcome key
-the task's package does not declare (Runtime Boundary), so the package declared
-every key the run's own catalog referenced for the task. For the pair's latest
-run, when it succeeded, each of those keys that the run did not produce and the
-active catalog still references projects one more `ObservedOutcome`:
-`Boolean(false)`, with the run's observation instant, activity window and
-expiry. An outcome predicate on such a key evaluates `false`, not Unknown. A
-failed or cancelled run, a pair without a completed run, and a key the run's
-own catalog did not reference stay Unknown (`outcome_missing`). When the active
-catalog does not reference the produced key, the produced key's three records
-are left out; the pair still projects its `false` records, and projects nothing
-when it has none (Workflow #400). These records count against the same bound of
-16,384 outcome records per evaluation.
-
 A strategic goal's `MetricRef::Outcome` reads the record with its exact key for
 the assessment's instance. As for `MetricRef::Fact`, an `Integer` value is the
 metric, any other value is none, and a record whose `expires_at_unix_ms` is
@@ -780,12 +765,9 @@ there is no scheduling-result consumer. The package may declare and produce its
 own valid outcomes; its actual final page, designated effect and terminal
 `scheduling_disposition` remain in GlobalLedger. Completion and recovery create
 no policy outcome projection or completed-run consumption identity in this case.
-When the reference set is nonempty, it must be a subset of the package's declared
-outcome keys (Workflow #390 OUT-1, forced compromise O-03): a package may declare
-outcomes the catalog does not read, and a run may produce one of them. A
-referenced key the package does not declare refuses the run before any effect
-(`policy_run_outcome_declaration_mismatch`). Package validity and execution
-evidence requirements apply in both cases.
+When the reference set is nonempty, it must exactly match the package's declared
+outcome keys. Package validity and execution evidence requirements apply in both
+cases.
 
 ## Forward Planning And Maintenance
 
