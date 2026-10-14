@@ -138,9 +138,7 @@ incident = []
 key = "28"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::crash_recovery::policy_dispatch_crash_child_process",
     "actingcommand-runtime-host::lib::tests::crash_recovery::exact_lifecycle_checkpoint_recovers_scheduled_failure_once",
-    "actingcommand-runtime-host::lib::tests::crash_recovery::policy_pending_crash_child_process",
     "actingcommand-runtime-host::lib::tests::crash_recovery::orphaned_policy_admission_is_reconciled_after_real_process_kill",
     "actingcommand-runtime-host::lib::tests::crash_recovery::policy_dispatch_accepts_one_late_outcome_after_process_crash",
     "actingcommand-runtime-host::lib::tests::crash_recovery::first_policy_execution_append_failure_recovers_each_scheduled_outcome_once",
@@ -706,3 +704,52 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_a_runtime_holding_a_lease_refuses_the_install_commit_shutdown_at_once",
 ]
 incident = ["#378 SHUT-FU"]
+
+# A previous owner whose last record still declares resources in use is released only when its process is gone: no running process has the pid, or the running one was created more than 2 s after the recorded start (one prior_epoch_owner_released_by_exit fact and the daemon line); alive or undecided keeps owner_resource_unconfirmed with the probe's finding (Workflow #382 H-5 G18, injected probe)
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_previous_owner_alive_or_undecided_keeps_the_refusal_with_the_probes_finding",
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_previous_owner_gone_is_released_with_one_fact_and_the_daemon_line",
+    "actingcommand-runtime-host::lib::owner::tests::owner_protocol_unconfirmed_blocks_automatic_takeover",
+]
+incident = ["#382 H-5 G18"]
+
+# During an install drain a subscription is Denied RuntimeUnavailable, not fatal, and the Runtime stays healthy; is_lifecycle_draining follows the drain and is false after an Abort, when the same cursor subscribes again (#376; Workflow #382 H-5 G4)
+[[gate]]
+key = "10"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_cursor_after_abort",
+]
+incident = ["#382 H-5 G4"]
+
+# The failed run's lease goes to its ladder with no window for a dispatch: the held instance's candidate is deferred dispatch_instance_held, nothing is dispatched, rejected or granted until the ladder's own release, and the next dispatch follows it (#369 §6; Workflow #382 H-4 G8)
+[[gate]]
+key = "17"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_its_release",
+]
+incident = ["#382 H-4 G8"]
+
+# A ladder wait ends on an install drain, a shutdown or a pause: the waiting rung fails with the interruption, the climb ends exhausted at Warning and the ladder releases its key once (#369 H-3; Workflow #382 H-4 G9)
+[[gate]]
+key = "22"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_an_install_drain_during_the_readiness_wait_fails_rung_three_and_releases_once",
+    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once",
+    "actingcommand-runtime-host::lib::tests::instance_workers::a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release",
+]
+incident = ["#382 H-4 G9"]
+
+# sample_capacity resolves every target and queries each distinct volume once, with no retry; a resolution error stays with its target, a query error with its volume's sample (Workflow #382 H-5 G20, injected resolver and query)
+[[gate]]
+key = "43"
+coverage = "Y"
+tests = [
+    "actingcommand-host-metrics::lib::gate_382_h5::gate_capacity_queries_each_volume_once_and_keeps_each_failure_with_its_targets",
+]
+incident = ["#382 H-5 G20"]
