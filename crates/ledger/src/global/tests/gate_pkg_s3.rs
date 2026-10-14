@@ -49,8 +49,15 @@ fn holder_of<'a>(
     value: &'a mut Value,
     member: &str,
 ) -> Option<&'a mut serde_json::Map<String, Value>> {
+    // A shared look first: returning the guarded mutable borrow from a match arm is refused
+    // by the borrow checker (E0499).
+    if value
+        .as_object()
+        .is_some_and(|object| object.contains_key(member))
+    {
+        return value.as_object_mut();
+    }
     match value {
-        Value::Object(object) if object.contains_key(member) => Some(object),
         Value::Object(object) => object
             .values_mut()
             .find_map(|child| holder_of(child, member)),
