@@ -87,10 +87,6 @@ pub(super) struct ActingdConfigFile {
     capacity_thresholds: Option<actingcommand_contract::CapacityThresholds>,
     #[serde(default)]
     frame_retention_enabled: Option<bool>,
-    #[serde(default)]
-    frame_retention_failed_run_successes: Option<u16>,
-    #[serde(default)]
-    frame_retention_failed_run_days: Option<u16>,
     /// Workflow #375 R5c: whether each 30 s error window drops its interior near-duplicates
     /// (default `true`). Ordinary frames are always deduplicated and have no key.
     // Interface anchor `actingd-config` revision 4 (contracts/component-interfaces.md): a Runtime
@@ -1207,18 +1203,6 @@ impl ActingdConfigFile {
         {
             return Err(ActingdCode::MumuRootInvalid.code());
         }
-        let defaults = actingcommand_contract::FailedRunRetentionPolicy::default();
-        let failed_run_retention = actingcommand_contract::FailedRunRetentionPolicy {
-            successor_successes: self
-                .frame_retention_failed_run_successes
-                .unwrap_or(defaults.successor_successes),
-            retention_days: self
-                .frame_retention_failed_run_days
-                .unwrap_or(defaults.retention_days),
-        };
-        failed_run_retention
-            .validate()
-            .map_err(|_| SharedCode::InvalidFailedRunRetentionPolicy.code())?;
         // Workflow #318 cfg2: a pressure streak outside 1..=30 keeps its own refusal; a value of
         // another type is the configuration mechanism's (`config_value_invalid`, below).
         for key in [
@@ -1395,7 +1379,6 @@ impl ActingdConfigFile {
                 .with_device_diagnostic_mode(self.device_diagnostic_mode.unwrap_or_default())
                 .with_capacity_thresholds(self.capacity_thresholds.unwrap_or_default())
                 .with_frame_retention_enabled(self.frame_retention_enabled.unwrap_or(true))
-                .with_failed_run_retention(failed_run_retention)
                 .with_frame_retention_dedup(
                     self.frame_retention_dedup_error.unwrap_or(true),
                     self.frame_retention_dedup_lab.unwrap_or(false),
@@ -1483,8 +1466,6 @@ impl ActingdConfigFile {
             bind_port_explicit: self.bind_port.is_some(),
             device_diagnostic_mode_explicit: self.device_diagnostic_mode.is_some(),
             frame_retention_enabled: self.frame_retention_enabled,
-            failed_run_successes_explicit: self.frame_retention_failed_run_successes.is_some(),
-            failed_run_days_explicit: self.frame_retention_failed_run_days.is_some(),
             dedup_error_explicit: self.frame_retention_dedup_error.is_some(),
             dedup_lab_explicit: self.frame_retention_dedup_lab.is_some(),
             capacity_thresholds_explicit: self.capacity_thresholds.is_some(),
@@ -2739,8 +2720,6 @@ mod tests {
             let mut value = value.clone();
             if let Some(configured) = configured {
                 value["frame_retention_enabled"] = json!(configured);
-                value["frame_retention_failed_run_successes"] = json!(4);
-                value["frame_retention_failed_run_days"] = json!(9);
                 // Workflow #375 R5c: both dedup switches, each against its default.
                 value["frame_retention_dedup_error"] = json!(false);
                 value["frame_retention_dedup_lab"] = json!(true);
@@ -2870,39 +2849,6 @@ mod tests {
                 .expect("frame retention parameter");
             assert_eq!(parameter.value, FactScalar::Boolean(enabled));
             assert_eq!(parameter.source, source);
-            for (key, expected) in [
-                (
-                    "frame_retention_failed_run_successes",
-                    if configured.is_some() { 4 } else { 3 },
-                ),
-                (
-                    "frame_retention_failed_run_days",
-                    if configured.is_some() { 9 } else { 7 },
-                ),
-            ] {
-                let parameter = assembly
-                    .manifest
-                    .parameters
-                    .iter()
-                    .find(|parameter| parameter.key == key)
-                    .expect("failed-run policy parameter");
-                assert_eq!(parameter.value, FactScalar::Integer(expected));
-                assert_eq!(parameter.source, source);
-            }
-        }
-        for (key, invalid) in [
-            ("frame_retention_failed_run_successes", 0),
-            ("frame_retention_failed_run_successes", 1025),
-            ("frame_retention_failed_run_days", 0),
-            ("frame_retention_failed_run_days", 36501),
-        ] {
-            let mut value = value.clone();
-            value[key] = json!(invalid);
-            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
-            assert!(matches!(
-                config.assemble().map_err(Code::as_str),
-                Err("invalid_failed_run_retention_policy")
-            ));
         }
         // cfg2: a pressure streak outside 1..=30 and a relative or missing device path are
         // refused at assembly with their own codes.
@@ -2973,6 +2919,62 @@ mod tests {
             "unexpected": true
         });
         assert!(serde_json::from_value::<ActingdConfigFile>(value).is_err());
+    }
+
+    // Workflow #382 L-5b (apps gate 46): the failed-run (K/T) keys are retired. A configuration
+    // that still names either one is refused as an unknown member when it is loaded, by a start
+    // and by check-config alike, before anything is assembled (Fail Loud). The key table has no
+    // row for either key, so an instruction that names one is `config_key_unknown`.
+    #[test]
+    fn l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown() {
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join("actingd.config.json");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": []
+        });
+        let purposes = [
+            actingcommand_contract::InstallConfigPurpose::Running,
+            actingcommand_contract::InstallConfigPurpose::CandidateCheck,
+        ];
+        fs::write(
+            &path,
+            serde_json::to_vec(&base).expect("configuration JSON"),
+        )
+        .expect("write the configuration");
+        for purpose in purposes {
+            assert!(
+                load_for(&path, purpose).is_ok(),
+                "{purpose:?}: the configuration without a retired key loads"
+            );
+        }
+        // Each key with the value it defaulted to before its retirement (K = 3, T = 7).
+        for (key, value) in [
+            ("frame_retention_failed_run_successes", 3),
+            ("frame_retention_failed_run_days", 7),
+        ] {
+            let mut named = base.clone();
+            named[key] = json!(value);
+            fs::write(
+                &path,
+                serde_json::to_vec(&named).expect("configuration JSON"),
+            )
+            .expect("write the configuration");
+            for purpose in purposes {
+                assert_eq!(
+                    load_for(&path, purpose).err(),
+                    Some(SharedCode::ConfigDecodeFailed.code()),
+                    "{purpose:?}: {key}"
+                );
+            }
+            assert!(
+                actingcommand_runtime_config::find_row(key).is_none(),
+                "{key} has no key table row"
+            );
+        }
     }
 
     #[test]

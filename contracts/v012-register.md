@@ -455,6 +455,21 @@ lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.
 streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
 controller; before, code constants); every other key by its later slice.
 
+### 1.30 Wave 8 slice L-5b (#382: the K/T remnants L-5 left)
+
+L-5b removes what is left of the retired K/T policy (Workflow #382 L-5, after #375 R5d) and
+writes no new shape; [ledger-store.md](ledger-store.md) and
+[actingd-check-config.md](actingd-check-config.md) are the contract. No 0.12 build writes a
+`failed_run` intent (L-5), and no reader accepts a ledger or a configuration written before
+v0.12.0, so nothing written by a 0.12 build becomes unreadable.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5-1 | `ArtifactEvictionIntentRecord.failed_run` and its types `FailedRunRetentionEvidence`, `FailedRunRetentionBasis`, `FailedRunRetentionPolicy` | removed persisted member | L-5b | — | an intent names its `success` source; a stored intent that still carries `failed_run` does not decode, so replay refuses it (`corrupt_ledger_record`, location `decode_sqlite_record`) and the ledger does not open |
+| L5-2 | `ArtifactRetentionPublicFact::EvictionIntent.failed_run` (the public read data of `artifact.eviction_intent`) | removed wire member | L-5b | — | it was never present on a record a 0.12 build wrote |
+| L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
+| L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

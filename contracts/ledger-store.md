@@ -570,20 +570,23 @@ evidence: retention cannot silently reinterpret file loss as authorized eviction
 missing file without an eviction proof stays `Unrecorded`; since Workflow #375 R5a no
 formal opening reads material, so it no longer fails verification.
 
-The K/T policy is retired (Workflow #382 L-5, after #375 R5d). It let a failed or
-cancelled run's frames qualify for an eviction intent after K later successful runs
-on the same InstanceId or T days. Since R5d the frame cleaner admits no eviction
-intent, and the Ledger writer no longer evaluates or seals failed-run evidence: an
-intent the writer builds names only its original `success` source, and its append
-check refuses an intent with `failed_run` evidence (`artifact_eviction_not_eligible`).
-Frames of failed runs follow the frame classes below.
+The K/T policy is retired (Workflow #382 L-5, after #375 R5d; its remnants by L-5b).
+It let a failed or cancelled run's frames qualify for an eviction intent after K
+later successful runs on the same InstanceId or T days. Since R5d the frame cleaner
+admits no eviction intent, and the Ledger writer no longer evaluates or seals
+failed-run evidence: an intent the writer builds names only its original `success`
+source. Frames of failed runs follow the frame classes below. Since L-5b the
+`failed_run` evidence is no member of an eviction intent and its policy type is
+gone, with the actingd keys `frame_retention_failed_run_successes` and
+`frame_retention_failed_run_days` (`contracts/actingd-check-config.md`).
 
-An eviction intent already in a ledger contains exactly one of the original
-`success` source or `failed_run` evidence. Replay checks that a `failed_run`
-intent's evaluation time equals its own ledger timestamp and that every sealed
-terminal reference resolves, and does not reproduce the basis. Historical success
-intents retain their required original proof; no missing historical facts are
-synthesized.
+An eviction intent names its original `success` source. A stored intent that still
+carries `failed_run` evidence (sealed by the retired K/T admission) does not decode:
+replay refuses that record as `corrupt_ledger_record` (location
+`decode_sqlite_record` on a formal root) and the ledger does not open; no reader
+accepts it (no old-version compatibility). Replay checks that every sealed source
+reference resolves. Success intents retain their required original proof; no
+missing historical facts are synthesized.
 
 Startup recovery consumes sealed pending intents without changing them or
 re-judging eligibility, under the same try-only material guard,
@@ -644,9 +647,8 @@ read-only parser, kept for forensics and migration, has none), integrity only:
 the contract structure, origin and links; that the object is in
 the index with the same identity and verified source, its identity anchored in
 the object's first, scope-checked pin; no earlier proof; that the Intent prefix
-equals its position and a failed-run evaluation time equals its ledger time; that
-every referenced source resolves in the preceding prefix; that an outcome answers
-its exact Intent; and that sealed material is never used again. A reader never
+equals its position; that every referenced source resolves in the preceding
+prefix; that an outcome answers its exact Intent; and that sealed material is never used again. A reader never
 rejects a root because its own eligibility rules differ from the writer's. A
 missing file without an Intent and outcome is restored `Unrecorded` (Workflow #375
 R5a: formal openings read no material). Recovery of

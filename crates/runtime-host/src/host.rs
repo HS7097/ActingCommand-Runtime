@@ -473,7 +473,6 @@ pub struct RuntimeHostConfig {
     performance_monitor: Option<PerformanceMonitorConfig>,
     capacity_thresholds: actingcommand_contract::CapacityThresholds,
     frame_retention_enabled: bool,
-    failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy,
     /// Workflow #375 R5c: whether the error windows and the Lab output lose their interior
     /// near-duplicates (`frame_retention_dedup_error`, `frame_retention_dedup_lab`).
     frame_retention_dedup_error: bool,
@@ -539,7 +538,6 @@ impl RuntimeHostConfig {
             performance_monitor: None,
             capacity_thresholds: actingcommand_contract::CapacityThresholds::default(),
             frame_retention_enabled: true,
-            failed_run_retention: actingcommand_contract::FailedRunRetentionPolicy::default(),
             frame_retention_dedup_error: true,
             frame_retention_dedup_lab: false,
             performance_control: PerformanceControlConfig::default(),
@@ -649,14 +647,6 @@ impl RuntimeHostConfig {
 
     pub fn with_frame_retention_enabled(mut self, enabled: bool) -> Self {
         self.frame_retention_enabled = enabled;
-        self
-    }
-
-    pub fn with_failed_run_retention(
-        mut self,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
-    ) -> Self {
-        self.failed_run_retention = policy;
         self
     }
 
@@ -873,10 +863,6 @@ impl RuntimeHostConfig {
         self.frame_retention_enabled
     }
 
-    pub const fn failed_run_retention(&self) -> actingcommand_contract::FailedRunRetentionPolicy {
-        self.failed_run_retention
-    }
-
     pub const fn frame_retention_dedup_error(&self) -> bool {
         self.frame_retention_dedup_error
     }
@@ -890,13 +876,6 @@ impl RuntimeHostConfig {
             RuntimeHostError::scheduler(HostLocation::ValidateRuntimeConfig, &error)
         })?;
         self.policy_cadence.validate()?;
-        self.failed_run_retention.validate().map_err(|_| {
-            RuntimeHostError::fatal(
-                SharedCode::InvalidFailedRunRetentionPolicy,
-                HostLocation::ValidateRuntimeConfig,
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
         self.capacity_thresholds.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 SharedCode::InvalidCapacityThresholds,
@@ -984,7 +963,6 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("performance_monitor", &self.performance_monitor)
             .field("capacity_thresholds", &self.capacity_thresholds)
             .field("frame_retention_enabled", &self.frame_retention_enabled)
-            .field("failed_run_retention", &self.failed_run_retention)
             .field(
                 "frame_retention_dedup_error",
                 &self.frame_retention_dedup_error,

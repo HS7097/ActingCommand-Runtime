@@ -4,9 +4,9 @@ use super::{
     ArtifactKind, CorrelationId, InstanceId, LeaseId, OwnerEpoch, ProjectedArtifactReference,
     RequestId, RunId, SanitizationError,
 };
+use crate::TerminalEvent;
 use crate::codes::SanitizationCode;
 use crate::outcome::{IoOp, Outcome};
-use crate::{TaskOutcome, TerminalEvent};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_RETENTION_POLICY_VERSION: u16 = 1;
@@ -14,98 +14,6 @@ pub const FRAME_RETENTION_BACKTRACE: usize = 8;
 pub const RETENTION_ROUND_OBJECTS: usize = 16;
 pub const RETENTION_ROUND_BYTES: u64 = 64 * 1024 * 1024;
 pub const RETENTION_ROUND_START_BUDGET_MS: u64 = 1_000;
-
-/// Bounds keep the sealed successor proof and day-to-millisecond conversion finite.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FailedRunRetentionPolicy {
-    pub successor_successes: u16,
-    pub retention_days: u16,
-}
-
-impl Default for FailedRunRetentionPolicy {
-    fn default() -> Self {
-        Self {
-            successor_successes: 3,
-            retention_days: 7,
-        }
-    }
-}
-
-impl FailedRunRetentionPolicy {
-    pub fn validate(&self) -> Result<(), SanitizationError> {
-        if !(1..=1024).contains(&self.successor_successes)
-            || !(1..=36500).contains(&self.retention_days)
-        {
-            return Err(invalid("failed_run_policy"));
-        }
-        Ok(())
-    }
-
-    pub fn retention_ms(&self) -> u64 {
-        u64::from(self.retention_days) * 86_400_000
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum FailedRunRetentionBasis {
-    SuccessorSuccesses { terminals: Vec<TerminalEvent> },
-    ElapsedTime,
-}
-
-/// The original run's terminal and the effective OR policy, frozen at writer admission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FailedRunRetentionEvidence {
-    pub policy: FailedRunRetentionPolicy,
-    pub terminal: TerminalEvent,
-    pub task_result: TaskOutcome,
-    pub terminal_unix_ms: u64,
-    pub evaluated_at_unix_ms: u64,
-    pub basis: FailedRunRetentionBasis,
-}
-
-impl FailedRunRetentionEvidence {
-    fn validate(&self, through_sequence: u64) -> Result<(), SanitizationError> {
-        self.policy.validate()?;
-        event(&self.terminal)?;
-        if !matches!(
-            self.task_result,
-            TaskOutcome::Failure | TaskOutcome::Cancelled
-        ) || self.terminal_unix_ms == 0
-            || self.evaluated_at_unix_ms == 0
-            || self.terminal.sequence > through_sequence
-        {
-            return Err(invalid("failed_run_terminal"));
-        }
-        match &self.basis {
-            FailedRunRetentionBasis::SuccessorSuccesses { terminals } => {
-                if terminals.len() != usize::from(self.policy.successor_successes) {
-                    return Err(invalid("failed_run_success_count"));
-                }
-                let mut previous = self.terminal.sequence;
-                for terminal in terminals {
-                    event(terminal)?;
-                    if terminal.sequence <= previous || terminal.sequence > through_sequence {
-                        return Err(invalid("failed_run_success_order"));
-                    }
-                    previous = terminal.sequence;
-                }
-            }
-            FailedRunRetentionBasis::ElapsedTime => {
-                if !self
-                    .evaluated_at_unix_ms
-                    .checked_sub(self.terminal_unix_ms)
-                    .is_some_and(|elapsed| elapsed >= self.policy.retention_ms())
-                {
-                    return Err(invalid("failed_run_age"));
-                }
-            }
-        }
-        Ok(())
-    }
-}
 
 /// Identity and originating authority; no field grants access to object bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,10 +114,11 @@ impl LabPinReleaseResult {
 pub struct ArtifactEvictionIntentRecord {
     pub identity: ArtifactRetentionIdentity,
     pub verified: TerminalEvent,
+    /// The original success the intent is sourced from. Workflow #382 L-5b: the `failed_run`
+    /// evidence of the retired K/T policy is no member any more, so a stored intent that still
+    /// carries it does not decode and its replay refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub success: Option<TerminalEvent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed_run: Option<Box<FailedRunRetentionEvidence>>,
     pub close: TerminalEvent,
     pub capture_summary: Option<TerminalEvent>,
     pub settlement: Option<TerminalEvent>,
@@ -278,13 +187,8 @@ impl ArtifactRetentionFact {
                 Ok(())
             }
             Self::EvictionIntent(value) => {
-                let terminal = match (&value.success, &value.failed_run) {
-                    (Some(success), None) => success,
-                    (None, Some(failed)) if value.identity.run_id.is_some() => {
-                        failed.validate(value.through_sequence)?;
-                        &failed.terminal
-                    }
-                    _ => return Err(invalid("intent_terminal")),
+                let Some(terminal) = &value.success else {
+                    return Err(invalid("intent_terminal"));
                 };
                 for source in [&value.verified, terminal, &value.close]
                     .into_iter()

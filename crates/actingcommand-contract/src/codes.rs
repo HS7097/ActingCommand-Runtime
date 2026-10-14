@@ -302,7 +302,6 @@ crate::outcome_codes! {
         InvalidCapacitySample => "invalid_capacity_sample": error / none,
         InvalidCapacityThresholds => "invalid_capacity_thresholds": error / none,
         InvalidCapturePolicy => "invalid_capture_policy": error / none,
-        InvalidFailedRunRetentionPolicy => "invalid_failed_run_retention_policy": error / none,
         InvalidGovernanceIdentityCard => "invalid_governance_identity_card": error / none,
         InvalidGovernanceOrigin => "invalid_governance_origin": error / none,
         InvalidInstanceAlias => "invalid_instance_alias": error / none,

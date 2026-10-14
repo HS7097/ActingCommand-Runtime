@@ -96,8 +96,6 @@ pub enum ArtifactRetentionPublicFact {
         verified: crate::TerminalEvent,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         success: Option<crate::TerminalEvent>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        failed_run: Option<Box<crate::FailedRunRetentionEvidence>>,
         close: crate::TerminalEvent,
         capture_summary: Option<crate::TerminalEvent>,
         settlement: Option<crate::TerminalEvent>,
@@ -134,7 +132,6 @@ impl ArtifactRetentionPayload {
                 ArtifactRetentionPublicFact::EvictionIntent {
                     verified: value.verified,
                     success: value.success,
-                    failed_run: value.failed_run.clone(),
                     close: value.close,
                     capture_summary: value.capture_summary,
                     settlement: value.settlement,
