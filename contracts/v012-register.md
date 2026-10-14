@@ -568,6 +568,23 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.36 Wave 9 slice S6a (#369 model v3.1 §7 row 6, H-5; ORD §3.5 item 17)
+
+S6a brings and writes the configuration key `start_emulator` and its report;
+[runtime-config.md](runtime-config.md) and [actingd-check-config.md](actingd-check-config.md) are
+the contract. No ledger record type or persisted member is added. host-metrics'
+`network_connectivity()` is an in-memory read with no persisted shape; its reason vocabulary
+`connectivity_reason`, the code `start_emulator_requires_discovery_binding` and the domain
+`start_emulator_` are catalog entries, not rows (§7). Nothing acts on the key before S6c.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| E6-1 | `config.parameters.instance`: `instance.<instance id>.start_emulator` | new per-instance configuration row | S6a | S6a | boolean from the entry's `start_emulator`; default `none`, so an entry that does not name it has no row and is off; not settable (read once at assembly); `true` only on a discovery-bound instance, otherwise the start and `check-config` refuse with `start_emulator_requires_discovery_binding` (actingd, error, ladder class `none`, `alias`) |
+| E6-2 | check-config v1: `instances[]` member `start_emulator` (boolean) on a `discovery_pending` entry; `error.detail` `{alias}` of `start_emulator_requires_discovery_binding` | interface members | S6a | S6a | schema version stays `v1` (additive); an `explicit` entry has no such member |
+
+Configuration keys (§5): the per-instance `start_emulator` row, parsed, checked and reported by
+S6a; S6c reads it.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -657,7 +674,7 @@ when it takes effect.
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
-| per instance | `start_emulator` | ORD §3.5 item 17 | S6a | S6a |
+| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 | PKG-S3; SR-3 |

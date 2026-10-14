@@ -29,6 +29,25 @@ actingcommand_contract::outcome_codes! {
     }
 }
 
+actingcommand_contract::outcome_vocabulary! {
+    /// Why the operating system's connectivity status is unknown (vocabulary
+    /// `connectivity_reason`; Workflow #369 S6a): the reason `network_connectivity` gives with
+    /// `NetworkConnectivity::Unknown`.
+    pub enum ConnectivityReason: "connectivity_reason" {
+        /// The operating system reported its connectivity level as unknown, or a level this
+        /// build does not know.
+        LevelUnknown => "level_unknown",
+        /// The query returned an error code (`os_error`).
+        QueryFailed => "query_failed",
+        /// The system library has no such query (a Windows before 10 2004).
+        QueryUnsupported => "query_unsupported",
+        /// The system library could not be loaded (`os_error`).
+        LibraryUnavailable => "library_unavailable",
+        /// This operating system has no such query.
+        UnsupportedOs => "unsupported_os",
+    }
+}
+
 actingcommand_contract::outcome_locations! {
     /// The steps of a capacity sample (`CapacityUnavailable.operation`).
     pub enum HostMetricsLocation {

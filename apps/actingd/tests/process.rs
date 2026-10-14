@@ -3605,6 +3605,82 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
     );
 }
 
+/// Workflow #369 S6a (model 369 v3.1 H-5, slice S6a "check-config shows `start_emulator`"; ORD
+/// §3.5 item 17, default off): each discovery-bound entry of the report carries its
+/// `start_emulator`, `true` for the instance that names it and `false` for one that does not; the
+/// manifest reports `instance.<instance id>.start_emulator` only for the instance whose entry names
+/// it, explicit and not settable. Nothing is started by check-config.
+#[test]
+fn s6a_check_config_shows_start_emulator() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let started = instance_id();
+    let not_started = instance_id();
+    let instance = |alias: &str, id: InstanceId, index: u16| {
+        json!({
+            "alias": alias,
+            "instance_id": id,
+            "application_id": "neutral.application",
+            "instance_index": index,
+            "connect": false,
+            "touch_backend": "adb_shell_input",
+            "capture_backend": "adb"
+        })
+    };
+    let mut first = instance("neutral.autostart", started, 0);
+    first["start_emulator"] = json!(true);
+    let config = json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": root.path().join("state"),
+        "bind_host": "127.0.0.1",
+        "bind_port": 0,
+        "secret_fingerprint_salt": PROCESS_TEST_SALT,
+        "mumu_root": root.path().join("mumu"),
+        "instances": [first, instance("neutral.manual", not_started, 1)]
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+
+    let (succeeded, report) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{report}");
+    assert_eq!(report["status"], "ok");
+    let instances = report["instances"].as_array().expect("instances");
+    assert_eq!(instances.len(), 2, "{report}");
+    for (entry, alias, start_emulator) in [
+        (&instances[0], "neutral.autostart", true),
+        (&instances[1], "neutral.manual", false),
+    ] {
+        assert_eq!(entry["alias"], alias, "{entry}");
+        assert_eq!(entry["binding"], "discovery_pending", "{entry}");
+        assert_eq!(entry["start_emulator"], start_emulator, "{entry}");
+    }
+    let started = serde_json::to_value(started).expect("instance id JSON");
+    let expected = json!({
+        "key": format!(
+            "instance.{}.start_emulator",
+            started.as_str().expect("instance id text")
+        ),
+        "value": {"type": "boolean", "value": true},
+        "source": "explicit",
+        "settable": false
+    });
+    let parameters = report["config_manifest"]["parameters"]
+        .as_array()
+        .expect("manifest parameters");
+    let rows = parameters
+        .iter()
+        .filter(|parameter| {
+            parameter["key"]
+                .as_str()
+                .is_some_and(|key| key.ends_with(".start_emulator"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows, [&expected], "{parameters:?}");
+}
+
 fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatcher_enabled: bool) {
     let mut value = json!({
         "schema_version": "actingcommand.actingd.config.v1",

@@ -47,7 +47,7 @@ pub use effective::{
 };
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
 pub use instance::{
-    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, STUCK_RECOVERY,
+    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, START_EMULATOR, STUCK_RECOVERY,
     STUCK_RECOVERY_COOLDOWN_SECS,
 };
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};

@@ -221,6 +221,9 @@ revision.
   starts one. The same values are the manifest parameters
   `instance.<instance_id>.stuck_recovery` and
   `instance.<instance_id>.stuck_recovery_cooldown_secs` (see `config_manifest`).
+  A `discovery_pending` entry also carries `start_emulator` (Workflow #369 S6a):
+  `true` when the instance names `start_emulator: true`, `false` otherwise (see
+  "Discovery-bound instances"); an `explicit` entry has no such member.
   `resource_package` is present only on an instance
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
@@ -341,7 +344,9 @@ revision.
     instance does not name takes the `recovery_ladder` section's value. Workflow #398
     RD-1b adds `instance.<instance_id>.device_kind` (string, `emulator` or `handset`,
     not settable) for an instance that names `device`, and nothing for one that does
-    not (see "Devices"). They form
+    not (see "Devices"). Workflow #369 S6a adds `instance.<instance_id>.start_emulator`
+    (boolean, `explicit`, not settable) for an instance that names `start_emulator`, and
+    nothing for one that does not (default `none`: off). They form
     the section `instance`, which with every other section counts against its own
     256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
     D1c adds, before the per-instance keys, the sections the mechanism resolves:
@@ -421,7 +426,8 @@ revision.
 `vision_config_invalid`, the `prerequisite_package*` and `return_home_package*` codes
 of "Prerequisite packages", the device codes `device_config_invalid`,
 `device_binding_file_invalid` and, after the typed assembly, `device_binding_missing`
-of "Devices", and after the typed assembly the install root's
+of "Devices", `start_emulator_requires_discovery_binding` (Workflow #369 S6a, with
+`error.detail` `{alias}`), and after the typed assembly the install root's
 adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
@@ -881,7 +887,14 @@ Checked here, without discovery:
   `nemu_paired_input_configuration_missing`, `nemu_app_index_invalid`);
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
-  (`duplicate_instance_alias` / `duplicate_instance_id`).
+  (`duplicate_instance_alias` / `duplicate_instance_id`);
+- Workflow #369 S6a: the optional `start_emulator` (boolean, absent is off) is
+  allowed only on a discovery-bound instance; on a fixture or on an instance bound
+  otherwise it fails assembly with `start_emulator_requires_discovery_binding`,
+  whose `error.detail` names the instance (`{alias}`). A discovery-bound entry of
+  the result carries `start_emulator`. The daemon starts such an instance's
+  stopped emulator at its start from Workflow #369 S6c on; this command starts
+  nothing.
 
 Still deferred to startup, because each needs the discovery result
 (`contracts/provider-startup.md`): the `MuMuManager` version floor and
