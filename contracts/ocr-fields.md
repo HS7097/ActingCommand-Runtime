@@ -49,16 +49,26 @@ writes back as an instance fact is a resource reading (`resource-readings.md`), 
 separately even on a task that also collects fields.
 
 A `0.8` fields task may declare `operations: []` in `navigable_route` mode with
-`stop_on_confirmation` omitted or true. Its nonempty target-page set, fields-page set
-and sole `fields_recorded` mapping's terminal-page set must coincide under the existing
-game-prefix page normalization, with no duplicate aliases. The mapping has
-`no_designated_effect`, no designated operation, and the task has no recovery or stability
-declaration. Build-task and Runtime admission apply the same contract predicate; the
-offline package consumer delegates fields-package deep validation to Runtime admission.
-The first frame is page-admitted before fields are read from that same frame. Reaching
-a declared terminal page produces the ordinary verified report and successful receipt
-with zero executed steps and zero input calls. A different admitted page cannot advance
-an empty task and fails without fields success or input.
+`stop_on_confirmation` omitted or true. It may declare several outcomes (Workflow #390
+OUT-1, forced compromise O-05): one `fields_recorded` mapping and any others. Its fields-page
+set must coincide with the `fields_recorded` mapping's terminal-page set, and its nonempty
+target-page set with the union of every mapping's terminal pages, under the existing
+game-prefix page normalization, with no duplicate aliases and no page in two mappings.
+Every mapping has `no_designated_effect`, there is no designated operation, and the task
+has no recovery or stability declaration. Build-task and Runtime admission apply the same
+contract predicate; the offline package consumer delegates fields-package deep validation
+to Runtime admission. The first frame is page-admitted before fields are read from that
+same frame. Reaching a `fields_recorded` terminal page produces the ordinary verified
+report and successful receipt with zero executed steps and zero input calls; reaching
+another mapping's terminal page produces a successful receipt with that outcome, no OCR
+observation and no fields report. A page that is no target cannot advance an empty task
+and fails without fields success or input.
+
+Only a run that passes a field page collects fields (OUT-1, O-05). The collector reads a
+frame of every field page the run recognizes, so a successful run of any fields task that
+passed no field page ends without an OCR observation or a fields report instead of failing
+with `contained_task_post_admission_ocr_observation_missing`; the host accepts that
+success. A run that passes a field page keeps every rule below.
 
 An entry is required Home when `entry_page`, after removing the exact current game prefix,
 is `home` and its resolved page definition has nonempty `any_of`. The same resolver governs

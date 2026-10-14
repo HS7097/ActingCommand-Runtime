@@ -24,6 +24,7 @@ use actingcommand_contract::{
     TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure,
     TaskTimingScope, TaskTimingStage, validate_resource_readings, validate_task_phases,
 };
+use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
@@ -49,6 +50,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 mod linear;
+// Workflow #390 EXEC-2.
+mod observation_window;
 // Workflow #384 D2-S2.
 mod readings;
 // Workflow #386 SR-1.
@@ -70,12 +73,18 @@ mod gate_308_l6a;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
+// Workflow #390 EXEC-2.
+#[cfg(test)]
+mod gate_390_exec2;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
 // Workflow #384 D2-S2.
 #[cfg(test)]
 mod gate_384_d2s2;
+// Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
+#[cfg(test)]
+mod gate_387_d1cg;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceReadingMiss, ResourceReadingProblem, judge_resource_reading,
@@ -389,6 +398,10 @@ type OcrEvaluationObserver<'a> = dyn FnMut(
         >,
     ) -> Result<(), ContainedTaskError>
     + 'a;
+
+/// A fresh frame's scene (its passed page, or the scene of a frame on which no page passed) and
+/// the timing it was taken under (Workflow #390 EXEC-2).
+type FreshFrameObservation = (Result<PageObservation, Scene>, ContainedTaskTimingContext);
 
 impl<E> ContainedTaskRunError<E> {
     /// A task failure with a code of the runtime host, which the host still holds as its
@@ -2507,6 +2520,12 @@ impl PreparedContainedTask {
         self.post_admission_ocr.is_some() || self.post_admission_fields.is_some()
     }
 
+    /// Workflow #390 OUT-1 (FCM O-05): whether the task collects OCR fields. A successful run
+    /// of it that passes no field page has no OCR observation and no fields report.
+    pub const fn has_ocr_fields(&self) -> bool {
+        self.post_admission_fields.is_some()
+    }
+
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
@@ -3098,7 +3117,7 @@ impl PreparedContainedTask {
             .result
             .map_err(|error| {
                 ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                    page_evaluation_failure_code(page_failed_by_provider(&error)),
                     error.to_string(),
                 )
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
@@ -3149,6 +3168,7 @@ impl PreparedContainedTask {
                 .collect(),
             Err(error) => error.ppocr_diagnostics(),
         };
+        let failure_code = page_batch_failure_code(&results);
         let evaluations = results
             .map_err(|error| {
                 actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -3156,11 +3176,8 @@ impl PreparedContainedTask {
             })
             .and_then(require_all_page_evaluations)
             .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                ContainedTaskError::with_detail(failure_code, error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         let matched_pages = evaluations
             .iter()
@@ -3220,7 +3237,8 @@ impl PreparedContainedTask {
     /// Workflow #373 NAV-6: this package's pages `pages` evaluated on `scene` in one scene
     /// evaluation (one read per distinct request, REC-1), as a shared interrupt check evaluates
     /// its feature package: the ids of the pages that matched, in `pages` order. An evaluation
-    /// error is `contained_task_recognition_failed`.
+    /// error is `contained_task_recognition_failed`, or `contained_task_vision_provider_failed`
+    /// when the vision provider failed (Workflow #387 D1c-G).
     pub fn matching_pages_on_scene(
         &self,
         scene: &Scene,
@@ -3231,6 +3249,7 @@ impl PreparedContainedTask {
             self.detector
                 .evaluate_pages_outcomes_in_context(&context, pages)
         };
+        let failure_code = page_batch_failure_code(&results);
         let evaluations = results
             .map_err(|error| {
                 actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -3238,11 +3257,8 @@ impl PreparedContainedTask {
             })
             .and_then(require_all_page_evaluations)
             .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                ContainedTaskError::with_detail(failure_code, error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         Ok(evaluations
             .into_iter()
@@ -3719,7 +3735,7 @@ impl PreparedContainedTask {
                                 pacing,
                                 ExecutionKernelLocation::ObservationBeforeInput,
                             );
-                            let (guard, action, sampling, input_context) = loop {
+                            let (guard, action, sampling, input_context, rechecked) = loop {
                                 let observed = observation.as_ref().ok_or_else(|| {
                                     ContainedTaskError::new(
                                         SharedCode::ContainedTaskPageUnknown.code(),
@@ -3769,45 +3785,58 @@ impl PreparedContainedTask {
                                             // item 6), not through the pack's failure decision.
                                             Err(failure) if timed_out => return Err(failure),
                                             Err(ContainedTaskRunError::Task(error)) => {
-                                                let Some(policy) = retry_policy.as_ref() else {
-                                                    return Err(error.into());
-                                                };
-                                                match operation.failure_decision(
-                                                    policy,
+                                                Self::refuse_before_input::<R::Error>(
+                                                    operation,
+                                                    retry_policy.as_ref(),
                                                     attempt,
-                                                    error.code(),
+                                                    error,
                                                     Some(observed.page_label.clone()),
-                                                    RunFailureStage::PreExecutionGuard,
-                                                )? {
-                                                    RunOperationFailureDecision::RequestRecovery(
-                                                        trigger,
-                                                    ) => {
-                                                        machine
-                                                            .operation_needs_recovery(trigger)
-                                                            .map_err(|_| {
-                                                                ContainedTaskError::new(
-                                                                    SharedCode::ContainedTaskStateInvalid
-                                                                        .code(),
-                                                                )
-                                                            })?;
-                                                        break 'attempt;
-                                                    }
-                                                    RunOperationFailureDecision::Fail(_) => {
-                                                        return Err(error.into());
-                                                    }
-                                                    RunOperationFailureDecision::Retry { .. } => {
-                                                        return Err(ContainedTaskError::new(
-                                                            SharedCode::ContainedTaskStateInvalid
-                                                                .code(),
-                                                        )
-                                                        .into());
-                                                    }
-                                                }
+                                                    &mut machine,
+                                                )?;
+                                                break 'attempt;
                                             }
                                             Err(error) => return Err(error),
                                         }
                                     }
                                 };
+                                // Workflow #390 EXEC-2 (FCM E-06): a click that declares a
+                                // recheck is checked again on fresh frames here, before the one
+                                // sampling deadline check and the effect intent; its input is
+                                // drawn from and bound to the last of them.
+                                let (guard, target, rechecked) =
+                                    match operation.input_recheck.filter(|_| selected.is_none()) {
+                                        None => (guard, target, None),
+                                        Some(recheck) => match self.recheck_before_input(
+                                            runtime,
+                                            operation,
+                                            recheck,
+                                            &observed.page_label,
+                                            (observation_timing, step_timeout),
+                                            &mut retries,
+                                        )? {
+                                            InputRecheck::Held(held) => {
+                                                let RecheckedInput {
+                                                    observation: fresh,
+                                                    timing,
+                                                    guard,
+                                                    target,
+                                                } = *held;
+                                                step_timing = timing;
+                                                (guard, target, Some(fresh))
+                                            }
+                                            InputRecheck::Refused { error, after_page } => {
+                                                Self::refuse_before_input::<R::Error>(
+                                                    operation,
+                                                    retry_policy.as_ref(),
+                                                    attempt,
+                                                    error,
+                                                    after_page,
+                                                    &mut machine,
+                                                )?;
+                                                break 'attempt;
+                                            }
+                                        },
+                                    };
                                 let action_seed = runtime
                                     .action_seed(step_index, &operation_id)
                                     .map_err(ContainedTaskRunError::operation::<R>)?;
@@ -3829,7 +3858,8 @@ impl PreparedContainedTask {
                                             target.as_ref(),
                                             action_seed,
                                         )?;
-                                        (action, sampling, observed.input_context.clone())
+                                        let frame = rechecked.as_ref().unwrap_or(observed);
+                                        (action, sampling, frame.input_context.clone())
                                     }
                                 };
                                 // The one sampling deadline check before the input (§2.1 item
@@ -3855,8 +3885,11 @@ impl PreparedContainedTask {
                                     step_timing = timing;
                                     continue;
                                 }
-                                break (guard, action, sampling, input_context);
+                                break (guard, action, sampling, input_context, rechecked);
                             };
+                            if let Some(fresh) = rechecked {
+                                observation = Some(fresh);
+                            }
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -4369,16 +4402,15 @@ impl PreparedContainedTask {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
-            if report.frames_collected == 0 {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskPostAdmissionOcrObservationMissing.code(),
-                )
-                .into());
+            // Workflow #390 OUT-1 (FCM O-05): the collector reads a frame of every field page
+            // the run recognizes, so a run without one never passed a field page. Only a path
+            // through a field page needs fields; this one ends with no fields report.
+            if report.frames_collected != 0 {
+                runtime
+                    .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                ocr_collector.fields_report_recorded = true;
             }
-            runtime
-                .record(ContainedTaskTrace::PostAdmissionOcrFields { report })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            ocr_collector.fields_report_recorded = true;
             None
         } else {
             match std::mem::take(ocr_collector).finish()? {
@@ -4672,16 +4704,28 @@ impl PreparedContainedTask {
         retries: &mut SampleRetries,
     ) -> Result<(PageObservation, ContainedTaskTimingContext), ContainedTaskRunError<R::Error>>
     {
+        match self.observe_fresh_frame(runtime, timing, window, retries)? {
+            (Ok(observation), step_timing) => Ok((observation, step_timing)),
+            (Err(_), _) => {
+                Err(ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code()).into())
+            }
+        }
+    }
+
+    /// [`Self::observe_before_input`] that keeps the scene of a fresh frame on which no page of
+    /// the package passed (Workflow #390 EXEC-2: a stability wait before an input counts such a
+    /// frame as one that did not hold).
+    fn observe_fresh_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        timing: ContainedTaskTimingContext,
+        window: Duration,
+        retries: &mut SampleRetries,
+    ) -> Result<FreshFrameObservation, ContainedTaskRunError<R::Error>> {
         loop {
             let step_timing = timing.with_deadline(runtime.observation_now() + window);
             match self.capture_frame_scene(runtime, None, None, step_timing, None, None) {
-                Ok(Ok(observation)) => return Ok((observation, step_timing)),
-                Ok(Err(_)) => {
-                    return Err(ContainedTaskError::new(
-                        SharedCode::ContainedTaskPageUnknown.code(),
-                    )
-                    .into());
-                }
+                Ok(observed) => return Ok((observed, step_timing)),
                 Err(failure) => retries.retry(failure, window)?,
             }
         }
@@ -5039,6 +5083,7 @@ impl PreparedContainedTask {
                     .collect(),
                 Err(error) => error.ppocr_diagnostics(),
             };
+            let failure_code = page_batch_failure_code(&results);
             let evaluations = results
                 .map_err(|error| {
                     actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -5046,11 +5091,8 @@ impl PreparedContainedTask {
                 })
                 .and_then(require_all_page_evaluations)
                 .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        SharedCode::ContainedTaskRecognitionFailed.code(),
-                        error.to_string(),
-                    )
-                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                    ContainedTaskError::with_detail(failure_code, error.to_string())
+                        .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?;
             if sampled {
                 // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code;
@@ -5256,7 +5298,21 @@ impl PreparedContainedTask {
                         .into());
                     }
                     if destination_matches == 1 {
-                        return Ok(PostconditionResolution::Reached(observation));
+                        // Workflow #390 EXEC-2 (FCM E-05): a declared observation window watches
+                        // the screen before the step finishes.
+                        return match operation.observation_window {
+                            Some(window) => self.observe_window(
+                                runtime,
+                                ocr_collector,
+                                operation,
+                                window,
+                                observation,
+                                (interval, timeout),
+                                base_timing,
+                                &mut retries,
+                            ),
+                            None => Ok(PostconditionResolution::Reached(observation)),
+                        };
                     }
                     if hit_error_page {
                         return Ok(PostconditionResolution::Failed {
@@ -7423,6 +7479,14 @@ struct TaskOperation {
     /// admitted only under `linear_steps`.
     #[serde(default)]
     optional: Option<linear::TaskOptional>,
+    /// Workflow #390 EXEC-2: the screen is watched for a while after the operation's destination
+    /// passed; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    observation_window: Option<observation_window::TaskObservationWindow>,
+    /// Workflow #390 EXEC-2: the click is checked again on fresh frames before its input; task
+    /// schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    input_recheck: Option<observation_window::TaskInputRecheck>,
 }
 
 impl TaskOperation {
@@ -7499,6 +7563,7 @@ impl TaskOperation {
                 ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
             ));
         }
+        observation_window::validate_operation(self, control, schema_version)?;
         match (&self.click, &self.application, &self.select) {
             (Some(click), None, None) => {
                 match (&self.guard, self.unguarded_trusted_coordinate) {
@@ -8294,6 +8359,50 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
         }
     }
     failure
+}
+
+/// Workflow #387 D1c-G: whether a page evaluation failed because the vision provider failed or
+/// answered invalidly, the causes admission reports as `contained_task_vision_provider_failed`
+/// (`contained_task_admission_error`).
+fn page_failed_by_provider(error: &actingcommand_page_detector::PageDetectorError) -> bool {
+    error.failed_target.as_ref().is_some_and(|failed| {
+        matches!(
+            failed.cause.code(),
+            RecognitionPackErrorCode::VisionProviderFailure
+                | RecognitionPackErrorCode::VisionProviderInvalidResponse
+        )
+    })
+}
+
+/// Workflow #387 D1c-G: whether a page of a batch evaluation failed because the vision provider
+/// failed (`page_failed_by_provider`).
+fn pages_failed_by_provider(results: &PageBatchResult) -> bool {
+    let outcomes = match results {
+        Ok(outcomes) => outcomes.as_slice(),
+        Err(error) if page_failed_by_provider(&error.cause) => return true,
+        Err(error) => error.completed.as_slice(),
+    };
+    outcomes
+        .iter()
+        .any(|outcome| outcome.result.as_ref().is_err_and(page_failed_by_provider))
+}
+
+/// Workflow #387 D1c-G (Alice 10-14: a code's class follows its real cause): a run's page
+/// evaluation that failed because the vision provider failed is the class-5
+/// `contained_task_vision_provider_failed`; one that failed for any other cause stays the class-4
+/// `contained_task_recognition_failed`.
+fn page_evaluation_failure_code(provider_failed: bool) -> Code {
+    if provider_failed {
+        ExecutionKernelCode::ContainedTaskVisionProviderFailed.code()
+    } else {
+        SharedCode::ContainedTaskRecognitionFailed.code()
+    }
+}
+
+/// Workflow #387 D1c-G: the code of a page evaluation batch that failed
+/// (`page_evaluation_failure_code`), for the run and for the host's records of the same batch.
+pub fn page_batch_failure_code(results: &PageBatchResult) -> Code {
+    page_evaluation_failure_code(pages_failed_by_provider(results))
 }
 
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {

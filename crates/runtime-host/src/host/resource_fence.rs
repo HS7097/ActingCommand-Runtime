@@ -38,7 +38,8 @@ use std::collections::btree_map::Entry;
 /// Where a fence stands.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FenceStage {
-    /// Fenced; the lease sweep has not handed it to a ladder or a person yet.
+    /// Fenced; the lease sweep has not handed it to a ladder or a person yet (nor has the end
+    /// of a ladder that held the instance when it was fenced).
     Pending,
     /// A recovery ladder holds or waits for the instance; its end decides.
     Ladder,
@@ -84,8 +85,10 @@ pub(super) fn resource_fence_error(
 }
 
 /// M387 B1: whether a key of `kind` is held by a person's manual work (a direct task run, a
-/// client lease, an application or input command, a Lab operation), whose fence starts no ladder.
-fn manual_claim(kind: ClaimKind) -> bool {
+/// client lease, an application or input command, a Lab operation), whose fence starts no ladder
+/// and whose records direction ① does not count (Workflow #387 D1c-H) while
+/// `rules.direct_runs` is `exempt`.
+pub(super) fn manual_claim(kind: ClaimKind) -> bool {
     matches!(
         kind,
         ClaimKind::DirectTaskRun
@@ -211,15 +214,38 @@ impl HostShared {
         let fence = resource_fence_error(instance_id, fenced_projection_code(error))
             .with_caused_by(error.outcome());
         if newly {
+            // Workflow #387 D1c-H: the fence record enters from the unconfirmed failure's own
+            // record, so direction ① counts the two as one failure even where the fence's
+            // links name the instance alone (a failed lease end).
             self.append_lifecycle_failure(
                 RuntimeLifecycleFailureStage::SessionClose,
                 RuntimeLifecycleFailure::Host(&fence),
                 links.with_instance_id(self.events.issuer().issue_registered_instance(instance_id)),
-                None,
+                error.diagnostics().recorded_event().get().copied(),
             )?;
             self.withhold_policy_instance_availability(instance_id)?;
         }
         Ok(UnconfirmedResources::Fenced(fence))
+    }
+
+    /// Workflow #387 D1c-G: settles `error`, the failure of an ADB check of `instance_id`'s own
+    /// (the startup package's probe, the foreground gate's observation, the emulator control's
+    /// ADB wait, a ladder's ADB checks). An adb child or pipe it left unconfirmed belongs to that
+    /// instance: the instance is fenced and the check's work fails with the fence's non-fatal
+    /// failure (`Ok`). Where no fence may take it (no registered owner, a ledger failure, a
+    /// shutdown) the owner is retained and the Runtime marked fatal, as before (`Err`, the fatal
+    /// failure). A failure whose cleanup was confirmed is returned as it is (`Ok`).
+    pub(super) fn settle_unconfirmed_adb(
+        &self,
+        error: RuntimeHostError,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<RuntimeHostError> {
+        match self.settle_unconfirmed_resources(&error, Some(instance_id), links)? {
+            UnconfirmedResources::Confirmed => Ok(error),
+            UnconfirmedResources::Fenced(fence) => Ok(fence),
+            UnconfirmedResources::Retained => Err(error.into_fatal()),
+        }
     }
 
     /// The whole-Runtime retention of unconfirmed resources that no single instance owns: the
@@ -400,6 +426,12 @@ impl HostShared {
     }
 
     /// A ladder of `instance_id` ended: a fence it held without lifting now waits for a person.
+    /// Workflow #387 D1c-G: so does a fence made while the ladder held the instance (one of its
+    /// own ADB checks, say) that the sweep has not handed on yet: the ladder holding the
+    /// instance decides it at its end, whether or not a sweep tick fell inside the climb. Left
+    /// `Pending`, a later tick would either start a second ladder for it, or, while the ladder
+    /// still holds the key before its release, hand it to this ladder after its decision, so
+    /// that it never waits for a person.
     pub(super) fn resource_fence_awaits_person(
         &self,
         instance_id: InstanceId,
@@ -408,9 +440,7 @@ impl HostShared {
             &self.resource_fences,
             HostLocation::HandResourceFencesToLadders,
         )?;
-        if let Some(fence) = fences.get_mut(&instance_id)
-            && fence.stage == FenceStage::Ladder
-        {
+        if let Some(fence) = fences.get_mut(&instance_id) {
             fence.stage = FenceStage::Person;
         }
         Ok(())

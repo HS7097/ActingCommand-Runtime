@@ -425,4 +425,6 @@ outcome_keys! {
     yield_cause: vocab(yield_cause),
     held_ms: duration_ms,
     // ---- Workflow #383 SH-1: end ----
+    // Workflow #389 MCP-14: an outcome code's name as a lookup was given it.
+    code_name: name,
 }

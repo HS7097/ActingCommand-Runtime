@@ -937,6 +937,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
     expects_post_admission_ocr: bool,
+    /// Workflow #390 OUT-1 (FCM O-05): the package collects OCR fields, so a success that
+    /// passed no field page ends with no OCR observation and no fields report.
+    collects_ocr_fields: bool,
     post_admission_ocr_observations: u32,
     post_admission_ocr_comparison_recorded: bool,
     pub(super) current_recognition_id: Option<IssuedRecognitionId>,
@@ -1471,10 +1474,26 @@ impl RuntimeContainedTask<'_> {
         frame_id: IssuedFrameId,
         session: CaptureGeometrySessionRef,
     ) -> Result<(), RequestFailure> {
-        let extent = CaptureExtent::new(frame.width, frame.height).ok_or_else(|| {
-            RequestFailure::poison_without_terminal(task_geometry_error(
-                HostCode::ContainedTaskGeometryFrameExtentInvalid,
-            ))
+        #[cfg(test)]
+        let width = if self
+            .host
+            .frame_extent_fault_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            0
+        } else {
+            frame.width
+        };
+        #[cfg(not(test))]
+        let width = frame.width;
+        // Workflow #387 D1c-G: a frame without an extent ends this run only, with its code, as
+        // the other task geometry failures do (class 5, so it counts toward direction ①); the
+        // Runtime and the other instances go on.
+        let extent = CaptureExtent::new(width, frame.height).ok_or_else(|| {
+            task_geometry_request_failure(
+                task_geometry_error(HostCode::ContainedTaskGeometryFrameExtentInvalid),
+                None,
+            )
         })?;
         self.geometry_frame = Some(TaskGeometryFrame {
             frame_id: *frame_id.transport(),
@@ -4288,8 +4307,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     _ => true,
                 };
                 let post_admission_ocr_finalization_invalid = if self.expects_post_admission_ocr {
-                    self.post_admission_ocr_observations == 0
-                        || !self.post_admission_ocr_comparison_recorded
+                    // Workflow #390 OUT-1 (FCM O-05): a fields run that passed no field page
+                    // has neither an observation nor a report.
+                    let no_field_page = self.collects_ocr_fields
+                        && self.post_admission_ocr_observations == 0
+                        && !self.post_admission_ocr_comparison_recorded;
+                    !no_field_page
+                        && (self.post_admission_ocr_observations == 0
+                            || !self.post_admission_ocr_comparison_recorded)
                 } else {
                     self.post_admission_ocr_observations != 0
                         || self.post_admission_ocr_comparison_recorded
@@ -5110,10 +5135,9 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
-        // Workflow #387 D1c (B1, M387 §3.4): the run's records count for direction ① only under
-        // `rules.direct_runs = trigger`.
-        self.track_direct_run(original.request_id(), true)
-            .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #387 D1c-H (B1): the run's records count for direction ① only under
+        // `rules.direct_runs = trigger`; the counter sees its key held by the run's
+        // `DirectTaskRun` claim, the fence's manual set.
         let executed = self.execute_contained_task_with_lease(
             original,
             request,
@@ -5131,7 +5155,6 @@ impl HostShared {
             active_run.control(),
             None,
         );
-        let untracked = self.track_direct_run(original.request_id(), false);
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
         // that. Noted while the run is still registered, so a draining pause sees it.
@@ -5146,7 +5169,7 @@ impl HostShared {
         // `ac_run_pack`) starts no stuck-recovery ladder by default; whoever ran it has the
         // receipt and decides. Workflow #387 D1c: `rules.direct_runs = trigger` lets its failed
         // end queue one (`ladder_after_direct_run`).
-        with_recovery_ladder_staging(executed, awaited.and(untracked))
+        with_recovery_ladder_staging(executed, awaited)
     }
 
     pub(super) fn package_material_deadline(
@@ -5372,10 +5395,23 @@ impl HostShared {
                 &|| self.fatal.is_shutdown_requested(),
             )
         {
+            // Workflow #387 D1c-G: the probe's own adb child or pipe left unconfirmed fences the
+            // instance (a startup run, a rung's startup run or a return-home run alike) and the
+            // run fails with the fence; only where no fence may take it is it the Runtime's fatal.
             if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::execution(HostLocation::RunStartupPackage, &error),
-                ));
+                let links =
+                    self.events
+                        .request_links(&validated, Some(resolved.instance_id()), None, None);
+                return Err(
+                    match self.settle_unconfirmed_adb(
+                        RuntimeHostError::execution(HostLocation::RunStartupPackage, &error),
+                        resolved.instance_id(),
+                        links,
+                    ) {
+                        Ok(fence) => RequestFailure::fence_without_terminal(fence),
+                        Err(fatal) => RequestFailure::poison_without_terminal(fatal),
+                    },
+                );
             }
             let mut host_error = RuntimeHostError::request(
                 pending.run.adb_not_ready_code(),
@@ -5724,7 +5760,9 @@ impl HostShared {
             .flat_map(|declaration| declaration.mappings())
             .map(|mapping| mapping.outcome_key().to_owned())
             .collect::<BTreeSet<_>>();
-        if !expected_outcome_keys.is_empty() && expected_outcome_keys != declared_outcome_keys {
+        // Workflow #390 OUT-1 (FCM O-03): the catalog may reference a subset of the outcomes the
+        // package declares; it is refused only for a key the package does not declare.
+        if !expected_outcome_keys.is_subset(&declared_outcome_keys) {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     HostCode::PolicyRunOutcomeDeclarationMismatch,
@@ -5859,6 +5897,7 @@ impl HostShared {
             expected_stability_declaration,
             stability: None,
             expects_post_admission_ocr,
+            collects_ocr_fields: prepared.has_ocr_fields(),
             post_admission_ocr_observations: 0,
             post_admission_ocr_comparison_recorded: false,
             current_recognition_id: None,

@@ -67,6 +67,7 @@ one operation is at fault; an existing check keeps its existing code.
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
 | each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
+| no operation declares an `observation_window` or an `input_recheck`, page-graph declarations (Workflow #390 EXEC-2, `resource-declarations.md`) | the field name |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |
@@ -104,7 +105,9 @@ boundary, `CaptureCompleted`, the committed input frame context when the frame c
 input reference, `RecognitionStarted`, the page evaluations, `RecognitionCompleted`), but only
 the pages the run currently waits for are evaluated, and they are its candidate pages. The
 frame's page is the first candidate that passes; several passing candidates are no conflict.
-An evaluation error is `contained_task_recognition_failed`. A wait captures, returns on a
+An evaluation error is `contained_task_recognition_failed`, or
+`contained_task_vision_provider_failed` when the vision provider failed or answered invalidly
+(Workflow #387 D1c-G). A wait captures, returns on a
 passing candidate, gives up once its budget is spent, and otherwise sleeps the smaller of its
 interval and its remaining budget; the task deadline inside a wait is `contained_task_timeout`.
 
@@ -489,6 +492,7 @@ the request's package admitted again (it may have changed in place since); anoth
 | The steps run would exceed 1000 (a safeguard; preparation already checks) | `contained_task_prerequisite_step_limit` | no |
 | The prerequisite package failed | its own code | as that code does |
 | A recognition error of the gate | `contained_task_recognition_failed` | no |
+| The vision provider failed or answered invalidly at the gate (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | no |
 | A refusal at preparation (table above) | `contained_task_prerequisite_*` | no |
 
 No `contained_task_prerequisite_*` code starts the stuck-recovery ladder: the prerequisite
@@ -618,6 +622,7 @@ ladder.
 | A guard refusal | `contained_task_guard_refused` | none |
 | The task deadline | `contained_task_timeout` | `task` / the stage it expired in |
 | A recognition error | `contained_task_recognition_failed` | none |
+| The vision provider failed or answered invalidly (Workflow #387 D1c-G) | `contained_task_vision_provider_failed` | none |
 | A frame of another size | `contained_task_frame_resolution_mismatch` | none |
 | A package outside the admission rules | `contained_task_linear_invalid` (admission) | none |
 | The prerequisite gate ("Prerequisite packages" above) | `contained_task_prerequisite_*` | `page_recognition` / `entry_recognition` for `contained_task_prerequisite_entry_unmatched` |

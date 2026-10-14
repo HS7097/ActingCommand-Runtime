@@ -147,8 +147,11 @@ are not gated.
   successful gate re-records `application.foreground`; `device.connected` is written again by
   the next emulator control action, `task.page` by the next matched contained-task recognition.
   When the ADB command's child or pipe cleanup is unconfirmed, the three facts are invalidated
-  the same way first, then the host poisons under the unconfirmed device-resource rule
-  (`application_foreground_unknown`, `runtime_fatal`); no `command.rejected` is written.
+  the same way first, then the instance is fenced (Workflow #387 D1c-G;
+  `contracts/emulator-control.md`, "Resource fence"): the input is refused as above and fails
+  with `instance_resources_fenced`. Only where no fence may take it (no registered owner, a
+  ledger failure, a shutdown) does the host poison under the unconfirmed device-resource rule
+  (`application_foreground_unknown`, `runtime_fatal`), with no `command.rejected` written.
 - First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
   baseline probe against the task deadline fails too, the host invalidates the same three facts
   (`device.connected`, `application.foreground`, `task.page`) with `adb_unreachable` and the
@@ -203,7 +206,10 @@ instance found already running at daemon startup pull nothing.
 
 The package runs only after ADB is ready: the worker probes the ADB baseline once more
 before admission, and a failed probe is `startup_package_adb_not_ready`
-(`backend_operation_failed`), recorded before the run; the claim's key is then released. Typed admission codes:
+(`backend_operation_failed`), recorded before the run; the claim's key is then released. A
+probe whose own ADB child or pipe cleanup is unconfirmed fences the instance instead and the
+run fails with `instance_resources_fenced` before it starts (Workflow #387 D1c-G;
+`contracts/emulator-control.md`, "Resource fence"). Typed admission codes:
 `startup_package_missing` (a locator that does not exist, the loader's
 `content_directory_missing`), `startup_package_admission_failed` (every other admission
 refusal, with the loader's code as the related failure). Workflow #336 PKG-S1: every locator
@@ -245,7 +251,8 @@ lease.released                                  under the run's links; ends the 
 ## Typed codes
 
 `application_not_foreground`, `application_foreground_unknown` (`invalid_request`, denied;
-`runtime_fatal` when the ADB cleanup is unconfirmed);
+an unconfirmed ADB cleanup fences the instance, `instance_resources_fenced`, and is
+`runtime_fatal` only where no fence may take it);
 `application_effect_requires_assigned_application` (`invalid_request`, denied);
 `startup_package_missing`, `startup_package_admission_failed` (`package_invalid`, denied);
 `emulator_control_adb_not_ready`, `startup_package_adb_not_ready`

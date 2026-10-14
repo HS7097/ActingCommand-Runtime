@@ -637,3 +637,39 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1cf_three_recoded_failures_on_one_instance_within_the_window_start_no_ladder",
 ]
 incident = ["#387"]
+
+# Workflow #387 D1c-G: an ADB child a ladder's own entry probe, a startup package's probe, the foreground gate's query or the emulator control's ADB wait cannot confirm gone fences that instance (a ladder's rung fails with instance_resources_fenced before any stop), the instance waits for a person and the other instance runs, with no Runtime fatal; a task frame without an extent ends only its run with contained_task_geometry_frame_extent_invalid and the other instance runs; a scheduled run whose vision provider fails ends with contained_task_vision_provider_failed (class 5) and its lease end starts no ladder
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_adb_cleanup_inside_a_ladder_fences_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_a_frame_without_an_extent_ends_only_its_run_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_a_vision_provider_failure_in_a_scheduled_run_starts_no_ladder_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_startup_package_adb_probe_fences_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_foreground_gate_adb_query_fences_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_emulator_control_adb_wait_fences_its_instance_and_the_other_runs",
+]
+incident = ["#387", "#403"]
+
+# Workflow #387 D1c-H: the records one failure commits count once toward direction ① (by its run, else its request, else the failure of the record it entered from, else the record): a lifecycle failure with two causes, a scheduled run's capture failure and a monitor probe's capture failure each count once; three separate failures within the window register a burst and three at just over it do not; under rules.direct_runs = exempt the records committed while manual work (the fence's B1 set) holds the instance's key are not counted, under trigger they are, and emulator control records still count; the counter reads the holder kind the scheduler last reported for the key, so a change from a manual claim to a routine one flips counting
+[[gate]]
+key = "71"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_the_records_of_one_failure_count_once",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_three_separate_failures_within_the_window_register_a_burst_and_just_over_do_not",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_a_key_holder_change_from_manual_work_to_a_routine_claim_flips_counting",
+]
+incident = ["#387"]
+
+# Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): a catalog reading a subset of its package's declared outcomes runs it, a declared outcome a successful run did not produce is false while a failed run leaves it Unknown, and a zero-input fields package with two outcomes ends on its other page without fields (OUT-1's tests live in the host crate; key after the reservations 63 to 71)
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_catalog_reads_a_subset_of_the_declared_outcomes_and_an_unproduced_one_is_false",
+    "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_without_fields",
+]
+incident = ["#390 O-03", "#390 O-04"]

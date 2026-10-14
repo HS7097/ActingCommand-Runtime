@@ -107,7 +107,9 @@ macro_rules! two_way_rule {
 
 two_way_rule! {
     /// B1 (§2.2a): a direct run's (CLI or console task-run, MCP `ac_run_pack`) terminal, the
-    /// records under it, and a resource fence that manual work met.
+    /// records committed while manual work holds the instance's key (the resource fence's set:
+    /// a direct task run, a client lease, an application or input command, a Lab operation;
+    /// Workflow #387 D1c-H), and a resource fence that manual work met.
     DirectRuns { Exempt => "exempt", Trigger => "trigger" }
 }
 
@@ -289,7 +291,8 @@ impl CodePattern {
     }
 }
 
-/// Direction ① (§3.4): the `count`-th record within `window_ms` starts the ladder.
+/// Direction ① (§3.4): the `count`-th failure within `window_ms` starts the ladder; one failure
+/// counts once, however many records it commits (Workflow #387 D1c-H).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BurstWindow {
     pub count: u32,

@@ -438,9 +438,11 @@ impl RuntimeContainedTask<'_> {
                 .find_map(|outcome| outcome.result.as_ref().err()),
             Err(error) => Some(error.cause.as_ref()),
         };
+        // Workflow #387 D1c-G: the run's own code for this batch (a vision provider failure is
+        // `contained_task_vision_provider_failed`, any other `contained_task_recognition_failed`).
         let primary = original_error.map(|error| {
             ppocr_diagnostic::task_ppocr_failure(
-                SharedCode::ContainedTaskRecognitionFailed,
+                actingcommand_execution_kernel::page_batch_failure_code(results),
                 error.to_string(),
                 &reports,
             )

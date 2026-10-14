@@ -897,7 +897,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision provider failed or answered invalidly while a contained task package was admitted.",
+      "description": "The vision provider failed or answered invalidly while a contained task package was admitted, or while a run evaluated its pages (home preflight, page evaluation, a shared interrupt check); a page evaluation that fails for any other cause stays contained_task_recognition_failed (Workflow #387 D1c-G).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1959,6 +1959,50 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A linear application step's next page did not pass.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_input_stability_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page-graph click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_observation_stability_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page-graph operation declared a stable observation window, and no destination of the operation passed on that many consecutive frames before the window (timeout_ms) ended; pack_operation_id names the operation. The input had been made; no further input was made.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
