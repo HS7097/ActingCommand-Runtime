@@ -870,3 +870,16 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_an_undeclared_pool",
 ]
 incident = ["#382 E-1"]
+
+# Test plan v2.2 E-5 G7: a single-frame select step chooses on its frame, confirms on a fresh frame of its page that passes its guard and projects to the same candidate set, records its decision once and taps once inside the chosen candidate's click rectangle; another page, another candidate set, a failed guard or an outcome other than selected taps nothing and is not retried
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_selected_candidate_is_confirmed_on_a_fresh_frame_and_tapped_inside_its_click",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_confirmation_frame_with_other_candidates_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_confirmation_frame_of_another_page_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_guard_that_fails_on_the_confirmation_frame_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_an_outcome_other_than_selected_aborts_without_a_confirmation_or_a_retry",
+]
+incident = ["#382 E-5"]
