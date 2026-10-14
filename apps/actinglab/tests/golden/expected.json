@@ -1124,7 +1124,6 @@
                       "fact": {
                         "kind": "package_admitted",
                         "package_label": "golden.task",
-                        "package_sha256": "be9354ef0712abb2c3d5eab9515e5cce3775f4d3526f8cfa8efdcd999bac6d46",
                         "response_deadline_monotonic_ms": "<TIME>",
                         "task_label": "task"
                       },
