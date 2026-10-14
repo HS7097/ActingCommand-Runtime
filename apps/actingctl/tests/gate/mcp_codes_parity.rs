@@ -105,7 +105,7 @@ fn gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_t
         .iter()
         .filter(|(name, entry)| name.starts_with(PREFIX) && entry["owner"] == json!(OWNER))
         .collect::<Vec<_>>();
-    names.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    names.sort_unstable_by_key(|(left, _)| *left);
     let expected_rows = names
         .into_iter()
         .map(|(name, entry)| {
