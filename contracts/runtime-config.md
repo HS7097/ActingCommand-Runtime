@@ -26,7 +26,7 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
   that the shipped file's SHA-256 is the `defaults_sha256` `check-config` reports. It holds
   exactly the keys whose `default` is `file`, parsed by `DefaultsFile` (no required top-level
   member; a member without parsing code is refused). D1c fills it with the `recovery_ladder` and
-  `host_claims` sections (M387 §7.1).
+  `host_claims` sections (M387 §7.1), P-c with the `performance` section (PERF §10).
 - **Merge.** A key the file names is `explicit`, otherwise `default` (from the defaults file, the
   section-level key or code). A list or object the file names replaces the default whole. The
   example configuration stays a skeleton: a configuration names only the keys it changes. A key
@@ -50,7 +50,7 @@ One row per key ([v012-register.md](v012-register.md) §5 lists the sections):
 | Column | Meaning |
 |---|---|
 | `key` | as `config.parameters` names it; a per-instance key is `instance.<instance id>.<member>` |
-| `file_path` | where the file holds it: at the key, at another dotted path (`performance_monitor.pressure_*` ← `performance.pressure_*`), in the `instances[]` entry with the same `instance_id`, or nowhere |
+| `file_path` | where the file holds it: at the key, at another dotted path (none since Workflow #385 P-c made the pressure streaks keys of the `performance` section at their file members), in the `instances[]` entry with the same `instance_id`, or nowhere |
 | `type` | boolean, integer, milliseconds, string, decimal, list, object (decimal, list and object are reported as canonical JSON text) |
 | `range` | allowed values (schema, not a threshold) |
 | `default` | `file`, `none`, `section:<key>` or `code` (a key whose default no slice has moved yet) |
@@ -63,9 +63,10 @@ question 2: change it in the file, commit, restart) and the per-instance `stuck_
 `section:recovery_ladder.enabled` and `section:recovery_ladder.cooldown_secs` (D1c). D1c's rows:
 the `recovery_ladder` and `host_claims` sections below (all settable, default `file`) and
 `standard_packs.root` (Workflow #373 NAV-6, moved here: string, default `none`, not settable,
-read once at assembly). A manifest key the table does not have fails the start
-(`config_key_unknown`). The manifest lists the exact keys in row order (`recovery_ladder`,
-`host_claims`, `standard_packs`), then each instance's per-instance keys together.
+read once at assembly). P-c's rows: the `performance` section below. A manifest key the table
+does not have fails the start (`config_key_unknown`). The manifest lists the exact keys in row
+order (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`), then each instance's
+per-instance keys together.
 
 ## The recovery ladder section (D1c)
 
@@ -143,6 +144,45 @@ deviation 5); the file member and its meaning are unchanged, and `config.paramet
 reports it as the file writes it when the file names it. Changing it needs a commit and a
 restart.
 
+## The performance section (Workflow #385 P-c)
+
+Frozen model PERF v1.4.2 §10 (`contracts/v012-register.md` §5): every key of performance pacing,
+parsed, checked and defaulted from v0.12.0 on, though most are read by later slices (order-v012
+R4). The defaults are PERF §10's, all in `actingd.defaults.json`; a configuration names only what
+it changes, so a key it leaves out takes the running release's default. Neither the example
+configuration nor any installer writes a performance key.
+
+| Subsection (file) | Keys | Read by |
+|---|---|---|
+| `performance.monitor.*`, `performance.load.*`, `performance.pressure.*`, `performance.pressure_start_samples`, `performance.pressure_end_samples` (`src/performance/monitor.rs`) | PERF §10.1, 15 keys: sampling period (1 000..=5 000 ms), context window, summary interval, sample bounds, process coverage, failures, control freshness, stutter gap, heavy load threshold, the two pressure streaks (1..=30), `pressure.thresholds` and `pressure.severity` (objects), `pressure.gpu_aggregate` (`max_engine_type` \| `sum`) | the streaks: the start-up assembly, as before (their file members are unchanged); the rest: P-m |
+| `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
+| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*` | `heavy_dispatch_limit.*` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants); the rest: P-m, P-k, P-s, P-h |
+| `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
+
+- **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5); every other
+  key is read once at assembly and changes by the file, a commit and a restart. `mode` in
+  particular is a person's configuration, never an instruction (PERF §4.6).
+- **Whole-section check** (`perf_config_invalid`, `config_key` and `config_value_problem`; through
+  an instruction `config_value_invalid` with the same key and problem): the curve has at most
+  **70 points** (`out_of_range` beyond; coordinator ruling 2026-10-14: 70 is the largest count
+  whose serialized JSON fits the 8 KiB `ConfigureSettings` value limit for every curve these
+  rules allow, the longest being 117 × points − 1 bytes, 8 189 for 70 and 8 306 for 71, so any
+  curve a file may hold can also be sent by an instruction) and runs from
+  `r_bp` 10 000 down to 0, strictly falling; each point is `{r_bp, stage, factor_milli,
+  extra_retries, share_milli}`, its factor within 1 000 and `max_factor_milli`, its share within
+  0 and 1 000, its stage S0 to S3; as R falls the factor never falls, the share never rises and
+  the stage never steps back; no two neighbours drop the share from 1 000 straight to 0 (PERF
+  §4.1). `tolerance` rises strictly; each `bounds.sN` has min below max, and a deeper stage's
+  bounds lie no higher than the stage before it; `pressure_max_stage` is S0 to S2;
+  `trouble_codes` are active catalog codes (`code_unknown`, `code_retired`) (PERF §10.4). The
+  context window and summary interval are at least the sampling period; each threshold pair
+  ends below where it starts; an elevated severity is not above the critical one; each
+  per-backend baseline has `default` and positive values; the baseline window holds at least
+  its minimum and its clamp floor is not above its ceiling; `pressure_floor.kinds` are known
+  pressure kinds, each once; `heavy_dispatch_limit.paused` is not above `.normal`. A value of the
+  wrong type or outside a key's range is `config_value_invalid`. At start and in `check-config`
+  the refusal comes before the ledger opens, exit code 1.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
@@ -211,9 +251,10 @@ start until the ledger is repaired (`host_config_overrides_fact_invalid`).
 
 Owner `runtime-config`: `config_key_unknown`, `config_key_not_settable`, `config_value_invalid`,
 `config_override_superseded`, `config_override_base_changed`, `config_override_dropped`,
-`recovery_ladder_config_invalid` and `recovery_ladder_code_unclassified` (D1c emits them), and
+`recovery_ladder_config_invalid` and `recovery_ladder_code_unclassified` (D1c emits them),
 `blackout_config_invalid` (registered by SR-0; host blackout entries are parsed in this crate,
-so the code moved here; SR-4a emits it). Owner `runtime-host`:
+so the code moved here; SR-4a emits it) and `perf_config_invalid` (Workflow #385 P-c; domain
+`perf_`). Owner `runtime-host`:
 `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`,
 `host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`. Owner `contract`:
 `invalid_configure_settings`. Vocabulary `config_value_problem` (source

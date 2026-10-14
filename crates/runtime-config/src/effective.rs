@@ -10,7 +10,7 @@ use crate::defaults::shipped_scalar;
 use crate::recovery_ladder::LadderConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
-use crate::{host_claims, instance, recovery_ladder};
+use crate::{host_claims, instance, performance, recovery_ladder};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
@@ -111,7 +111,7 @@ impl ConfigFailure {
     /// whole request as `config_value_invalid`, keeping its key and why.
     fn into_instruction(self) -> Self {
         match self.code {
-            ConfigCode::RecoveryLadderConfigInvalid => Self {
+            ConfigCode::RecoveryLadderConfigInvalid | ConfigCode::PerfConfigInvalid => Self {
                 code: ConfigCode::ConfigValueInvalid,
                 problem: self.problem.or(Some(ConfigValueProblem::SectionCheck)),
                 ..self
@@ -331,6 +331,12 @@ impl EffectiveConfig {
         host_claims::renewal_slack_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
+    /// §10.4).
+    pub fn check_performance(&self) -> Result<(), ConfigFailure> {
+        performance::check(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)
@@ -429,7 +435,8 @@ impl EffectiveConfig {
 
     /// The whole-section checks of `sections` against the values in effect (§5.3), with the
     /// facts of other crates in `context`: the `recovery_ladder` section whole (D1c), the
-    /// `host_claims` slack (D1c) and each instance of the per-instance section (D1b).
+    /// `host_claims` slack (D1c), the `performance` section whole (Workflow #385 P-c) and each
+    /// instance of the per-instance section (D1b).
     fn check_sections(
         &self,
         sections: &BTreeSet<String>,
@@ -440,6 +447,9 @@ impl EffectiveConfig {
         }
         if sections.contains(host_claims::SECTION) {
             self.renewal_slack_ms()?;
+        }
+        if sections.contains(performance::SECTION) {
+            self.check_performance()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

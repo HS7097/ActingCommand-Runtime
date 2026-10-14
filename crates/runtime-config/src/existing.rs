@@ -35,7 +35,7 @@ const fn row(
 }
 
 use DefaultSource::{Code, None as NoDefault};
-use FilePath::{Absent, At, Key};
+use FilePath::{Absent, Key};
 use NotSettable::{BeforeLedgerOpen, Derived, NoFileMember, ReadAtAssembly};
 use ValueType::{Boolean, DurationMs, Integer, String as Text};
 
@@ -273,49 +273,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         Code,
         NoFileMember,
     ),
-    row(
-        "performance_control.clock_jump_threshold_ms",
-        Absent,
-        DurationMs,
-        Code,
-        NoFileMember,
-    ),
-    row(
-        "performance_control.normal_heavy_dispatch_limit",
-        Absent,
-        Integer,
-        Code,
-        NoFileMember,
-    ),
-    row(
-        "performance_control.pressured_heavy_dispatch_limit",
-        Absent,
-        Integer,
-        Code,
-        NoFileMember,
-    ),
-    row(
-        "performance_monitor.sample_interval_ms",
-        Absent,
-        DurationMs,
-        Code,
-        NoFileMember,
-    ),
-    // The file member is `performance.*`; the manifest name is `performance_monitor.*` (§5.5).
-    row(
-        "performance_monitor.pressure_start_samples",
-        At("performance.pressure_start_samples"),
-        Integer,
-        Code,
-        ReadAtAssembly,
-    ),
-    row(
-        "performance_monitor.pressure_end_samples",
-        At("performance.pressure_end_samples"),
-        Integer,
-        Code,
-        ReadAtAssembly,
-    ),
+    // Workflow #385 P-c: the controller's clock jump and heavy-dispatch limits and the
+    // monitor's sampling period and pressure streaks are keys of the `performance` section
+    // (`performance.pacing.*`, `performance.monitor.*`, `performance.pressure_*_samples`).
     row(
         "capacity_thresholds.hard_bytes",
         Key,

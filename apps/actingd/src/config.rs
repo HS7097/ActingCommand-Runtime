@@ -22,12 +22,13 @@ use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
 };
+use actingcommand_runtime_config::performance::{monitor, pacing};
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, CatalogTransitionRequest, DiscoverySpec, ExecutionBackendProvider,
     ExecutionBackendRegistration, ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy,
-    InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
-    ProcedureBinding, ProcedureManifest, ProviderAssembly, RecognitionVisionProvider,
-    RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
+    InstanceMode, InstanceSpec, PerformanceControlConfig, PerformanceMonitorConfig, PolicyCadence,
+    PolicyInputSnapshot, ProcedureBinding, ProcedureManifest, ProviderAssembly,
+    RecognitionVisionProvider, RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionListingCode,
@@ -131,9 +132,11 @@ pub(super) struct ActingdConfigFile {
     /// Explicit MuMu install root: the highest-priority `MuMuManager.exe` discovery source.
     #[serde(default)]
     mumu_root: Option<PathBuf>,
-    /// Workflow #318 (cfg2): performance monitor tunables that had no file field.
+    /// Workflow #318 (cfg2): the pressure streaks; Workflow #385 P-c: the whole `performance`
+    /// section (`crates/runtime-config`), the streaks keeping their members, each member
+    /// optional; the defaults file holds every default.
     #[serde(default)]
-    performance: Option<PerformanceConfigFile>,
+    performance: Option<actingcommand_runtime_config::PerformanceFile>,
     /// Workflow #318 (cfg2): daemon-level device tool paths, applied to every device
     /// instance's backend configuration; absent fields keep today's env / discovery /
     /// bundled-tool behaviour.
@@ -330,19 +333,40 @@ fn assemble_return_home_packages(
     Ok(packages)
 }
 
-/// `PerformanceMonitorConfig` pressure streaks (`1..=30`, default 3 each).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PerformanceConfigFile {
-    #[serde(default)]
-    pressure_start_samples: Option<u16>,
-    #[serde(default)]
-    pressure_end_samples: Option<u16>,
+/// Workflow #385 P-c: the values of the `performance` section the start-up assembly reads
+/// (PERF §10.1, §10.3), from the rows the configuration mechanism resolved: the monitor's
+/// pressure streaks, and the controller's clock jump and heavy-dispatch limits, which the host
+/// took from code constants until now.
+fn performance_settings(
+    parameters: &[actingcommand_contract::ConfigParameter],
+) -> Result<(PerformanceMonitorConfig, PerformanceControlConfig), Code> {
+    let value = |key: &str| {
+        parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .map(|parameter| &parameter.value)
+    };
+    let small = |key: &str| match value(key) {
+        Some(actingcommand_contract::FactScalar::Integer(number)) => {
+            u16::try_from(*number).map_err(|_| ActingdCode::ConfigManifestInvalid.code())
+        }
+        _ => Err(ActingdCode::ConfigManifestInvalid.code()),
+    };
+    let clock_jump = match value(pacing::CLOCK_JUMP_MS) {
+        Some(actingcommand_contract::FactScalar::DurationMs(ms)) => Duration::from_millis(*ms),
+        _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
+    };
+    let monitor_config = PerformanceMonitorConfig::default()
+        .with_pressure_start_samples(small(monitor::PRESSURE_START_SAMPLES)?)
+        .with_pressure_end_samples(small(monitor::PRESSURE_END_SAMPLES)?);
+    let control_config = PerformanceControlConfig::default()
+        .with_clock_jump_threshold(clock_jump)
+        .with_heavy_dispatch_limits(
+            small(pacing::HEAVY_DISPATCH_LIMIT_NORMAL)?,
+            small(pacing::HEAVY_DISPATCH_LIMIT_PAUSED)?,
+        );
+    Ok((monitor_config, control_config))
 }
-
-/// The upper bound `PerformanceMonitorConfig::validate` applies to both pressure streaks;
-/// checked here so the refusal carries `invalid_pressure_samples` before host validation.
-const MAX_PRESSURE_STREAK_SAMPLES: u16 = 30;
 
 /// Daemon-level device tool paths. Each set path must be absolute and exist
 /// (`device_path_invalid`); it is then passed to the backend configuration it names.
@@ -1170,29 +1194,25 @@ impl ActingdConfigFile {
         failed_run_retention
             .validate()
             .map_err(|_| SharedCode::InvalidFailedRunRetentionPolicy.code())?;
-        let mut performance_monitor = PerformanceMonitorConfig::default();
-        let (pressure_start_samples, pressure_end_samples) =
-            self.performance
+        // Workflow #318 cfg2: a pressure streak outside 1..=30 keeps its own refusal; a value of
+        // another type is the configuration mechanism's (`config_value_invalid`, below).
+        for key in [
+            monitor::PRESSURE_START_SAMPLES,
+            monitor::PRESSURE_END_SAMPLES,
+        ] {
+            let out_of_range = self
+                .performance
                 .as_ref()
-                .map_or((None, None), |performance| {
-                    (
-                        performance.pressure_start_samples,
-                        performance.pressure_end_samples,
-                    )
+                .and_then(|section| section.value_at(key))
+                .filter(|value| value.is_i64() || value.is_u64())
+                .is_some_and(|value| {
+                    !value.as_i64().is_some_and(|samples| {
+                        (1..=monitor::MAX_PRESSURE_STREAK_SAMPLES).contains(&samples)
+                    })
                 });
-        for samples in [pressure_start_samples, pressure_end_samples]
-            .into_iter()
-            .flatten()
-        {
-            if !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&samples) {
+            if out_of_range {
                 return Err(ActingdCode::InvalidPressureSamples.code());
             }
-        }
-        if let Some(samples) = pressure_start_samples {
-            performance_monitor = performance_monitor.with_pressure_start_samples(samples);
-        }
-        if let Some(samples) = pressure_end_samples {
-            performance_monitor = performance_monitor.with_pressure_end_samples(samples);
         }
         let device_paths = self.device_paths.unwrap_or_default();
         device_paths.validate()?;
@@ -1326,7 +1346,6 @@ impl ActingdConfigFile {
                     self.bind_port.unwrap_or_default(),
                 ))
                 .with_policy_cadence(policy_cadence.clone())
-                .with_performance_monitor(performance_monitor)
                 .with_governance_policy(governance_policy);
         let instances_startup_package_count = startup_packages.len();
         // Workflow #387 D1c: the sections the configuration mechanism resolves, as the file
@@ -1338,6 +1357,8 @@ impl ActingdConfigFile {
             "host_claims": serde_json::to_value(&self.host_claims)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "standard_packs": serde_json::to_value(&self.standard_packs)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "performance": serde_json::to_value(&self.performance)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
@@ -1353,8 +1374,9 @@ impl ActingdConfigFile {
             })
             .transpose()?;
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
-        // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections, then
-        // the per-instance section), from the members the file named.
+        // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
+        // the `performance` section; then the per-instance section), from the members the file
+        // named.
         let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
             .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
         let mechanism_parameters = actingcommand_runtime_config::render_parameters(
@@ -1382,7 +1404,13 @@ impl ActingdConfigFile {
                     config_sha256,
                     defaults_sha256: actingcommand_runtime_config::shipped_defaults_sha256(),
                 });
+        // Workflow #385 P-c: the monitor and the controller take the section's values in
+        // effect.
+        let (performance_monitor, performance_control) =
+            performance_settings(&mechanism_parameters)?;
         host = host
+            .with_performance_monitor(performance_monitor)
+            .with_performance_control(performance_control)
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
             .with_prerequisite_packages(prerequisite_packages)
@@ -1399,8 +1427,6 @@ impl ActingdConfigFile {
             dedup_error_explicit: self.frame_retention_dedup_error.is_some(),
             dedup_lab_explicit: self.frame_retention_dedup_lab.is_some(),
             capacity_thresholds_explicit: self.capacity_thresholds.is_some(),
-            pressure_start_samples_explicit: pressure_start_samples.is_some(),
-            pressure_end_samples_explicit: pressure_end_samples.is_some(),
             secret_fingerprint_salt_bytes: self.secret_fingerprint_salt.len(),
             mumu_root: provider.mumu_root(),
             device_paths: device_paths.entries(),
@@ -2632,14 +2658,16 @@ mod tests {
                 .host
                 .performance_monitor()
                 .expect("assembled performance monitor");
+            // Workflow #385 P-c: the streaks are rows of the `performance` section, at the file
+            // members they had.
             for (key, expected, effective) in [
                 (
-                    "performance_monitor.pressure_start_samples",
+                    monitor::PRESSURE_START_SAMPLES,
                     if configured.is_some() { 5 } else { 3 },
                     performance_monitor.pressure_start_samples(),
                 ),
                 (
-                    "performance_monitor.pressure_end_samples",
+                    monitor::PRESSURE_END_SAMPLES,
                     if configured.is_some() { 7 } else { 3 },
                     performance_monitor.pressure_end_samples(),
                 ),
@@ -2649,8 +2677,8 @@ mod tests {
                 assert_eq!(parameter.value, FactScalar::Integer(i64::from(effective)));
                 assert_eq!(parameter.source, source);
             }
-            let sample_interval = parameter("performance_monitor.sample_interval_ms")
-                .expect("sample interval parameter");
+            let sample_interval =
+                parameter(monitor::SAMPLE_INTERVAL_MS).expect("sample interval parameter");
             assert_eq!(
                 sample_interval.value,
                 FactScalar::DurationMs(
@@ -3320,5 +3348,70 @@ mod tests {
             config.assemble().err().map(Code::as_str),
             Some("agent_dispatcher_config_invalid")
         );
+    }
+
+    /// Workflow #385 P-c, Tc-1 at start (PERF §10.3; P-c row: `with_performance_control` takes
+    /// the configuration): the host's controller takes `performance.pacing.clock_jump_ms` and
+    /// `.heavy_dispatch_limit.*` in effect, the model's defaults (30 000 ms, 2, 1) when the file
+    /// names none, the file's values otherwise; each row says where its value came from.
+    #[test]
+    fn tc_1_the_controller_takes_the_performance_section_s_clock_jump_and_dispatch_limits() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.fixture", "instance_id": id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}], "max_inputs": 1
+                }
+            }]
+        });
+        let mut named = base.clone();
+        named["performance"] = json!({
+            "pacing": {
+                "clock_jump_ms": 45_000,
+                "heavy_dispatch_limit": {"normal": 3, "paused": 2}
+            }
+        });
+        for (value, clock_jump_ms, normal, paused, source) in [
+            (base, 30_000, 2, 1, ConfigParameterSource::Default),
+            (named, 45_000, 3, 2, ConfigParameterSource::Explicit),
+        ] {
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            let assembly = config.assemble().expect("runtime assembly");
+            let control = assembly.host.performance_control();
+            assert_eq!(
+                control.clock_jump_threshold(),
+                Duration::from_millis(clock_jump_ms)
+            );
+            assert_eq!(control.normal_heavy_dispatch_limit(), normal);
+            assert_eq!(control.pressured_heavy_dispatch_limit(), paused);
+            for (key, reported) in [
+                (pacing::CLOCK_JUMP_MS, FactScalar::DurationMs(clock_jump_ms)),
+                (
+                    pacing::HEAVY_DISPATCH_LIMIT_NORMAL,
+                    FactScalar::Integer(i64::from(normal)),
+                ),
+                (
+                    pacing::HEAVY_DISPATCH_LIMIT_PAUSED,
+                    FactScalar::Integer(i64::from(paused)),
+                ),
+            ] {
+                let parameter = assembly
+                    .manifest
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == key)
+                    .unwrap_or_else(|| panic!("no parameter {key}"));
+                assert_eq!(parameter.value, reported, "{key}");
+                assert_eq!(parameter.source, source, "{key}");
+            }
+        }
     }
 }

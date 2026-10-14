@@ -11,6 +11,14 @@ releases one instance per transition. The levels in rank order are Normal,
 DispatchPaused, Throttled, YieldRequested, QosReduced, Suspended and
 ShutdownRequested.
 
+The controller's `clock_jump_threshold` and its heavy-dispatch limits come from
+the configuration (Workflow #385 P-c): `performance.pacing.clock_jump_ms`
+(default 30 000) and `performance.pacing.heavy_dispatch_limit.normal` /
+`.paused` (defaults 2 and 1), read once when actingd assembles the host
+([runtime-config.md](runtime-config.md), "The performance section"). The
+escalation and recovery samples and the transition cooldown stay the
+controller's own values.
+
 ## Responsiveness input
 
 Host responsiveness measures execution spans: `recognition_latency_ms`

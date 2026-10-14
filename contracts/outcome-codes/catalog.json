@@ -6477,6 +6477,9 @@
     "per_": [
       "actinglab"
     ],
+    "perf_": [
+      "runtime-config"
+    ],
     "performance_": [
       "contract",
       "host-metrics",

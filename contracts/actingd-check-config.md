@@ -144,7 +144,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance_monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance.monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -235,8 +235,8 @@ revision.
   `pressure_end_samples`, each `{ value, source }` with `source` `explicit`
   when the file's `performance` section named it and `default` otherwise. The
   values are read from the manifest, so they equal the
-  `performance_monitor.pressure_*` parameters there and what
-  `actingctl status --config` shows after startup.
+  `performance.pressure_start_samples` / `performance.pressure_end_samples`
+  parameters there and what `actingctl status --config` shows after startup.
 - `device_paths` echoes the daemon-level device tool paths, always with all
   five names (`nemu_folder`, `nemu_ipc_dll`, `droidcast_apk`,
   `minitouch_path`, `maatouch_path`): `{ path, source: "explicit" }` for a
@@ -291,7 +291,7 @@ revision.
     - `device_diagnostic` and `performance_monitor`: always on
       (`config_subsystem_always_on`). The mode and the sample interval are the
       parameters `device_diagnostic_mode` and
-      `performance_monitor.sample_interval_ms`.
+      `performance.monitor.sample_interval_ms`.
     - `mumu_discovery` and `emulator_control`: on only when at least one
       instance is bound by `instance_index` or `instance_name`
       (`config_subsystem_discovery_bound` with `count`, else
@@ -325,14 +325,15 @@ revision.
     and device paths"), `instances_count`, `instances_deferred_count`,
     `instances_startup_package_count` (instances declaring a startup package),
     the per-instance keys below, the
-    `capacity_thresholds.*` bytes, the performance monitor's
-    `performance_monitor.pressure_start_samples` /
-    `performance_monitor.pressure_end_samples`, with a `policy` section the
+    `capacity_thresholds.*` bytes, every key of the `performance` section
+    (Workflow #385 P-c, [runtime-config.md](runtime-config.md), "The performance
+    section"; the pressure streaks are `performance.pressure_start_samples` /
+    `performance.pressure_end_samples`), with a `policy` section the
     `policy.monitor.*` settings (Workflow #397, described above) and, when the section is
     present, the `agent_dispatcher.*` budget; plus the values the daemon
     applies without a file field: `scheduler.*`, `policy_cadence.*`,
-    `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.*`,
-    `performance_monitor.sample_interval_ms` and `mumu_manager.*`. Per
+    `io_timeout_ms`, `maximum_frame_bytes`, `performance_control.escalation_samples`,
+    `.recovery_samples`, `.transition_cooldown_ms` and `mumu_manager.*`. Per
     configured instance, in declaration order (Workflow #318, cfg3):
     `instance.<instance_id>.stuck_recovery` (boolean) and
     `instance.<instance_id>.stuck_recovery_cooldown_secs` (integer), keyed by
@@ -670,11 +671,15 @@ here exactly as at startup, at stage `assemble`.
 performance monitor's pressure streaks (`PerformanceMonitorConfig` in
 `crates/runtime-host/src/performance.rs`): the consecutive samples above a start
 threshold before a pressure is recorded, and below an end threshold before it
-is ended. Each is optional, default `3`, range `1..=30`; a value outside the
-range fails with `invalid_pressure_samples` before host validation. The
-effective values appear as `performance` here and as the manifest parameters
-`performance_monitor.pressure_start_samples` /
-`performance_monitor.pressure_end_samples` (`explicit` when named).
+is ended. Each is optional, default `3` (from `actingd.defaults.json`), range
+`1..=30`; a value outside the range fails with `invalid_pressure_samples` before
+host validation. The effective values appear as `performance` here and as the
+manifest parameters `performance.pressure_start_samples` /
+`performance.pressure_end_samples` (`explicit` when named). Since Workflow #385
+P-c the `performance` section holds every key of performance pacing
+([runtime-config.md](runtime-config.md), "The performance section"); a rule the
+section breaks fails with `perf_config_invalid` at stage `assemble`, as at
+startup.
 
 `device_paths { nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path,
 maatouch_path }` names the device tool paths every device instance's backend

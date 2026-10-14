@@ -4,9 +4,11 @@
 //! §5.2): the lowest layer of every key whose `default` is `file`, compiled into the program and
 //! shipped beside the example configuration. It is parsed by its own structure, with no
 //! top-level required member; a member without parsing code is refused. Each section adds its
-//! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`).
+//! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`;
+//! Workflow #385 P-c adds `performance`).
 
 use crate::host_claims::HostClaimsFile;
+use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
 use crate::resolve::member;
 use crate::table::find_row;
@@ -31,6 +33,8 @@ pub struct DefaultsFile {
     pub recovery_ladder: Option<RecoveryLadderFile>,
     #[serde(default)]
     pub host_claims: Option<HostClaimsFile>,
+    #[serde(default)]
+    pub performance: Option<PerformanceFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.
