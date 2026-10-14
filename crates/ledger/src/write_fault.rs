@@ -36,6 +36,8 @@ struct Faults {
     spills_held: bool,
     /// Spill writes that reached the gate since it was armed.
     spills_reached: usize,
+    /// Spill writes that landed in the dump file since the gate was armed.
+    spills_written: usize,
 }
 
 /// One fault a write attempt meets.
@@ -145,6 +147,17 @@ impl LedgerWriteFaultGate {
             .unwrap_or_else(PoisonError::into_inner);
         faults.spills_reached > 0
     }
+
+    /// Whether `count` spill writes landed in the dump file, waiting at most `wait` for them.
+    pub fn wait_spills_written(&self, count: usize, wait: Duration) -> bool {
+        let faults = self.faults();
+        let (faults, _) = self
+            .entry
+            .spill_changed
+            .wait_timeout_while(faults, wait, |faults| faults.spills_written < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        faults.spills_written >= count
+    }
 }
 
 impl Drop for LedgerWriteFaultGate {
@@ -177,6 +190,20 @@ pub(crate) fn committed_batch(root: &Path, sequences: Vec<u64>, full: bool) {
             .committed
             .push((sequences, full));
     }
+}
+
+/// Workflow #383 AO-2: called by the spill thread once a spill landed in the dump file at
+/// `dump_path` (in its state root).
+pub(crate) fn after_spill(dump_path: &Path) {
+    let Some(entry) = dump_path.parent().and_then(entry_of) else {
+        return;
+    };
+    entry
+        .faults
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .spills_written += 1;
+    entry.spill_changed.notify_all();
 }
 
 /// Workflow #383 AO-2: called by the spill thread before it writes to the dump file at

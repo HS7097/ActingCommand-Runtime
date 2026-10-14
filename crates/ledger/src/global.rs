@@ -1993,7 +1993,8 @@ impl GlobalLedger {
                 None,
                 capture::Reply::Append {
                     response,
-                    observation: queued_at.map(LedgerAppendObservation::sent),
+                    observation: queued_at
+                        .map(|queued_at| Box::new(LedgerAppendObservation::sent(queued_at))),
                 },
             );
             if let Some(value) = &mut observation {

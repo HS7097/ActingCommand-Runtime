@@ -52,17 +52,17 @@ impl Default for IndexPolicy {
 /// A `lifecycle` row's key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LifecycleSlot {
-    LastStart,
-    LastClose,
-    LastFatal,
+    Start,
+    Close,
+    Fatal,
 }
 
 impl LifecycleSlot {
     pub(super) const fn key(self) -> &'static str {
         match self {
-            Self::LastStart => "last_start",
-            Self::LastClose => "last_close",
-            Self::LastFatal => "last_fatal",
+            Self::Start => "last_start",
+            Self::Close => "last_close",
+            Self::Fatal => "last_fatal",
         }
     }
 }
@@ -282,12 +282,12 @@ fn is_request_record(event_type: EventType) -> bool {
 fn lifecycle_slot(event: &PersistedEvent) -> Option<LifecycleSlot> {
     match event.payload() {
         EventPayload::Runtime(RuntimePayload::Started(_) | RuntimePayload::Takeover(_)) => {
-            Some(LifecycleSlot::LastStart)
+            Some(LifecycleSlot::Start)
         }
         EventPayload::Runtime(RuntimePayload::LifecycleObserved(lifecycle))
             if matches!(lifecycle.phase(), RuntimeLifecyclePhase::ShutdownRequested) =>
         {
-            Some(LifecycleSlot::LastClose)
+            Some(LifecycleSlot::Close)
         }
         EventPayload::Runtime(RuntimePayload::Failed(_))
             if event
@@ -295,7 +295,7 @@ fn lifecycle_slot(event: &PersistedEvent) -> Option<LifecycleSlot> {
                 .outcome()
                 .is_some_and(|outcome| outcome.category() == Category::Fatal) =>
         {
-            Some(LifecycleSlot::LastFatal)
+            Some(LifecycleSlot::Fatal)
         }
         _ => None,
     }

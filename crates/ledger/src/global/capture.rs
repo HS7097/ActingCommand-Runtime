@@ -165,7 +165,7 @@ pub struct LedgerCaptureStatus {
 pub(super) enum Reply {
     Append {
         response: SyncSender<LedgerAppendOutcome>,
-        observation: Option<LedgerAppendObservation>,
+        observation: Option<Box<LedgerAppendObservation>>,
     },
     Joint(SyncSender<GlobalLedgerResult<PersistedEvent>>),
 }
@@ -204,7 +204,9 @@ impl Reply {
                 if let Some(observation) = &mut observation {
                     observation.reply_ready(result.is_ok());
                 }
-                response.send((result, observation)).is_ok()
+                response
+                    .send((result, observation.map(|observation| *observation)))
+                    .is_ok()
             }
             Self::Joint(response) => response.send(result).is_ok(),
         }
@@ -1396,6 +1398,8 @@ impl CaptureQueue {
                 // The flush thread may be waiting for this spill to land.
                 state.wake_owed = true;
                 self.release(state);
+                #[cfg(any(test, feature = "test-hooks"))]
+                crate::write_fault::after_spill(failure.plan().dump_path());
             }
             Err(failed) => {
                 self.release(state);

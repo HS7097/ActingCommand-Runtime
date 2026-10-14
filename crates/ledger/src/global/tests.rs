@@ -2626,6 +2626,15 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         }
         Ok(())
     });
+    // Workflow #383 AO-2: every writer has its capture queue; this one has no spill thread.
+    let queue = Arc::new(
+        super::capture::CaptureQueue::new(
+            super::LedgerCapturePolicy::default(),
+            None,
+            sender.clone(),
+        )
+        .expect("capture queue"),
+    );
     let ledger = GlobalLedger {
         sender: Some(sender),
         writer: Some(writer),
@@ -2633,6 +2642,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         deferred: Mutex::new(Vec::new()),
         reply_timeout: GlobalLedger::REPLY_TIMEOUT,
         probe: None,
+        queue,
+        spill: None,
     };
     let (done_sender, done_receiver) = mpsc::channel();
     thread::spawn(move || {
