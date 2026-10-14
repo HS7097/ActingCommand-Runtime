@@ -826,9 +826,6 @@ impl HostShared {
         ),
     ) -> RuntimeHostResult<PersistedEvent> {
         let (payload, mut observation) = input;
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::AppendRuntimeEvent));
-        }
         if let Some(value) = observation.as_mut() {
             value.draft.begin();
         }
@@ -855,10 +852,9 @@ impl HostShared {
         if let Some(value) = observation.as_mut() {
             value.writer_response.finish(appended.is_ok());
         }
-        let event = appended.map_err(|_| {
-            self.lifecycle_append_failed.store(true, Ordering::Release);
-            ledger_error(HostLocation::AppendRuntimeEvent)
-        })?;
+        // Workflow #383 AO-1: no latch refuses the later appends; a write the ledger gave up on
+        // stops the Runtime by its dump (`contracts/ledger-observer.md` §9.2).
+        let event = appended.map_err(|_| ledger_error(HostLocation::AppendRuntimeEvent))?;
         // Workflow #383 AO-7: the record is committed; its wake, if any, reaches the driver
         // from here, not from the ledger.
         self.policy_wakes.raise(event.event_type());
@@ -870,7 +866,6 @@ impl HostShared {
             value.device_diagnostics.finish(diagnostic.is_ok());
         }
         if let Err(error) = diagnostic {
-            self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
             return Err(error);
         }
@@ -878,7 +873,6 @@ impl HostShared {
         // under its own leaf lock; nothing is recorded and no ladder is admitted on the write
         // path (the lease sweep admits what it registered).
         if let Err(error) = self.count_stability_record(&event) {
-            self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
             return Err(error);
         }
@@ -895,9 +889,6 @@ impl HostShared {
             let mut facts = lock(&self.facts, HostLocation::SynchronizeFactStore)?;
             facts.synchronize(&self.ledger)?;
             for invalidation in facts.pending_invalidations() {
-                if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                    return Err(ledger_error(HostLocation::AppendFactTransaction));
-                }
                 let work = facts.prepare_invalidation(&self.ledger, &invalidation)?;
                 let links = self.events.system_links()?;
                 let draft = self.events.draft(
@@ -912,20 +903,13 @@ impl HostShared {
                 let persisted = self
                     .ledger
                     .append_transaction(draft, Box::new(work))
-                    .map_err(|error| {
-                        let error = crate::fact_store::fact_transaction_error(error);
-                        if error.is_fatal() {
-                            self.lifecycle_append_failed.store(true, Ordering::Release);
-                        }
-                        error
-                    })?;
+                    .map_err(crate::fact_store::fact_transaction_error)?;
                 // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
                 self.policy_wakes.raise(persisted.event_type());
                 facts
                     .acknowledge_generated_invalidation(&invalidation.data, persisted.sequence())
                     .and_then(|()| self.observe_device_diagnostics_under_fact_gate(&persisted))
                     .inspect_err(|error| {
-                        self.lifecycle_append_failed.store(true, Ordering::Release);
                         let _ = error
                             .diagnostics()
                             .recorded_event()

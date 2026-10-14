@@ -396,3 +396,22 @@ tests = [
     "actingcommand-ledger::lib::fact::capture_tests::l4_a_stored_record_reads_its_capture_and_refuses_another_time",
 ]
 incident = ["#383 SH-1"]
+
+# A failed write is read back and retried; a write that gives up, or an integrity failure, or an attempt that stalls dumps every unflushed record with the ledger's own runtime.failed last and stops through the failure plan's sink; a read that waits meanwhile gets the error writer_response_timeout; the dump goes to the fallback folder when the state root cannot take it; the next start imports it before any new record, once per event id, records ledger.dump_imported (and a gap for a damaged dump) and deletes it, or refuses a dump it cannot write or read (Workflow #383 AO-1, AO1-a to AO1-k)
+[[gate]]
+key = "42"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_a_a_write_that_fails_fewer_times_than_its_attempts_commits_once",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_b_exhausted_attempts_dump_every_unflushed_record_and_stop",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_c_a_commit_reported_as_failed_is_read_back_not_written_again",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_d_an_integrity_failure_is_not_retried_and_dumps_the_unflushed_records",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_e_the_attempts_follow_the_configuration",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_f_a_stalled_attempt_is_dumped_by_the_probe_and_a_waiting_read_gets_an_error",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_g_a_start_imports_the_dump_in_capture_order_records_it_and_deletes_it",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_h_an_import_cut_short_is_finished_by_the_next_start_once_per_event",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_i_a_damaged_dump_imports_its_verified_part_with_a_gap",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_j_a_start_refuses_a_dump_it_cannot_write_or_read_and_leaves_it_untouched",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao1::ao1_k_a_state_root_that_cannot_take_the_dump_sends_it_to_the_fallback_folder",
+]
+incident = ["#383"]

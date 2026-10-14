@@ -9913,6 +9913,16 @@ impl ResourceAuthoringPayloadDraft {
 enum LedgerDraftKind {
     Recovered(RecoveryDraft),
     Signature(LedgerSignatureEvent, AuditInput),
+    /// Workflow #383 AO-1: `ledger.dump_imported` (register L3).
+    DumpImported(Outcome, AuditInput),
+    /// Workflow #383 AO-1: a damaged dump's gap (register L1).
+    DumpGap {
+        gap_kind: LedgerGapKind,
+        gap_start_unix_ms: u64,
+        gap_end_unix_ms: u64,
+        outcome: Outcome,
+        audit: AuditInput,
+    },
 }
 
 pub struct LedgerPayloadDraft(LedgerDraftKind);
@@ -9944,6 +9954,31 @@ impl LedgerPayloadDraft {
             affected_bytes,
             audit,
         }))
+    }
+
+    /// Workflow #383 AO-1 (`ledger-observer.md` §9.4 step 5): the ledger's own record of a dump
+    /// it imported, `outcome` being `ledger_dump_imported` (register L3).
+    pub fn dump_imported(outcome: Outcome, audit: AuditInput) -> Self {
+        Self(LedgerDraftKind::DumpImported(outcome, audit))
+    }
+
+    /// Workflow #383 AO-1 (`ledger-observer.md` §9.4, §10): the gap of a damaged dump
+    /// (`dump_incomplete` or `dump_invalid`): its time range, the count unknown and no record
+    /// named; `outcome` is the gap's code (register L1).
+    pub fn dump_gap(
+        gap_kind: LedgerGapKind,
+        gap_start_unix_ms: u64,
+        gap_end_unix_ms: u64,
+        outcome: Outcome,
+        audit: AuditInput,
+    ) -> Self {
+        Self(LedgerDraftKind::DumpGap {
+            gap_kind,
+            gap_start_unix_ms,
+            gap_end_unix_ms,
+            outcome,
+            audit,
+        })
     }
 }
 
@@ -11415,6 +11450,21 @@ impl EventPayloadDraft {
                         audit: audit.sanitize(fingerprinter)?,
                     })
                 }
+                LedgerDraftKind::DumpImported(outcome, audit) => LedgerPayload::DumpImported(
+                    LedgerDumpImportedPayload::new(outcome, audit.sanitize(fingerprinter)?)?,
+                ),
+                LedgerDraftKind::DumpGap {
+                    gap_kind,
+                    gap_start_unix_ms,
+                    gap_end_unix_ms,
+                    outcome,
+                    audit,
+                } => LedgerPayload::GapRecorded(LedgerGapPayload::dump(
+                    gap_kind,
+                    (gap_start_unix_ms, gap_end_unix_ms),
+                    outcome,
+                    audit.sanitize(fingerprinter)?,
+                )?),
             }),
         })
     }

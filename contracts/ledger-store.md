@@ -26,7 +26,9 @@ semantic core, query, projection and subscription behavior.
   as `ledger_write_failed` (fatal); the next start imports the dump before any new record and
   deletes it. A refused record (sanitizing, validation) is `ledger_record_rejected` with a gap
   record and no retry. An integrity or format failure stays fatal without retry. See
-  [ledger-observer.md §9](ledger-observer.md#9-write-failure-retry-dump-fatal-ao-1).
+  [ledger-observer.md §9](ledger-observer.md#9-write-failure-retry-dump-fatal-ao-1). Built by
+  AO-1 for the running Runtime's writer (opened with a failure plan), except the refused
+  record's gap (AO-2).
 - **One queue, categories, batch sync** (replaces "Durability classes"; AO-2): one capture queue
   in capture order. A record's category is *decision* (today's durable) or *observation* (today's
   observational), fixed by its type as today, with the exceptions of the gate table
@@ -97,15 +99,18 @@ is taken from the returned error, not inferred from a scenario's historical name
 A failed append is not proof of absence: write/sync or later accounting may fail
 after bytes or a fact have become durable. A successful observational append is not
 proof of presence after a power loss (see [Durability classes](#durability-classes-workflow-191-i)).
-The writer terminates on a fatal
-append/settlement error, informs subscribers and returns the error to the caller.
-Callers must recover/read authoritative facts before deciding whether an effect
-occurred. For external effects, durable intent still precedes the attempt and
-outcome follows it; storage cannot make a device action transactional.
+A writer opened without a failure plan (the offline subcommands, a candidate opened
+without one) terminates on a fatal append/settlement error, informs subscribers and
+returns the error to the caller. The running Runtime's writer follows "Append failure"
+above (Workflow #383 AO-1): it reads back, retries, and when it gives up dumps every
+unflushed record and stops the Runtime. Callers must recover/read authoritative facts
+before deciding whether an effect occurred. For external effects, durable intent still
+precedes the attempt and outcome follows it; storage cannot make a device action
+transactional.
 
-> **Superseded by Workflow #383** (the paragraph above): AO-1 replaces the writer's termination
-> with "Append failure" in "Ledger observer target"; AO-4 drops the wait for a durable intent
-> before the effect (rule 9: intent and result stay two records, copied in order, never waited on).
+> **Superseded by Workflow #383** (the paragraph above): AO-4 drops the wait for a durable
+> intent before the effect (rule 9: intent and result stay two records, copied in order, never
+> waited on).
 
 Close drains the existing command path, syncs the Segment medium (the SQLite medium
 adds no sync at close; see [Durability classes](#durability-classes-workflow-191-i))
@@ -176,8 +181,9 @@ diagnostic summary.
 ## Deferred append
 
 > **Superseded by Workflow #383 AO-2 and AO-4**: "Capture instead of deferred append; the close
-> drain" above. `ingress_full`, `deferred_append_unconfirmed` and the `lifecycle_append_failed`
-> latch leave with it ([ledger-observer.md §9.5](ledger-observer.md#95-fatal-paths-removed-or-changed-ao-1-unless-named)).
+> drain" above. `ingress_full` and `deferred_append_unconfirmed` leave with it; the
+> `lifecycle_append_failed` latch left with AO-1
+> ([ledger-observer.md §9.5](ledger-observer.md#95-fatal-paths-removed-or-changed-ao-1-unless-named)).
 
 `GlobalLedger::append_deferred(draft)` accepts a sanitized draft on the same writer
 command as `append`: the same bounded ingress queue, the same store transaction, the
@@ -196,9 +202,9 @@ replies still missing at the deadline stay pending and are counted. A zero deadl
 is a drain-only confirmation. Host boundaries are `HostShared::close`,
 `finish_device_diagnostics` (and the aborted-start summary) and the performance
 sampling tick that hosts the summary producer, each with the writer reply wait as
-its budget except the drain-only tick. A boundary that finds a failure sets the
-existing `lifecycle_append_failed` latch (once the host exists) and fails through
-its existing error path, so close fails exactly as a synchronous append failure did.
+its budget except the drain-only tick. A boundary that finds a failure fails
+through its existing error path, as a synchronous append failure does; no latch
+refuses the later appends (Workflow #383 AO-1).
 
 Writer shutdown confirms deferred appends first, with the writer reply wait as its
 budget. A failed reply fails the close with that error; a reply still pending is the

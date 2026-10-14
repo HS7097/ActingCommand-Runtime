@@ -119,6 +119,9 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
+// Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
+// imported once by the restart and deleted.
+mod gate_383_ao1;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
 // Workflow #383 SH-1, register §1.18: the reserved single-touch path drag is refused.

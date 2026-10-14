@@ -144,6 +144,29 @@ impl LedgerGapPayload {
         self.source.as_ref()
     }
 
+    /// Workflow #383 AO-1: the gap of a damaged dump (`ledger-observer.md` §9.4): `range` is
+    /// `(gap_start_unix_ms, gap_end_unix_ms)`, the count unknown and no record named.
+    pub(super) fn dump(
+        gap_kind: LedgerGapKind,
+        range: (u64, u64),
+        outcome: Outcome,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::LedgerRecovery,
+            gap_kind,
+            gap_start_unix_ms: range.0,
+            gap_end_unix_ms: range.1,
+            record_count: None,
+            event_id: None,
+            source: None,
+            outcome,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     /// A gap's time range is ordered; a rejected record is one record at one capture time,
     /// with its event id; every other gap's count is unknown and names no record.
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
@@ -223,6 +246,18 @@ pub struct LedgerDumpImportedPayload {
 }
 
 impl LedgerDumpImportedPayload {
+    /// Workflow #383 AO-1: the ledger's own record of a dump it imported (`ledger-observer.md`
+    /// §9.4 step 5).
+    pub(super) fn new(outcome: Outcome, audit: SanitizedAudit) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::LedgerRecovery,
+            outcome,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
         if self.action != EventAction::LedgerRecovery || self.outcome.category() != Category::Info {
             return Err(invalid_ledger_record("dump_imported"));

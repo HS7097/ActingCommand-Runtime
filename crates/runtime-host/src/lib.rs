@@ -52,6 +52,9 @@ pub use strategy::StrategicPlanPreparation;
 pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 
 pub use actingcommand_scheduler::SchedulerConfig;
+// Workflow #383 AO-1: actingd's side of the ledger's write path (`contracts/ledger-observer.md`
+// §9.2 step 4).
+pub use actingcommand_ledger::LedgerFailureSink;
 pub use agent_dispatcher::AgentDispatcherConfig;
 pub use catalog_plan::{
     CatalogApprovalPlan, CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,

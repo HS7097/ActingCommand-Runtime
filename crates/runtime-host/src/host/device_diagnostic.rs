@@ -117,24 +117,20 @@ impl HostShared {
                     )
                 });
         if let Err(error) = &result {
-            self.lifecycle_append_failed.store(true, Ordering::Release);
             self.fatal.mark(error.clone())?;
         }
         result
     }
 
-    /// Confirms every deferred append at a host boundary; a failed reply sets the existing
-    /// lifecycle latch and surfaces through `operation` exactly as a synchronous failure.
+    /// Confirms every deferred append at a host boundary; a failed reply surfaces through
+    /// `operation` exactly as a synchronous failure. Workflow #383 AO-1: no latch refuses the
+    /// later appends; a write the ledger gave up on stops the Runtime by its dump (§9.2).
     pub(super) fn confirm_deferred_appends(
         &self,
         deadline: Duration,
         operation: impl Into<Location>,
     ) -> RuntimeHostResult<()> {
-        let result = confirm_deferred_appends(&self.ledger, deadline, operation);
-        if result.is_err() {
-            self.lifecycle_append_failed.store(true, Ordering::Release);
-        }
-        result
+        confirm_deferred_appends(&self.ledger, deadline, operation)
     }
 
     fn close_device_diagnostic_budget(&self) -> RuntimeHostResult<()> {
@@ -148,9 +144,6 @@ impl HostShared {
         )?;
         if budget.closed {
             return Ok(());
-        }
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::CloseDeviceDiagnosticBudget));
         }
         self.append_device_diagnostic_record_under_fact_gate(budget.record.clone())?;
         budget.closed = true;

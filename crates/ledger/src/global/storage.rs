@@ -183,6 +183,15 @@ pub(super) trait DurableStorage: Send + 'static {
     }
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>>;
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1): after a failed write of
+    /// `event`, whether the store holds it after all; a store that cannot tell refuses, and the
+    /// write is not tried again.
+    fn read_back(&mut self, _event: &PersistedEvent) -> GlobalLedgerResult<ReadBack> {
+        Err(GlobalLedgerError::fatal(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::ReadBackLedgerWrite.location(),
+        ))
+    }
     fn persist_transaction(
         &mut self,
         _event: &PersistedEvent,
@@ -196,6 +205,14 @@ pub(super) trait DurableStorage: Send + 'static {
     fn close(&mut self) -> GlobalLedgerResult<()>;
 }
 
+/// Workflow #383 AO-1: what reading the store back after a failed write found (§9.1).
+pub(super) enum ReadBack {
+    /// The record is committed: the store's head moved to it.
+    Committed,
+    /// The store's head is where the write left it: the record is not there.
+    Absent,
+}
+
 /// Shared typed semantics and committed snapshot, owned by the existing writer.
 pub(super) struct EventStore<B> {
     pub(super) commit_statistics: Arc<CommitStatistics>,
@@ -205,6 +222,9 @@ pub(super) struct EventStore<B> {
     pub(super) indexes: EventIndexes,
     pub(super) retention: super::retention::RetentionIndex,
     pub(super) recovering_retention: bool,
+    /// Workflow #383 AO-1: the running Runtime's write-failure state; `None` for an offline
+    /// writer, whose failed write is not tried again (`contracts/ledger-observer.md` §6).
+    pub(super) write_failure: Option<Arc<super::write_failure::WriteFailureState>>,
 }
 
 #[cfg(test)]
@@ -365,7 +385,116 @@ impl<B: DurableStorage> EventStore<B> {
             retention,
             recovering_retention,
             events,
+            write_failure: None,
         })
+    }
+
+    /// Workflow #383 AO-1: the running Runtime's write-failure state, then the import of every
+    /// dump an earlier run left (§9.4), before any other new record.
+    pub(super) fn attach_write_failure(
+        &mut self,
+        state: Option<Arc<super::write_failure::WriteFailureState>>,
+    ) -> GlobalLedgerResult<()> {
+        self.write_failure = state;
+        match self.write_failure.clone() {
+            Some(state) => super::write_failure::import_dumps(self, &state),
+            None => Ok(()),
+        }
+    }
+
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1): one record's write. Without a
+    /// write-failure state it is one attempt. With one, a write failure is read back and, unless
+    /// the record turns out committed, tried again with its original event id, by the configured
+    /// attempts and waits. When they are used up, or the store reports an integrity or format
+    /// failure, the write gives up: the record stays in flight for the dump and the writer stops
+    /// (§9.2). A joint record is never dumped: its state work rolls back with it.
+    fn persist_retried(
+        &mut self,
+        event: &PersistedEvent,
+        work: Option<&dyn super::LedgerTransactionWork>,
+    ) -> GlobalLedgerResult<Option<u64>> {
+        let Some(state) = self.write_failure.clone() else {
+            return match work {
+                Some(work) => self.backend.persist_transaction(event, work),
+                None => self.backend.persist(event),
+            };
+        };
+        state.hold(
+            work.is_none()
+                .then(|| crate::fact::DumpedDraft::from_event(event)),
+        )?;
+        let attempts = state.plan().policy().write_attempts();
+        let started = Instant::now();
+        let mut last_failure: Option<GlobalLedgerError> = None;
+        let mut attempt = 0_u32;
+        let result = loop {
+            attempt += 1;
+            state.wait_before(attempt);
+            if last_failure.is_some() {
+                match self.backend.read_back(event) {
+                    Ok(ReadBack::Committed) => break Ok(None),
+                    Ok(ReadBack::Absent) => {}
+                    Err(error) if error.is_write_failure() && attempt < attempts => {
+                        last_failure = Some(error);
+                        continue;
+                    }
+                    Err(error) => break Err(state.give_up(attempt, error)),
+                }
+            }
+            state.begin_attempt(attempt)?;
+            let written = match work {
+                Some(work) => self.backend.persist_transaction(event, work),
+                None => self.backend.persist(event),
+            };
+            if state.end_attempt() {
+                // The probe found this attempt stalled and dumped it (T8).
+                return Err(super::write_failure::sealed_error());
+            }
+            match written {
+                Ok(write_sync_ns) => break Ok(write_sync_ns),
+                Err(error) if error.is_write_failure() && attempt < attempts => {
+                    last_failure = Some(error);
+                }
+                Err(error) if error.is_write_failure() || error.terminal() => {
+                    break Err(state.give_up(attempt, error));
+                }
+                Err(error) => {
+                    state.release();
+                    return Err(error);
+                }
+            }
+        };
+        if result.is_ok() {
+            state.release();
+            if let Some(failure) = &last_failure {
+                state.report_retried(
+                    attempt.saturating_sub(1),
+                    failure.write_failure_kind(),
+                    started.elapsed(),
+                );
+            }
+        }
+        result
+    }
+
+    /// Workflow #383 AO-1 (§9.4): appends one record of a dump import, or the import's own
+    /// record. An imported record precedes every record of this start, so a retention recovery
+    /// still pending does not hold it back.
+    pub(super) fn persist_imported(
+        &mut self,
+        event: PersistedEvent,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        let following_sequence = increment_sequence(self.next_sequence)?;
+        if self.indexes.contains_event_id(event.event_id()) {
+            return Err(GlobalLedgerError::request(
+                LedgerCode::DuplicateEventId.code(),
+                LedgerLocation::ImportLedgerDump.location(),
+            ));
+        }
+        self.retention
+            .validate(&event, &self.events, &self.indexes, false, true)?;
+        let write_sync_ns = self.persist_retried(&event, None)?;
+        self.publish_committed(event, following_sequence, write_sync_ns)
     }
 
     pub(super) fn append(
@@ -438,7 +567,7 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         self.validate_retention_admission(&event, false)?;
-        let write_sync_ns = self.backend.persist_transaction(&event, work)?;
+        let write_sync_ns = self.persist_retried(&event, Some(work))?;
         self.publish_committed(event, following_sequence, write_sync_ns)
     }
 
@@ -1390,7 +1519,7 @@ impl<B: DurableStorage> EventStore<B> {
         if let Some(value) = observation {
             value.durable_started_at = Some(Instant::now());
         }
-        let result = self.backend.persist(&event);
+        let result = self.persist_retried(&event, None);
         if let Some(value) = observation {
             value.persisted(result.is_ok());
         }

@@ -34,9 +34,9 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| L1 | `ledger.gap_recorded` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`; severity = outcome category | SH-1 | AO-1 (dump gaps), AO-2 (tail, single record) | payload `{gap_kind (dump_incomplete, dump_invalid, tail_unconfirmed, record_rejected), gap_start_unix_ms, gap_end_unix_ms, record_count? (absent = unknown), event_id?, source? {source, lineage, revision}, outcome}`; [ledger-observer.md §10](ledger-observer.md#10-gap-records-ao-1-ao-2) |
+| L1 | `ledger.gap_recorded` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`; severity = outcome category | SH-1 | AO-1 (dump gaps; built, §1.26), AO-2 (tail, single record) | payload `{gap_kind (dump_incomplete, dump_invalid, tail_unconfirmed, record_rejected), gap_start_unix_ms, gap_end_unix_ms, record_count? (absent = unknown), event_id?, source? {source, lineage, revision}, outcome}`; [ledger-observer.md §10](ledger-observer.md#10-gap-records-ao-1-ao-2) |
 | L2 | `ledger.health_observed` | new event type, family `ledger`, action `ledger.probe` (new action value), origin module `global-ledger` | SH-1 | AO-2 (watermark and spill segments, revision skips), AO-8 (mismatch, flush lag) | payload `{outcome, segment_edge? (started, ended)}`; the finding's values travel in `outcome` |
-| L3 | `ledger.dump_imported` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`, info | SH-1 | AO-1 | payload `{outcome}` with `ledger_dump_imported` and its values |
+| L3 | `ledger.dump_imported` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`, info | SH-1 | AO-1 (built, §1.26) | payload `{outcome}` with `ledger_dump_imported` and its values |
 | L4 | record envelope `capture` | new optional envelope member of every stored event | SH-1 | AO-2 (`capture_seq`, `captured_at_unix_ms`), AO-3 (`source`) | `{capture_seq, captured_at_unix_ms, source? {source: instance_facts \| runtime_facts \| decision_memory \| fact_refresh_transitions, lineage, revision}}`; `timestamp` = capture time |
 | L5 | `runtime.lifecycle_observed` phase `tagged_state_loaded` | new phase | SH-1 | AO-6 | `{stores: [{source, previous_lineage?, previous_revision?, lineage, loaded_count}]}`; the base record of a new lineage |
 | L6 | `runtime.lifecycle_observed` phase `tagged_state_enabled` | new phase | SH-1 | AO-5 / AO-6 | no members |
@@ -45,7 +45,7 @@ before SH-1 merges.
 | L9 | `policy.dispatch_intent`, `task.selection_evaluated`: `input_fact_revisions` | new optional member | SH-1 | AO-3 | `{instance_facts {lineage, revision}, runtime_facts {lineage, revision}}`; readers accept either it or `input_ledger_position` (still non-zero when present); AO-4 stops writing the old member (ORD §3.5 item 11) |
 | L10 | `runtime.fact_snapshot` sealed by the ledger | existing type, origin module `global-ledger` | — | AO-8 (T2) | the core stops writing it (AO-4) |
 | L11 | `ledger_index` table | new table in `runtime-state.sqlite` | AO-2 | AO-2 | [ledger-observer.md §11.1](ledger-observer.md#111-the-index-table-ledger_index) |
-| L12 | ledger dump file | file format, `dump_version` 1 | AO-1 | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
+| L12 | ledger dump file | file format, `dump_version` 1 | AO-1 (built, §1.26 AO1) | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
 | L13 | view lists | Health gains `ledger.gap_recorded`, `ledger.health_observed`, `ledger.dump_imported`; Changes gains `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition`, `agent.wake_obligation_recorded` | SH-1 (view schema upgrade, `views.rs:40-43`) | — | the new `perf.*` types join Health through their family |
 | L14 | `policy.activity_state_recorded` | new event type, family `policy`, action `policy.control_state`, info; tagged | SH-1 | AO-4 | one (instance, activity profile)'s complete activity state, index key `activity_memory/<instance>/<activity profile>`: `{instance_id, profile_id, local_day, daily_count, window_id, window_count, window_runtime_ms, next_eligible_unix_ms?}` = today's `activity_daily`, `activity_window`, `activity_runtime` and `next_activity_eligible` (`policy_control.rs:88-91`); without it a restart after AO-6 would reset the activity budgets and the activity interval |
 
@@ -455,6 +455,18 @@ lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.
 streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
 controller; before, code constants); every other key by its later slice.
 
+### 1.26 Wave 8 slice AO-1 (#383 ledger-observer.md §9, §15)
+
+AO-1 is the first writer of L1's dump gaps (`dump_incomplete`, `dump_invalid`), of L3 and of the
+dump file (L12), and brings the `ledger_observer` section of `crates/runtime-config`
+(`src/ledger_observer.rs`); [runtime-config.md](runtime-config.md), "The `ledger_observer`
+section", is that section's contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AO1 | ledger dump file (L12) | the members L12 leaves open | AO-1 | AO-1 | header `owner_epoch` is the owner epoch's id (`epoch_…`) and `runtime_commit` is present when the build knows its commit; a record's `draft` holds the sanitized draft's members, `artifacts` as projected references with their object keys; `captured_at_unix_ms` is the draft's time until AO-2 captures; `capture_seq` counts from 1 in each dump; every hash is 64 lowercase hex digits; a place that already holds a dump file is not written to ([ledger-observer.md §9.3](ledger-observer.md#93-dump-file)) |
+| AO2 | `config.parameters.ledger_observer` (21 rows) | new section of an existing fact family | AO-1 | AO-1 | the keys of §5's `ledger_observer.*` row in §15's order; decimals and lists as canonical JSON text; settable: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys`, `status_gap_window_ms` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -526,7 +538,7 @@ when it takes effect.
 
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
-| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
+| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 (built, §1.26) | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |

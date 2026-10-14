@@ -383,6 +383,107 @@ impl StoredEventRecord {
     }
 }
 
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.3): the `draft` of one dump record, a
+/// sanitized record that has no ledger sequence yet. It serializes as the sanitized draft does;
+/// a reader tolerates unknown members.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct DumpedDraft {
+    schema_version: String,
+    event_id: EventId,
+    timestamp_unix_ms: u64,
+    event_type: EventType,
+    severity: EventSeverity,
+    sensitivity: Sensitivity,
+    origin: EventOrigin,
+    links: EventLinks,
+    payload_schema: String,
+    payload: EventPayload,
+    artifacts: Vec<ProjectedArtifactReference>,
+}
+
+impl DumpedDraft {
+    /// The record a write was attempting when it failed.
+    pub(crate) fn from_event(event: &PersistedEvent) -> Self {
+        Self {
+            schema_version: event.schema_version.clone(),
+            event_id: event.event_id,
+            timestamp_unix_ms: event.timestamp_unix_ms,
+            event_type: event.event_type,
+            severity: event.severity,
+            sensitivity: event.sensitivity,
+            origin: event.origin.clone(),
+            links: event.links.clone(),
+            payload_schema: event.payload_schema.clone(),
+            payload: event.payload.clone(),
+            artifacts: event
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.project(true))
+                .collect(),
+        }
+    }
+
+    /// A draft still waiting for the writer.
+    pub(crate) fn from_sanitized(draft: &SanitizedEventDraft) -> Self {
+        Self {
+            schema_version: draft.schema_version().to_owned(),
+            event_id: *draft.event_id(),
+            timestamp_unix_ms: draft.timestamp_unix_ms(),
+            event_type: draft.event_type(),
+            severity: draft.severity(),
+            sensitivity: draft.sensitivity(),
+            origin: draft.origin().clone(),
+            links: draft.links().clone(),
+            payload_schema: draft.payload_schema().to_owned(),
+            payload: draft.payload().clone(),
+            artifacts: draft
+                .artifacts()
+                .iter()
+                .map(|artifact| artifact.project(true))
+                .collect(),
+        }
+    }
+
+    pub(crate) const fn event_id(&self) -> &EventId {
+        &self.event_id
+    }
+
+    pub(crate) const fn timestamp_unix_ms(&self) -> u64 {
+        self.timestamp_unix_ms
+    }
+
+    pub(crate) const fn payload(&self) -> &EventPayload {
+        &self.payload
+    }
+
+    /// The record at ledger sequence `sequence`, checked as every stored record is; its
+    /// artifacts are recorded, their material not read.
+    pub(crate) fn into_event(self, sequence: u64) -> Result<PersistedEvent, FactValidationError> {
+        let artifacts = self
+            .artifacts
+            .into_iter()
+            .map(LedgerArtifactReference::recorded)
+            .collect::<Result<Vec<_>, _>>()?;
+        let event = PersistedEvent {
+            schema_version: self.schema_version,
+            event_id: self.event_id,
+            sequence,
+            timestamp_unix_ms: self.timestamp_unix_ms,
+            event_type: self.event_type,
+            severity: self.severity,
+            sensitivity: self.sensitivity,
+            origin: self.origin,
+            links: self.links,
+            payload_schema: self.payload_schema,
+            payload: self.payload,
+            artifacts,
+            artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+        };
+        event.validate()?;
+        Ok(event)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FactValidationError {
     code: Code,

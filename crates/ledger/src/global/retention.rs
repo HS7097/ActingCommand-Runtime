@@ -1689,7 +1689,11 @@ impl super::GlobalLedger {
             },
             ContractLocation::ReleaseLabPin.location(),
         )?;
-        super::receive_response(receiver, ContractLocation::ReleaseLabPin.location())?
+        super::receive_response(
+            receiver,
+            ContractLocation::ReleaseLabPin.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn retention_candidates(
@@ -1706,7 +1710,11 @@ impl super::GlobalLedger {
             super::WriterCommand::RetentionCandidates { after, response },
             LedgerLocation::RetentionCandidates.location(),
         )?;
-        super::receive_response(receiver, LedgerLocation::RetentionCandidates.location())?
+        super::receive_response(
+            receiver,
+            LedgerLocation::RetentionCandidates.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn admit_artifact_eviction(
@@ -1726,7 +1734,11 @@ impl super::GlobalLedger {
             },
             LedgerLocation::AdmitArtifactEviction.location(),
         )?;
-        super::receive_response(receiver, LedgerLocation::AdmitArtifactEviction.location())?
+        super::receive_response(
+            receiver,
+            LedgerLocation::AdmitArtifactEviction.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn finish_artifact_eviction(
@@ -1750,7 +1762,11 @@ impl super::GlobalLedger {
             },
             LedgerLocation::FinishArtifactEviction.location(),
         )?;
-        super::receive_response(receiver, LedgerLocation::FinishArtifactEviction.location())?
+        super::receive_response(
+            receiver,
+            LedgerLocation::FinishArtifactEviction.location(),
+            self.reply_timeout,
+        )?
     }
 }
 

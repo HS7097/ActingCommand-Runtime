@@ -12,7 +12,8 @@
 //!   `ConfigureSettings` (all changes or none) and restored at start (§5.6, §5.7, §12 question 3).
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
 //!   `standard_packs` (Workflow #373 NAV-6, moved here); `performance` (Workflow #385 P-c, PERF
-//!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay).
+//!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay);
+//!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -25,6 +26,7 @@ mod effective;
 mod existing;
 mod host_claims;
 mod instance;
+pub mod ledger_observer;
 pub mod performance;
 pub mod recovery_ladder;
 mod resolve;
@@ -45,6 +47,7 @@ pub use effective::{
 };
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
 pub use instance::{DEVICE_KIND, DEVICE_KIND_TOKENS, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS};
+pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{
     AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
@@ -79,6 +82,9 @@ pub fn annotate_settable(
 
 #[cfg(test)]
 mod ladder_tests;
+// Workflow #383 AO-1.
+#[cfg(test)]
+mod ledger_observer_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod perf_tests;
