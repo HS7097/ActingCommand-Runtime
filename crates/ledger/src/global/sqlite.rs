@@ -621,6 +621,8 @@ pub(super) fn open_formal(
     timing: &mut LedgerOpenTiming,
 ) -> GlobalLedgerResult<SqliteLedgerStore> {
     let started = Instant::now();
+    // one-off (red proof 2, L-3 G9): the formal open reads the whole history a second time.
+    let _ = read_formal_snapshot(&database, deadline)?;
     let raw = read_formal_snapshot(&database, deadline);
     timing.sql_read_ms = elapsed_ms(started);
     let raw = raw?;
