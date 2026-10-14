@@ -549,3 +549,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
 ]
 incident = ["#383 SH-1"]
+
+# Workflow #384 D2-S2: a recognition package binding that is no reader is fact_reader_binding_invalid with its reader problem; readings are published on the frames they were taken on, and a mark that gives no reading leaves the key's earlier record and is one warning row of the task diagnostic; a mark whose key policy.facts or a ledger_fact pool claims refuses the binding, and a start runs without it and notes fact_reader_binding_ignored; a realistic fact no reader marks is fact_reader_missing
+[[gate]]
+key = "61"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s2::d2s2_t9_a_binding_to_a_package_that_is_no_reader_is_invalid",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s2::d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s2::d2s2_t14_a_mark_the_configuration_claims_refuses_the_binding_and_a_start_ignores_it",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s2::d2s2_t34_a_realistic_fact_no_reader_marks_is_a_warning",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::recognition_package::tests::d2s2_t14_a_start_runs_without_a_binding_it_cannot_use_and_notes_it",
+]
+incident = ["#384"]

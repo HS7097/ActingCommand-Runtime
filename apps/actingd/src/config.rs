@@ -46,6 +46,8 @@ use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
 mod device_binding;
+// Workflow #384 D2-S2.
+pub(super) mod recognition_package;
 pub(crate) use device_binding::DeviceRefusal;
 mod manifest;
 #[cfg(test)]
@@ -807,6 +809,11 @@ struct InstanceConfig {
     /// directory, as `startup_package.package` does; see `validate_resource_packages`.
     #[serde(default)]
     resource_package: Option<PathBuf>,
+    /// Workflow #384 D2-S2 (D2 model §3.2, v1.4.2): the instance's recognition maintenance
+    /// package, `{package}`: a location only, never a digest. A relative path resolves against
+    /// the configuration file's directory; nothing is opened at assembly.
+    #[serde(default)]
+    recognition_package: Option<RecognitionPackageConfigFile>,
     /// Slice #316-B4: `false` turns the stuck-recovery ladder off for this instance
     /// (default `true`).
     #[serde(default)]
@@ -877,6 +884,13 @@ impl StartupPackageConfigFile {
     }
 }
 
+/// Workflow #384 D2-S2: `instances[].recognition_package`, exactly `{package}` (M-PKG §4.5).
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecognitionPackageConfigFile {
+    package: PathBuf,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FixtureBackendConfigFile {
@@ -903,6 +917,9 @@ pub(super) struct RuntimeAssembly {
     pub(super) config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Per instance alias: the configured `resource_package`, resolved but not yet admitted.
     pub(super) resource_packages: BTreeMap<String, PathBuf>,
+    /// Workflow #384 D2-S2: per instance alias, the configured `recognition_package` location,
+    /// resolved but not opened.
+    pub(super) recognition_packages: BTreeMap<String, PathBuf>,
     /// The `ACTINGCOMMAND_*` variables that are set but ignored because
     /// `allow_env_overrides` is off, in `EnvOverrides::VARIABLES` order.
     pub(super) ignored_env_overrides: Vec<&'static str>,
@@ -1251,6 +1268,7 @@ impl ActingdConfigFile {
         let mut instances = self.instances;
         let mut startup_packages = BTreeMap::new();
         let mut resource_packages = BTreeMap::new();
+        let mut recognition_packages = BTreeMap::new();
         let mut instance_ids = Vec::with_capacity(instances.len());
         // Workflow #387 D1c: each instance's alias and id, for the stuck-recovery settings the
         // configuration mechanism resolves below.
@@ -1316,6 +1334,23 @@ impl ActingdConfigFile {
                     serde_json::to_value(device)
                         .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
                 );
+            }
+            // Workflow #384 D2-S2: the location is reported as
+            // `instance.<id>.recognition_package`, resolved as it is used. An empty path stays
+            // empty, so the binding check reports it unreadable.
+            if let Some(recognition) = instance.recognition_package.take() {
+                let path = if recognition.package.as_os_str().is_empty()
+                    || recognition.package.is_absolute()
+                {
+                    recognition.package
+                } else {
+                    self.source_root.join(recognition.package)
+                };
+                members.insert(
+                    actingcommand_runtime_config::RECOGNITION_PACKAGE.to_owned(),
+                    serde_json::json!({ "package": path.to_string_lossy() }),
+                );
+                recognition_packages.insert(instance.alias.clone(), path);
             }
             instance_members.push(serde_json::Value::Object(members));
             instance_ids.push(instance_id);
@@ -1549,6 +1584,7 @@ impl ActingdConfigFile {
             manifest,
             config_selection,
             resource_packages,
+            recognition_packages,
             ignored_env_overrides,
             adb_requirement,
             unbound_handsets,

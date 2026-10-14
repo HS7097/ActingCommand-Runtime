@@ -157,6 +157,9 @@ outcome_keys! {
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
     reader_problem: vocab(reader_problem),
+    // Workflow #384 D2-S2: a reading mark that gave no reading.
+    reading_id: id,
+    reading_problem: vocab(reading_problem),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
     pause_reason: name,

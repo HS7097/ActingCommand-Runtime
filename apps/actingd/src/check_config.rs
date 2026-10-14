@@ -80,6 +80,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             manifest,
             config_selection,
             resource_packages,
+            recognition_packages,
             ignored_env_overrides,
             adb_requirement,
             unbound_handsets,
@@ -137,6 +138,33 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                 rejection = Some(Rejection::ResourcePackage(refused));
                 registered(code, ActingdLocation::ResourcePackage)
             })?;
+        // Workflow #384 D2-S2 (D2 model §3.2): each recognition package binding is checked in
+        // full (checks 1-3) and a binding that is no reader is refused, so `acsetup
+        // --commit-config` does not commit it. The realistic facts the catalog reads that no
+        // reader marks are warnings.
+        let recognition = config::recognition_package::check_bindings(
+            &recognition_packages,
+            &host,
+            policy.as_ref(),
+            config::recognition_package::BindingRead::Prepare,
+        )
+        .map_err(|code| registered(code, ActingdLocation::RecognitionBinding))?;
+        for binding in &recognition {
+            if let Err(invalid) = &binding.verdict {
+                let (detail, message) =
+                    config::recognition_package::refusal_detail(binding, invalid);
+                rejection = Some(Rejection::RecognitionBinding(detail, message));
+                return Err(registered(
+                    actingcommand_runtime_host::HostCode::FactReaderBindingInvalid,
+                    ActingdLocation::RecognitionBinding,
+                ));
+            }
+        }
+        let missing_readers = config::recognition_package::missing_reader_warnings(
+            policy.as_ref(),
+            &config::recognition_package::marked_keys(&recognition),
+        )
+        .map_err(|code| registered(code, ActingdLocation::RecognitionBinding))?;
         let checked = CheckedAssembly {
             host,
             registry,
@@ -153,6 +181,28 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             unused_device_bindings,
         };
         let mut report = summarize(&config_path, &checked, &resource_packages)?;
+        // Workflow #384 D2-S2: the bound recognition package of each instance that names one,
+        // and the readers missing for the catalog's realistic facts.
+        if let Some(instances) = report["instances"].as_array_mut() {
+            for entry in instances {
+                if let Some(binding) = recognition
+                    .iter()
+                    .find(|binding| entry["alias"].as_str() == Some(binding.alias.as_str()))
+                {
+                    entry["recognition_package"] = json!({
+                        "package": binding.path.to_string_lossy(),
+                        "fact_keys": binding.verdict.as_ref().ok(),
+                    });
+                }
+            }
+        }
+        if let Some(warnings) = report["warnings"].as_array_mut() {
+            warnings.extend(missing_readers.iter().map(|warning| {
+                json!(config::recognition_package::missing_reader_warning_v1(
+                    warning
+                ))
+            }));
+        }
         // Workflow #361 C3: the plan startup would make, from the ledger read-only.
         let previewing = std::time::Instant::now();
         let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
@@ -187,6 +237,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             if let Some(rejection) = rejection {
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::RecognitionBinding(detail, message) => (detail, message),
                     Rejection::Device(refused) => (refused.detail(), refused.to_string()),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
                     Rejection::PolicyState(refused, elapsed_ms) => {
@@ -292,6 +343,9 @@ enum Rejection {
     /// Workflow #398 RD-1b: an instance's device declaration, the private binding file or a
     /// handset without a binding (stage `assemble`).
     Device(config::DeviceRefusal),
+    /// Workflow #384 D2-S2: a recognition package binding that is no reader (stage
+    /// `config_recognition_binding`): its `error.detail` and developer text.
+    RecognitionBinding(serde_json::Value, String),
 }
 
 /// Everything `summarize` reports once every check passed: the registry as configured and

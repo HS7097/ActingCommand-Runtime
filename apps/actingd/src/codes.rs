@@ -206,6 +206,8 @@ actingcommand_contract::outcome_locations! {
         ConfigVision => "config_vision",
         ConfigValidate => "config_validate",
         ResourcePackage => "resource_package",
+        /// Workflow #384 D2-S2: checking the recognition maintenance package bindings.
+        RecognitionBinding => "config_recognition_binding",
         PolicyState => "policy_state",
         PolicyInitialization => "policy_initialization",
         PolicyBootstrap => "policy_bootstrap",

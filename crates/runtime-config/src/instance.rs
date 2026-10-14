@@ -9,7 +9,8 @@
 //! entry's `scheduling` member, defaulting to the `scheduling` section's keys of the same name;
 //! parsed and checked only, no slice reads them yet. Workflow #398 RD-1b adds `device_kind`, the
 //! entry's `device.kind` (model-398 v1.1 §11.2): reported only for an instance that names it,
-//! read at assembly.
+//! read at assembly. Workflow #384 D2-S2 adds `recognition_package`, the entry's
+//! `recognition_package.package`: reported only for an instance that names it, read at assembly.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
@@ -31,6 +32,9 @@ pub const STUCK_RECOVERY_COOLDOWN_SECS: &str = "stuck_recovery_cooldown_secs";
 pub const DEVICE_KIND: &str = "device_kind";
 /// The values of [`DEVICE_KIND`] (model-398 v1.1 §3.1).
 pub const DEVICE_KIND_TOKENS: &[&str] = &["emulator", "handset"];
+/// Workflow #384 D2-S2 (D2 model §3.2, v1.4.2): the instance's recognition maintenance package,
+/// `recognition_package.package` in its entry: a location only, never a digest.
+pub const RECOGNITION_PACKAGE: &str = "recognition_package";
 
 pub(crate) static ROWS: &[KeyRow] = &[
     KeyRow {
@@ -67,6 +71,16 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::None,
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "RD-1b",
+        since: "0.12.0",
+    },
+    KeyRow {
+        name: KeyName::PerInstance(RECOGNITION_PACKAGE),
+        file_path: FilePath::InstanceMemberAt("recognition_package.package"),
+        value_type: ValueType::String,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "D2-S2",
         since: "0.12.0",
     },
 ];

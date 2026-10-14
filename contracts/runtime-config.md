@@ -67,7 +67,12 @@ read once at assembly). P-c's rows: the `performance` section below. Workflow #3
 the `scheduling` section below. Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
 at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
-`device`. A manifest key the table does not have fails the start (`config_key_unknown`). The
+`device`. Workflow #384 D2-S2's row: the per-instance `recognition_package` (string, the location
+of the instance's recognition maintenance package, from the entry's `recognition_package.package`
+resolved against the configuration file's directory; a location only, never a digest; default
+`none`, not settable, read once at assembly; [resource-readings.md](resource-readings.md),
+"Recognition maintenance packages"), present only for an instance that names it. A manifest key
+the table does not have fails the start (`config_key_unknown`). The
 manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
 `performance`, `scheduling`), then each instance's per-instance keys together.
 
@@ -196,7 +201,10 @@ in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 [cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
 that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
-`ac_diagnose` lists under `not_run`) by SR-6b.
+`ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
+`fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
+to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); D2-S4 adds the
+section's other fact refresh keys.
 
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
@@ -218,6 +226,7 @@ that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
+| `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -239,7 +248,7 @@ against the other. No slice reads them before #405.
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |
 | `host.config_overrides` | one per instruction value: `config_key`, `value_json`, `base_json`, `base_source` (`explicit` or `default`), `set_unix_ms`, `set_in_owner_epoch`, `request_id`; `channel` from U-2 on | at every `ConfigureSettings`, and at start when it held rows (tagged, `tag.workbench_patterns`) |

@@ -390,6 +390,12 @@ impl EffectiveConfig {
         scheduling::sample_timeout_retries(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, in
+    /// milliseconds: how long a successful run waits for the readings it handed to recognition.
+    pub fn recognition_join_timeout_ms(&self) -> Result<u64, ConfigFailure> {
+        scheduling::recognition_join_timeout_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)

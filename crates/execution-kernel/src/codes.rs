@@ -119,7 +119,9 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
         ContainedTaskLinearApplicationUnconfirmed => "contained_task_linear_application_unconfirmed": error / pack_logic_mismatch,
         PageConfirmationFailed => "page_confirmation_failed": error / pack_logic_mismatch,
-        ContainedTaskResourceReadingUnresolved => "contained_task_resource_reading_unresolved": error / pack_logic_mismatch,
+        /// Warning (Workflow #384 D2-S2): a reading mark gave no reading; the run goes on (keys
+        /// `reading_id`, `fact_key`, `reading_problem`).
+        ContainedTaskResourceReadingUnresolved => "contained_task_resource_reading_unresolved": warning / none,
         ContainedTaskStabilityCaptureInvalid => "contained_task_stability_capture_invalid": error / environment_fault,
         ContainedTaskStabilityComparisonFailed => "contained_task_stability_comparison_failed": error / environment_fault,
         ContainedTaskStabilityCounterInvalid => "contained_task_stability_counter_invalid": error / none,

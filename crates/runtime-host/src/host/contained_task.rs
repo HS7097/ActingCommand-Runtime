@@ -193,7 +193,7 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) selected_scheduling_outcome: Option<String>,
     pub(super) capture_summary: Option<CapturePipelineSummary>,
     pub(super) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
-    /// Readings taken on the successful terminal frame (Workflow #335 S5b); in memory only.
+    /// Readings a successful run took (Workflow #335 S5b, #384 D2-S2); in memory only.
     pub(super) resource_readings: Option<ContainedTaskResourceReadings>,
 }
 
@@ -217,9 +217,9 @@ fn terminal_failure_severe(
                 .contains(&failure.code().as_str()))
 }
 
-/// The resource readings a run took on its successful terminal frame (Workflow #335 S5b),
-/// carried in memory from the kernel trace to the terminal, which publishes each one as an
-/// instance fact. Never serialized.
+/// The resource readings a successful run took (Workflow #335 S5b; Workflow #384 D2-S2: on every
+/// frame it handed to recognition), carried in memory from the kernel traces to the terminal,
+/// which publishes each one as an instance fact. Never serialized.
 #[derive(Clone)]
 pub(super) struct ContainedTaskResourceReadings {
     /// The fact scope: the run's registered instance alias.
@@ -228,10 +228,17 @@ pub(super) struct ContainedTaskResourceReadings {
     pub(super) task_label: String,
     /// The admitted package identity as SHA-256 hex (`resource_bundle_hash`).
     pub(super) resource_bundle_hash: String,
-    /// The terminal frame's device capture time (`observed_at_unix_ms`).
+    /// The frames whose readings held, in hand-off order.
+    pub(super) frames: Vec<JoinedReadingFrame>,
+}
+
+/// Workflow #384 D2-S2: the readings that held on one frame handed to recognition.
+#[derive(Clone)]
+pub(super) struct JoinedReadingFrame {
+    /// The frame's device capture time (`observed_at_unix_ms`).
     pub(super) captured_at: SystemTime,
     pub(super) frame_id: IssuedFrameId,
-    /// In declaration order.
+    /// In mark order.
     pub(super) readings: Vec<ResourceReadingValue>,
 }
 
@@ -303,15 +310,13 @@ fn resource_reading_identifier_text(
         .ok_or_else(|| RequestFailure::poison_without_terminal(runtime_identifier_error()))
 }
 
-/// Workflow #335 S5b: the `<id>:<reason>` of a reading the kernel could not take, or of a
-/// declaration it refused, is the receipt's native detail.
+/// Workflow #335 S5b: the `<id>:<reason>` of a declaration the kernel refused is the receipt's
+/// native detail. A reading the kernel could not take no longer fails a run (Workflow #384
+/// D2-S2).
 fn resource_reading_failure_detail(code: &str, detail: Option<&str>) -> Option<String> {
     if spelled(
         code,
-        &[
-            ExecutionKernelCode::ContainedTaskResourceReadingUnresolved.code(),
-            ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
-        ],
+        &[ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code()],
     ) {
         detail.map(str::to_owned)
     } else {
@@ -904,9 +909,17 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) last_frame_id: Option<IssuedFrameId>,
     /// The device capture time of the frame `last_frame_id` names.
     last_frame_captured_at: Option<SystemTime>,
-    /// The resource readings trace, accepted once before `Finalizing` (Workflow #335 S5b):
-    /// the terminal frame's capture time and id, and the readings.
-    taken_resource_readings: Option<(SystemTime, IssuedFrameId, Vec<ResourceReadingValue>)>,
+    /// Workflow #384 D2-S2: the frames the run handed to recognition, in hand-off order: each
+    /// frame's device capture time and id.
+    reading_frames: Vec<(SystemTime, IssuedFrameId)>,
+    /// How many of `reading_frames` the run has joined, in order.
+    joined_reading_frames: usize,
+    /// The readings that held on the joined frames, accepted before `Finalizing` (Workflow #335
+    /// S5b, #384 D2-S2).
+    taken_resource_readings: Vec<JoinedReadingFrame>,
+    /// Workflow #384 D2-S2: the frame the diagnostic rows now written belong to, when it is not
+    /// the last captured one (a joined reading's evaluation and miss).
+    pub(super) diagnostic_frame: Option<IssuedFrameId>,
     geometry_session: Option<CaptureGeometrySessionRef>,
     geometry_frame: Option<TaskGeometryFrame>,
     geometry_initial: Option<(CaptureExtent, CaptureGeometryObservation)>,
@@ -1839,6 +1852,23 @@ impl RuntimeContainedTask<'_> {
             .map_err(online_observation::observation_artifact_failure)?;
         self.configuration_records += 1;
         Ok(())
+    }
+
+    /// Workflow #384 D2-S2: the id of the next handed-off frame to join, which must be the one
+    /// captured at `captured_at`; the kernel joins frames in hand-off order.
+    fn joined_reading_frame(
+        &self,
+        captured_at: SystemTime,
+    ) -> Result<IssuedFrameId, RequestFailure> {
+        match self.reading_frames.get(self.joined_reading_frames) {
+            None => Err(resource_reading_poison(
+                HostCode::ContainedTaskResourceReadingFrameMissing,
+            )),
+            Some((handed_off, _)) if *handed_off != captured_at => Err(resource_reading_poison(
+                HostCode::ContainedTaskResourceReadingFrameMismatch,
+            )),
+            Some((_, frame_id)) => Ok(*frame_id),
+        }
     }
 
     fn ensure_active(&self) -> Result<(), RequestFailure> {
@@ -2977,6 +3007,32 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         >,
     ) -> Result<(), Self::Error> {
         self.diagnostic_ocr(target, result)
+    }
+
+    /// Workflow #384 D2-S2 (model §3.5): the configured join timeout
+    /// (`scheduling.fact_refresh.recognition_join_timeout_ms`), read when the run joins.
+    fn reading_join_timeout(&mut self) -> Result<Option<std::time::Duration>, Self::Error> {
+        self.host
+            .recognition_join_timeout()
+            .map(Some)
+            .map_err(RequestFailure::poison_without_terminal)
+    }
+
+    /// Workflow #384 D2-S2: a joined reading's evaluation, recorded against the frame it was
+    /// read on.
+    fn record_reading_evaluation(
+        &mut self,
+        captured_at: SystemTime,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        let frame_id = self.joined_reading_frame(captured_at)?;
+        self.diagnostic_frame = Some(frame_id);
+        let recorded = self.diagnostic_ocr(target_id, result);
+        self.diagnostic_frame = None;
+        recorded
     }
 
     fn classify_error(error: &Self::Error) -> ContainedTaskRuntimeErrorClass {
@@ -4170,13 +4226,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     .any(|f| f.privacy == actingcommand_contract::OcrFieldPrivacy::Personal);
                 self.record_post_admission_ocr_comparison(report, frames, &outcome, personal)
             }
-            // Workflow #335 S5b: the readings of the terminal frame, accepted once before
-            // Finalizing and only from the last captured frame; the terminal publishes them.
-            ContainedTaskTrace::ResourceReadings {
-                captured_at,
-                readings,
-            } => {
-                if self.finalizing.is_some() || self.taken_resource_readings.is_some() {
+            // Workflow #384 D2-S2: a frame handed to recognition is the last captured frame,
+            // handed off before Finalizing and before the run joins any.
+            ContainedTaskTrace::ResourceReadingFrame { captured_at } => {
+                if self.finalizing.is_some() || self.joined_reading_frames != 0 {
                     return Err(resource_reading_poison(
                         HostCode::ContainedTaskResourceReadingDuplicate,
                     ));
@@ -4193,7 +4246,36 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         HostCode::ContainedTaskResourceReadingFrameMismatch,
                     ));
                 }
-                self.taken_resource_readings = Some((captured_at, frame_id, readings));
+                self.reading_frames.push((captured_at, frame_id));
+                Ok(())
+            }
+            // Workflow #335 S5b, #384 D2-S2: the readings of the next handed-off frame, joined
+            // before Finalizing in hand-off order; the terminal publishes those that held. Each
+            // mark that gave no reading is a warning row of the task diagnostic, on its frame.
+            ContainedTaskTrace::ResourceReadings {
+                captured_at,
+                readings,
+                unresolved,
+            } => {
+                if self.finalizing.is_some() {
+                    return Err(resource_reading_poison(
+                        HostCode::ContainedTaskResourceReadingDuplicate,
+                    ));
+                }
+                let frame_id = self.joined_reading_frame(captured_at)?;
+                self.joined_reading_frames += 1;
+                let recorded = unresolved
+                    .iter()
+                    .try_for_each(|miss| self.diagnostic_reading_miss(frame_id, miss));
+                self.diagnostic_frame = None;
+                recorded?;
+                if !readings.is_empty() {
+                    self.taken_resource_readings.push(JoinedReadingFrame {
+                        captured_at,
+                        frame_id,
+                        readings,
+                    });
+                }
                 Ok(())
             }
             ContainedTaskTrace::Finalizing { outcome } => {
@@ -4216,10 +4298,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     self.post_admission_ocr_observations != 0
                         || self.post_admission_ocr_comparison_recorded
                 };
+                // Workflow #384 D2-S2: a successful run joins every frame it handed off.
+                let readings_finalization_invalid = outcome == TaskOutcome::Success
+                    && self.joined_reading_frames != self.reading_frames.len();
                 if self.finalizing.replace(outcome).is_some()
                     || !self.step_actions.is_empty()
                     || stability_finalization_invalid
                     || post_admission_ocr_finalization_invalid
+                    || readings_finalization_invalid
                 {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
@@ -5756,7 +5842,10 @@ impl HostShared {
             declared_game_server: (prepared.game().to_owned(), prepared.server().to_owned()),
             last_frame_id: None,
             last_frame_captured_at: None,
-            taken_resource_readings: None,
+            reading_frames: Vec::new(),
+            joined_reading_frames: 0,
+            taken_resource_readings: Vec::new(),
+            diagnostic_frame: None,
             geometry_session: None,
             geometry_frame: None,
             geometry_initial: None,
@@ -5951,7 +6040,7 @@ impl HostShared {
         }
         let finalizing = runtime.finalizing;
         let executed_steps = runtime.executed_steps;
-        let taken_resource_readings = runtime.taken_resource_readings.take();
+        let taken_resource_readings = std::mem::take(&mut runtime.taken_resource_readings);
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         let outcome = match execution {
@@ -6325,18 +6414,16 @@ impl HostShared {
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
                 task_timing: Some(task_timing),
-                resource_readings: taken_resource_readings.map(
-                    |(captured_at, frame_id, readings)| ContainedTaskResourceReadings {
+                resource_readings: (!taken_resource_readings.is_empty()).then(|| {
+                    ContainedTaskResourceReadings {
                         instance_alias: instance_alias.to_owned(),
                         task_label: prepared.task_label().to_owned(),
                         resource_bundle_hash: resource_reading_bundle_hash(
                             prepared.package_sha256(),
                         ),
-                        captured_at,
-                        frame_id,
-                        readings,
-                    },
-                ),
+                        frames: taken_resource_readings,
+                    }
+                }),
             },
         )?;
         match self.release_lease(
@@ -7909,26 +7996,30 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .active_loaded();
         let live_pool = catalog.as_ref().and_then(|catalog| {
-            readings.readings.iter().find_map(|reading| {
-                catalog
-                    .compiled()
-                    .catalog()
-                    .pools
-                    .pools
-                    .iter()
-                    .find(|pool| {
-                        matches!(
-                            pool.value_source,
-                            actingcommand_policy::PoolValueSource::LedgerFact { .. }
-                        ) && pool.scope == scope
-                            && matches!(
-                                &pool.observation,
-                                actingcommand_policy::ObservationRef::Fact { fact_key }
-                                    if *fact_key == reading.declaration.fact_key
-                            )
-                    })
-                    .map(|pool| format!("{}:{}", reading.declaration.id, pool.id))
-            })
+            readings
+                .frames
+                .iter()
+                .flat_map(|frame| &frame.readings)
+                .find_map(|reading| {
+                    catalog
+                        .compiled()
+                        .catalog()
+                        .pools
+                        .pools
+                        .iter()
+                        .find(|pool| {
+                            matches!(
+                                pool.value_source,
+                                actingcommand_policy::PoolValueSource::LedgerFact { .. }
+                            ) && pool.scope == scope
+                                && matches!(
+                                    &pool.observation,
+                                    actingcommand_policy::ObservationRef::Fact { fact_key }
+                                        if *fact_key == reading.declaration.fact_key
+                                )
+                        })
+                        .map(|pool| format!("{}:{}", reading.declaration.id, pool.id))
+                })
         });
         if let Some(detail) = live_pool {
             return Ok(Some(refuse_resource_readings(
@@ -7962,38 +8053,45 @@ impl HostShared {
             }
         }
         drop(gate);
-        let observed_at_unix_ms = readings
-            .captured_at
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SharedCode::SystemClockInvalid.code())
-            .and_then(|elapsed| {
-                u64::try_from(elapsed.as_millis()).map_err(|_| HostCode::SystemClockOverflow.code())
-            })
-            .map_err(|code| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    code,
-                    HostLocation::PublishResourceReadings,
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })?;
         let run_text = resource_reading_identifier_text(draft.run_id.transport())?;
-        let frame_text = resource_reading_identifier_text(readings.frame_id.transport())?;
-        let mut records = Vec::with_capacity(readings.readings.len());
-        for reading in &readings.readings {
-            let Some(record) = resource_reading_fact_record(
-                &readings,
-                reading,
-                observed_at_unix_ms,
-                &run_text,
-                &frame_text,
-            ) else {
-                return Ok(Some(refuse_resource_readings(
-                    draft,
-                    HostCode::ContainedTaskResourceReadingRejected,
-                    format!("{}:fact_observation_invalid", reading.declaration.id),
-                )));
-            };
-            records.push((reading.declaration.id.as_str(), record));
+        // Workflow #384 D2-S2 (model §3.5): the readings are published in the order of their
+        // frames' capture times, each observed when its frame was captured.
+        let mut frames = readings.frames.iter().collect::<Vec<_>>();
+        frames.sort_by_key(|frame| frame.captured_at);
+        let mut records = Vec::new();
+        for frame in frames {
+            let observed_at_unix_ms = frame
+                .captured_at
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| SharedCode::SystemClockInvalid.code())
+                .and_then(|elapsed| {
+                    u64::try_from(elapsed.as_millis())
+                        .map_err(|_| HostCode::SystemClockOverflow.code())
+                })
+                .map_err(|code| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        code,
+                        HostLocation::PublishResourceReadings,
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+            let frame_text = resource_reading_identifier_text(frame.frame_id.transport())?;
+            for reading in &frame.readings {
+                let Some(record) = resource_reading_fact_record(
+                    &readings,
+                    reading,
+                    observed_at_unix_ms,
+                    &run_text,
+                    &frame_text,
+                ) else {
+                    return Ok(Some(refuse_resource_readings(
+                        draft,
+                        HostCode::ContainedTaskResourceReadingRejected,
+                        format!("{}:fact_observation_invalid", reading.declaration.id),
+                    )));
+                };
+                records.push((reading.declaration.id.as_str(), record));
+            }
         }
         for (reading_id, record) in records {
             match self.publish_facts(
