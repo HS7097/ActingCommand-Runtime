@@ -34,6 +34,13 @@
 // (I5): `RuntimeHost::append_runtime_fact_snapshot_for_test` seals a set now, and
 // `RuntimeHost::take_last_runtime_fact_replay_for_test` tells where the recovery read from and
 // how many events it read. No wall-clock bound is asserted.
+//
+// §4 #9 (host key 80; the c4 `ConnectionReset` flake, #332 G-c, fixed in a5ad64d0): a request
+// frame whose body arrives after the Runtime has read its header and begun reading the frame is
+// served as usual, and the connection goes on; a body that does not arrive within the Runtime's
+// I/O timeout ends the connection with one `runtime.failed` `runtime_frame_timeout`, an error and
+// not fatal. Seam: `ipc::watch_frame_body_reads`, which tells the test when the header was read.
+// The c4 process test stays as it is.
 
 use super::*;
 use crate::owner::ScriptedProcessProbe;
@@ -45,6 +52,7 @@ use actingcommand_contract::{
 use actingcommand_host_metrics::{HostMetricsCode, ProcessProbe};
 use actingcommand_ledger::WriterStallGate;
 use actingcommand_ledger::owner_journal::RuntimeOwnerRecord;
+use std::io::Read;
 
 /// The previous owner's pid and the start its record names.
 const OWNER_PID: u32 = 4_242;
@@ -515,4 +523,125 @@ fn gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set(
     );
     assert!(restarted.fatal_error().expect("runtime health").is_none());
     restarted.close().expect("close the restarted host");
+}
+
+/// A raw connection to the Runtime, whose frames the test writes header and body apart, and what
+/// tells it that the Runtime read a header from it.
+fn raw_connection(host: &RuntimeHost) -> (TcpStream, mpsc::Receiver<()>) {
+    let stream = TcpStream::connect(host.runtime_info().socket_addr().expect("runtime address"))
+        .expect("connect the Runtime");
+    stream
+        .set_read_timeout(Some(GATE_WAIT))
+        .expect("read timeout");
+    stream
+        .set_write_timeout(Some(GATE_WAIT))
+        .expect("write timeout");
+    let header_reads =
+        crate::ipc::watch_frame_body_reads(stream.local_addr().expect("local address"));
+    (stream, header_reads)
+}
+
+/// A status request's frame body and the header that announces its length.
+fn status_frame() -> ([u8; 4], Vec<u8>) {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let body =
+        serde_json::to_vec(&runtime_request(&ids, RuntimeOperation::Status)).expect("request JSON");
+    let header = u32::try_from(body.len())
+        .expect("frame length")
+        .to_be_bytes();
+    (header, body)
+}
+
+/// The outcome codes of the Runtime's recorded failures.
+fn recorded_failures(host: &RuntimeHost) -> Vec<(String, EventSeverity)> {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::RuntimeFailed),
+        ..EventQuery::default()
+    })
+    .expect("ledger events")
+    .iter()
+    .filter_map(|event| match event.payload() {
+        EventPayload::Runtime(RuntimePayload::Failed(payload)) => Some((
+            payload.outcome().code().as_str().to_owned(),
+            event.severity(),
+        )),
+        _ => None,
+    })
+    .collect()
+}
+
+#[test]
+fn gate_a_frame_whose_body_arrives_after_its_header_was_read_is_served_as_usual() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let (mut stream, header_reads) = raw_connection(&host);
+    // Twice on one connection: after a split frame the connection goes on.
+    for round in 0..2 {
+        let (header, body) = status_frame();
+        stream.write_all(&header).expect("write the header");
+        header_reads
+            .recv_timeout(GATE_WAIT)
+            .unwrap_or_else(|error| panic!("round {round}: the header was not read: {error}"));
+        stream.write_all(&body).expect("write the body");
+        let FrameRead::Data(frame) =
+            read_frame(&mut stream, DEFAULT_RUNTIME_MAX_FRAME_BYTES).expect("the receipt frame")
+        else {
+            panic!("round {round}: no receipt");
+        };
+        let receipt: RuntimeReceipt = serde_json::from_slice(&frame).expect("receipt JSON");
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "round {round}: {receipt:?}"
+        );
+    }
+    assert_eq!(recorded_failures(&host), Vec::new());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(stream);
+    host.close().expect("close host");
+}
+
+#[test]
+fn gate_a_frame_body_that_never_arrives_ends_its_connection_with_one_frame_timeout() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let (mut stream, header_reads) = raw_connection(&host);
+    let (header, _) = status_frame();
+    stream.write_all(&header).expect("write the header");
+    header_reads
+        .recv_timeout(GATE_WAIT)
+        .expect("the header was read");
+    // The body never comes: once the Runtime's read of it passes its I/O timeout, the Runtime
+    // records the failure and closes the connection without a receipt.
+    let mut rest = Vec::new();
+    let ended = stream.read_to_end(&mut rest);
+    assert!(
+        rest.is_empty()
+            && ended.as_ref().map_or_else(
+                |error| matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ),
+                |_| true
+            ),
+        "{ended:?}, {} bytes",
+        rest.len()
+    );
+    assert_eq!(
+        recorded_failures(&host),
+        [(
+            crate::codes::HostCode::RuntimeFrameTimeout
+                .code()
+                .as_str()
+                .to_owned(),
+            EventSeverity::Error
+        )]
+    );
+    // The Runtime stays healthy and serves the next connection.
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let mut next = TestClient::connect(&host);
+    let status = next.request(RuntimeOperation::Status);
+    assert_eq!(next.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(next);
+    host.close().expect("close host");
 }

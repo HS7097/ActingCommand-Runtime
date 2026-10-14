@@ -772,3 +772,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set",
 ]
 incident = ["#382 H-5 G15"]
+
+# A request frame whose body arrives after the Runtime read its header is served and the connection goes on; a body that does not arrive within the I/O timeout ends the connection with one runtime.failed runtime_frame_timeout, not fatal (test plan v2.2 §4 #9, the c4 ConnectionReset flake fixed in a5ad64d0; Workflow #382 H-5; no inventory key, the next free key after 79)
+[[gate]]
+key = "80"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_frame_whose_body_arrives_after_its_header_was_read_is_served_as_usual",
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_frame_body_that_never_arrives_ends_its_connection_with_one_frame_timeout",
+]
+incident = ["#332 G-c"]
