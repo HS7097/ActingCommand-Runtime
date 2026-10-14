@@ -79,6 +79,46 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// The state of a handset's wired device link (vocabulary `device_link_state`, Workflow
+    /// #398 RD-2, model-398 §4.2, §10.1). The first six are what the adb server reports for the
+    /// bound serial; the last two are the Runtime's own.
+    pub enum DeviceLinkState: "device_link_state" {
+        /// adb reports `device`: the handset answers.
+        Device => "device",
+        /// The bound serial is not in adb's device list (the cable is out).
+        Absent => "absent",
+        /// adb reports `offline`.
+        Offline => "offline",
+        /// adb reports `unauthorized`: a person allows USB debugging on the handset.
+        Unauthorized => "unauthorized",
+        /// adb reports `no permissions` (a driver problem on the host).
+        NoPermissions => "no_permissions",
+        /// adb reports another state (`authorizing`, `connecting`, `recovery`, `sideload`,
+        /// `bootloader` and the like).
+        Other => "other",
+        /// The link watch is not running, so the Runtime cannot see the link.
+        Unwatched => "unwatched",
+        /// The private binding file binds no device to the handset instance.
+        Unbound => "unbound",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// What went wrong with the device-link watch, the one `adb track-devices` process of the
+    /// Runtime (vocabulary `device_watch_problem`, Workflow #398 RD-2, model-398 §4.3, §10.1).
+    pub enum DeviceWatchProblem: "device_watch_problem" {
+        /// The watch process could not be started.
+        SpawnFailed => "spawn_failed",
+        /// The watch process ended, or its output closed.
+        Exited => "exited",
+        /// The watch's output has a shape the parser does not know.
+        ProtocolInvalid => "protocol_invalid",
+        /// The watch ended more often within the restart window than the restart limit allows.
+        RestartBudgetSpent => "restart_budget_spent",
+    }
+}
+
 /// One binding of the private file: an instance alias and the serial of its handset.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

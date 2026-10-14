@@ -608,6 +608,77 @@ pub(super) struct FakeProvider {
     // (`with_discovery`); without one the provider refuses discovery as a provider without a
     // discovery surface does.
     discovery: Option<ProviderInstanceDiscovery>,
+    // Workflow #398 RD-2: the device-link watches a provider with handsets opens and the
+    // reconnects it was asked for (`with_link_watch`); without it the provider has none.
+    link_watches: Option<Arc<FakeLinkWatches>>,
+}
+
+// Workflow #398 RD-2: what a fake provider's device-link watches saw. A watch reports nothing by
+// itself (a test hands the host its events, `device_link_event_for_test`); it blocks its reader
+// until it is stopped. The fake records each reconnect by alias; the provider surface has no
+// other command, so no `kill-server` can reach a device through it.
+#[derive(Default)]
+pub(super) struct FakeLinkWatches {
+    opened: AtomicUsize,
+    stopped: AtomicUsize,
+    reconnects: std::sync::Mutex<Vec<String>>,
+}
+
+impl FakeLinkWatches {
+    fn opened(&self) -> usize {
+        self.opened.load(Ordering::Acquire)
+    }
+
+    fn stopped(&self) -> usize {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn reconnects(&self) -> Vec<String> {
+        self.reconnects.lock().expect("fake reconnects").clone()
+    }
+}
+
+type FakeLinkWatchStopped = Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
+
+struct FakeLinkWatch {
+    watches: Arc<FakeLinkWatches>,
+    stopped: FakeLinkWatchStopped,
+}
+
+impl actingcommand_execution_kernel::DeviceLinkWatch for FakeLinkWatch {
+    fn next_event(&mut self) -> actingcommand_execution_kernel::DeviceLinkWatchEvent {
+        let (stopped, changed) = &*self.stopped;
+        let mut guard = stopped.lock().expect("fake link watch");
+        while !*guard {
+            guard = changed.wait(guard).expect("fake link watch");
+        }
+        actingcommand_execution_kernel::DeviceLinkWatchEvent::Ended
+    }
+
+    fn stopper(&self) -> Arc<dyn actingcommand_execution_kernel::DeviceLinkWatchStop> {
+        Arc::new(FakeLinkWatchStop {
+            watches: Arc::clone(&self.watches),
+            stopped: Arc::clone(&self.stopped),
+        })
+    }
+}
+
+struct FakeLinkWatchStop {
+    watches: Arc<FakeLinkWatches>,
+    stopped: FakeLinkWatchStopped,
+}
+
+impl actingcommand_execution_kernel::DeviceLinkWatchStop for FakeLinkWatchStop {
+    fn stop(&self) -> DeviceResult<()> {
+        let (stopped, changed) = &*self.stopped;
+        let mut guard = stopped.lock().expect("fake link watch");
+        if !*guard {
+            *guard = true;
+            self.watches.stopped.fetch_add(1, Ordering::AcqRel);
+        }
+        changed.notify_all();
+        Ok(())
+    }
 }
 
 impl FakeProvider {
@@ -630,7 +701,15 @@ impl FakeProvider {
             resolved_for: BTreeMap::new(),
             device_endpoints: false,
             discovery: None,
+            link_watches: None,
         }
+    }
+
+    /// Workflow #398 RD-2: the provider opens device-link watches into `watches` and records the
+    /// reconnects it is asked for there.
+    fn with_link_watch(mut self, watches: Arc<FakeLinkWatches>) -> Self {
+        self.link_watches = Some(watches);
+        self
     }
 
     /// Workflow #383 AO-4q: answers an on-demand instance discovery with `discovery`.
@@ -893,6 +972,32 @@ impl ExecutionBackendProvider for FakeProvider {
         }
         .expect("fake monitor observation must be valid");
         Ok(observation)
+    }
+
+    // Workflow #398 RD-2: a provider with handsets opens a watch that reports nothing by itself.
+    fn open_device_link_watch(
+        &self,
+    ) -> DeviceResult<Option<Box<dyn actingcommand_execution_kernel::DeviceLinkWatch>>> {
+        let Some(watches) = &self.link_watches else {
+            return Ok(None);
+        };
+        watches.opened.fetch_add(1, Ordering::AcqRel);
+        Ok(Some(Box::new(FakeLinkWatch {
+            watches: Arc::clone(watches),
+            stopped: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
+        })))
+    }
+
+    fn reconnect_handset(&self, instance_alias: &str) -> DeviceResult<()> {
+        let Some(watches) = &self.link_watches else {
+            return Err(DeviceError::fatal("the fake provider has no handset"));
+        };
+        watches
+            .reconnects
+            .lock()
+            .expect("fake reconnects")
+            .push(instance_alias.to_owned());
+        Ok(())
     }
 
     // Workflow #387 D1c-G: adbd answers every probe unless the instance's `adb_probe_error` is

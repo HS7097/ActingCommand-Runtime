@@ -468,16 +468,27 @@ impl HostShared {
         if self.handset_unbound(instance_id)? {
             return self.withdraw_unbound_handset(&instance_alias, active.as_ref());
         }
+        // Workflow #398 RD-2 (model-398 v1.1 §4.2): a handset whose device link is not
+        // `device` stays unavailable, under its link's state, whatever its self-check says.
+        if let Some(state) = self.device_link_hold(instance_id)? {
+            if Self::withdrawn_for_device_link(active.as_ref(), state.as_str()) {
+                return Ok(());
+            }
+            return self.publish_device_link_unavailable(&instance_alias, state.as_str());
+        }
         // Workflow #403: a fenced instance stays unavailable whatever its self-check says,
         // until a passing preparation lifts the fence.
         if seed_available
             && self.backend_selfcheck_passed(instance_id)?
             && !self.resource_fenced(instance_id)?
         {
+            // Workflow #398 RD-2: a device-link withdrawal ends the same way, once the link is
+            // `device` again and a preparation passed (model-398 §4.2, §4.3).
             let withdrawn_by_selfcheck = active.as_ref().is_some_and(|record| {
                 record
                     .source_snapshot_id
                     .starts_with(BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX)
+                    || Self::withdrawn_by_device_link(Some(record))
             });
             if withdrawn_by_selfcheck && active_value != Some(true) {
                 self.restore_policy_instance_availability(&instance_alias, seed_available)?;
@@ -544,7 +555,10 @@ impl HostShared {
 
     /// Whether the instance's stored self-check passes (Workflow #317 sc3): no entry holds
     /// `failed`, and `nemu`, or both `input` and `capture`, hold `passed`.
-    fn backend_selfcheck_passed(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+    pub(super) fn backend_selfcheck_passed(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<bool> {
         let scope = RuntimeFactScope::Instance { instance_id };
         let store = lock(
             &self.runtime_facts,

@@ -403,6 +403,10 @@ outcome_keys! {
     // private device-binding file.
     device_config_problem: vocab(device_config_problem),
     device_binding_problem: vocab(device_binding_problem),
+    // Workflow #398 RD-2: the state of a handset's device link and what went wrong with the
+    // device-link watch.
+    device_link_state: vocab(device_link_state),
+    device_watch_problem: vocab(device_watch_problem),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
     // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----
