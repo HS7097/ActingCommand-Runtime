@@ -27,8 +27,8 @@ use std::time::Duration;
 const FRAME: (u32, u32) = (400, 600);
 const COLUMNS: [i32; 3] = [20, 140, 260];
 
-/// One card of the synthetic list, in content coordinates: its top edge on the axis, its left
-/// edge, its identity, its signature color and its gate feature.
+// One card of the synthetic list, in content coordinates: its top edge on the axis, its left
+// edge, its identity, its signature color and its gate feature.
 #[derive(Debug, Clone)]
 struct Card {
     axis: i32,
@@ -38,7 +38,7 @@ struct Card {
     open: bool,
 }
 
-/// `rows` rows of three distinct cards, the first row at content y 60.
+// `rows` rows of three distinct cards, the first row at content y 60.
 fn cards(rows: usize) -> Vec<Card> {
     (0..rows * 3)
         .map(|index| Card {
@@ -55,7 +55,7 @@ fn cards(rows: usize) -> Vec<Card> {
         .collect()
 }
 
-/// The cards with these row indices made one family: the same identity and the same look.
+// The cards with these row indices made one family: the same identity and the same look.
 fn family(mut list: Vec<Card>, rows: std::ops::Range<usize>) -> Vec<Card> {
     for card in &mut list {
         let row = usize::try_from((card.axis - 60) / 100).expect("row");
@@ -105,7 +105,7 @@ fn features(card: &Card) -> CandidateFeatureMap {
     ])
 }
 
-/// One captured frame of the list.
+// One captured frame of the list.
 #[derive(Debug, Clone)]
 struct View {
     instances: Vec<ScanReadInstance>,
@@ -113,8 +113,8 @@ struct View {
     end: bool,
 }
 
-/// The list at content offset `offset`: every card that lies in the frame, actionable inside
-/// the readable band, with its features only then.
+// The list at content offset `offset`: every card that lies in the frame, actionable inside
+// the readable band, with its features only then.
 fn view(list: &[Card], offset: i32, start: bool, end: bool) -> View {
     let instances = list
         .iter()
@@ -147,14 +147,14 @@ fn view(list: &[Card], offset: i32, start: bool, end: bool) -> View {
     }
 }
 
-/// What the fake hands out: the dispatched frame, then its captures in order.
+// What the fake hands out: the dispatched frame, then its captures in order.
 struct Script {
     dispatched: Vec<CandidateRect>,
     captures: VecDeque<Result<View, ContainedTaskError>>,
 }
 
 impl Script {
-    /// `Pin`: the dispatched frame, and one equal capture, so it settles at once.
+    // `Pin`: the dispatched frame, and one equal capture, so it settles at once.
     fn starting_with(first: View) -> Self {
         Self {
             dispatched: first
@@ -166,21 +166,21 @@ impl Script {
         }
     }
 
-    /// After a drag: the moved frame, captured twice, so it settles at the second capture.
+    // After a drag: the moved frame, captured twice, so it settles at the second capture.
     fn then(mut self, moved: View) -> Self {
         self.captures.push_back(Ok(moved.clone()));
         self.captures.push_back(Ok(moved));
         self
     }
 
-    /// A capture the source refuses with `error`, as a runtime refuses a frame of another page.
+    // A capture the source refuses with `error`, as a runtime refuses a frame of another page.
     fn then_refused(mut self, error: ContainedTaskError) -> Self {
         self.captures.push_back(Err(error));
         self
     }
 }
 
-/// A scan source that replays a script; every capture costs the settle interval plus `cost`.
+// A scan source that replays a script; every capture costs the settle interval plus `cost`.
 struct Fake {
     script: Script,
     current: Option<View>,
@@ -237,7 +237,7 @@ impl ScanSource for Fake {
     }
 }
 
-/// The declaration every test starts from; `patch` changes it.
+// The declaration every test starts from; `patch` changes it.
 fn declaration(patch: impl FnOnce(&mut Value)) -> ScanDeclaration {
     let mut value = json!({
         "identity_feature": "member",
@@ -291,7 +291,7 @@ fn layout(identities: &[String]) -> CandidateLayout {
     .expect("layout")
 }
 
-/// A member set: every open card is a member.
+// A member set: every open card is a member.
 fn policy(identities: &[String]) -> SelectionPolicy {
     let policy: SelectionPolicy = serde_json::from_value(json!({
         "schema_version": "actingcommand.selection-policy.v1",
@@ -366,7 +366,7 @@ fn run(scan: &ScanDeclaration, list: &[Card], script: Script) -> Run {
     run_with_cost(scan, list, script, Duration::ZERO)
 }
 
-/// The task failure a run ended with.
+// The task failure a run ended with.
 fn failure(run: &Run) -> &ContainedTaskError {
     match &run.result {
         Err(ContainedTaskRunError::Task(error)) => error,
@@ -395,7 +395,7 @@ fn offsets(run: &Run) -> Vec<i64> {
         .collect()
 }
 
-/// Twelve rows read from the top in steps of 300 px, the last step short at the list's end.
+// Twelve rows read from the top in steps of 300 px, the last step short at the list's end.
 fn top_to_end(list: &[Card]) -> Script {
     Script::starting_with(view(list, 0, true, false))
         .then(view(list, 300, false, false))
@@ -857,7 +857,7 @@ fn l3_a_frame_aligns_against_the_content_map_within_the_return_window() {
     );
 }
 
-/// `view` with the identity of the card `identity` read Unknown (low confidence).
+// `view` with the identity of the card `identity` read Unknown (low confidence).
 fn identity_unread(mut frame: View, identity: &str) -> View {
     for instance in &mut frame.instances {
         let read = matches!(
@@ -1257,5 +1257,33 @@ mod kernel_path {
                 .any(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. })),
             "a scan drag completes no effect"
         );
+    }
+
+    // S0 §2.3: every capture of a scan must be the step's page. A popup covers the list after
+    // the first drag; the scan fails `selection_page_changed` and makes no further input.
+    #[test]
+    fn l3_a_frame_of_another_page_mid_scan_fails_selection_page_changed() {
+        let task = scan_task();
+        let popup = image(WIDTH, HEIGHT, |_, _| [200, 200, 200]);
+        let mut runtime = Recording {
+            frames: VecDeque::from([list(0, true, false), list(0, true, false), popup]),
+            traces: Vec::new(),
+            inputs: Vec::new(),
+        };
+        let error = run_scan(
+            &task,
+            &mut runtime,
+            ("pick", &card_scan(false)),
+            (&no_facts(), 1_000),
+            false,
+        )
+        .expect_err("the popup ends the scan");
+        match error {
+            ContainedTaskRunError::Task(error) => {
+                assert_eq!(error.code().as_str(), "selection_page_changed");
+            }
+            other => panic!("expected a task failure, got {other:?}"),
+        }
+        assert_eq!(runtime.inputs.len(), 1);
     }
 }

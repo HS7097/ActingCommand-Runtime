@@ -13,7 +13,8 @@
 //! position fixes it, and each viewport evaluates the positions it fixed with the one pinned
 //! fact snapshot and instant. Coverage is proven, never assumed: the bands overlap (one
 //! corrective reverse advance per gap), the spacing checks find missed anchors, and every
-//! position that was seen was also read.
+//! position that was seen was also read. A scan that declares `early_stop` stops before the end
+//! once no unknown position and no position not yet seen could outrank the best member (§3.3).
 //!
 //! Every number comes from the declaration; the Runtime has no default. Every failure is a
 //! registered code (§2.7). The session stops at `Decide`'s coverage checks: the decision over

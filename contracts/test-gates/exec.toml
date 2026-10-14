@@ -804,5 +804,6 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_early_stop_does_not_hold_while_an_unknown_position_might_tie",
     "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_a_dry_run_that_needs_a_rewind_ends_with_a_typed_failure",
     "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_each_scan_drag_is_an_effect_intent_of_the_select_step_and_completes_no_effect",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_a_frame_of_another_page_mid_scan_fails_selection_page_changed",
 ]
 incident = ["#308"]
