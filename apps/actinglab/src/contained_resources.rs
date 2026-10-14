@@ -123,7 +123,10 @@ pub(super) fn observation_resources(
     })
 }
 
+/// Workflow #396 LAB-3: every bundle evaluates OCR with actinglab's OCR provider, the
+/// Runtime's, when it has one.
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
+    let vision_provider = super::offline_ocr::lab_ocr().provider();
     if flags.optional("--package-ref").is_some() {
         let input = PackageInput::open(flags)?;
         let deadline = std::time::Instant::now()
@@ -137,7 +140,7 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
             input.path(),
             &input.reference,
             false,
-            None,
+            vision_provider,
             deadline,
         )
         .map(Arc::new)
@@ -158,9 +161,14 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     }
     let bytes = zip.read_all()?;
     let instance = format!("semantic_{}", command.replace('-', "_"));
-    ExternallyVerifiedBundle::load(&instance, &bytes, &expected)
-        .map(Arc::new)
-        .map_err(|error| CliError::package_invalid(error.to_string()))
+    match vision_provider {
+        Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
+            &instance, &bytes, &expected, provider,
+        ),
+        None => ExternallyVerifiedBundle::load(&instance, &bytes, &expected),
+    }
+    .map(Arc::new)
+    .map_err(|error| CliError::package_invalid(error.to_string()))
 }
 
 /// Retains the existing publication pin for ZIP material throughout an RPC.

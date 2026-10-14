@@ -88,6 +88,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let instance = lab2_instance(global, &flags);
     let resources = super::contained_resources::load(&flags, "observe")?;
     let (evaluator, _) = super::contained_resources::recognition_pipeline(&resources)?;
+    super::offline_ocr::require_pages(&resources)?;
     if evaluator.target_sample_frames() > 1 {
         return Err(CliError::package_invalid(format!(
             "recognition samples unavailable: offline observe provides 1 frame; target consensus requires {}; aggregation not completed",
@@ -105,7 +106,13 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .filter(|edge| outcome.matched && edge.from_page == outcome.page)
         .map(navigation_edge_json)
         .collect::<Vec<_>>();
-    let observation = observation::build(&view, &evaluator, &loaded_scene.scene, &outcome)?;
+    let observation = observation::build(
+        &view,
+        &evaluator,
+        &loaded_scene.scene,
+        &outcome,
+        super::offline_ocr::lab_ocr(),
+    )?;
     let mut payload = json!({
         "req_id": ids.req_id,
         "state": if outcome.matched { "observed" } else { "unknown" },
@@ -1754,9 +1761,37 @@ fn recognition_engine_capabilities() -> Value {
             ]
         },
         "color": {"rgb_mean_distance": true, "status": "available", "available": true, "reason_code": "offline_handler_ready"},
-        "ocr": {"default_screen_state": false, "explicit_command_required": true, "declared_support": true, "status": "unverified", "available": false, "reason_code": "runtime_provider_configuration_and_assets_unverified"},
+        "ocr": ocr_capability(),
         "nn": {"declared_support": true, "status": "unverified", "available": false, "reason_code": "runtime_provider_configuration_and_assets_unverified"}
     })
+}
+
+/// Workflow #396 LAB-3: OCR with the Runtime's provider on the CPU when actinglab loaded an
+/// OCR model, otherwise unavailable under `lab_ocr_unavailable` with its cause.
+fn ocr_capability() -> Value {
+    let mut capability = json!({
+        "default_screen_state": false,
+        "explicit_command_required": true,
+        "declared_support": true,
+    });
+    let status = super::offline_ocr::status();
+    let available = status["available"] == true;
+    capability["status"] = json!(if available {
+        "available"
+    } else {
+        "unavailable"
+    });
+    capability["reason_code"] = json!(if available {
+        "offline_handler_ready"
+    } else {
+        actingcommand_lab::LabCode::LabOcrUnavailable.as_str()
+    });
+    if let (Some(capability), Some(status)) = (capability.as_object_mut(), status.as_object()) {
+        for (key, value) in status {
+            capability.insert(key.clone(), value.clone());
+        }
+    }
+    capability
 }
 
 fn lab2_config_instances(config: &UserConfig) -> Vec<Value> {
@@ -2202,7 +2237,8 @@ fn guard_evaluable_target(
             "{command} requires a visually evaluatable target; '{target}' is click-only"
         )));
     }
-    Ok(())
+    // Workflow #396 LAB-3: an OCR target without an OCR model is refused, never skipped.
+    super::offline_ocr::require_target(evaluator, target)
 }
 
 /// `wait --stable` compares a target's measured place between frames; a composite check has

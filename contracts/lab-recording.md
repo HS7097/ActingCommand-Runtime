@@ -241,13 +241,36 @@ samples, not superseded frames). The result is `passed`, `failed` or `not_evalua
 | template | `region` (crop), `search?` (default `region`; must contain it and lie in the frame), `threshold?` | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes) |
 | color | `region`, `max_distance?` | `expected` is the mean color of `region` on the primary frame; every frame's mean color must be within the distance; `margin` = limit − largest distance |
 | color_digest | `region`, `columns`, `rows`, `max_mean_milli`, `max_cell?`, `exclude_cells?` (no defaults) | `cells` from the primary frame (`color_digest.v1`); every frame must pass; `margin` = `{mean_milli, max_cell}` limits minus the worst values |
-| ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | always `not_evaluated` (`lab_ocr_provider_unverified`): Lab has no OCR provider, and not evaluated is never reported as passed |
+| ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed |
 | check | `all_of` or `any_of`: 2..8 distinct marks of the step, no checks | derived: all_of fails on any failed member and passes when all pass; any_of passes on any passed member and fails when all fail; otherwise not evaluated |
 
 Shape errors (missing or misplaced fields, an invalid grid) are `validation_failed` (exit
 2); a region outside the frame (`region_outside_frame`), an invalid search area
 (`search_invalid`), a check member that is not a mark of the step (`check_member_invalid`)
 and failed self-tests are reasons inside `record_mark_rejected`.
+
+### OCR in the Lab
+
+Workflow #396 LAB-3. actinglab and the Lab load the OCR provider the Runtime uses: the
+in-process `ppocr-ctc` engine over the model folders (`models\<model_ref>\`) of the vision root
+that the Runtime configuration's `vision` section names (`root`, else `vision` beside the install
+root), always on the CPU whatever `vision.execution_provider` says. actinglab reads the
+configuration its installation selects; outside an installation there is none. As in the
+Runtime, model files are read and ONNX Runtime is initialised on the first OCR request. The mark
+self-test, `record stop`'s first decision and cross-check, `observe`, `recognize`, `is-visible`,
+`detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
+evaluate OCR targets with it.
+
+Without a usable OCR model OCR is unavailable: `lab_ocr_unavailable`, whose `caused_by` link says
+why (`lab_ocr_vision_unconfigured`, a configuration read or decode code,
+`vision_root_unavailable`, `vision_models_empty`, `lab_ocr_model_missing` or
+`lab_ocr_runtime_missing`). It is never skipped silently: a command that would evaluate an OCR
+target (directly or as a composite member, or on a page of the page set it detects) refuses with
+`lab_ocr_unavailable` (exit 3, `blocked_by: ["ocr_model"]`, `details.outcome` the outcome with
+the target as `target_id`) before evaluating anything; an OCR mark's self-test and `record stop`'s
+first decision report it as their reason; `capabilities` and `package dry-run` report the OCR
+state (`available`, `execution_provider: "cpu"`, `vision_root`, and `unavailable` with the
+outcome).
 
 ## Steps, frames and remediation
 
@@ -725,8 +748,8 @@ guard execution still requires the corresponding frames, provider and Runtime ev
 1. **Container round trip.** The encoded bytes expand (`expand_content_container`) to exactly
    the generated files, whose digest is D.
 2. **Admission.** The kernel admits the files as actingd loads a content directory: the digest
-   comparison, source compilation, declarations and the `linear_steps` rules, without a vision
-   provider. A refusal is `record_artifact_admission_failed` (3) with
+   comparison, source compilation, declarations and the `linear_steps` rules, with the Lab's OCR
+   provider when it has one (admission never calls it). A refusal is `record_artifact_admission_failed` (3) with
    `details{stage, loader_code, detail, declaration{file, pointer, reason}}`.
 3. **First decision.** The offline simulation of the package on recorded frames:
    - a package with an application step, on its first live frame, must be refused with
@@ -734,16 +757,17 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      `first_decision{status:"not_evaluated", reason:"lab_application_effect_offline",
      refusal}`; when step 1 is a click, the warning `first_decision_not_evaluated` says its
      click was not simulated;
-   - a step 1 that involves OCR (an OCR mark or a check with an OCR member among its required
-     marks, which includes a trusted-coordinate step) is not simulated:
-     `first_decision{status:"not_evaluated", reason:"lab_ocr_provider_unverified"}` and the
-     warning `first_decision_not_evaluated`;
+   - without an OCR model, a step 1 that involves OCR (an OCR mark or a check with an OCR
+     member among its required marks, which includes a trusted-coordinate step) is not
+     simulated: `first_decision{status:"not_evaluated", reason:"lab_ocr_unavailable"}` and the
+     warning `first_decision_not_evaluated`; with one it is simulated like any other step;
    - otherwise step 1's primary frame must give `would_click` of `step_01_click` with the
      point inside its rectangle.
 
    Anything else is `record_artifact_admission_failed` with the decision.
-4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator; OCR is
-   not called and counts as undetermined, a check is derived from its members. A page matches
+4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
+   with the Lab's OCR provider; without an OCR model OCR is not called and counts as
+   undetermined. A check is derived from its members. A page matches
    when every required target passes, does not when one fails, and is undetermined otherwise.
    - **Self.** Every page on every live frame of its step (the primary frame and the samples,
      never a superseded frame; a page transition on its own frames) matches or is

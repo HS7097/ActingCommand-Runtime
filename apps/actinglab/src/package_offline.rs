@@ -73,16 +73,25 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "package",
     )?;
     let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, &recorded)?;
-    let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, &recorded)
-        .map_err(|error| {
-            offline_error(
-                error.code().as_str(),
-                error
-                    .detail()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| error.to_string()),
-            )
-        })?;
+    // Workflow #396 LAB-3: the replay evaluates OCR targets with the Runtime's OCR provider.
+    let prepared = match crate::offline_ocr::lab_ocr().provider() {
+        Some(provider) => PreparedContainedTask::load_with_vision_provider(
+            "offline.simulation",
+            &package_bytes,
+            &recorded,
+            provider,
+        ),
+        None => PreparedContainedTask::load("offline.simulation", &package_bytes, &recorded),
+    }
+    .map_err(|error| {
+        offline_error(
+            error.code().as_str(),
+            error
+                .detail()
+                .map(str::to_string)
+                .unwrap_or_else(|| error.to_string()),
+        )
+    })?;
     let package_sha256 = prepared.package_sha256().clone();
     let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation = simulate_contained_task_at(&prepared, fixture.frames, now_unix_ms)
@@ -122,6 +131,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             "result_zip_sha256": bundle_sha256,
             "decision": record.simulation.decision,
             "post_admission_ocr": record.simulation.post_admission_ocr,
+            "ocr": crate::offline_ocr::status(),
             "production_global_ledger_written": false
         })));
     }
@@ -138,6 +148,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "decision": record.simulation.decision,
         "recognition": record.simulation.recognition,
         "post_admission_ocr": record.simulation.post_admission_ocr,
+        "ocr": crate::offline_ocr::status(),
         "production_global_ledger_written": false
     }))
 }

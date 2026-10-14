@@ -580,3 +580,17 @@ tests = [
     "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t8_every_command_the_checks_can_send_is_on_the_whitelist",
 ]
 incident = ["#398"]
+
+# actinglab and the Lab load the Runtime's OCR provider (CPU, the vision root's model folders, the vision section); observe and the Lab self-test evaluate OCR targets with it; without an OCR model OCR is unavailable under lab_ocr_unavailable with its cause and an OCR target is refused, never skipped
+[[gate]]
+key = "47"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::tests::lab3_a_vision_root_with_an_ocr_model_folder_gives_the_runtime_provider",
+    "actingcommand-lab::lib::ocr::tests::lab3_without_a_usable_ocr_model_ocr_is_unavailable_with_its_cause",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_runtime_configuration_vision_section_names_the_vision_root",
+    "actingcommand-lab::lib::ocr::tests::lab3_an_ocr_target_without_a_model_is_refused_with_its_code_never_skipped",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_mark_self_test_evaluates_an_ocr_mark_on_every_frame",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::lab3_tests::lab3_observe_evaluates_an_ocr_target_and_refuses_it_without_a_model",
+]
+incident = ["#396"]
