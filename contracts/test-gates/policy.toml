@@ -452,3 +452,27 @@ tests = [
     "actingcommand-selection-policy::lib::evaluator::tests::the_golden_fixture_selects_the_declared_top_two_with_a_full_breakdown",
 ]
 incident = []
+
+# Admission deferral: a deferred candidate carries its reason and wake, consumes no host budget
+# and leaves its instance to the next ranked candidate; a failed admission read fails the round
+# (Workflow #382 P-2a, test plan v2.2 P-2 G8)
+[[gate]]
+key = "29"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g8_admission_deferrals_carry_their_reason_and_leave_instance_and_host_to_the_next_candidate",
+    "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g8_a_budget_deferral_wakes_the_round_at_its_next_eligible_time",
+    "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g8_an_admission_read_failure_fails_the_evaluation_with_that_error",
+]
+incident = ["#369 S4", "#372", "#382 P-2a"]
+
+# Clock-slot view: every due slot of a two-day replay is served or held back by an admission gate,
+# and an owed run counts against the day it ran in (Workflow #382 P-2a, test plan v2.2 P-2 G9)
+[[gate]]
+key = "26"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::evaluator::tests::clock_slot_view_reads_due_and_next_trigger_clocks",
+    "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g9_a_two_day_replay_serves_or_gates_every_due_slot_and_counts_an_owed_run_on_its_day",
+]
+incident = ["#372", "#382 P-2a"]
