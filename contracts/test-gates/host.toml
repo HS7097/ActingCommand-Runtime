@@ -696,3 +696,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_without_fields",
 ]
 incident = ["#390 O-03", "#390 O-04", "#390 O-05"]
+
+# Workflow #390 OUT-2 (FCM O-01, O-02, S-01): a direct run of a designated effect set whose cap is an instance fact maps "collected" when its member completed (the cap reached, then the page's next operation; or the page changed before the cap) and "nothing" for a cap of 0, its terminal's scheduling disposition recording the member's count beside the cap the run held it to and reading back as written; a run whose cap fact is missing fails with contained_task_designated_effect_cap_unresolved before any input
+[[gate]]
+key = "76"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_out2::out2_a_run_of_a_designated_effect_set_records_each_count_and_its_cap",
+]
+incident = ["#390 O-01", "#390 O-02", "#390 S-01"]

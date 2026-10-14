@@ -304,6 +304,17 @@ pub struct RunStateConfig {
     max_steps: u32,
     phases: Option<Vec<TaskPhase>>,
     designated_operation: Option<String>,
+    /// Workflow #390 OUT-2: the members of a designated effect set with the caps the run holds
+    /// them to, in declaration order.
+    designated_effect_caps: Vec<DesignatedEffectCap>,
+}
+
+/// Workflow #390 OUT-2: one member of a designated effect set and the cap a run holds it to (the
+/// declared constant, or the fact's value read before the run's first step).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesignatedEffectCap {
+    pub operation_id: String,
+    pub max_repeats: u32,
 }
 
 impl RunStateConfig {
@@ -338,6 +349,7 @@ impl RunStateConfig {
             max_steps,
             phases: None,
             designated_operation: None,
+            designated_effect_caps: Vec::new(),
         };
         if config.game.trim().is_empty() {
             return Err(RunDecisionError::invalid(
@@ -382,6 +394,13 @@ impl RunStateConfig {
     ) -> Self {
         self.phases = Some(phases);
         self.designated_operation = designated_operation;
+        self
+    }
+
+    /// Workflow #390 OUT-2: a designated effect set's members and their caps. A member that
+    /// completed as often as its cap is not selected again; the page's next operation is.
+    pub fn with_designated_effect_caps(mut self, caps: Vec<DesignatedEffectCap>) -> Self {
+        self.designated_effect_caps = caps;
         self
     }
 }
@@ -456,6 +475,8 @@ pub struct RunStateMachine {
     terminal: Option<RunTerminal>,
     phase_index: usize,
     designated_effect_completed: bool,
+    /// Workflow #390 OUT-2: how often each member of the designated effect set completed.
+    designated_effect_counts: Vec<u32>,
 }
 
 impl RunStateMachine {
@@ -469,6 +490,7 @@ impl RunStateMachine {
                 config.max_task_retries
             )));
         }
+        let designated_effect_counts = vec![0; config.designated_effect_caps.len()];
         Ok(Self {
             config,
             completed_task_retries,
@@ -478,6 +500,7 @@ impl RunStateMachine {
             terminal: None,
             phase_index: 0,
             designated_effect_completed: false,
+            designated_effect_counts,
         })
     }
 
@@ -565,6 +588,8 @@ impl RunStateMachine {
                 },
             }));
         }
+        // Workflow #390 OUT-2: a member of the designated effect set that reached its cap is
+        // passed over.
         let phase_operations = operations
             .iter()
             .filter(|operation| {
@@ -572,7 +597,7 @@ impl RunStateMachine {
                     phases
                         .get(self.phase_index)
                         .is_some_and(|phase| phase.operations.contains(&operation.id))
-                })
+                }) && !self.designated_effect_capped(operation.id())
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -718,7 +743,38 @@ impl RunStateMachine {
             }
             self.designated_effect_completed = true;
         }
+        // Workflow #390 OUT-2: a member of the set counts its completions up to its cap.
+        if let Some(member) = self.designated_effect_member(operation_id) {
+            let cap = self.config.designated_effect_caps[member].max_repeats;
+            let count = &mut self.designated_effect_counts[member];
+            if *count >= cap {
+                return Err(RunDecisionError::invalid_transition(
+                    "designated effect completed beyond its cap",
+                ));
+            }
+            *count += 1;
+        }
         Ok(())
+    }
+
+    /// Workflow #390 OUT-2: the members of the designated effect set with their caps.
+    pub fn designated_effect_caps(&self) -> &[DesignatedEffectCap] {
+        &self.config.designated_effect_caps
+    }
+
+    fn designated_effect_member(&self, operation_id: &str) -> Option<usize> {
+        self.config
+            .designated_effect_caps
+            .iter()
+            .position(|cap| cap.operation_id == operation_id)
+    }
+
+    fn designated_effect_capped(&self, operation_id: &str) -> bool {
+        self.designated_effect_member(operation_id)
+            .is_some_and(|member| {
+                self.designated_effect_counts[member]
+                    >= self.config.designated_effect_caps[member].max_repeats
+            })
     }
 
     fn require_executing(&self, operation_id: &str) -> Result<(), RunDecisionError> {

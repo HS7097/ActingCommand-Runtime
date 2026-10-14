@@ -2483,12 +2483,45 @@ impl Declaration<'_> {
     }
 
     fn scheduling(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        let object = self.object(value, pointer, &["designated_operation", "mappings"])?;
+        let object = self.object(
+            value,
+            pointer,
+            &["designated_operation", "designated_effects", "mappings"],
+        )?;
         if let Some(operation) = object
             .get("designated_operation")
             .filter(|value| !value.is_null())
         {
             self.string(operation, &child(pointer, "designated_operation"))?;
+        }
+        // Workflow #390 OUT-2: a designated effect set is a task schema `0.9` declaration.
+        if let Some(effects) = object.get("designated_effects") {
+            let effects_pointer = child(pointer, "designated_effects");
+            if self.schema != Some("0.9") {
+                return Err(
+                    self.error(&effects_pointer, ResourceDeclarationReason::UnconsumedField)
+                );
+            }
+            for (index, effect) in self.array(effects, &effects_pointer)?.iter().enumerate() {
+                let pointer = child(&effects_pointer, &index.to_string());
+                let effect = self.object(effect, &pointer, &["operation_id", "max_repeats"])?;
+                self.string(
+                    self.required(effect, &pointer, "operation_id")?,
+                    &child(&pointer, "operation_id"),
+                )?;
+                if let Some(repeats) = effect.get("max_repeats") {
+                    let repeats_pointer = child(&pointer, "max_repeats");
+                    if repeats.is_object() {
+                        let fact = self.object(repeats, &repeats_pointer, &["fact_key"])?;
+                        self.string(
+                            self.required(fact, &repeats_pointer, "fact_key")?,
+                            &child(&repeats_pointer, "fact_key"),
+                        )?;
+                    } else {
+                        self.unsigned(repeats, &repeats_pointer)?;
+                    }
+                }
+            }
         }
         let mappings = self.required(object, pointer, "mappings")?;
         for (index, mapping) in self

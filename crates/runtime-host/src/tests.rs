@@ -150,6 +150,9 @@ mod gate_389_mcp4;
 // Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
 // outcomes and zero-input packages with several outcomes.
 mod gate_390_out1;
+// Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
+// counts and caps.
+mod gate_390_out2;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;

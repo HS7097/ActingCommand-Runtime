@@ -772,3 +772,14 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_recognition_that_cannot_conclude_stays_the_class_4_recognition_failure",
 ]
 incident = ["#387"]
+
+# Workflow #390 OUT-2 (FCM O-01, O-02, R-03, S-01): a scheduling outcome may name a designated effect set (1 to 8 members, each once, a constant cap from 1 to 1000 or a fact cap under a fact key, never with designated_operation); admission refuses a member that leaves its page without an operation once capped, and a fact cap (which may be 0) needs a mapping for a run without a designated effect; a run repeats each member up to its cap and then takes the page's next operation, ending when its page changes before the cap; a fact cap is the instance fact's integer, read once before the first step, and a missing, expired, non-integer or out-of-range fact or no fact snapshot ends the run before any input with contained_task_designated_effect_cap_unresolved
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_designated_effect_set_declares_caps_and_needs_a_way_on_once_capped",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_counted_loop_repeats_each_member_to_its_cap_then_goes_on",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_fact_cap_is_read_once_before_the_first_step",
+]
+incident = ["#390 O-01", "#390 O-02", "#390 R-03", "#390 S-01"]
