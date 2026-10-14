@@ -843,7 +843,7 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #390 READ-1 (forced compromise O-08): a current_capacity reading mark that declares capacity_fact_key writes its denominator as that second reading key; the declaration gate admits the second key only on a fraction mark, under the reading key rule and unique among the task's reading keys; the run gives both readings from the mark's one evaluation on its frame, a requested key set of the second key reads the mark, and the host publishes the denominator as its own instance fact with the mark's observation, expiry, confidence, detector and snapshot
+# Workflow #390 READ-1 (forced compromise O-08): a current_capacity reading mark that declares capacity_fact_key writes its denominator as that second reading key; the declaration gate admits the second key only on a fraction mark, under the reading key rule and unique among the task's reading keys; the run gives both readings from the mark's one evaluation on its frame, a requested key set of the second key reads the mark, and the host publishes the denominator as its own instance fact, an observation of its own under the snapshot `run:<run>/frame:<frame>/<reading id>/capacity` (register RE2), with the mark's observation time, expiry, confidence and detector
 [[gate]]
 key = "61"
 coverage = "Y"
