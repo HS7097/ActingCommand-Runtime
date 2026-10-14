@@ -184,8 +184,9 @@ identity is written, together with a Warning `runtime.failed`
 
 A run's error frame is the capture frame artifact (`ArtifactVerified`, kind `capture_frame`)
 of the frame of its latest `CaptureCompleted`. The previous run is the run of the pair's latest
-failed dispatch. Frames are read and verified read-only; a failed run's last frames are
-retained permanently.
+failed dispatch. Frames are read and verified read-only. A failed run's frames are not kept
+permanently: they follow the frame classes of `contracts/ledger-store.md` (Workflow #375), and
+a frame no longer present makes the comparison unavailable (`frame_missing`, above).
 
 Both frames are decoded as PNG and digested whole with `color_digest.v1` on a grid of
 `min(32, width)` by `min(18, height)` cells. A cell has changed when `|dR| + |dG| + |dB|` of

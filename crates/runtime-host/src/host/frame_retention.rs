@@ -11,8 +11,8 @@ use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
     ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput, DiagnosticCode,
     DiagnosticDetailDraft, EffectDisposition, EventActor, EventLinksDraft, EventSeverity,
-    EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, FailedRunRetentionPolicy, OriginModule,
-    OwnerEpoch, ProjectedArtifactReference, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS,
+    EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, OriginModule, OwnerEpoch,
+    ProjectedArtifactReference, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS,
     RETENTION_ROUND_START_BUDGET_MS, RuntimeErrorCode, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
@@ -648,7 +648,6 @@ impl FrameRetention {
 #[derive(Default)]
 struct EvictionRecovery {
     after: Option<ArtifactId>,
-    policy: FailedRunRetentionPolicy,
 }
 
 struct RecoveryRound {
@@ -666,7 +665,7 @@ impl EvictionRecovery {
         ledger.check_writer_health().map_err(ledger_failure)?;
         let started = Instant::now();
         let candidates = ledger
-            .retention_candidates(self.after, self.policy)
+            .retention_candidates(self.after)
             .map_err(ledger_failure)?;
         if candidates.references.len() > RETENTION_ROUND_OBJECTS {
             return Err(failure(HostCode::ArtifactRetentionCandidateBoundExceeded));
@@ -702,7 +701,7 @@ impl EvictionRecovery {
                 return Ok(round);
             }
             match ledger
-                .admit_artifact_eviction(guard, self.policy)
+                .admit_artifact_eviction(guard)
                 .map_err(ledger_failure)?
             {
                 ArtifactEvictionAdmission::Deferred => {}

@@ -949,7 +949,6 @@ enum WriterCommand {
     },
     RetentionCandidates {
         after: Option<actingcommand_contract::ArtifactId>,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
         response: SyncSender<GlobalLedgerResult<ArtifactRetentionCandidates>>,
     },
     /// Workflow #375 R5d: the frame cleaner's read. Its writer command kind stays
@@ -962,7 +961,6 @@ enum WriterCommand {
     },
     AdmitArtifactEviction {
         guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
         response: SyncSender<GlobalLedgerResult<ArtifactEvictionAdmission>>,
     },
     FinishArtifactEviction {
@@ -2257,12 +2255,8 @@ fn writer_loop<S: LedgerStore>(
                     }
                 }
             }
-            WriterCommand::RetentionCandidates {
-                after,
-                policy,
-                response,
-            } => {
-                let result = store.retention_candidates(after, policy);
+            WriterCommand::RetentionCandidates { after, response } => {
+                let result = store.retention_candidates(after);
                 command_succeeded = result.is_ok();
                 if let Err(error) = &result
                     && error.terminal()
@@ -2291,28 +2285,26 @@ fn writer_loop<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
-            WriterCommand::AdmitArtifactEviction {
-                guard,
-                policy,
-                response,
-            } => match store.admit_artifact_eviction(*guard, policy) {
-                Ok((admission, appended)) => {
-                    command_succeeded = true;
-                    for event in &appended {
-                        deliver_live_event(&mut subscribers, event);
+            WriterCommand::AdmitArtifactEviction { guard, response } => {
+                match store.admit_artifact_eviction(*guard) {
+                    Ok((admission, appended)) => {
+                        command_succeeded = true;
+                        for event in &appended {
+                            deliver_live_event(&mut subscribers, event);
+                        }
+                        command_observation.replied(response.send(Ok(admission)).is_ok());
                     }
-                    command_observation.replied(response.send(Ok(admission)).is_ok());
-                }
-                Err(error) => {
-                    command_succeeded = false;
-                    let terminal = error.terminal();
-                    command_observation.replied(response.send(Err(error.clone())).is_ok());
-                    if terminal {
-                        notify_terminal_failure(&mut subscribers, error.clone());
-                        return Err(error);
+                    Err(error) => {
+                        command_succeeded = false;
+                        let terminal = error.terminal();
+                        command_observation.replied(response.send(Err(error.clone())).is_ok());
+                        if terminal {
+                            notify_terminal_failure(&mut subscribers, error.clone());
+                            return Err(error);
+                        }
                     }
                 }
-            },
+            }
             WriterCommand::FinishArtifactEviction {
                 permit,
                 disposition,

@@ -72,5 +72,5 @@ eviction objects are denied. Communication timeout remains an unknown result
 associated with the original request; the command does not retry a state change
 or require a follow-up event query after a successful response. A release proves
 neither deletion nor current eligibility: other pins, permanent evidence, Lab
-references after the release prefix, close/summary/settlement and success/K/T
+references after the release prefix, close/summary/settlement and success
 conditions still govern the original eviction path.

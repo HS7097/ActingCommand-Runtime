@@ -174,10 +174,9 @@ parameters; omission and explicit values retain their independent `default` or
 even when periodic retention is disabled. Days convert to milliseconds within
 `u64`; a backward clock cannot supply a negative elapsed duration as an expiry.
 Confirmed close, summary/settlement, material binding and permanent evidence
-protections still apply. GlobalLedger seals the effective K/T and original
-terminal with the chosen eligibility basis in the original eviction intent.
-Since Workflow #375 R5d the cleaner admits no eviction intent, so K and T gate
-nothing; both keys are still validated and reported.
+protections still apply. Since Workflow #375 R5d the cleaner admits no eviction
+intent, and since Workflow #382 L-5 GlobalLedger no longer evaluates or seals
+K/T, so K and T gate nothing; both keys are still validated and reported.
 
 `frame_retention_dedup_error` (boolean, default `true`) and
 `frame_retention_dedup_lab` (boolean, default `false`) are the frame classes'
