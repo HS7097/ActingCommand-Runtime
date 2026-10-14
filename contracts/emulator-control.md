@@ -512,11 +512,13 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   (a direct task run, a client lease, an application or input command, a Lab operation), under
   `trigger` they count; and codes the catalog does not list. An emulator control command is not
   manual work, so its records count, and the connection preparation after an emulator `start` or
-  `restart` still starts its ladder as above (coordinator ruling P1). The count reads which claim
-  holds the instance's key and takes its own lock; it records nothing and admits nothing on the
-  write path. The lease sweep admits each burst's ladder (trigger `stage: stability_warnings`, the
-  burst's last code, no run, task or preparation) and queues its claim. Its return-home rung takes
-  the recovery package the instance's startup package resolves, as a preparation's ladder does.
+  `restart` still starts its ladder as above (coordinator ruling P1). The count takes no lock but
+  its own: it reads the holder kind the scheduler last reported for the instance's key (the
+  scheduler reports it under its own lock at every grant, transfer, release, expiry and
+  rollback), and it records nothing and admits nothing on the write path. The lease sweep admits
+  each burst's ladder (trigger `stage: stability_warnings`, the burst's last code, no run, task
+  or preparation) and queues its claim. Its return-home rung takes the recovery package the
+  instance's startup package resolves, as a preparation's ladder does.
   Windows and failures are memory only: a restart starts every window empty.
 - **Resource fence (Workflow #403).** An unconfirmed close of one instance's own resources (an
   application, input or capture backend, or a session close, that could not confirm its

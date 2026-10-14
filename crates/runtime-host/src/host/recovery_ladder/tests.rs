@@ -255,7 +255,7 @@ fn request_id() -> RequestId {
 }
 
 /// A record that is a failure of its own: it names no run, no request and no record it entered
-/// from, and no claim holds its instance's key.
+/// from.
 fn record(instance_id: InstanceId, at_unix_ms: u64, spelling: &str) -> CountedRecord<'_> {
     CountedRecord {
         instance_id,
@@ -263,7 +263,6 @@ fn record(instance_id: InstanceId, at_unix_ms: u64, spelling: &str) -> CountedRe
         run_id: None,
         request_id: None,
         entered_event_id: None,
-        holder: None,
         at_unix_ms,
         severity: EventSeverity::Error,
         spelling,
@@ -274,6 +273,23 @@ fn record(instance_id: InstanceId, at_unix_ms: u64, spelling: &str) -> CountedRe
 fn bursts(config: Arc<LadderConfig>, records: &[CountedRecord<'_>]) -> Vec<StabilityBurst> {
     let mut counter = StabilityCounter::default();
     counter.configure(config);
+    for record in records {
+        counter.count(record);
+    }
+    counter.take().0
+}
+
+// A counter with `config` that counted `records` while the scheduler reported a claim of
+// `holder` holding `instance_id`'s key; the bursts it registered.
+fn held_bursts(
+    config: Arc<LadderConfig>,
+    instance_id: InstanceId,
+    holder: ClaimKind,
+    records: &[CountedRecord<'_>],
+) -> Vec<StabilityBurst> {
+    let mut counter = StabilityCounter::default();
+    counter.configure(config);
+    counter.set_key_holder(instance_id, Some(holder));
     for record in records {
         counter.count(record);
     }
@@ -426,11 +442,9 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     // A direct run's records (its key held by its `DirectTaskRun` claim) count only under
     // `direct_runs = trigger`.
     let direct_records = |instance_id| {
-        [1_000, 2_000, 3_000].map(|at_unix_ms| CountedRecord {
-            holder: Some(ClaimKind::DirectTaskRun),
-            ..record(instance_id, at_unix_ms, OPEN_FAILED)
-        })
+        [1_000, 2_000, 3_000].map(|at_unix_ms| record(instance_id, at_unix_ms, OPEN_FAILED))
     };
+    counter.set_key_holder(other, Some(ClaimKind::DirectTaskRun));
     for record in &direct_records(other) {
         counter.count(record);
     }
@@ -439,6 +453,7 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     triggering.configure(ladder(
         serde_json::json!({"rules": {"direct_runs": "trigger"}}),
     ));
+    triggering.set_key_holder(other, Some(ClaimKind::DirectTaskRun));
     for record in &direct_records(other) {
         triggering.count(record);
     }
@@ -645,9 +660,9 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
     let node = instance();
     let exempt = ladder(serde_json::json!({}));
     let trigger = ladder(serde_json::json!({"rules": {"direct_runs": "trigger"}}));
-    // Three failures of one kind of work, 1 s apart, each under its own request while a claim of
-    // `holder` holds the instance's key; `fenced` adds each failure's fence record.
-    let failures = |holder: ClaimKind, spellings: &[&'static str], fenced: bool| {
+    // Three failures of one kind of work, 1 s apart, each under its own request; `fenced` adds
+    // each failure's fence record.
+    let failures = |spellings: &[&'static str], fenced: bool| {
         let mut records = Vec::new();
         for at_unix_ms in [1_000_u64, 2_000, 3_000] {
             let request = Some(request_id());
@@ -655,7 +670,6 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
             for (offset, &spelling) in (0_u64..).zip(spellings) {
                 records.push(CountedRecord {
                     request_id: request,
-                    holder: Some(holder),
                     ..record(node, at_unix_ms + offset, spelling)
                 });
             }
@@ -663,7 +677,6 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
                 let entered = records.get(first).map(|failed| failed.event_id);
                 records.push(CountedRecord {
                     entered_event_id: entered,
-                    holder: Some(holder),
                     ..record(node, at_unix_ms + 10, "instance_resources_fenced")
                 });
             }
@@ -697,12 +710,12 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
         ),
     ];
     for (work, holder, spellings, fenced) in rows {
-        let records = failures(holder, spellings.as_slice(), fenced);
+        let records = failures(spellings.as_slice(), fenced);
         assert!(
-            bursts(Arc::clone(&exempt), &records).is_empty(),
+            held_bursts(Arc::clone(&exempt), node, holder, &records).is_empty(),
             "{work} under exempt"
         );
-        let registered = bursts(Arc::clone(&trigger), &records);
+        let registered = held_bursts(Arc::clone(&trigger), node, holder, &records);
         let [burst] = registered.as_slice() else {
             panic!("{work} under trigger: one burst: {}", registered.len());
         };
@@ -713,11 +726,10 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
         );
     }
     let control = failures(
-        ClaimKind::EmulatorControl,
         ["backend_operation_failed", "emulator_control_failed"].as_slice(),
         false,
     );
-    let registered = bursts(exempt, &control);
+    let registered = held_bursts(exempt, node, ClaimKind::EmulatorControl, &control);
     let [burst] = registered.as_slice() else {
         panic!(
             "emulator control under exempt: one burst: {}",
@@ -728,5 +740,40 @@ fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts(
         (burst.first_unix_ms, burst.last_unix_ms),
         (1_000, 3_000),
         "emulator control under exempt"
+    );
+}
+
+// Workflow #387 D1c-H (B1): the counter reads the holder kind the scheduler last reported for the
+// instance's key. Under `exempt`, two failures while a client lease holds the key count for
+// nothing; once the scheduler reports a policy dispatch holding it, the routine claim's failures
+// count, and the burst comes at its third failure, spanning only the routine ones.
+#[test]
+fn d1ch_a_key_holder_change_from_manual_work_to_a_routine_claim_flips_counting() {
+    let node = instance();
+    let operation_failed = "capture_backend_operation_failed";
+    let mut counter = StabilityCounter::default();
+    counter.configure(ladder(serde_json::json!({})));
+    counter.set_key_holder(node, Some(ClaimKind::ClientLease));
+    for at_unix_ms in [1_000, 2_000] {
+        counter.count(&record(node, at_unix_ms, operation_failed));
+    }
+    assert!(counter.take().0.is_empty(), "the client lease's failures");
+    counter.set_key_holder(node, Some(ClaimKind::PolicyDispatch));
+    for at_unix_ms in [3_000, 4_000] {
+        counter.count(&record(node, at_unix_ms, operation_failed));
+    }
+    assert!(
+        counter.take().0.is_empty(),
+        "two routine failures, the manual ones not counted"
+    );
+    counter.count(&record(node, 5_000, operation_failed));
+    let registered = counter.take().0;
+    let [burst] = registered.as_slice() else {
+        panic!("one burst: {}", registered.len());
+    };
+    assert_eq!(
+        (burst.first_unix_ms, burst.last_unix_ms),
+        (3_000, 5_000),
+        "the burst spans the routine failures alone"
     );
 }

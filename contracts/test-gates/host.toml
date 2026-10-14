@@ -593,7 +593,7 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #387 D1c-H: the records one failure commits count once toward direction ① (by its run, else its request, else the failure of the record it entered from, else the record): a lifecycle failure with two causes, a scheduled run's capture failure and a monitor probe's capture failure each count once; three separate failures within the window register a burst and three at just over it do not; under rules.direct_runs = exempt the records committed while manual work (the fence's B1 set) holds the instance's key are not counted, under trigger they are, and emulator control records still count
+# Workflow #387 D1c-H: the records one failure commits count once toward direction ① (by its run, else its request, else the failure of the record it entered from, else the record): a lifecycle failure with two causes, a scheduled run's capture failure and a monitor probe's capture failure each count once; three separate failures within the window register a burst and three at just over it do not; under rules.direct_runs = exempt the records committed while manual work (the fence's B1 set) holds the instance's key are not counted, under trigger they are, and emulator control records still count; the counter reads the holder kind the scheduler last reported for the key, so a change from a manual claim to a routine one flips counting
 [[gate]]
 key = "71"
 coverage = "Y"
@@ -601,5 +601,6 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_the_records_of_one_failure_count_once",
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_three_separate_failures_within_the_window_register_a_burst_and_just_over_do_not",
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_a_key_holder_change_from_manual_work_to_a_routine_claim_flips_counting",
 ]
 incident = ["#387"]

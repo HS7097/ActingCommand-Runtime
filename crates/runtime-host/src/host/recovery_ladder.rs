@@ -442,13 +442,17 @@ struct EmulatorRestartBounds<'a> {
 /// (a restart starts every window empty, LEDG:932). A leaf lock: the append path takes it while
 /// it holds `fact_write_gate` and takes nothing under it; the lease sweep admits what it
 /// registered. Workflow #387 D1c-H (Alice 10-14): a window holds failures, not records; one
-/// failure counts once, however many matching records it commits.
+/// failure counts once, however many matching records it commits. The scheduler reports each
+/// change of an instance key's holder under its own lock (scheduler → this leaf), so the write
+/// path takes no lock but this one.
 #[derive(Default)]
 pub(super) struct StabilityCounter {
     /// The section in effect, refreshed whenever the configuration changes.
     config: Option<Arc<LadderConfig>>,
     /// The instances a ladder climbs on: their records are its own work.
     climbing: BTreeSet<InstanceId>,
+    /// Per instance, the kind of claim the scheduler last reported holding its key (B1).
+    key_holders: BTreeMap<InstanceId, ClaimKind>,
     /// Per instance and trigger item, when each counted failure counted, oldest first.
     windows: BTreeMap<InstanceId, BTreeMap<String, VecDeque<u64>>>,
     /// Per instance, the failures of recent records and the failures counted (D1c-H).
@@ -519,15 +523,13 @@ pub(super) struct StabilityBurst {
 }
 
 /// What direction ① reads of one committed record: its instance, its own event id, its run and
-/// request links, the record its failure entered from, the kind of claim that held the
-/// instance's key when it was committed, when, how severe, and its code.
+/// request links, the record its failure entered from, when, how severe, and its code.
 pub(super) struct CountedRecord<'a> {
     pub(super) instance_id: InstanceId,
     pub(super) event_id: EventId,
     pub(super) run_id: Option<RunId>,
     pub(super) request_id: Option<RequestId>,
     pub(super) entered_event_id: Option<EventId>,
-    pub(super) holder: Option<ClaimKind>,
     pub(super) at_unix_ms: u64,
     pub(super) severity: EventSeverity,
     pub(super) spelling: &'a str,
@@ -547,6 +549,19 @@ impl StabilityCounter {
         }
     }
 
+    /// Workflow #387 D1c-H (B1): the scheduler reports which kind of claim holds
+    /// `instance_id`'s key now (`None`: the key is free).
+    pub(super) fn set_key_holder(&mut self, instance_id: InstanceId, holder: Option<ClaimKind>) {
+        match holder {
+            Some(kind) => {
+                self.key_holders.insert(instance_id, kind);
+            }
+            None => {
+                self.key_holders.remove(&instance_id);
+            }
+        }
+    }
+
     /// Counts one committed record (§3.4): a warning or worse, on an instance no ladder climbs
     /// on, not committed while manual work holds the instance's key under
     /// `rules.direct_runs = exempt` (B1, the fence's set), whose code the first
@@ -563,7 +578,13 @@ impl StabilityCounter {
             record.severity,
             EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
         ) || self.climbing.contains(&record.instance_id)
-            || direct_run_exempt(&config.rules, record.holder.is_some_and(manual_claim))
+            || direct_run_exempt(
+                &config.rules,
+                self.key_holders
+                    .get(&record.instance_id)
+                    .copied()
+                    .is_some_and(manual_claim),
+            )
         {
             return;
         }
@@ -1123,15 +1144,34 @@ impl HostShared {
         Ok(())
     }
 
+    /// Workflow #387 D1c-H (B1): reports to direction ① which kind of claim holds `instance_id`'s
+    /// key as `scheduler` now has it. Called under the scheduler's lock wherever the key's holder
+    /// changes (a grant, a transfer, a release, an expiry, a rollback); it takes only the
+    /// counter's leaf lock.
+    pub(super) fn note_key_holder(
+        &self,
+        scheduler: &SeedScheduler,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        let holder = scheduler
+            .active_lease(instance_id)
+            .map(|lease| lease.kind());
+        lock(
+            &self.stability_counter,
+            HostLocation::RecoveryStabilityCount,
+        )?
+        .set_key_holder(instance_id, holder);
+        Ok(())
+    }
+
     /// Workflow #387 D1c (§3.4): direction ①'s count of one committed record, under the append
     /// path's `fact_write_gate`: memory only, nothing recorded and no admission. A record counts
     /// by its outcome's code; a record without an outcome counts for nothing (Workflow #387
     /// D1c-H: a backend open observation carries none; an open failure counts through the
     /// preparation, capture, input or task record that carries it). Its run and request links
-    /// and the record its failure entered from name the failure it belongs to; the kind of claim
-    /// holding its instance's key says whether manual work committed it (B1). The scheduler's
-    /// lock is taken and dropped before the counter's leaf lock; nothing that holds the
-    /// scheduler's lock appends a record.
+    /// and the record its failure entered from name the failure it belongs to; the holder kind
+    /// the scheduler last reported for its instance's key says whether manual work committed it
+    /// (B1). It takes no lock but the counter's own.
     pub(super) fn count_stability_record(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         let Some(instance_id) = event.links().instance_id().copied() else {
             return Ok(());
@@ -1139,16 +1179,6 @@ impl HostShared {
         let Some(outcome) = event.payload().outcome() else {
             return Ok(());
         };
-        // Only a warning or worse can count; the key's holder is read for those alone.
-        if !matches!(
-            event.severity(),
-            EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
-        ) {
-            return Ok(());
-        }
-        let holder = lock(&self.scheduler, HostLocation::RecoveryStabilityCount)?
-            .active_lease(instance_id)
-            .map(|lease| lease.kind());
         let entered_event_id = match event.payload() {
             EventPayload::Runtime(RuntimePayload::Failed(value)) => value
                 .lifecycle_failure()
@@ -1165,7 +1195,6 @@ impl HostShared {
             run_id: event.links().run_id().copied(),
             request_id: event.links().request_id().copied(),
             entered_event_id,
-            holder,
             at_unix_ms: event.timestamp_unix_ms(),
             severity: event.severity(),
             spelling: outcome.code().as_str(),

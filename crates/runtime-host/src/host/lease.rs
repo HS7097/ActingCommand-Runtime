@@ -1039,8 +1039,13 @@ impl HostShared {
                 audit_endpoint(context.instance.audit_endpoint()),
             ),
         )?;
-        let committed = lock(&self.scheduler, HostLocation::CommitLeaseTransfer)?
-            .commit_transfer(prepared, self.monotonic_ms()?);
+        let committed = {
+            let mut scheduler = lock(&self.scheduler, HostLocation::CommitLeaseTransfer)?;
+            let committed = scheduler.commit_transfer(prepared, self.monotonic_ms()?);
+            // Workflow #387 D1c-H: direction ① learns the key's new holder under this lock.
+            self.note_key_holder(&scheduler, to.instance_id())?;
+            committed
+        };
         let committed = committed.map_err(|_| {
             RequestFailure::poison(
                 RuntimeHostError::fatal(
@@ -1917,8 +1922,13 @@ impl HostShared {
                         .naming_lease(token.lease_id())
                 })
                 .unwrap_or(error);
+            self.note_key_holder(&scheduler, token.instance_id())
+                .map_err(ActionFailure::poison)?;
             return Err(ActionFailure::poison(rollback_error));
         }
+        // Workflow #387 D1c-H: direction ① learns the key's new holder under this lock.
+        self.note_key_holder(&scheduler, token.instance_id())
+            .map_err(ActionFailure::poison)?;
         Ok(token)
     }
 
@@ -1944,6 +1954,9 @@ impl HostShared {
                             .naming_lease(token.lease_id()),
                     )
                 })?;
+            // Workflow #387 D1c-H: direction ① learns the key is free under this lock.
+            self.note_key_holder(&scheduler, token.instance_id())
+                .map_err(ActionFailure::poison)?;
         }
         self.persist_active_instances()
             .map_err(ActionFailure::poison)?;
@@ -2531,7 +2544,7 @@ impl HostShared {
                                 };
                             }
                         };
-                    if reason == LeaseReleaseReason::Expired {
+                    let outcome = if reason == LeaseReleaseReason::Expired {
                         let now = match self.monotonic_ms() {
                             Ok(now) => now,
                             Err(error) => {
@@ -2544,7 +2557,15 @@ impl HostShared {
                         scheduler.expire_token(token, now)
                     } else {
                         scheduler.release_owned(token, connection_id, reason)
+                    };
+                    // Workflow #387 D1c-H: direction ① learns the key's holder under this lock.
+                    if let Err(error) = self.note_key_holder(&scheduler, token.instance_id()) {
+                        return CriticalActionReport::Failed {
+                            error: ActionFailure::poison(error),
+                            effect: EffectDisposition::Indeterminate,
+                        };
                     }
+                    outcome
                 };
                 match released {
                     Ok(_) => match self.persist_active_instances() {
