@@ -7,8 +7,8 @@ pub(crate) fn adb_recovery_record(
     value: &device::AdbTargetRecovery,
 ) -> contract::AdbTargetRecovery {
     contract::AdbTargetRecovery {
-        endpoint: detail(&value.endpoint),
-        initial_error: detail(&value.initial_error),
+        endpoint: Some(detail(&value.endpoint)),
+        initial_error: Some(detail(&value.initial_error)),
         path: match value.path {
             device::AdbRecoveryPath::Connect => contract::AdbRecoveryPath::Connect,
             device::AdbRecoveryPath::TargetDisconnectConnect => {
@@ -24,6 +24,7 @@ pub(crate) fn adb_recovery_record(
                 attempt: step.attempt,
                 elapsed_ms: step.elapsed_ms,
                 error: step.error.as_ref().map(detail),
+                outcome: None,
                 command: step
                     .command
                     .as_ref()
@@ -36,12 +37,14 @@ pub(crate) fn adb_recovery_record(
                         stderr_lossy_decode: command.stderr_lossy_decode,
                         state: state(command.state),
                         raw_text_redacted: command.raw_text_redacted,
+                        outcome: None,
                     }),
             })
             .collect(),
         final_state: state(value.final_state),
         recovered: value.recovered,
         dropped_count: value.dropped_count,
+        outcome: None,
     }
 }
 fn detail(value: &device::AdbRecoveryText) -> contract::LifecycleNativeDetail {

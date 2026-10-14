@@ -141,6 +141,7 @@ fn target_payload(
             margin_milli: value.margin_milli,
             second_rect: value.second_rect.map(region_rect),
         }),
+        correction: None,
     }
 }
 

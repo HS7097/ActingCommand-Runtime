@@ -461,6 +461,7 @@ fn rd3i_t4_a_cropped_stream_records_its_crop_and_an_unrecorded_one_is_judged_as_
         rotation,
         sampled_at: SystemTime::UNIX_EPOCH,
         frame_transform,
+        safe_insets: None,
     };
     let frame = CaptureExtent::new(1080, 2336).expect("frame");
     let recorded = geometry(transform);

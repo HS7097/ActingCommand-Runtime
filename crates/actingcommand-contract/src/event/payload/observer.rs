@@ -266,6 +266,18 @@ pub(super) fn validate_tagged_state_stores(
     Ok(())
 }
 
+/// The report a `tagged_state_loaded` or `tagged_state_enabled` record may carry (register
+/// X4): the load (`ledger_tagged_state_loaded`) or the seeding (`ledger_tagged_state_seeded`),
+/// both info, as every code ledger observer §16 reports for these phases.
+pub(super) fn validate_tagged_state_outcome(
+    outcome: Option<&Outcome>,
+) -> Result<(), SanitizationError> {
+    if outcome.is_some_and(|outcome| outcome.category() != Category::Info) {
+        return Err(invalid_ledger_record("tagged_state_outcome"));
+    }
+    Ok(())
+}
+
 /// `input_fact_revisions` of `policy.dispatch_intent` and `task.selection_evaluated`
 /// (register L9): both stores' (lineage, revision) the decision read, each the same pair a
 /// status read's source names (`RuntimeStateStoreRevision`, register W1). A reader accepts it or

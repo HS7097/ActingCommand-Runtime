@@ -1865,6 +1865,7 @@ impl CaptureBackend for DroidcastRawBackend {
             rotation: observed_rotation(rotation, rotation_source),
             sampled_at: geometry_sampled_at,
             frame_transform: Some(transform),
+            safe_insets: None,
         });
         Ok(frame)
     }
@@ -2914,6 +2915,7 @@ impl NemuIpcWorkerState {
             rotation: CaptureRotationObservation::NotProvidedBySource,
             sampled_at,
             frame_transform,
+            safe_insets: None,
         }))
     }
 
@@ -3488,6 +3490,7 @@ fn read_adb_capture_geometry(
         rotation: observed_rotation(rotation, rotation_source),
         sampled_at: SystemTime::now(),
         frame_transform: None,
+        safe_insets: None,
     }))
 }
 

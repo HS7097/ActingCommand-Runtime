@@ -1443,6 +1443,7 @@ impl CaptureBackend for GoldenCapture {
             },
             sampled_at: std::time::SystemTime::now(),
             frame_transform: None,
+            safe_insets: None,
         }))
     }
     fn close_once(

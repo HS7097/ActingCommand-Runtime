@@ -1425,6 +1425,7 @@ impl RuntimeContainedTask<'_> {
                             trigger,
                             original_failure,
                             unavailable: result.as_ref().err().map(task_geometry_failure_ref),
+                            display_map: None,
                         }),
                     },
                     AuditInput::new(),
