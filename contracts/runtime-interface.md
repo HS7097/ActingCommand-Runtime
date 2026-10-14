@@ -178,8 +178,9 @@ static and exhaustive over `RuntimeOperation`: no content, no heuristics.
 - **General interface: what normal operation needs.** All three counters take it,
   whether or not the Lab is installed.
   - Reads: every query (status, ledger, frames, instance discovery, resource targets).
-    A read may record an observation (a capture, a discovery) or write a copy
-    (material export).
+    A read may record an observation (a capture) or write a copy (material export).
+    A successful instance discovery appends no observation record (Workflow #383
+    AO-4q); only G14 copies its request.
   - Instructions: a decision or setting handed to the Runtime, which does the work
     itself: pause and resume, monitor settings, whether a package is scheduled for a
     period, the priority offset, instance facts and resource targets, request shutdown,
@@ -222,7 +223,7 @@ one would be (section Records).
 |---|---|---|---|---|
 | Status, MonitorStatus, RuntimeFactSnapshot, ProjectInterface, QueryEvents, SubscribeEvents, ReadMaterial, ResourceTargetView | general | read | cli, mcp, ui; the Lab channel too | no (a failed ReadMaterial is recorded as today) |
 | ObserveReadonly, CaptureSequence | general | read (frames) | cli `observe`, `stream`; mcp `ac_observe`, `ac_stream` (new); both pin `Explicit`. Lab channel: actinglab's capture commands and `runtime observe`, pinned `Lab` | yes |
-| DiscoverInstances | general | read (instance discovery) | cli `emulator discover` (and acsetup's instance step); mcp `ac_emulator_discover` (new); ui instance discovery | yes, plus its observation |
+| DiscoverInstances | general | read (instance discovery) | cli `emulator discover` (and acsetup's instance step); mcp `ac_emulator_discover` (new); ui instance discovery | yes (the request only; a successful discovery appends no observation record, Workflow #383 AO-4q) |
 
 **General instructions (7)**
 
@@ -409,9 +410,11 @@ refusing earlier would cut every machine that uses the Lab today.
   as `command.received`, `command.validated` or `command.rejected`, with two members
   added by this model: `channel` (`cli`, `mcp`, `ui`, `lab`) and the optional `via`
   (`mcp`, `ui`).
-- Reads that write records (the two capture kinds, discovery, option one's reads, the
-  planning projection) are copied with their channel too; pure queries (status, events,
-  material, snapshots, the target view, upgrade-state status) are not.
+- Reads that write records (the two capture kinds, option one's reads, the planning
+  projection) and discovery (its request only: a successful discovery appends no
+  observation record, Workflow #383 AO-4q) are copied with their channel too; pure
+  queries (status, events, material, snapshots, the target view, upgrade-state status)
+  are not.
 - A refused request is copied when an accepted one of its kind would be:
   `lab_module_not_installed`, `lab_module_option_disabled` and
   `channel_request_refused` on a write become `command.rejected`; a refused pure query
