@@ -4495,7 +4495,8 @@ impl TaskSemanticFact {
             | Self::TerminalCommitted { outcome, .. } => outcome.as_ref(),
             Self::SelectionEvaluated { selection, .. } => match &selection.confirmation {
                 TaskSelectionConfirmation::GuardFailed { outcome }
-                | TaskSelectionConfirmation::CaptureFailed { outcome } => Some(outcome),
+                | TaskSelectionConfirmation::CaptureFailed { outcome }
+                | TaskSelectionConfirmation::RepositionFailed { outcome, .. } => Some(outcome),
                 _ => None,
             },
             _ => None,
@@ -4533,7 +4534,8 @@ impl TaskSemanticFact {
                     reason.0 = reason.0.codes_only();
                 }
                 if let TaskSelectionConfirmation::GuardFailed { outcome }
-                | TaskSelectionConfirmation::CaptureFailed { outcome } =
+                | TaskSelectionConfirmation::CaptureFailed { outcome }
+                | TaskSelectionConfirmation::RepositionFailed { outcome, .. } =
                     &mut selection.confirmation
                 {
                     *outcome = outcome.codes_only();
