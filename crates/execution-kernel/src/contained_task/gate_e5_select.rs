@@ -469,7 +469,7 @@ fn gate_select_a_guard_that_fails_on_the_confirmation_frame_taps_nothing() {
     assert_aborted_before_the_input(&device);
     match &device.records()[0].confirmation {
         TaskSelectionConfirmation::GuardFailed { outcome } => {
-            assert_eq!(outcome.code(), error.code(), "{error}");
+            assert_eq!(outcome.code().as_str(), error.code().as_str(), "{error}");
         }
         other => panic!("a guard_failed confirmation, got {other:?}"),
     }

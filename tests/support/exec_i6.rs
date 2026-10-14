@@ -5,8 +5,8 @@
 //! (runtime-host), so both judge the same packages (E-4 G4b,
 //! `contracts/package-reference.md`, "Maintenance declarations (bundle v3)").
 //!
-//! Every package is a `linear_steps` package of game `neutral`, server `test`, written as an
-//! assembled package directory: one click from `home` (first pixel red) to `list` (first pixel
+//! Every package is a `linear_steps` package of game `neutral`, server `test`, written as a
+//! source package directory: one click from `home` (first pixel red) to `list` (first pixel
 //! blue). A case is a set of such packages, the ones bound as prerequisite packages, and the
 //! code with which the shared prerequisite chain refuses the run of [`ROOT`].
 
@@ -111,7 +111,10 @@ pub fn admitted_case() -> I6Case {
     }
 }
 
-/// Writes `pack` as an assembled package directory at `directory`.
+/// Writes `pack` as a source package directory at `directory`, the layout the Runtime and the
+/// bundle check both read from a directory and compile in memory (Workflow #336 PKG-S1): its
+/// control, its resource table and one task whose two pages are each recognized by a color probe
+/// of the first pixel. A source package holds no derived output such as `resources/manifest.json`.
 pub fn write_pack(directory: &Path, pack: &I6Pack) {
     let (width, height) = pack.resolution;
     let mut control = json!({
@@ -130,12 +133,25 @@ pub fn write_pack(directory: &Path, pack: &I6Pack) {
     if let Some(prerequisite) = pack.prerequisite {
         control["prerequisite_package_id"] = json!(prerequisite);
     }
+    let probe = |id: &str, expected: [u8; 3]| {
+        json!({"id": id,
+               "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
+               "expected": expected})
+    };
     let task = json!({
         "schema_version": "0.9",
         "task_id": "task",
         "game": GAME,
         "server_scope": [SERVER],
+        "locale": "en-US",
+        "goal": "EXEC-I6 fixture",
         "coordinate_space": {"width": width, "height": height},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [probe("first_red", [255, 0, 0]), probe("first_blue", [0, 0, 255])],
+        "page_rules": {
+            "home": {"required": ["first_red"]},
+            "list": {"required": ["first_blue"]}
+        },
         "entry_page": "home",
         "target_page": "list",
         "max_steps": 1,
@@ -147,38 +163,13 @@ pub fn write_pack(directory: &Path, pack: &I6Pack) {
             "unguarded_trusted_coordinate": true
         }]
     });
-    let probe = |id: &str, expected: [u8; 3]| {
-        json!({"type": "color", "id": id,
-               "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": expected})
-    };
-    let recognition = json!({
-        "schema_version": "0.3",
-        "game": GAME,
-        "server": SERVER,
-        "coordinate_space": {"width": width, "height": height},
-        "defaults": {"color_max_distance": 0.0},
-        "targets": [probe("pixel/first_red", [255, 0, 0]), probe("pixel/first_blue", [0, 0, 255])]
-    });
-    let page = |page: &str, target: &str| json!({"id": format!("{GAME}/{page}"), "required": [target], "optional": [], "forbidden": []});
-    let pages = json!({
-        "schema_version": "0.3",
-        "pages": [page("home", "pixel/first_red"), page("list", "pixel/first_blue")]
-    });
-    let files: [(&[&str], Value); 5] = [
+    let files: [(&[&str], Value); 3] = [
         (&["control.json"], control),
         (
-            &["resources", "manifest.json"],
-            json!({"schema_version": "0.3", "entry_task_id": "task"}),
+            &["resources", "operations", "resources.json"],
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
         ),
         (&["resources", "operations", "task", "task.json"], task),
-        (
-            &["resources", "recognition", "neutral.test.pack.json"],
-            recognition,
-        ),
-        (
-            &["resources", "recognition", "neutral.test.pages.json"],
-            pages,
-        ),
     ];
     for (segments, value) in files {
         let path = segments
