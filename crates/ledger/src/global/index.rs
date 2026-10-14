@@ -58,7 +58,7 @@ pub(super) enum LifecycleSlot {
 }
 
 impl LifecycleSlot {
-    pub(super) const fn key(self) -> &'static str {
+    pub(super) const fn index_key(self) -> &'static str {
         match self {
             Self::Start => "last_start",
             Self::Close => "last_close",

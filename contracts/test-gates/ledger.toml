@@ -443,3 +443,25 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_l5b::gate_replay_refuses_an_eviction_intent_carrying_failed_run_evidence",
 ]
 incident = ["#382 L-5b"]
+
+# Capture queue, watermark tiers and spill, batched flush with the ledger_index rows, gap records, flush barrier and close drain (Workflow #383 AO-2)
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_a_a_held_flush_spills_the_oldest_records_and_the_ledger_keeps_capture_order",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_b_one_spill_segment_while_memory_moves_between_the_tier_2_lines",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_c_decision_and_observation_records_keep_their_capture_order",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_d_the_flush_barrier_waits_for_its_record_and_writes_nothing",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_e_a_revision_hole_is_reported_unless_a_gap_covers_it",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_f_an_unconfirmed_tail_gets_one_gap_and_a_complete_dump_none",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_g_a_refused_capture_becomes_its_gap_and_the_others_are_written",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_h_the_budget_the_batches_and_the_dump_limit_follow_the_configuration",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_i_the_close_drains_both_segments_and_the_close_record_is_last",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_j_concurrent_captures_keep_capture_order_without_holes",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_k_a_held_spill_reaches_tier_3_and_the_hard_limit_stops_by_the_dump",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_l_the_index_rows_follow_the_committed_records",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_m_a_tagged_record_commits_on_arrival_with_full_sync",
+    "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_n_a_fatal_record_is_drained_last_or_dumped_in_capture_order",
+]
+incident = ["#383"]

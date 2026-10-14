@@ -2411,6 +2411,9 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        // Workflow #383 AO-2 (§8.2): from here the close record is the epoch's last record; the
+        // segment edges the close drain crosses are not reported after it.
+        self.queue.begin_close();
         let probe = self.probe.take().map_or(Ok(()), WriteProbe::finish);
         let writer = self.shutdown_writer();
         // Workflow #383 AO-2: the spill thread stops after the writer drained the queue; then

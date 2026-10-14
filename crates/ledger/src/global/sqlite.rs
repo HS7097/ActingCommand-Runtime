@@ -1300,7 +1300,7 @@ fn write_index_rows(connection: &Connection, batch: &BatchRows<'_>) -> GlobalLed
                     connection,
                     batch,
                     "lifecycle",
-                    SqlValue::Text(slot.key().to_owned()),
+                    SqlValue::Text(slot.index_key().to_owned()),
                     *at,
                 )?;
             }

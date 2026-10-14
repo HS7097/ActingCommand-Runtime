@@ -3002,3 +3002,7 @@ mod gate_l5b;
 // Workflow #383 AO-1: retry, dump, fatal stop and import (test rows AO1-a to AO1-k).
 #[path = "tests/gate_383_ao1.rs"]
 mod gate_383_ao1;
+
+// Workflow #383 AO-2 (ledger observer §7, §8, §10, §11.1).
+#[path = "tests/gate_383_ao2.rs"]
+mod gate_383_ao2;

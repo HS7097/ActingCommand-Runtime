@@ -74,9 +74,9 @@ struct Origin {
     source: Option<SourceRevision>,
 }
 
-/// Why a capture was refused: the refusal's code, as the gap's cause.
-fn cause(code: &'static str) -> Outcome {
-    Outcome::relayed(code)
+/// Why a capture was refused: the refusal's code as it was spelled, as the gap's cause.
+fn cause(spelling: &'static str) -> Outcome {
+    Outcome::relayed(spelling)
 }
 
 /// One staged record: where it came from and whether a caller waits for it.

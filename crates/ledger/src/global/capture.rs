@@ -343,6 +343,9 @@ struct QueueState {
     wake_owed: bool,
     hard_limit: bool,
     sealed: bool,
+    /// The writer drains for its close: the close record is the epoch's last record, so the
+    /// segment edges the drain itself crosses are not reported.
+    closing: bool,
     closed: bool,
     stop: bool,
 }
@@ -617,6 +620,7 @@ impl CaptureQueue {
                 wake_owed: false,
                 hard_limit: false,
                 sealed: false,
+                closing: false,
                 closed: false,
                 stop: false,
             }),
@@ -803,6 +807,9 @@ impl CaptureQueue {
         outcome: Outcome,
         edge: Option<LedgerSegmentEdge>,
     ) {
+        if state.closing && edge.is_some() {
+            return;
+        }
         let Ok(event_id) = self.identifiers.mint_event_id() else {
             return;
         };
@@ -1198,6 +1205,12 @@ impl CaptureQueue {
             }
             state = self.wait(state);
         }
+    }
+
+    /// The writer drains for its close (§8.2): the segment edges of that drain are not reported
+    /// after the close record.
+    pub(super) fn begin_close(&self) {
+        self.lock().closing = true;
     }
 
     /// The writer ended: waiters of the barrier wake.
