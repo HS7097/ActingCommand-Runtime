@@ -48,7 +48,6 @@ impl RuntimeDebugSession {
             .find(|instance| instance.instance_alias() == instance_alias)
             .ok_or_else(|| observation_error(ClientCode::RuntimeObservationInstanceUnknown))?
             .instance_id();
-        let expected = request.expected_sha256().clone();
         let timeout = self
             .client
             .connection(ClientLocation::ObserveContainedPage.location())?
@@ -75,7 +74,6 @@ impl RuntimeDebugSession {
             receipt,
             self.correlation_id(),
             instance,
-            &expected,
             &events,
         )
         .map_err(|error| {
@@ -102,7 +100,6 @@ fn verify_observation(
     receipt: RuntimeReceipt,
     correlation: CorrelationId,
     instance: InstanceId,
-    expected: &actingcommand_contract::PackageRef,
     events: &[ProjectedEvent],
 ) -> RuntimeClientResult<VerifiedPageObservation> {
     receipt
@@ -113,10 +110,9 @@ fn verify_observation(
             ClientCode::RuntimeObservationResultUnexpected,
         ));
     };
-    if receipt.correlation_id() != correlation
-        || observation.instance_id != instance
-        || &observation.expected_package_sha256 != expected
-    {
+    // Workflow #336 PKG-S2 (option 丙): the observation names its package by `package_id`;
+    // no package digest is compared.
+    if receipt.correlation_id() != correlation || observation.instance_id != instance {
         return Err(observation_error(
             ClientCode::RuntimeObservationIdentityMismatch,
         ));
@@ -251,8 +247,7 @@ fn verify_observation(
         || evidence.request_id != receipt.request_id()
         || evidence.correlation_id != correlation
         || evidence.instance_id != instance
-        || &evidence.expected_package_sha256 != expected
-        || &evidence.actual_package_sha256 != expected
+        || evidence.package_label != observation.package_label
         || evidence.frame != observation.frame
         || evidence.status != observation.status
         || evidence.projection != observation.projection

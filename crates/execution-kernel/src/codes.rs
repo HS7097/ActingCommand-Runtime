@@ -31,7 +31,8 @@ actingcommand_contract::outcome_codes! {
         ExecutionEndpointRebindFailed => "execution_endpoint_rebind_failed": error / none,
         PreparationDeadlineExceeded => "preparation_deadline_exceeded": error / budget_or_permission,
         // Device backends of a session.
-        InputPlanPreparationFailed => "input_plan_preparation_failed": error / environment_fault,
+        // Workflow #387 D1c-F: a validated action whose plan fails to prepare (Runtime-internal).
+        InputPlanPreparationFailed => "input_plan_preparation_failed": error / none,
         InputBackendMissing => "input_backend_missing": error / none,
         InputBackendCloseFailed => "input_backend_close_failed": error / stability_warning,
         InputFrameCaptureMismatch => "input_frame_capture_mismatch": error / none,
@@ -122,7 +123,6 @@ actingcommand_contract::outcome_codes! {
         /// Warning (Workflow #384 D2-S2): a reading mark gave no reading; the run goes on (keys
         /// `reading_id`, `fact_key`, `reading_problem`).
         ContainedTaskResourceReadingUnresolved => "contained_task_resource_reading_unresolved": warning / none,
-        ContainedTaskStabilityCaptureInvalid => "contained_task_stability_capture_invalid": error / environment_fault,
         ContainedTaskStabilityComparisonFailed => "contained_task_stability_comparison_failed": error / environment_fault,
         ContainedTaskStabilityCounterInvalid => "contained_task_stability_counter_invalid": error / none,
         ContainedTaskStabilityCounterOverflow => "contained_task_stability_counter_overflow": error / none,

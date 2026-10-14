@@ -55,14 +55,6 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         .resource_declaration()
         .expect("typed declaration refusal");
     assert_eq!(
-        refusal.declared_package.legacy_sha256(),
-        Some(invalid_hash.as_str())
-    );
-    assert_eq!(
-        refusal.verified_package.as_ref(),
-        Some(&refusal.declared_package)
-    );
-    assert_eq!(
         refusal.issue.declaration_file,
         "resources/operations/task/task.json"
     );
@@ -288,8 +280,8 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         .collect::<Vec<_>>();
     assert!(semantic.iter().any(|fact| matches!(
         fact,
-        TaskSemanticFact::PackageAdmitted { package_sha256, .. }
-            if package_sha256 == &actingcommand_contract::PackageRef::from(&expected)
+        TaskSemanticFact::PackageAdmitted { package_label, .. }
+            if package_label == "neutral.semantic.task"
     )));
     assert_eq!(
         semantic

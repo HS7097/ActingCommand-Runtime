@@ -3,7 +3,7 @@
 //! Workflow #336 PKG-S1 (option 丙), model M-PKG v1.1 §4.2 S1-T4: the `sha256` pins of a
 //! post-admission OCR truth set and of an OCR field dictionary are well formed but name other
 //! bytes; the package is admitted all the same, because no pin inside a package is compared.
-//! The keys stay required and format-checked until PKG-S2.
+//! Since PKG-S2 the keys are optional and ignored (S2-T7 below).
 
 use super::*;
 use serde_json::{Value, json};
@@ -116,6 +116,58 @@ fn s1_t4_ocr_truth_set_and_dictionary_pins_are_not_compared_at_admission() {
             "node.a",
             &path,
             &reference,
+            Some(Arc::new(FakeVisionProvider::default())),
+            Instant::now() + Duration::from_secs(60),
+        );
+        assert!(
+            admitted.is_ok(),
+            "{name}: the package is refused: {:?}",
+            admitted.err()
+        );
+    }
+}
+
+// Workflow #336 PKG-S2, model M-PKG v1.1 §4.3 S2-T7: the truth set and the dictionary
+// reference declare no `sha256` at all; the package is admitted all the same.
+#[test]
+fn s2_t7_ocr_truth_set_and_dictionary_without_a_pin_are_admitted() {
+    let task_path = "resources/operations/task/task.json";
+    let without_pin = |mut entries: BTreeMap<String, Vec<u8>>, pointer: &str| {
+        let mut task: Value = serde_json::from_slice(&entries[task_path]).expect("task JSON");
+        task.pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("the reference")
+            .remove("sha256")
+            .expect("the fixture declares a pin");
+        entries.insert(
+            task_path.to_owned(),
+            serde_json::to_vec(&task).expect("task JSON"),
+        );
+        entries
+    };
+    for (name, entries) in [
+        (
+            "truth-set",
+            without_pin(
+                truth_set_with_unrelated_pin(),
+                "/post_admission_ocr/truth_set",
+            ),
+        ),
+        (
+            "dictionary",
+            without_pin(
+                dictionary_with_unrelated_pin(),
+                "/post_admission_ocr/fields/0/value/dictionary",
+            ),
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let path = root.path().join(format!("{name}.zip"));
+        fs::write(&path, package_bytes(&entries)).expect("package file");
+        let admitted = PreparedContainedTask::load_path(
+            "node.a",
+            &path,
+            &actingcommand_contract::PackageRef::from("0".repeat(64)),
             Some(Arc::new(FakeVisionProvider::default())),
             Instant::now() + Duration::from_secs(60),
         );

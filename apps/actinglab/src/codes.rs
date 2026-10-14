@@ -20,5 +20,18 @@ actingcommand_contract::outcome_codes! {
         /// fit (keys `actual_bytes`, `limit_bytes`).
         ObserveIdentityLimitExceeded => "observe_identity_limit_exceeded": error / none,
         // ---- end of #391 MCP-391b
+        // ---- Workflow #308 SEL-L6a (pending): `actinglab replay --frames`.
+        /// Error. The replayed run did not complete: it ended with the outcome the details carry
+        /// as `end.outcome` (`offline_fixture_exhausted` when it needed a frame after the last).
+        ReplayRunRefused => "replay_run_refused": error / none,
+        /// Error. The `--frames` directory or one of its entries could not be listed.
+        ReplayFramesUnreadable => "replay_frames_unreadable": error / none,
+        /// Error. The `--frames` directory holds an entry that is not a PNG file.
+        ReplayFramesInvalid => "replay_frames_invalid": error / none,
+        /// Error. The `--facts` file could not be opened or read.
+        ReplayFactsUnreadable => "replay_facts_unreadable": error / none,
+        /// Error. The `--facts` file is not one complete instance fact answer of a Runtime.
+        ReplayFactsInvalid => "replay_facts_invalid": error / none,
+        // ---- end of SEL-L6a
     }
 }

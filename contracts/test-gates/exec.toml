@@ -679,3 +679,58 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #308 SEL-L6a: a whole package replays over a saved frame sequence with the production interpreter (the entry check, each step's operation, destinations, guarded inputs and reached page, the run's end); an operation whose to names several pages names them and the page reached; a multi-frame consensus takes its samples from the sequence; a select step evaluates the given fact snapshot at the instant it was read; actinglab replay asks nothing and exits by how the run ended; without an OCR model a package with an OCR target is refused with lab_ocr_unavailable; offline observe lists an operation with several destinations
+[[gate]]
+key = "51"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6a::l6a_t1_a_whole_package_replays_its_entry_steps_guards_and_end",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6a::l6a_t2_a_multi_destination_operation_names_its_destinations_and_the_page_reached",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6a::l6a_t3_a_multi_frame_consensus_takes_its_samples_from_the_sequence",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6a::l6a_t4_a_select_step_evaluates_the_facts_snapshot_at_the_instant_it_was_read",
+    "actingcommand-actinglab::replay_frames::replay_frames_runs_a_package_without_asking_and_exits_by_how_the_run_ended",
+    "actingcommand-actinglab::replay_frames::replay_frames_without_an_ocr_model_reports_ocr_unavailable_before_evaluating",
+    "actingcommand-actinglab::replay_frames::observe_lists_an_operation_with_several_destinations",
+]
+incident = ["#308"]
+
+# Workflow #396 REC-8: a fixed_slots layout's shared OCR read gives every slot target inside it the blocks of its region with one provider call; a slot without blocks is Unknown; the projection counts the read as one provider evaluation; a truncated read fails with text_read_blocks_truncated; a slot target outside the read reads on its own; a shared read no target uses is refused; the field and reading targets a page gate names count one read each in the page recognition's text read budget, at admission and at run time
+[[gate]]
+key = "52"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::sixteen_slots_take_their_names_from_one_shared_read",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_slot_without_blocks_in_its_region_is_unknown",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_projection_served_by_the_shared_read_counts_one_provider_evaluation",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_truncated_shared_read_fails_with_text_read_blocks_truncated",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_slot_target_outside_the_shared_read_reads_on_its_own",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_shared_read_no_slot_target_uses_is_refused",
+    "actingcommand-page-detector::lib::text_read_tests::a_page_set_counts_each_kept_target_it_names_as_one_read",
+    "actingcommand-recognition-pack::lib::text_locate::tests::a_fifth_kept_target_a_page_gate_reads_is_refused_before_the_provider_is_called",
+]
+incident = ["#396"]
+
+# Workflow #336 PKG-S2 (option 丙): a select step and a truth set without sha256 are admitted and compared as before, the comparison report names the truth set by path only, and a Lab do records its package by package_id while resource restore pairs by that id (same id restores, also changed in place; another id is refused) (M-PKG v1.1 §4.3 S2-T5, S2-T7; key 55 as the coordinator assigned it: 53 is reserved for D2-S3)
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::s2_t7_a_select_step_without_a_policy_pin_is_admitted",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::s2_t7_a_truth_set_without_a_pin_is_compared_and_its_report_names_no_pin",
+    "actingcommand-actinglab::runtime_input_proxy::s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id",
+]
+incident = ["#336 PKG-S2"]
+
+# Workflow #387 D1c-F: an invalid segmented swipe is refused by its producer under its own code before any input (a pack's at admission and when its action is built with contained_task_operation_invalid, class 3; Lab's port with validation_failed); a plan that still fails to prepare is input_plan_preparation_failed, class none, with no device severity, no resource disposition and no backend opened; a stability sample's frame data that does not add up is contained_task_frame_invalid (class 5) and a region that does not fit is contained_task_control_invalid (class 3)
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_admission_refuses_a_pack_swipe_whose_corner_leaves_no_room_for_the_brake",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_a_pack_swipe_past_admission_is_refused_before_any_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_a_stability_sample_tells_frame_data_from_a_region_that_does_not_fit",
+    "actingcommand-execution-kernel::lib::tests::gate_387_d1cf::d1cf_a_swipe_that_reaches_preparation_unvalidated_fails_as_a_runtime_internal_error",
+    "actingcommand-lab::lib::ports::d1cf_tests::d1cf_the_lab_port_refuses_a_segmented_swipe_before_any_port_opens",
+]
+incident = ["#387"]

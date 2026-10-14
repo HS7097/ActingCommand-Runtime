@@ -348,7 +348,7 @@ mod tests {
 
         let declaration_json = json!({"mode":"fields_v1","page_ids":["panel"],"fields":[{
             "id":"name","group":"item","target_id":"name","required":true,"privacy":"public",
-            "trim":"whitespace_v1","value":{"type":"dictionary_entry","dictionary":{"path":"words.json","sha256":"a".repeat(64)}}
+            "trim":"whitespace_v1","value":{"type":"dictionary_entry","dictionary":{"path":"words.json"}}
         }],"limits":{"max_frames":1,"max_items":2,"max_string_bytes":128,"max_total_bytes":4096,"max_truth_entries":16},"outcome_key":"fields_recorded"});
         let mut declaration: OcrFieldsDeclaration =
             serde_json::from_value(declaration_json.clone()).unwrap();

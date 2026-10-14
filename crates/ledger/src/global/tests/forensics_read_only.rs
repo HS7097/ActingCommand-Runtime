@@ -1634,12 +1634,8 @@ fn replays_a_sealed_archive_through_the_canonical_verifier() {
         identity: EvidenceExportIdentity {
             run_id: *run_id.transport(),
             correlation_id: *correlation_id.transport(),
-            package: EvidencePackage::new(
-                "sealed-package.zip",
-                "b".repeat(64),
-                PackageVerification::Passed,
-            )
-            .expect("package"),
+            package: EvidencePackage::new("sealed-package.zip", PackageVerification::Passed)
+                .expect("package"),
             task_outcome: TaskOutcome::Success,
             terminal_receipt,
             projection_profile: ProjectionProfile::Forensic,

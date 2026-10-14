@@ -5081,6 +5081,31 @@
           "description": "The run was preempted while it was held."
         }
       }
+    },
+    "connectivity_reason": {
+      "description": "Why the operating system's internet connectivity status is unknown (Workflow #369 S6a): the reason host-metrics' network_connectivity gives.",
+      "review": "pending",
+      "source": {
+        "file": "crates/host-metrics/src/codes.rs",
+        "enum": "ConnectivityReason"
+      },
+      "tokens": {
+        "level_unknown": {
+          "description": "The operating system reported its connectivity level as unknown, or a level this build does not know."
+        },
+        "query_failed": {
+          "description": "The connectivity query returned an error code (os_error)."
+        },
+        "query_unsupported": {
+          "description": "The system library has no connectivity query (a Windows before 10 2004)."
+        },
+        "library_unavailable": {
+          "description": "The system library of the connectivity query could not be loaded (os_error)."
+        },
+        "unsupported_os": {
+          "description": "This operating system has no connectivity query."
+        }
+      }
     }
   },
   "domains": {
@@ -7928,6 +7953,9 @@
     ],
     "instances_": [
       "actingctl"
+    ],
+    "start_emulator_": [
+      "actingd"
     ]
   },
   "codes": {
@@ -20119,26 +20147,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "contained_task_stability_capture_invalid": {
-      "category": "error",
-      "ladder_class": "environment_fault",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A stability termination capture is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "contained_task_stability_comparison_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -28227,7 +28235,7 @@
     },
     "input_plan_preparation_failed": {
       "category": "error",
-      "ladder_class": "environment_fault",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -28241,7 +28249,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An input action could not be prepared into an executable input plan.",
+      "description": "An input action that passed validation could not be prepared into an executable input plan: a Runtime-internal defect; the work ends before any device input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -28277,7 +28285,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_overview could not read the install's build manifest.",
+      "description": "actingctl overview or ac_overview could not read the install's build manifest.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -37847,26 +37855,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_task_package_fingerprint": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Event or record sanitization refused a value: invalid task package fingerprint. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_task_phase": {
       "category": "error",
       "ladder_class": "none",
@@ -42343,7 +42331,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "mcp-serve read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
+      "description": "mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -59263,6 +59251,76 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "replay_facts_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --facts file of actinglab replay is not one complete instance fact answer of a Runtime: the result of actingctl facts --instance or of MCP ac_facts with scope instance (scope, read_at_unix_ms, snapshot, records_total, records_kept), read without key_prefix so that it holds every record, with a valid snapshot, within 4 MiB.",
+      "common_causes": "The answer was read with --key-prefix, is of another scope, or was edited.",
+      "handling": "Read the instance's facts again without a key prefix and save the answer unchanged."
+    },
+    "replay_facts_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay could not open or read the --facts file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file."
+    },
+    "replay_frames_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --frames directory of actinglab replay holds an entry that is not a PNG file (a subdirectory, a link or a file without the .png extension). Every entry of the directory is a frame, replayed in file-name order.",
+      "common_causes": "Other files were saved beside the frames.",
+      "handling": "Keep only the PNG frames in the directory."
+    },
+    "replay_frames_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames could not list the --frames directory or one of its entries.",
+      "common_causes": "The path does not exist, is not a directory, or is not readable.",
+      "handling": "Name a readable directory of PNG frames."
+    },
+    "replay_run_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames replayed the whole package over the frame sequence and the replayed run did not complete. The details carry the replay (entry check, steps, recognitions) and, as end.outcome, the outcome the run ended with; offline_fixture_exhausted when the run needed a frame after the last one of the sequence. Nothing was executed; the exit code is that of a usage refusal, so a CI job fails on it.",
+      "common_causes": "The package no longer recognizes a recorded page or guard; the sequence ends before the run does; a select step chose nothing with the given facts.",
+      "handling": "Read end.outcome and the last step of the details; fix the package or record a sequence that reaches the run's end."
+    },
     "report_serialization_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -61757,38 +61815,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client call failed: run summary not found.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "run_summary_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-client",
-      "layer": "client",
-      "uncertain": false,
-      "values": {
-        "operation": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "run_summary_package_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-client",
-      "layer": "client",
-      "uncertain": false,
-      "values": {
-        "operation": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest mismatch. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -66095,6 +66121,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client call failed: runtime operation unsupported.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_overview_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl overview: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -70919,6 +70959,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A standard-pack game directory or root file, or the root directory itself (then without game), could not be read (an I/O failure other than a root file's absence; the OS error is the cause). Recorded at startup; a run that needs the root is refused in preparation (Workflow #373 NAV-6). A broken root never stops the Runtime.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "start_emulator_requires_discovery_binding": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration (Workflow #369 S6a): an instance names start_emulator true but has no emulator the daemon can start, because it is a fixture or is not bound by instance_index or instance_name. check-config names the instance as alias.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -87978,6 +88034,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Checking one consumer's text read budget before calling the OCR provider (Workflow #396 REC-1)."
+    },
+    "text_read_shared": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading a candidate layout's shared OCR request for the targets it serves (Workflow #396 REC-8)."
     },
     "transition_performance_control": {
       "owner": "runtime-host",

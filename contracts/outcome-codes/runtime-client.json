@@ -2194,38 +2194,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "run_summary_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-client",
-      "layer": "client",
-      "uncertain": false,
-      "values": {
-        "operation": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "run_summary_package_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-client",
-      "layer": "client",
-      "uncertain": false,
-      "values": {
-        "operation": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A runtime client call failed: run summary package digest mismatch. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "run_summary_device_event_forbidden": {
       "category": "error",
       "ladder_class": "none",

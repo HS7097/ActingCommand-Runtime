@@ -24,7 +24,6 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeCl
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -82,6 +81,8 @@ impl Location {
 
 // Workflow #389 MCP-7: shared with `actingctl diagnose`.
 pub(super) use crate::child::pin_child;
+// Workflow #389 MCP-8: the bounded file read, shared with `actingctl overview`.
+pub(super) use crate::overview::read_bounded;
 
 /// The control connection with (Cli, Cli) origin, as actingctl itself uses.
 pub(super) struct Connected {
@@ -414,22 +415,4 @@ fn configured_state_root(config: Option<&Path>) -> Result<PathBuf, Outcome> {
         return Err(unresolved().config_path(config).path(&state_root));
     }
     Ok(state_root)
-}
-
-/// Reads a whole file of at most `limit` bytes: a failed open or read is `foreign_os_error`
-/// with the `path` and `io_op`; a larger file is `mcp_file_too_large` with `path` and
-/// `limit_bytes`.
-pub(super) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
-    let file = fs::File::open(path)
-        .map_err(|error| Outcome::from_io_error(&error, IoOp::Open).path(path))?;
-    let mut bytes = Vec::new();
-    file.take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| Outcome::from_io_error(&error, IoOp::Read).path(path))?;
-    if bytes.len() as u64 > limit {
-        return Err(Outcome::new(ActingctlCode::McpFileTooLarge)
-            .path(path)
-            .limit_bytes(limit));
-    }
-    Ok(bytes)
 }

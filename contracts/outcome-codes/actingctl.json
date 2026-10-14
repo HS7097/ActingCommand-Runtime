@@ -366,7 +366,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_overview could not read the install's build manifest.",
+      "description": "actingctl overview or ac_overview could not read the install's build manifest.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2166,6 +2166,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "runtime_overview_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl overview: the overview was printed, as ac_overview answers it (Workflow #389 MCP-8).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "package_bindings_reported": {
       "category": "success",
       "ladder_class": "none",
@@ -2466,7 +2480,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "mcp-serve read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
+      "description": "mcp-serve, or actingctl overview reading the build manifest, read a file (a configuration, a manifest, an export) larger than its bound limit_bytes.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

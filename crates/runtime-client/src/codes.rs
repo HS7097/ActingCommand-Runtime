@@ -146,8 +146,6 @@ actingcommand_contract::outcome_codes! {
         RunSummaryEncodeFailed => "run_summary_encode_failed": error / none,
         RunSummaryPackageRequestMismatch => "run_summary_package_request_mismatch": error / none,
         RunSummaryPackageFactCountInvalid => "run_summary_package_fact_count_invalid": error / none,
-        RunSummaryPackageDigestInvalid => "run_summary_package_digest_invalid": error / none,
-        RunSummaryPackageDigestMismatch => "run_summary_package_digest_mismatch": error / none,
         RunSummaryDeviceEventForbidden => "run_summary_device_event_forbidden": error / none,
         RunSummarySimulationProvenanceInvalid => "run_summary_simulation_provenance_invalid": error / none,
         RunSummarySimulationEffectInvalid => "run_summary_simulation_effect_invalid": error / none,

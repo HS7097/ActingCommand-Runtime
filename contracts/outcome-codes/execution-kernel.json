@@ -343,7 +343,7 @@
     },
     "input_plan_preparation_failed": {
       "category": "error",
-      "ladder_class": "environment_fault",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
@@ -357,7 +357,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An input action could not be prepared into an executable input plan.",
+      "description": "An input action that passed validation could not be prepared into an executable input plan: a Runtime-internal defect; the work ends before any device input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2004,26 +2004,6 @@
       "description": "Workflow #384 D2-S2: a reading mark gave no reading on a frame the run handed to recognition (its text did not parse, its confidence was missing or below the mark's floor, its region or provider failed, or its recognition had not returned when the join timeout ended). The run goes on and settles as it would without the mark; the key's earlier record stays until its own expiry. Written as a recognition error row of the task diagnostic, on the frame.",
       "common_causes": "The marked page showed no readable value on that frame, or the OCR provider was slow or failed.",
       "handling": "Read the task diagnostic row and the OCR evaluation of the frame; adjust the mark's target or confidence floor in the package if the value was on screen."
-    },
-    "contained_task_stability_capture_invalid": {
-      "category": "error",
-      "ladder_class": "environment_fault",
-      "owner": "execution-kernel",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A stability termination capture is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
     },
     "contained_task_stability_comparison_failed": {
       "category": "error",

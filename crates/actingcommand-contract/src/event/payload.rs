@@ -4078,10 +4078,11 @@ pub struct RecognizedTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSemanticFact {
+    /// Workflow #336 PKG-S2 (option 丙): the package is named by its `package_id`
+    /// (`package_label`); no content digest is recorded.
     PackageAdmitted {
         package_label: String,
         task_label: String,
-        package_sha256: crate::PackageRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         response_deadline_monotonic_ms: Option<u64>,
     },
@@ -4119,22 +4120,26 @@ pub enum TaskSemanticFact {
     EntryRecoveryDecision {
         required: bool,
     },
+    /// Workflow #336 PKG-S2: each layer names its package by `package_id` (`package_label`).
     EntryRecoveryPackageAdmitted {
-        package_sha256: crate::PackageRef,
+        package_label: String,
         /// Workflow #373 NAV-6: the layer's part; absent on the layers that have none yet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<TaskEntryRecoveryRole>,
     },
     EntryRecoveryCompleted {
-        package_sha256: crate::PackageRef,
+        package_label: String,
         final_page: String,
         executed_steps: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<TaskEntryRecoveryRole>,
     },
     /// The entry recovery package failed; `outcome` is its failure (ledger revision 3).
+    /// Workflow #336 PKG-S2: `package_label` is absent only when the layer's package was refused
+    /// before its `package_id` was read (a request's own recovery binding names a path only).
     EntryRecoveryFailed {
-        package_sha256: crate::PackageRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_label: Option<String>,
         outcome: Outcome,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<TaskEntryRecoveryRole>,
@@ -4991,12 +4996,10 @@ impl TaskSemanticFact {
             Self::PackageAdmitted {
                 package_label,
                 task_label,
-                package_sha256,
                 response_deadline_monotonic_ms,
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
                 validate_task_semantic_label(task_label, "task_label")?;
-                validate_task_package_sha256(package_sha256)?;
                 if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) {
                     return Err(SanitizationError::new(
                         SanitizationCode::InvalidTaskResponseDeadline,
@@ -5071,16 +5074,16 @@ impl TaskSemanticFact {
                 }
             }
             Self::EntryRecoveryDecision { .. } => {}
-            Self::EntryRecoveryPackageAdmitted { package_sha256, .. } => {
-                validate_task_package_sha256(package_sha256)?;
+            Self::EntryRecoveryPackageAdmitted { package_label, .. } => {
+                validate_task_semantic_label(package_label, "package_label")?;
             }
             Self::EntryRecoveryCompleted {
-                package_sha256,
+                package_label,
                 final_page,
                 executed_steps,
                 ..
             } => {
-                validate_task_package_sha256(package_sha256)?;
+                validate_task_semantic_label(package_label, "package_label")?;
                 validate_task_semantic_label(final_page, "final_page")?;
                 if *executed_steps > 1_000 {
                     return Err(SanitizationError::new(
@@ -5089,8 +5092,10 @@ impl TaskSemanticFact {
                     ));
                 }
             }
-            Self::EntryRecoveryFailed { package_sha256, .. } => {
-                validate_task_package_sha256(package_sha256)?;
+            Self::EntryRecoveryFailed { package_label, .. } => {
+                if let Some(package_label) = package_label {
+                    validate_task_semantic_label(package_label, "package_label")?;
+                }
             }
             Self::InterruptHandled {
                 page,
@@ -5324,15 +5329,6 @@ fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), 
     } else {
         Ok(())
     }
-}
-
-fn validate_task_package_sha256(value: &crate::PackageRef) -> Result<(), SanitizationError> {
-    value.validate().map_err(|_| {
-        SanitizationError::new(
-            SanitizationCode::InvalidTaskPackageFingerprint,
-            "package_sha256",
-        )
-    })
 }
 
 fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {

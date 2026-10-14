@@ -21,7 +21,7 @@ pub const TEXT_READ_MAX_CALLS: u32 = 4;
 /// The most cells one `locate.cells` grid declares.
 const TEXT_LOCATE_MAX_CELLS: i64 = 64;
 /// The largest `line_merge.gap_factor` (the model folder's own range).
-const TEXT_LOCATE_MAX_GAP_FACTOR: u32 = 16;
+pub(crate) const TEXT_LOCATE_MAX_GAP_FACTOR: u32 = 16;
 
 /// Schema 0.7 `locate` of an OCR target. Every member is written by the pack; there is no
 /// Runtime default.
@@ -206,27 +206,7 @@ impl SceneEvaluation<'_> {
                 }
             };
         }
-        let frame_area = u64::from(self.scene.width()) * u64::from(self.scene.height());
-        let area = rect_area(region);
-        {
-            let reads = self.text_reads.borrow();
-            if reads.calls >= TEXT_READ_MAX_CALLS {
-                return Err(text_read_budget_exceeded(
-                    &target.id,
-                    TextReadBudget::Calls,
-                    u64::from(reads.calls),
-                    u64::from(TEXT_READ_MAX_CALLS),
-                ));
-            }
-            if reads.area.saturating_add(area) > frame_area {
-                return Err(text_read_budget_exceeded(
-                    &target.id,
-                    TextReadBudget::Area,
-                    reads.area,
-                    frame_area,
-                ));
-            }
-        }
+        self.admit_text_read(&target.id, region)?;
         let result = provider
             .read_text(OcrProviderRequest {
                 frame: provider_frame(self.scene),
@@ -238,11 +218,48 @@ impl SceneEvaluation<'_> {
                 blocks,
             })
             .map_err(|err| provider_error(&target.id, "ocr", err));
+        self.count_text_read(region);
+        self.text_reads
+            .borrow_mut()
+            .results
+            .insert(key, result.clone());
+        result
+    }
+
+    /// Refuses a provider call for `target_id` over `region` that would take this consumer past
+    /// [`TEXT_READ_MAX_CALLS`] calls or one frame of summed area; nothing is called then.
+    /// Workflow #396 REC-8: also the reads of the field and reading targets a page gate keeps.
+    pub(crate) fn admit_text_read(
+        &self,
+        target_id: &str,
+        region: PackRect,
+    ) -> RecognitionPackResult<()> {
+        let frame_area = u64::from(self.scene.width()) * u64::from(self.scene.height());
+        let reads = self.text_reads.borrow();
+        if reads.calls >= TEXT_READ_MAX_CALLS {
+            return Err(text_read_budget_exceeded(
+                target_id,
+                TextReadBudget::Calls,
+                u64::from(reads.calls),
+                u64::from(TEXT_READ_MAX_CALLS),
+            ));
+        }
+        if reads.area.saturating_add(rect_area(region)) > frame_area {
+            return Err(text_read_budget_exceeded(
+                target_id,
+                TextReadBudget::Area,
+                reads.area,
+                frame_area,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Counts one provider call over `region` in this consumer's budget, whatever its result.
+    pub(crate) fn count_text_read(&self, region: PackRect) {
         let mut reads = self.text_reads.borrow_mut();
         reads.calls += 1;
-        reads.area = reads.area.saturating_add(area);
-        reads.results.insert(key, result.clone());
-        result
+        reads.area = reads.area.saturating_add(rect_area(region));
     }
 }
 
@@ -406,9 +423,11 @@ impl RecognitionEvaluator {
     }
 
     /// Adds what `target_id` reads to one consumer's static text-read count: a locate OCR
-    /// target, the sides of a value test (Workflow #396 REC-6), or those members of a check.
-    /// Each distinct request counts once; a template-relative region is its own request.
-    /// Another target reads nothing here.
+    /// target, the sides of a value test (Workflow #396 REC-6), a target the count keeps
+    /// (Workflow #396 REC-8, [`TextReadCount::keeping`]), or those members of a check. Each
+    /// distinct request counts once; a template-relative region is its own request, and a kept
+    /// target is its own read, since its observation is kept by target. Another target reads
+    /// nothing here.
     pub fn count_text_reads(
         &self,
         count: &mut TextReadCount,
@@ -418,8 +437,10 @@ impl RecognitionEvaluator {
             .pack
             .coordinate_space
             .map(|space| (space.width, space.height));
+        let kept = Arc::clone(&count.kept);
         let mut add = |target: &OcrTarget,
-                       blocks: OcrProviderBlocks|
+                       blocks: OcrProviderBlocks,
+                       by_target: bool|
          -> Result<(), TextReadBudgetOverrun> {
             let (region, area) = match (&target.region, frame) {
                 (PackRegion::Rect(rect), _) => (StaticTextRegion::Rect(*rect), rect_area(*rect)),
@@ -450,6 +471,11 @@ impl RecognitionEvaluator {
                 ),
                 // An unusable region is refused by the pack's own validation.
                 (PackRegion::Keyword(_), _) => return Ok(()),
+            };
+            let region = if by_target {
+                StaticTextRegion::Kept(target.id.clone())
+            } else {
+                region
             };
             let read = StaticTextRead {
                 region,
@@ -486,7 +512,10 @@ impl RecognitionEvaluator {
         let mut reads = |target: &RecognitionTarget| -> Result<(), TextReadBudgetOverrun> {
             match target {
                 RecognitionTarget::Ocr(target) => match &target.locate {
-                    Some(locate) => add(target, locate.provider_blocks()),
+                    Some(locate) => add(target, locate.provider_blocks(), false),
+                    None if kept.contains(&target.id) => {
+                        add(target, OcrProviderBlocks::Implicit, true)
+                    }
                     None => Ok(()),
                 },
                 RecognitionTarget::ValueTest(test) => {
@@ -498,7 +527,7 @@ impl RecognitionEvaluator {
                     };
                     for side in std::iter::once(test.left.target_id.as_str()).chain(right) {
                         if let Ok(RecognitionTarget::Ocr(target)) = self.target(side) {
-                            add(target, OcrProviderBlocks::Implicit)?;
+                            add(target, OcrProviderBlocks::Implicit, false)?;
                         }
                     }
                     Ok(())
@@ -537,6 +566,21 @@ impl RecognitionEvaluator {
 pub struct TextReadCount {
     reads: HashSet<StaticTextRead>,
     area: u64,
+    /// Workflow #396 REC-8: the ordinary OCR targets whose observation the consumer keeps.
+    kept: Arc<HashSet<String>>,
+}
+
+impl TextReadCount {
+    /// Workflow #396 REC-8: the count of a page recognition that keeps its observations of
+    /// `targets`, the field, reading and collection targets of its task. An ordinary OCR target
+    /// among them that a page names, directly or as a member of a check, is read by the page
+    /// recognition, and counts as one read of its own region.
+    pub fn keeping(targets: HashSet<String>) -> Self {
+        Self {
+            kept: Arc::new(targets),
+            ..Self::default()
+        }
+    }
 }
 
 /// A consumer whose text reads exceed a budget: `used` before the read that exceeds `limit`.
@@ -552,6 +596,8 @@ enum StaticTextRegion {
     Rect(PackRect),
     /// A template-relative region, by its target: its position is only known per frame.
     Relative(String),
+    /// Workflow #396 REC-8: a kept target's read, by its target.
+    Kept(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

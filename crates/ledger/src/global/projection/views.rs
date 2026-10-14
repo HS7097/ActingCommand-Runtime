@@ -349,17 +349,19 @@ fn same_recovery_relation<E: LedgerEventRead>(failure: &E, candidate: &E) -> boo
             EventPayload::Task(TaskPayload::Semantic(left)),
             EventPayload::Task(TaskPayload::Semantic(right)),
         ) => match (left.fact(), right.fact()) {
+            // Workflow #336 PKG-S2: the same layer's package, by `package_id`; a failure whose
+            // package was refused before its id was read pairs with nothing.
             (
                 TaskSemanticFact::EntryRecoveryFailed {
-                    package_sha256: left,
+                    package_label: Some(left),
                     ..
                 },
                 TaskSemanticFact::EntryRecoveryCompleted {
-                    package_sha256: right,
+                    package_label: right,
                     ..
                 }
                 | TaskSemanticFact::EntryRecoveryFailed {
-                    package_sha256: right,
+                    package_label: Some(right),
                     ..
                 },
             ) => left == right,

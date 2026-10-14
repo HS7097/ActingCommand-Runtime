@@ -724,8 +724,8 @@ pub(crate) fn current_selection(root: &Path) -> Result<InstalledProcess, PacksEr
 }
 
 /// Two levels above the running executable when `<root>\runtime\BUILD-MANIFEST.json` is a
-/// file, as mcp-serve's install detection.
-fn executable_install_root() -> Option<PathBuf> {
+/// file, as mcp-serve's install detection; `actingctl overview` finds its install the same way.
+pub(crate) fn executable_install_root() -> Option<PathBuf> {
     let executable = fs::canonicalize(std::env::current_exe().ok()?).ok()?;
     let root = executable.parent()?.parent()?.to_path_buf();
     root.join("runtime")

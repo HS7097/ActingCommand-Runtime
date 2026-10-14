@@ -108,6 +108,7 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+mod gate_336_pkgs2;
 mod gate_369s5;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
@@ -128,10 +129,15 @@ mod gate_383_ao4q;
 mod gate_383_sh1;
 // Workflow #384 D2-S2: reading marks, recognition package bindings and the reader warnings.
 mod gate_384_d2s2;
+// Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
+// suppressions a later build wrote.
+mod gate_386_sr2a;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
 mod gate_387_d1c;
+// Workflow #387 D1c-F: a direct input's invalid segmented swipe is refused by its contract.
+mod gate_387_d1cf;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
 mod gate_392_daa;

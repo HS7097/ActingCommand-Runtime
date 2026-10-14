@@ -523,6 +523,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Reading, parsing and comparing the sides of a value test (Workflow #396 REC-6)."
+    },
+    "text_read_shared": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading a candidate layout's shared OCR request for the targets it serves (Workflow #396 REC-8)."
     }
   }
 }
