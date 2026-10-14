@@ -21,7 +21,7 @@ use crate::failure_identity::{
 };
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v1";
+const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v2";
 const LIFTS_WHEN: &str = "main_digest_changes_or_any_layer_changes";
 /// `clock_slots` reads the records of this span before the ledger's latest event (#372 K3).
 const CLOCK_SLOT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
@@ -59,48 +59,43 @@ pub struct SuspensionReportRequest<'a> {
     pub catalog: &'a CatalogSources,
 }
 
-/// A report that could not be produced, with its code and operation.
+/// A report that could not be produced (Workflow #378 A6a): its outcome, the code with its
+/// operation, values and links.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuspensionReportError {
     code: Code,
-    operation: Location,
-    detail: Option<String>,
+    outcome: Outcome,
 }
 
 impl SuspensionReportError {
     fn new(code: impl Into<Code>, operation: impl Into<Location>) -> Self {
+        let code = code.into();
         Self {
-            code: code.into(),
-            operation: operation.into(),
-            detail: None,
+            code,
+            outcome: Outcome::new(code).operation(operation),
         }
     }
 
-    fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-
+    /// The failure's code, the top of its outcome.
     pub const fn code(&self) -> Code {
         self.code
     }
 
-    pub const fn operation(&self) -> Location {
-        self.operation
+    /// The failure with what its outcome says beyond its code and operation.
+    fn with_outcome(mut self, values: impl FnOnce(Outcome) -> Outcome) -> Self {
+        self.outcome = values(self.outcome);
+        self
     }
 
-    pub fn detail(&self) -> Option<&str> {
-        self.detail.as_deref()
+    /// The failure's outcome, which actingd's suspended report carries.
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
     }
 }
 
 impl fmt::Display for SuspensionReportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} during {}", self.code, self.operation)?;
-        if let Some(detail) = &self.detail {
-            write!(formatter, ": {detail}")?;
-        }
-        Ok(())
+        write!(formatter, "{}", self.outcome)
     }
 }
 
@@ -230,6 +225,9 @@ impl Snapshot<'_> {
     }
 
     /// The two error frames and their recomputed comparison; the verdict is returned too.
+    /// Workflow #378 A6a: why frames differ, or why they could not be compared, is the
+    /// comparison's `outcome` (a code with its links), and a failed `ccoeff` its
+    /// `ccoeff_failure`; v1 named them as text (`reason`, `ccoeff_error`).
     fn frames(
         &self,
         previous_run: Option<RunId>,
@@ -245,11 +243,11 @@ impl Snapshot<'_> {
                 })
             })
         };
-        let unavailable = |reason: &str| {
+        let unavailable = |why: Outcome| {
             json!({
-                "source": "recomputed", "status": "unavailable", "reason": reason,
+                "source": "recomputed", "status": "unavailable", "outcome": why,
                 "changed_cells_milli": null, "digest_mean_milli": null,
-                "ccoeff": null, "ccoeff_error": null,
+                "ccoeff": null, "ccoeff_failure": null,
             })
         };
         let (comparison, verdict) = match (&previous, &current) {
@@ -266,22 +264,31 @@ impl Snapshot<'_> {
                                     json!({
                                         "source": "recomputed",
                                         "status": compared.verdict.as_str(),
-                                        "reason": compared.reason.map(|reason| reason.as_str()),
+                                        "outcome": compared.reason.map(Outcome::new),
                                         "changed_cells_milli": compared.changed_cells_milli,
                                         "digest_mean_milli": compared.digest_mean_milli,
                                         "ccoeff": ccoeff.as_ref().ok(),
-                                        "ccoeff_error": ccoeff.as_ref().err().map(ToString::to_string),
+                                        "ccoeff_failure": ccoeff.as_ref().err().map(compare_failure),
                                     }),
                                     Some(compared.verdict.as_str()),
                                 )
                             }
-                            Err(error) => (unavailable(error.reason().as_str()), None),
+                            Err(error) => (unavailable(compare_failure(&error)), None),
                         }
                     }
-                    _ => (unavailable("artifact_unreadable"), None),
+                    (Err(error), _) | (_, Err(error)) => (
+                        unavailable(Outcome::new(HostCode::SuspendedFrameUnreadable).joined(
+                            CauseRelation::CausedBy,
+                            crate::RuntimeHostError::artifact_read(error).outcome(),
+                        )),
+                        None,
+                    ),
                 }
             }
-            _ => (unavailable("frame_missing"), None),
+            _ => (
+                unavailable(Outcome::new(HostCode::SuspendedFrameMissing)),
+                None,
+            ),
         };
         Ok((
             json!({
@@ -292,6 +299,16 @@ impl Snapshot<'_> {
             verdict,
         ))
     }
+}
+
+/// Workflow #378 A6a: frames that could not be compared, as an outcome: the kernel's code with
+/// the decoder's text as its `foreign_data_error` link.
+fn compare_failure(error: &actingcommand_execution_kernel::FailureFrameCompareError) -> Outcome {
+    Outcome::new(error.reason()).caused_by(
+        Outcome::new(actingcommand_contract::codes::ContractCode::ForeignDataError)
+            .raw_source(actingcommand_contract::outcome::RawSource::Other)
+            .raw_text(error.message()),
+    )
 }
 
 /// `actingd suspended`: the suspended, lifted and repeating pairs of the configured state
@@ -324,7 +341,7 @@ pub fn suspension_report(
             HostCode::SuspendedLedgerUnavailable,
             HostLocation::OpenSuspensionLedger,
         )
-        .with_detail("state_root_missing"));
+        .with_outcome(|outcome| outcome.state_root(state_root)));
     }
     let ledger = GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(state_root).sqlite_material_not_read(),
@@ -335,7 +352,11 @@ pub fn suspension_report(
             HostCode::SuspendedLedgerUnavailable,
             HostLocation::OpenSuspensionLedger,
         )
-        .with_detail(error.code())
+        .with_outcome(|outcome| {
+            outcome
+                .state_root(state_root)
+                .joined(CauseRelation::CausedBy, Outcome::relayed(error.code()))
+        })
     })?;
     if !ledger.is_complete() {
         return Err(SuspensionReportError::new(
@@ -540,8 +561,9 @@ pub fn suspension_report(
                 "task_id": task_id,
                 "instance_id": instance_id,
                 "procedure_ref": procedure_ref,
-                "error_code": recorded,
-                "failure_code": failure_spelling,
+                "failure": failure.outcome,
+                "failure_identity": failure.failure_identity,
+                "run_failure": Outcome::relayed(failure_spelling),
                 "consecutive_same_error": failure.consecutive_same_error,
                 "effective_class": wire(&failure.effective_class),
                 "severity": wire(&severity),
@@ -585,8 +607,9 @@ pub fn suspension_report(
         repeating.push(json!({
             "task_id": task_id,
             "instance_id": instance_id,
-            "error_code": recorded,
-            "failure_code": failure_spelling,
+            "failure": failure.outcome,
+            "failure_identity": failure.failure_identity,
+            "run_failure": Outcome::relayed(failure_spelling),
             "step": snapshot.step(current_run, terminal.is_some())?,
             "latest": {
                 "execution_sequence": latest.sequence,
@@ -602,7 +625,6 @@ pub fn suspension_report(
     let (clock_slots, clock_slots_total) = clock_slots(&snapshot)?;
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
-        "status": "ok",
         "config_path": request.config_path.to_string_lossy(),
         "state_root": state_root.to_string_lossy(),
         "through_sequence": through_sequence,

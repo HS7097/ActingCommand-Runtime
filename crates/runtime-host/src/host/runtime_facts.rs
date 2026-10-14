@@ -243,7 +243,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::BackendSelfcheckFactOverflow,
                 HostLocation::RecordBackendSelfcheckFacts,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         };
         let generation = i64::try_from(report.session_generation).map_err(|_| overflow())?;
@@ -636,7 +636,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::BackendSelfcheckInstanceUnregistered,
                 HostLocation::RecordBackendSelfcheckFacts,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })
     }
@@ -757,7 +757,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::PolicySettlementInstanceUnknown,
                         HostLocation::RecordPolicySettlementFacts,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
             self.record_settlement_fact_records(settlement, instance_id)
@@ -819,7 +819,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicySettlementFactOverflow,
                     HostLocation::RecordPolicySettlementFacts,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
         };
@@ -961,7 +961,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         error.code(),
                         HostLocation::AppendRuntimeFactSnapshot,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
             }
@@ -1025,7 +1025,7 @@ fn split_runtime_fact_snapshot(
         RuntimeHostError::fatal(
             code,
             HostLocation::AppendRuntimeFactSnapshot,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     };
     let mut envelope = RuntimeFactSnapshot {
@@ -1337,7 +1337,7 @@ fn append_takeover_invalidations(
             return Err(RuntimeHostError::fatal(
                 HostCode::RuntimeFactStoreDesync,
                 HostLocation::InvalidateRuntimeFactsOnTakeover,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
     }
@@ -1408,7 +1408,7 @@ fn runtime_fact_desync(
     RuntimeHostError::fatal(
         HostCode::RuntimeFactStoreDesync,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
     .with_native_detail(format!("{}: {error}", runtime_fact_code(error)))
 }
@@ -1418,7 +1418,7 @@ fn runtime_fact_replay_failed(sequence: u64, detail: &str) -> RuntimeHostError {
     RuntimeHostError::fatal(
         SharedCode::RuntimeFactReplayFailed,
         HostLocation::RecoverRuntimeFacts,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
     .with_native_detail(format!("sequence {sequence}: {detail}"))
 }

@@ -222,7 +222,7 @@ fn fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         ContractLocation::PrepareStrategicReport,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 

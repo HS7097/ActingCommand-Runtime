@@ -43,7 +43,7 @@ use actingcommand_artifact_store::{
     read_projected_verified,
 };
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     ActionId, AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
@@ -945,7 +945,7 @@ impl RuntimeHostConfig {
             RuntimeHostError::fatal(
                 SharedCode::InvalidCapacityThresholds,
                 HostLocation::ValidateRuntimeConfig,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         if let Some(performance_monitor) = &self.performance_monitor {
@@ -957,7 +957,7 @@ impl RuntimeHostConfig {
                 RuntimeHostError::fatal(
                     HostCode::InvalidRuntimeConfigManifest,
                     HostLocation::ValidateRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_native_detail(error.code().as_str().to_owned())
             })?;
@@ -969,7 +969,7 @@ impl RuntimeHostConfig {
                 return Err(RuntimeHostError::fatal(
                     HostCode::InvalidStartupPackage,
                     HostLocation::ValidateRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
         }
@@ -980,7 +980,7 @@ impl RuntimeHostConfig {
                 return Err(RuntimeHostError::fatal(
                     HostCode::InvalidStuckRecovery,
                     HostLocation::ValidateRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
         }
@@ -994,7 +994,7 @@ impl RuntimeHostConfig {
             return Err(RuntimeHostError::fatal(
                 HostCode::InvalidGovernancePolicy,
                 HostLocation::ValidateRuntimeConfig,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if self.state_root.as_os_str().is_empty()
@@ -1007,7 +1007,7 @@ impl RuntimeHostConfig {
             return Err(RuntimeHostError::fatal(
                 HostCode::InvalidRuntimeHostConfig,
                 HostLocation::ValidateRuntimeConfig,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(())
@@ -1077,8 +1077,11 @@ pub struct RuntimeHost {
     info: RuntimeInfo,
     info_path: PathBuf,
     owner_released_by_exit: Option<crate::PriorOwnerReleasedByExit>,
-    /// Workflow #361 B1: one line per scheduling pause this start restored or dropped.
-    scheduling_pause_restore: Vec<String>,
+    /// Workflow #378 A6a (model section 7.4, N1): `ledger_opened` with the open's phases.
+    ledger_opened: Outcome,
+    /// Workflow #361 B1: one outcome per scheduling pause this start restored or dropped
+    /// (Workflow #378 A6a: was one line each).
+    scheduling_pause_restore: Vec<Outcome>,
     shared: Option<Arc<HostShared>>,
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
@@ -1140,7 +1143,7 @@ impl RuntimeHost {
             RuntimeHostError::fatal(
                 SharedCode::StateRootCreateFailed,
                 HostLocation::StartRuntimeHost,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         // Workflow #378 A3 (acceptance CL-M1): a format-1 ledger is refused before the owner
@@ -1262,10 +1265,11 @@ impl RuntimeHost {
                 RuntimeErrorCode::LedgerFailure,
             ));
         }
-        // Workflow #375 H1: one stdout line with the open's phases, also before a failure is
-        // returned (never a Ledger event). Workflow #375 R5a: the open reads no artifact
-        // material, so a missing or damaged frame never stops the start and the line's
-        // material fields print 0.
+        // Workflow #375 H1: the open's phases, also when the open fails (never a Ledger event).
+        // Workflow #378 A6a (model section 7.4, N1): they are the values of `ledger_opened`,
+        // which actingd writes as its daemon line; a failed open carries them as a `note` link
+        // `ledger_open_measured` of its failure. Nothing is printed from here. Workflow #375
+        // R5a: the open reads no artifact material, so the material values are 0.
         let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
         // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9, §12 step 2): the writer reads
         // back and retries a failed write by `ledger_observer.*`, dumps and stops when it gives
@@ -1277,10 +1281,7 @@ impl RuntimeHost {
             Some(plan),
             &mut timing,
         );
-        println!(
-            "actingd ledger_open {timing} deadline_ms={}",
-            limits.timeout_seconds.saturating_mul(1000)
-        );
+        let timeout_ms = limits.timeout_seconds.saturating_mul(1000);
         let ledger = opened.map_err(|error| {
             RuntimeHostError::relayed_fatal(
                 error.code(),
@@ -1288,7 +1289,13 @@ impl RuntimeHost {
                 RuntimeErrorCode::LedgerFailure,
             )
             .with_native_detail(format!("{error:?}"))
+            .with_note(ledger_open_outcome(
+                HostCode::LedgerOpenMeasured,
+                &timing,
+                timeout_ms,
+            ))
         })?;
+        let ledger_opened = ledger_open_outcome(HostCode::LedgerOpened, &timing, timeout_ms);
         let recovery = limits
             .deadline()
             .map_err(|error| {
@@ -1416,21 +1423,21 @@ impl RuntimeHost {
             RuntimeHostError::fatal(
                 HostCode::RuntimeBindFailed,
                 HostLocation::StartRuntimeHost,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         listener.set_nonblocking(true).map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::RuntimeListenerConfigFailed,
                 HostLocation::StartRuntimeHost,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let local_address = listener.local_addr().map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::RuntimeListenerAddressFailed,
                 HostLocation::StartRuntimeHost,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         // Workflow #381 R6: the recovery timing, the writer's peak window and the shared
@@ -1460,7 +1467,7 @@ impl RuntimeHost {
                 RuntimeHostError::fatal(
                     SharedCode::RuntimeInfoInvalid,
                     HostLocation::StartRuntimeHost,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let info_path = config.state_root.join(RUNTIME_INFO_FILE);
@@ -1642,6 +1649,7 @@ impl RuntimeHost {
             info,
             info_path,
             owner_released_by_exit: released_by_exit,
+            ledger_opened,
             scheduling_pause_restore: Vec::new(),
             shared: Some(Arc::clone(&shared)),
             accept_thread: None,
@@ -1679,7 +1687,7 @@ impl RuntimeHost {
                         RuntimeHostError::fatal(
                             HostCode::RuntimeAcceptSpawnFailed,
                             HostLocation::StartRuntimeHost,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })?,
             );
@@ -1843,7 +1851,7 @@ impl RuntimeHost {
                 return Err(RuntimeHostError::fatal(
                     HostCode::AgentDispatcherConfigMissing,
                     HostLocation::StartRuntimeHost,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
 
@@ -1921,7 +1929,7 @@ impl RuntimeHost {
                         RuntimeHostError::fatal(
                             HostCode::RuntimeSweeperSpawnFailed,
                             HostLocation::StartRuntimeHost,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })?,
             );
@@ -1934,7 +1942,7 @@ impl RuntimeHost {
                         RuntimeHostError::fatal(
                             HostCode::RuntimeMonitorSpawnFailed,
                             HostLocation::StartRuntimeHost,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })?,
             );
@@ -1948,7 +1956,7 @@ impl RuntimeHost {
                             RuntimeHostError::fatal(
                                 HostCode::RuntimePerformanceSpawnFailed,
                                 HostLocation::StartRuntimeHost,
-                                RuntimeErrorCode::RuntimeFatal,
+                                RuntimeErrorCode::RuntimeHalted,
                             )
                         })?,
                 );
@@ -2018,11 +2026,18 @@ impl RuntimeHost {
         }
     }
 
-    /// Workflow #361 B1: one line per scheduling pause this start restored
-    /// (`scheduling_pause_restored scope=<global|instance:alias> since=<ms>`) or dropped
-    /// (`scheduling_pause_dropped scope=instance:<alias> reason=instance_not_registered`).
-    pub fn scheduling_pause_restore(&self) -> &[String] {
+    /// Workflow #361 B1: one outcome per scheduling pause this start restored
+    /// (`scheduling_pause_restored`, with `alias` for an instance's pause and its `at_unix_ms`)
+    /// or dropped (`scheduling_pause_dropped`, `alias`: its instance is not registered).
+    /// Workflow #378 A6a: actingd writes each as a daemon line.
+    pub fn scheduling_pause_restore(&self) -> &[Outcome] {
         &self.scheduling_pause_restore
+    }
+
+    /// Workflow #378 A6a (model section 7.4, N1): `ledger_opened` (info) with the phases of
+    /// this start's ledger open, which actingd writes as its daemon line.
+    pub fn ledger_opened(&self) -> &Outcome {
+        &self.ledger_opened
     }
 
     /// The daemon checks fatal_error first, then returns through its owned close path.
@@ -2514,7 +2529,7 @@ impl RuntimeHost {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::PolicyOutcomeTransitionTestHookAlreadyInstalled,
                 crate::codes::test_spellings::TestLocation::InstallPolicyOutcomeTransitionTestHook,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         *slot = Some(PolicyOutcomeTransitionTestHook {
@@ -2569,7 +2584,7 @@ impl RuntimeHost {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::ScheduledPolicyCheckpointTestHookAlreadyInstalled,
                 crate::codes::test_spellings::TestLocation::InstallScheduledPolicyCheckpointTestHook,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         *slot = Some(ScheduledPolicyCheckpointTestHook {
@@ -2647,7 +2662,7 @@ impl RuntimeHost {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::ContainedTaskCheckpointTestHookAlreadyInstalled,
                 crate::codes::test_spellings::TestLocation::InstallContainedTaskCheckpointTestHook,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         *slot = Some(ContainedTaskCheckpointTestHook {
@@ -2797,7 +2812,7 @@ impl RuntimeHost {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::QueueOperationTestHookAlreadyInstalled,
                 crate::codes::test_spellings::TestLocation::InstallQueueOperationTestHook,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         *slot = Some(QueueOperationTestHook {
@@ -2900,7 +2915,7 @@ impl RuntimeHost {
                 RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestInstanceMissing,
                     crate::codes::test_spellings::TestLocation::ReplaceInstanceEndpointForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         Ok(std::mem::replace(&mut instance.adb_endpoint, endpoint))
@@ -2988,7 +3003,7 @@ impl RuntimeHost {
             RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestClaimNotGranted,
                 crate::codes::test_spellings::TestLocation::RunPackageOnHeldClaimForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let shared = self
@@ -3224,7 +3239,7 @@ impl RuntimeHost {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointMissing,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
 
@@ -3242,21 +3257,21 @@ impl RuntimeHost {
                 RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenMissing,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             if candidates.next().is_some() {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenCandidateNotUnique,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             if active != *token {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenIdentityMismatch,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             if !scheduler
@@ -3267,7 +3282,7 @@ impl RuntimeHost {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenNotDue,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             scheduler.connection_for_token(token).map_err(|error| {
@@ -3716,7 +3731,7 @@ impl RuntimeHost {
                 Err(RuntimeHostError::fatal(
                     HostCode::RuntimeInfoRemoveFailed,
                     HostLocation::CloseRuntimeHost,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_native_detail(error.to_string())),
             );
@@ -3730,7 +3745,7 @@ impl RuntimeHost {
                     Err(RuntimeHostError::fatal(
                         HostCode::RuntimeReferenceLeaked,
                         HostLocation::CloseRuntimeHost,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )),
                 );
                 shared.finish_device_diagnostics(&mut failure);
@@ -3966,7 +3981,7 @@ fn initial_registered_instances(
             RuntimeHostError::fatal(
                 SharedCode::ExecutionBackendRegistryIncomplete,
                 HostLocation::InitializeRuntimeInstanceRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let registration = RegisteredInstance {
@@ -3983,7 +3998,7 @@ fn initial_registered_instances(
             return Err(RuntimeHostError::fatal(
                 HostCode::DuplicateRuntimeInstanceId,
                 HostLocation::InitializeRuntimeInstanceRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
     }
@@ -4291,7 +4306,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         crate::codes::test_spellings::TestCode::ScheduledPolicyCheckpointMarkerWriteFailed,
                         crate::codes::test_spellings::TestLocation::ConsumeScheduledPolicyCheckpointTestHook,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
                 std::process::exit(87);
@@ -4498,7 +4513,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonotonicClockRegressed,
                     HostLocation::ReadRuntimeClock,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         Ok(RuntimeClockSample {
@@ -4566,7 +4581,7 @@ fn accept_loop(
                         let error = RuntimeHostError::fatal(
                             HostCode::RuntimeConnectionSpawnFailed,
                             HostLocation::AcceptRuntimeConnection,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         );
                         record_failure(&mut failure, shared.fatal.mark(error.clone()));
                         record_failure(&mut failure, Err(error));
@@ -4582,7 +4597,7 @@ fn accept_loop(
                 let error = RuntimeHostError::fatal(
                     HostCode::RuntimeAcceptFailed,
                     HostLocation::AcceptRuntimeConnection,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 );
                 record_failure(&mut failure, shared.fatal.mark(error.clone()));
                 record_failure(&mut failure, Err(error));
@@ -4600,7 +4615,7 @@ fn accept_loop(
                     Err(RuntimeHostError::fatal(
                         HostCode::RuntimeConnectionPanicked,
                         HostLocation::JoinRuntimeConnection,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )),
                 );
                 return failure.map_or(Ok(()), Err);
@@ -4631,7 +4646,7 @@ fn reap_finished_connections(
             RuntimeHostError::fatal(
                 HostCode::RuntimeConnectionPanicked,
                 HostLocation::JoinRuntimeConnection,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         });
         let result = result.and_then(|result| result);
@@ -4694,7 +4709,7 @@ fn artifact_store_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::ArtifactStoreFailure,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -4703,7 +4718,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         RuntimeHostError::fatal(
             HostCode::RuntimeInfoParentMissing,
             HostLocation::PublishRuntimeInfo,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     let temporary = parent.join(format!("{RUNTIME_INFO_FILE}.tmp-{}", std::process::id()));
@@ -4712,7 +4727,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         RuntimeHostError::fatal(
             HostCode::RuntimeInfoEncodeFailed,
             HostLocation::PublishRuntimeInfo,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     let mut file = OpenOptions::new()
@@ -4723,7 +4738,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
             RuntimeHostError::fatal(
                 HostCode::RuntimeInfoCreateFailed,
                 HostLocation::PublishRuntimeInfo,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
     let write_result = file
@@ -4733,7 +4748,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
             RuntimeHostError::fatal(
                 HostCode::RuntimeInfoWriteFailed,
                 HostLocation::PublishRuntimeInfo,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         });
     drop(file);
@@ -4748,7 +4763,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         return Err(RuntimeHostError::fatal(
             HostCode::RuntimeInfoReplaceFailed,
             HostLocation::PublishRuntimeInfo,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
     if fs::rename(&temporary, path).is_err() {
@@ -4756,7 +4771,7 @@ fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()
         return Err(RuntimeHostError::fatal(
             HostCode::RuntimeInfoPublishFailed,
             HostLocation::PublishRuntimeInfo,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
     Ok(())
@@ -4769,7 +4784,7 @@ fn remove_temporary_runtime_info(path: &Path) -> RuntimeHostResult<()> {
         Err(_) => Err(RuntimeHostError::fatal(
             HostCode::RuntimeInfoTempRemoveFailed,
             HostLocation::PublishRuntimeInfo,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )),
     }
 }
@@ -4778,7 +4793,7 @@ fn runtime_identifier_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
         SharedCode::RuntimeIdentifierIssueFailed,
         ContractLocation::RunContainedTask,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -4797,6 +4812,25 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
     )
 }
 
+/// Workflow #378 A6a (model section 7.4, N1): `code` (`ledger_opened` or, as a note link of a
+/// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline.
+pub(crate) fn ledger_open_outcome(
+    code: HostCode,
+    timing: &actingcommand_ledger::LedgerOpenTiming,
+    timeout_ms: u64,
+) -> Outcome {
+    Outcome::new(code)
+        .event_count(timing.events)
+        .artifact_count(timing.artifacts)
+        .artifact_bytes(timing.artifact_bytes)
+        .worker_count(timing.workers)
+        .sql_read_ms(timing.sql_read_ms)
+        .verify_ms(timing.verify_ms)
+        .material_ms(timing.material_ms)
+        .restore_ms(timing.restore_ms)
+        .timeout_ms(timeout_ms)
+}
+
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure
 /// plan from the configuration in effect (`ledger_observer.*`; the defaults file's values for a
 /// host started without actingd's manifest): its write policy, its dump file in the state root
@@ -4811,7 +4845,7 @@ fn ledger_failure_plan(
         RuntimeHostError::fatal(
             failure.failure_code(),
             crate::codes::ConfigHostLocation::RecordRuntimeConfig,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
         .with_outcome_values(|outcome| failure.with_values(outcome))
     };
@@ -4885,7 +4919,7 @@ fn lock_poison_error(operation: impl Into<Location>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::RuntimeStatePoisoned,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -4930,7 +4964,7 @@ fn join_runtime_thread(
         RuntimeHostError::fatal(
             HostCode::RuntimeThreadPanicked,
             operation,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?
 }

@@ -396,7 +396,7 @@ pub(super) fn observation_integrity_failure(code: impl Into<Code>) -> RequestFai
     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
         code,
         HostLocation::PersistContainedPageObservation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     ))
 }
 pub(super) fn observation_artifact_failure(error: ArtifactStoreError) -> RequestFailure {

@@ -118,6 +118,8 @@ mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
+mod gate_378_a6a;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is

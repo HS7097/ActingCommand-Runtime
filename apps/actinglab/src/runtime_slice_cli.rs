@@ -73,7 +73,7 @@ pub(super) fn map_runtime_error(error: RuntimeClientError) -> CliError {
         matches!(
             projection.code,
             RuntimeErrorCode::RuntimeUnavailable
-                | RuntimeErrorCode::RuntimeFatal
+                | RuntimeErrorCode::RuntimeHalted
                 | RuntimeErrorCode::OwnerConflict
                 | RuntimeErrorCode::ProtocolInvalid
                 | RuntimeErrorCode::LedgerFailure

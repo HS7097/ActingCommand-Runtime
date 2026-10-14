@@ -96,11 +96,7 @@ impl fmt::Display for RuntimeDatabaseError {
             write!(formatter, ": {detail}")?;
         }
         for warning in &self.warnings {
-            write!(
-                formatter,
-                "; WARNING {} during {} sqlite={} recovery={}",
-                warning.code, warning.operation, warning.sqlite_code, warning.recovery
-            )?;
+            write!(formatter, "; WARNING {}", warning.outcome)?;
         }
         Ok(())
     }

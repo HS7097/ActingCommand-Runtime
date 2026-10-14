@@ -885,7 +885,7 @@ fn duration_ms(duration: Duration) -> RuntimeHostResult<u64> {
 }
 
 fn control_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 #[cfg(test)]

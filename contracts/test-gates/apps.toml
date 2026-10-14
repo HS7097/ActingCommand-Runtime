@@ -157,7 +157,7 @@ key = "23"
 coverage = "Y"
 tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::journals_of_every_shape_give_their_last_record",
-    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::fatal_lines_skip_a_lost_start_race_and_survive_a_multi_line_detail",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::processes_count_under_the_root_or_without_a_path",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::verbatim_paths_become_plain",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::tu44_the_watchdog_reads_a_close_with_the_upgrade_state_marker_as_usual",
@@ -334,6 +334,20 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_overview_and_ac_overview_refuse_an_unknown_section_naming_it",
 ]
 incident = ["#389 MCP-8"]
+
+# actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a)
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_each_outcome_is_one_developer_line_and_one_outcome_line_by_its_category",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_a_start_refusal_goes_to_the_fallback_log_only_when_stderr_is_not_kept",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_every_subcommand_exit_is_one_report_line_with_its_outcome",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_the_terminal_outcome_decides_by_its_category",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
+]
+incident = ["#378 A6a"]
 
 # actingctl codes and ac_outcome_code refuse a code the embedded catalog does not list (outcome_code_unknown with code_name), a cursor that is malformed or was issued for other filters (cursor_invalid) and a catalog they cannot read (outcome_catalog_unreadable); ac_outcome_code cuts a list over the output budget to the rows that fit, truncated, and its cursor reads on without a gap (Workflow #389 MCP-14)
 [[gate]]

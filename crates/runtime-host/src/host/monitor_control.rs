@@ -185,7 +185,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::FixtureMonitorScopeForbidden,
                 HostLocation::RunMonitorProbe,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let issued = self
@@ -196,7 +196,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorProbeIdIssueFailed,
                     HostLocation::RunMonitorProbe,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         let links = issued.event_links();
@@ -248,7 +248,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::MonitorFrameIdentityMissing,
                 HostLocation::RunMonitorCapture,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let frame_store = actingcommand_artifact_store::FrameStore::new(
@@ -422,7 +422,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorDecisionInvalid,
                     HostLocation::RunMonitorProbe,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         self.append_event_raw(
@@ -464,7 +464,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorStateInvalid,
                     HostLocation::CompleteMonitorProbe,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?,
         )?;
@@ -508,7 +508,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorStateInvalid,
                     HostLocation::RefuseMonitorProbe,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?,
         )?;
@@ -569,7 +569,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::MonitorRecoveryFencingStateInvalid,
                     HostLocation::CoordinateMonitorRecovery,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             let reason = if token.expires_at_monotonic_ms() <= now {
@@ -679,7 +679,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorStateInvalid,
                     HostLocation::FailMonitorProbe,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?,
         )?;
@@ -721,7 +721,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::MonitorInstanceUnknown,
                     HostLocation::ResolveMonitorInstance,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         let resolved = self.execution()?.resolve(instance_alias).map_err(|error| {
@@ -734,7 +734,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::RuntimeInstanceIdentityMismatch,
                 HostLocation::ResolveMonitorInstance,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(registered.clone())

@@ -234,6 +234,6 @@ fn fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         ContractLocation::AssessPredictiveMaintenance,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }

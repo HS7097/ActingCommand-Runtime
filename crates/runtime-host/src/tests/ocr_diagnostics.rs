@@ -281,7 +281,7 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
         .error_projection()
         .expect("fatal persistence failure");
     assert!(projection.fatal);
-    assert_eq!(projection.code, RuntimeErrorCode::RuntimeFatal);
+    assert_eq!(projection.code, RuntimeErrorCode::RuntimeHalted);
     assert!(failed.result().is_none());
     assert_eq!(vision_provider.ocr_calls.load(Ordering::Acquire), 1);
     assert_eq!(state.capture_count.load(Ordering::Acquire), 1);

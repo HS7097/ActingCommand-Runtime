@@ -395,10 +395,12 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           # BOOT-SMOKE (additions §8.1, REG-0): this build's actingd starts as a plain program on a
-          # fresh state root with the example configuration (no instances), prints one ready line
-          # within 60 s and shuts down cleanly. A failure before ready is accepted only when a row
-          # of ci/known-unbootable.toml (the copy of Workflow #390 REG-0) names a code of its FATAL
-          # line; then the Watchdog smoke is skipped. A release run accepts nothing but a boot.
+          # fresh state root with the example configuration (no instances), writes one
+          # `runtime_ready` daemon line within 60 s and shuts down cleanly. A failure before ready
+          # is accepted only when a row of ci/known-unbootable.toml (the copy of Workflow #390
+          # REG-0) names the code of its terminal outcome, the last `OUTCOME actingd:` line
+          # (Workflow #378 A6a); then the Watchdog smoke is skipped. A release run accepts nothing
+          # but a boot.
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
           $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -409,7 +411,9 @@ jobs:
           $out = Join-Path $root 'actingd.out.log'
           $err = Join-Path $root 'actingd.err.log'
           $ctl = Join-Path $runtime 'actingctl.exe'
-          $readyPattern = '^actingd ready pid=\d+ host=127\.0\.0\.1 port=\d+$'
+          # Workflow #378 A6a: actingd's daemon lines are on stderr, each outcome an
+          # `OUTCOME actingd: <envelope>` line after its developer line.
+          $outcomePrefix = 'OUTCOME actingd: '
           $release = -not [string]::IsNullOrEmpty($env:RELEASE_TAG)
           $rows = @()
           $outcome = 'failed'
@@ -431,6 +435,15 @@ jobs:
           function Get-SmokeRuntimes {
             @(Get-CimInstance -ClassName Win32_Process -Filter "Name='actingcommand-actingd.exe'" |
               Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$root\", [StringComparison]::OrdinalIgnoreCase) })
+          }
+          # The envelopes of actingd's `OUTCOME actingd:` lines in its stderr log, oldest first; a
+          # line still being written while actingd runs does not parse yet and is skipped.
+          function Get-SmokeOutcomes {
+            @(Get-Content -LiteralPath $err -ErrorAction SilentlyContinue |
+              Where-Object { $_.StartsWith($outcomePrefix, [StringComparison]::Ordinal) } |
+              ForEach-Object {
+                try { $_.Substring($outcomePrefix.Length) | ConvertFrom-Json -ErrorAction Stop } catch { }
+              })
           }
           function Format-Row($Row) {
             "slice=$($Row.slice) stage=$($Row.stage) expected_code=$($Row.expected_code) restored_by=$($Row.restored_by)"
@@ -480,7 +493,7 @@ jobs:
             $deadline = [DateTime]::UtcNow.AddSeconds(60)
             while ($true) {
               $exited = $process.HasExited
-              $ready = @(Get-Content -LiteralPath $out -ErrorAction SilentlyContinue | Where-Object { $_ -cmatch $readyPattern })
+              $ready = @(Get-SmokeOutcomes | Where-Object { $_.code -ceq 'runtime_ready' })
               if ($ready.Count -ge 1 -or $exited -or [DateTime]::UtcNow -ge $deadline) {
                 break
               }
@@ -488,7 +501,7 @@ jobs:
             }
 
             if ($ready.Count -eq 1) {
-              Write-Host "boot smoke ready line: $($ready[0])"
+              Write-Host "boot smoke ready outcome: $($ready[0] | ConvertTo-Json -Compress -Depth 20)"
               try {
                 $status = Invoke-SmokeChecked $ctl @('status', '--state-root', $state)
                 Write-Host "boot smoke actingctl status: exit 0 ($($status.Length) bytes)"
@@ -504,25 +517,30 @@ jobs:
                   throw "actingd exited $($process.ExitCode) after the shutdown"
                 }
                 Write-Host 'boot smoke actingd exited 0'
-                $readyAfter = @(Get-Content -LiteralPath $out | Where-Object { $_ -cmatch $readyPattern })
+                $after = @(Get-SmokeOutcomes)
+                $readyAfter = @($after | Where-Object { $_.code -ceq 'runtime_ready' })
                 if ($readyAfter.Count -ne 1) {
-                  throw "actingd printed $($readyAfter.Count) ready lines"
+                  throw "actingd wrote $($readyAfter.Count) runtime_ready outcomes"
+                }
+                # A requested stop's terminal outcome is runtime_stopped (model section 7.5).
+                if ($after.Count -eq 0 -or $after[-1].code -cne 'runtime_stopped') {
+                  throw "actingd's terminal outcome after the shutdown is not runtime_stopped"
                 }
                 $outcome = 'booted'
               } catch {
                 $red = "boot_smoke_failed: after the ready line: $($_.Exception.Message)"
               }
             } elseif ($ready.Count -gt 1) {
-              $red = "boot_smoke_failed: actingd printed $($ready.Count) ready lines"
+              $red = "boot_smoke_failed: actingd wrote $($ready.Count) runtime_ready outcomes"
             } elseif ($exited) {
-              # actingd prints `FATAL actingd: …` as its last act; a multi-line detail may follow.
-              $fatal = @(Get-Content -LiteralPath $err -ErrorAction SilentlyContinue |
-                Where-Object { $_.TrimStart().StartsWith('FATAL actingd:', [StringComparison]::Ordinal) })
-              if ($fatal.Count -eq 0) {
-                $red = "boot_smoke_failed: actingd exited $($process.ExitCode) before a ready line without a FATAL line"
+              # actingd writes its terminal outcome as its last `OUTCOME actingd:` line.
+              $outcomes = @(Get-SmokeOutcomes)
+              if ($outcomes.Count -eq 0) {
+                $red = "boot_smoke_failed: actingd exited $($process.ExitCode) before ready without an OUTCOME line"
               } else {
-                $fatalLine = $fatal[-1].Trim()
-                Write-Host "boot smoke FATAL line: $fatalLine"
+                $terminal = $outcomes[-1]
+                $fatalLine = "$($terminal.code) ($($terminal.category))"
+                Write-Host "boot smoke terminal outcome: $($terminal | ConvertTo-Json -Compress -Depth 20)"
                 $outcome = 'failed_before_ready'
               }
             } else {
@@ -539,14 +557,12 @@ jobs:
               if ($release) {
                 $red = "boot_smoke_failed: a release run accepts no failure before ready (registry not consulted): $fatalLine"
               } else {
-                $matching = @($rows | Where-Object {
-                  $fatalLine -cmatch "(?<![A-Za-z0-9_])$([regex]::Escape([string]$_.expected_code))(?![A-Za-z0-9_])"
-                })
+                $matching = @($rows | Where-Object { [string]$_.expected_code -ceq [string]$terminal.code })
                 if ($matching.Count -eq 0) {
                   $red = "boot_smoke_failed: the failure before ready is not in ci/known-unbootable.toml: $fatalLine"
                 } else {
                   foreach ($row in $matching) {
-                    Write-Host "::notice title=Boot smoke::known unbootable, $(Format-Row $row); FATAL line: $fatalLine"
+                    Write-Host "::notice title=Boot smoke::known unbootable, $(Format-Row $row); terminal outcome: $fatalLine"
                   }
                   foreach ($row in @($rows | Where-Object { $matching -notcontains $_ })) {
                     Write-Host "boot smoke row not reached this run: $(Format-Row $row)"
@@ -728,7 +744,9 @@ jobs:
             'RELEASE-NOTES.md'
           ) -SourceDirectory (Join-Path $PWD 'distribution/windows') -Destination $runtimeDir
           # Workflow #387 D1b (model v1.2 §5.2): the shipped defaults file is the one the program
-          # embeds: its SHA-256 equals check-config's config_selection.defaults_sha256.
+          # embeds: its SHA-256 equals check-config's config_selection.defaults_sha256. Workflow
+          # #378 A6a: check-config prints one v2 line, `{schema_version, outcome, report}`, and the
+          # digest is the report's; a missing or empty digest fails the check.
           $defaultsRoot = Join-Path $env:RUNNER_TEMP 'defaults-digest-check'
           if (Test-Path -LiteralPath $defaultsRoot) {
             Remove-Item -LiteralPath $defaultsRoot -Recurse -Force -ErrorAction Stop
@@ -744,7 +762,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "defaults digest check: check-config exited ${LASTEXITCODE}: $checkReport"
           }
-          $reportedDefaults = ($checkReport | ConvertFrom-Json).config_selection.defaults_sha256
+          $checkLine = $checkReport | ConvertFrom-Json
+          if ($checkLine.schema_version -cne 'actingcommand.actingd.check-config.v2') {
+            throw "defaults digest check: check-config printed schema '$($checkLine.schema_version)', not actingcommand.actingd.check-config.v2: $checkReport"
+          }
+          $reportedDefaults = [string]$checkLine.report.config_selection.defaults_sha256
+          if ([string]::IsNullOrEmpty($reportedDefaults)) {
+            throw "defaults digest check: check-config v2 reports no report.config_selection.defaults_sha256: $checkReport"
+          }
           $shippedDefaults = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $runtimeDir 'actingd.defaults.json')).Hash.ToLowerInvariant()
           if ($reportedDefaults -cne $shippedDefaults) {
             throw "defaults digest check: the program embeds $reportedDefaults, the artifact ships $shippedDefaults"

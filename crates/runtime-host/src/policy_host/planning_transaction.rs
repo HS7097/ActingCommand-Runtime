@@ -104,7 +104,7 @@ pub(crate) fn planning_transaction_error(error: GlobalLedgerError) -> RuntimeHos
             RuntimeHostError::relayed_fatal(
                 work.code,
                 work.operation,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         } else {
             RuntimeHostError::relayed_request(

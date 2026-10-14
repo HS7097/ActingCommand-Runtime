@@ -50,7 +50,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::ApprovalReplayPayloadMismatch,
                         ContractLocation::RecordApprovalDecision,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ),
                 ));
             };
@@ -150,7 +150,7 @@ impl HostShared {
                 RuntimeErrorCode::InvalidRequest,
             ));
         }
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(error);
         }
         // Recovery rewrites derived State rows, so it shares the gate of every other recovery.
@@ -225,7 +225,7 @@ impl HostShared {
         &self,
         operation: impl Into<Location>,
     ) -> RuntimeHostResult<ApprovalProjection> {
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(error);
         }
         let _gate = lock(&self.governance_write_gate, operation)?;
@@ -335,7 +335,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::GovernanceConnectionStateConflict,
                     ContractLocation::DeclareGovernanceIdentity,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
                 Some(terminal(&persisted)),
             ));

@@ -273,7 +273,7 @@ pub(super) fn reconcile_agent_wakes(
             return Err(RuntimeHostError::fatal(
                 HostCode::AgentWakeSourceInvalid,
                 HostLocation::ReconcileAgentWakes,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         let kind = match signal.kind() {
@@ -293,7 +293,7 @@ pub(super) fn reconcile_agent_wakes(
                 RuntimeHostError::fatal(
                     HostCode::AgentWakeInstanceUnknown,
                     HostLocation::ReconcileAgentWakes,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         append_agent_wake(state, ledger, events, config, &source, instance_id, kind)?;
@@ -324,7 +324,7 @@ pub(super) fn append_agent_wake(
                 RuntimeHostError::fatal(
                     HostCode::AgentWakeTriggerInvalid,
                     HostLocation::AppendAgentWake,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?,
             config.budget(),
@@ -334,7 +334,7 @@ pub(super) fn append_agent_wake(
             RuntimeHostError::fatal(
                 HostCode::AgentWakeIssueFailed,
                 HostLocation::AppendAgentWake,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
     let draft = events.draft(

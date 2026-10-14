@@ -932,17 +932,20 @@ fn scheduling_pauses_survive_a_restart_until_resumed() {
     host.close().expect("close host");
 
     let reopened = start(&root);
+    // Workflow #378 A6a: each restored pause is a `scheduling_pause_restored` outcome (it was a
+    // line), an instance's with its `alias`.
     assert_eq!(
         reopened.scheduling_pause_restore(),
         [
-            format!(
-                "scheduling_pause_restored scope=global since={}",
-                paused_global.since_unix_ms
-            ),
-            format!(
-                "scheduling_pause_restored scope=instance:{POLICY_INSTANCE_ALIAS} since={}",
-                paused_instance.since_unix_ms
-            ),
+            actingcommand_contract::outcome::Outcome::new(
+                crate::codes::HostCode::SchedulingPauseRestored
+            )
+            .at_unix_ms(paused_global.since_unix_ms),
+            actingcommand_contract::outcome::Outcome::new(
+                crate::codes::HostCode::SchedulingPauseRestored
+            )
+            .alias(POLICY_INSTANCE_ALIAS)
+            .at_unix_ms(paused_instance.since_unix_ms),
         ]
     );
     let (global, instances) = reopened

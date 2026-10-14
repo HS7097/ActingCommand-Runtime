@@ -3958,7 +3958,7 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
     for code in [
         RuntimeErrorCode::InvalidRequest,
         RuntimeErrorCode::RuntimeUnavailable,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
         RuntimeErrorCode::OwnerConflict,
         RuntimeErrorCode::ProtocolInvalid,
         RuntimeErrorCode::InstanceUnknown,

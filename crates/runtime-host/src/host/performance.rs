@@ -50,7 +50,7 @@ impl HostShared {
                         RuntimeHostError::fatal(
                             HostCode::MaintenanceEvidenceTimestampMissing,
                             ContractLocation::AssessPredictiveMaintenance,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })?;
                 self.record_policy_planning_signal(PolicyPlanningSignalEventData {
@@ -349,7 +349,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PerformancePipelineInstanceMissing,
                     HostLocation::ObservePerformancePipelineEvent,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let instance_alias = lock(
@@ -362,7 +362,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PerformancePipelineInstanceUnknown,
                     HostLocation::ObservePerformancePipelineEvent,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let (touch_response_us, capture_acquire_us) = match event.payload() {

@@ -57,7 +57,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::ExecutionBackendProvenanceMismatch,
                     HostLocation::ExecuteInput,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -825,7 +825,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::SafeResetActionIdMissing,
                         HostLocation::RecoverSafeReset,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
                 Ok(Some(OperationSuccess {
@@ -842,7 +842,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::SafeResetDurableStateInconsistent,
                     HostLocation::RecoverSafeReset,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
         }
@@ -889,7 +889,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::SafeResetInputResultInvalid,
                     HostLocation::ExecuteSafeReset,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )),
             ));
         };
@@ -960,7 +960,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::ApplicationLifecycleActionIdMissing,
                         HostLocation::RecoverApplicationLifecycle,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
                 Ok(Some(OperationSuccess {
@@ -977,7 +977,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::ApplicationLifecycleDurableStateInconsistent,
                     HostLocation::RecoverApplicationLifecycle,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
         }
@@ -1021,7 +1021,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::ApplicationLifecycleResultInvalid,
                     HostLocation::ExecuteApplicationLifecycle,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )),
             ));
         };
@@ -1134,7 +1134,7 @@ fn input_execution_plan_record(
             RuntimeHostError::fatal(
                 HostCode::InputExecutionPlanInvalid,
                 HostLocation::PrepareInputExecutionPlan,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })
 }

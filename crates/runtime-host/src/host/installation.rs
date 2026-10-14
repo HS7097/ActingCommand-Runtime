@@ -100,7 +100,7 @@ fn prepared<T>(value: &OnceLock<T>) -> RuntimeHostResult<&T> {
         RuntimeHostError::fatal(
             HostCode::RuntimeComponentNotPrepared,
             HostLocation::AccessPreparedRuntime,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }
@@ -110,7 +110,7 @@ pub(super) fn set_prepared<T>(slot: &OnceLock<T>, value: T) -> RuntimeHostResult
         RuntimeHostError::fatal(
             HostCode::RuntimeComponentAlreadyPrepared,
             HostLocation::PrepareRuntime,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }
@@ -286,7 +286,7 @@ impl HostShared {
         target: RuntimeShutdownTarget,
         admission: &mut LifecycleAdmission,
     ) -> Result<OperationSuccess, RequestFailure> {
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(error.into());
         }
         let decision = if target != self.shutdown_target {

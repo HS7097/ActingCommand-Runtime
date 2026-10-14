@@ -104,14 +104,14 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RunIdIssueFailed,
                         ContractLocation::DebugPackage,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
                 let task_id = self.events.issuer().mint_task_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::TaskIdIssueFailed,
                         ContractLocation::DebugPackage,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
                 let task_links = validated.task_event_links(task_id, run_id);

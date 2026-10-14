@@ -5200,7 +5200,7 @@
       "runtime-host"
     ],
     "runtime_restart_": [
-      "runtime-host"
+      "contract"
     ],
     "policy_settlement_release_": [
       "runtime-host"

@@ -88,7 +88,7 @@ pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostRes
                 RuntimeHostError::fatal(
                     HostCode::InstanceWorkerSpawnFailed,
                     HostLocation::StartRuntimeHost,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         workers.senders.insert(instance_id, sender);
@@ -118,9 +118,9 @@ fn instance_worker_loop(
                 shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
-                        HostCode::RuntimeRestartRequired,
+                        actingcommand_contract::codes::SharedCode::RuntimeRestartRequired,
                         HostLocation::RunInstanceWorker,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     );
                     shared.fatal.mark(error.clone())?;
                     return Err(error);
@@ -256,7 +256,7 @@ impl HostShared {
         Err(RuntimeHostError::fatal(
             HostCode::InstanceWorkerUnavailable,
             HostLocation::PostHostClaim,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ))
     }
 
@@ -372,7 +372,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::HostKeyRequestInvalid,
                 HostLocation::RenewHostKey,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         key.token =
@@ -398,7 +398,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::HostKeyRequestInvalid,
                 HostLocation::ReleaseHostKey,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         match self.release_lease(

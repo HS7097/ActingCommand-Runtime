@@ -151,7 +151,7 @@ fn policy_instance_seed_digest(
         RuntimeHostError::fatal(
             HostCode::PolicyInstanceSeedEncodeFailed,
             HostLocation::SeedPolicyInstanceFacts,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
@@ -257,7 +257,7 @@ impl HostShared {
                                 return Err(RuntimeHostError::fatal(
                                     HostCode::PolicyInstanceSeedIdentityConflict,
                                     HostLocation::SeedPolicyInstanceFacts,
-                                    RuntimeErrorCode::RuntimeFatal,
+                                    RuntimeErrorCode::RuntimeHalted,
                                 ));
                             }
                             true
@@ -346,7 +346,7 @@ impl HostShared {
                             return Err(RuntimeHostError::fatal(
                                 HostCode::ResourceTargetsRecordInvalid,
                                 ContractLocation::PublishFacts,
-                                RuntimeErrorCode::RuntimeFatal,
+                                RuntimeErrorCode::RuntimeHalted,
                             ));
                         }
                     }
@@ -419,7 +419,7 @@ impl HostShared {
                             RuntimeHostError::fatal(
                                 HostCode::FactPublicationSequenceMissing,
                                 ContractLocation::PublishFacts,
-                                RuntimeErrorCode::RuntimeFatal,
+                                RuntimeErrorCode::RuntimeHalted,
                             )
                         })?;
                     return Ok(FactPublication {

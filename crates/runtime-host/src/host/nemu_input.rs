@@ -103,7 +103,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::NemuInputDeadlineOverflow,
                     HostLocation::PrepareNemuInput,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?
             .min(token.expires_at_monotonic_ms());
@@ -112,7 +112,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::NemuInputTaskDeadlineMissing,
                     HostLocation::PrepareNemuInput,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             hard_deadline = hard_deadline.min(control.deadline());
@@ -145,7 +145,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::NemuCloseInstanceMissing,
                 HostLocation::PrepareNemuClose,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         self.nemu_input_check(&alias, token, connection_id, None, true)

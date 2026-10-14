@@ -426,7 +426,7 @@ pub(crate) fn approval_transaction_error(error: GlobalLedgerError) -> RuntimeHos
             RuntimeHostError::relayed_fatal(
                 work.code,
                 work.operation,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         } else {
             RuntimeHostError::relayed_request(
@@ -471,6 +471,6 @@ fn approval_fatal(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         HostLocation::RebuildApprovalProjection,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }

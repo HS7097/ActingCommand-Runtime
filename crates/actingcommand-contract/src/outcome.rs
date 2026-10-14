@@ -503,7 +503,7 @@ mod check;
 mod keys;
 mod vocabulary;
 
-pub use vocabulary::{CauseRelation, IoKind, IoOp, LadderClass, RawSource};
+pub use vocabulary::{CauseRelation, FileState, IoKind, IoOp, LadderClass, RawSource};
 
 /// The merged outcome catalog `contracts/outcome-codes.json`, embedded at build time. It is
 /// generated from the fragments by `outcome-guard merge` (in CI) and never edited by hand.
@@ -1117,6 +1117,30 @@ impl Outcome {
             outcome: link,
         });
         self
+    }
+
+    /// Attaches a link and keeps the fatal-link rule (Workflow #378 A6a): when `link` is fatal
+    /// and this outcome is not, `link` tops the result instead, with this outcome as its
+    /// `secondary` link. A link that is not fatal itself but holds a fatal one breaks the rule
+    /// already, and is left out of a top that is not fatal.
+    pub fn joined(self, relation: CauseRelation, link: Outcome) -> Self {
+        if self.inner.category == Category::Fatal || !link.holds_fatal() {
+            return self.link(relation, link);
+        }
+        if link.inner.category == Category::Fatal {
+            return link.link(CauseRelation::Secondary, self);
+        }
+        self
+    }
+
+    /// Whether this outcome or any of its links is fatal.
+    pub fn holds_fatal(&self) -> bool {
+        self.inner.category == Category::Fatal
+            || self
+                .inner
+                .causes
+                .iter()
+                .any(|link| link.outcome.holds_fatal())
     }
 
     /// The `actingcommand.outcome.v1` envelope of this outcome, bounded and filtered for the

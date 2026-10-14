@@ -52,7 +52,7 @@ impl ProviderStartup<'_> {
                 RuntimeHostError::fatal(
                     RuntimeErrorCode::LedgerFailure,
                     HostLocation::AppendProviderStartup,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
     }
@@ -71,7 +71,7 @@ impl ProviderStartup<'_> {
             Ok(()) => RuntimeHostError::relayed_fatal(
                 code,
                 HostLocation::AssembleProvider.as_str(),
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ),
             Err(error) => error,
         }

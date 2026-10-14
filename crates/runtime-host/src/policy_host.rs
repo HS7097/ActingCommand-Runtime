@@ -330,7 +330,7 @@ impl PolicyRunContext {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunPackageDigestMissing,
                 HostLocation::BuildPolicyRunContext,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         if reason_chain.decision_id != intent.decision_id
@@ -341,7 +341,7 @@ impl PolicyRunContext {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunIdentityMismatch,
                 HostLocation::BuildPolicyRunContext,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(Self {
@@ -4076,7 +4076,7 @@ fn sync_directory(_path: &Path, _operation: impl Into<Location>) -> RuntimeHostR
 }
 
 fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {

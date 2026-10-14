@@ -151,49 +151,6 @@ pub(crate) fn missing_reader_warnings(
     ))
 }
 
-/// The text one `fact_reader_missing` warning has in `check-config`'s v1 `warnings`,
-/// `fact_reader_missing:<instance>:<fact key>`, as `env_override_ignored:<VAR>` is written.
-pub(crate) fn missing_reader_warning_v1(warning: &Outcome) -> String {
-    let value = |key: &str| {
-        warning
-            .value(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    format!(
-        "{}:{}:{}",
-        warning.code(),
-        value("instance_id"),
-        value("fact_key")
-    )
-}
-
-/// A refused binding as `check-config` reports it: `error.detail` and the developer text.
-pub(crate) fn refusal_detail(
-    binding: &CheckedBinding,
-    invalid: &Outcome,
-) -> (serde_json::Value, String) {
-    let path = binding.path.to_string_lossy().into_owned();
-    let problem = invalid
-        .value("reader_problem")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let detail = serde_json::json!({
-        "alias": binding.alias,
-        "path": path,
-        "reader_problem": problem,
-        "package_id": invalid.value("package_id"),
-        "fact_key": invalid.value("fact_key"),
-    });
-    let message = format!(
-        "instance {:?} recognition_package {path:?}: {problem}",
-        binding.alias
-    );
-    (detail, message)
-}
-
 /// A Runtime start's bindings: the locations it keeps, and the `recognition_packages`
 /// subsystem row when the configuration names any binding, enabled when one is kept, with one
 /// `note` link of `fact_reader_binding_ignored` per binding it runs without.

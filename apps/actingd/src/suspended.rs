@@ -9,11 +9,13 @@
 use super::*;
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_runtime_host::{SuspensionReportRequest, suspension_report};
-use serde_json::json;
 
-const SUSPENDED_SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v1";
+/// Workflow #378 A6a (model section 7.4): suspended v2, the report's members with `outcome`
+/// (`suspended_reported`); a failure is its outcome alone (v1's `status`, `code`, `operation`
+/// and `detail`).
+pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v2";
 
-pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
     if arguments.len() > 3 {
         return Err(ActingdError::config(ActingdCode::SuspendedUsageInvalid));
     }
@@ -31,56 +33,36 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     let config_path =
         config.ok_or_else(|| ActingdError::config(ActingdCode::SuspendedConfigMissing))?;
     let RuntimeAssembly { host, policy, .. } = config::load(&config_path)
-        .and_then(config::ActingdConfigFile::assemble)
-        .map_err(ActingdError::config)?;
+        .map_err(ActingdError::config)?
+        .assemble_or_refusal()
+        .map_err(|(code, refusal)| ActingdError::refused(code, refusal))?;
     // The file's modification time tells whether the running daemon read this configuration.
     let config_modified_unix_ms = std::fs::metadata(&config_path)
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
-    let report = match policy.as_ref() {
-        Some(policy) => suspension_report(&SuspensionReportRequest {
-            config_path: &config_path,
-            config_modified_unix_ms,
-            host: &host,
-            catalog: &policy.catalog,
-        })
-        .map_err(|error| {
-            (
-                ErrorCode::Registered(error.code()),
-                error.operation().as_str(),
-                error.detail().map(str::to_owned),
-            )
-        }),
-        None => Err((
-            ErrorCode::Registered(SharedCode::SuspendedPolicyUnconfigured.code()),
-            ContractLocation::ReadSuspensionConfig.as_str(),
-            None,
-        )),
+    let Some(policy) = policy.as_ref() else {
+        let code = SharedCode::SuspendedPolicyUnconfigured;
+        return Err(ActingdError::refused(
+            code,
+            Outcome::new(code).operation(ContractLocation::ReadSuspensionConfig),
+        ));
     };
+    let report = suspension_report(&SuspensionReportRequest {
+        config_path: &config_path,
+        config_modified_unix_ms,
+        host: &host,
+        catalog: &policy.catalog,
+    })
+    .map_err(|error| ActingdError::refused(error.code(), error.outcome().clone()))?;
     match report {
-        Ok(report) => {
-            let encoded = serde_json::to_string(&report)
-                .map_err(|_| ActingdError::process(ActingdCode::SuspendedReportEncodeFailed))?;
-            println!("{encoded}");
-            Ok(())
-        }
-        Err((code, operation, detail)) => {
-            let encoded = serde_json::to_string(&json!({
-                "schema_version": SUSPENDED_SCHEMA_VERSION,
-                "status": "failed",
-                "code": code.as_str(),
-                "operation": operation,
-                "detail": detail,
-            }))
-            .map_err(|_| ActingdError::process(ActingdCode::SuspendedReportEncodeFailed))?;
-            println!("{encoded}");
-            let error = ActingdError::coded(code);
-            Err(match detail {
-                Some(detail) => error.with_detail(detail),
-                None => error,
-            })
-        }
+        serde_json::Value::Object(data) => Ok(Reported {
+            outcome: Outcome::new(ActingdCode::SuspendedReported),
+            data,
+        }),
+        _ => Err(ActingdError::process(
+            ActingdCode::SuspendedReportEncodeFailed,
+        )),
     }
 }

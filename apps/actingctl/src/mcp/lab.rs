@@ -1243,8 +1243,9 @@ pub(super) fn binding_draft(
 
 /// `<root>\runtime\actingcommand-actingd.exe check-config --config <root>\actingd.config.json`
 /// on the configuration in force, which it only reads (`check_config.rs:37-130`). Its whole
-/// stdout is exported; inline stay `{config, exit_code, status?, error?, report_export}` with
-/// `status` and `error` copied from the report's top level (review F3). A failure is
+/// stdout is exported; inline stay `{config, exit_code, outcome?, report_export}` with `outcome`
+/// copied from the report's top level (review F3; Workflow #378 A6a: check-config v2's outcome,
+/// which replaced v1's `status` and `error`). A failure is
 /// `check_config_failed {path, exit_code?}`, caused by the OS failure, or by the parser's
 /// rejection of the exported stdout (`foreign_data_error`) and actingd's stderr.
 fn check_config(program: &Program) -> Result<Value, ToolError> {
@@ -1295,10 +1296,8 @@ fn check_config(program: &Program) -> Result<Value, ToolError> {
         Value::String(config.display().to_string()),
     );
     inline.insert("exit_code".to_owned(), json!(exit_code));
-    for key in ["status", "error"] {
-        if let Some(value) = report.get(key) {
-            inline.insert(key.to_owned(), value.clone());
-        }
+    if let Some(outcome) = report.get("outcome") {
+        inline.insert("outcome".to_owned(), outcome.clone());
     }
     inline.insert("report_export".to_owned(), report_export);
     Ok(Value::Object(inline))
@@ -1428,8 +1427,7 @@ pub(super) fn binding_draft_result() -> Value {
     let mut check_config = Map::new();
     check_config.insert("config".to_owned(), json!({"type": "string"}));
     check_config.insert("exit_code".to_owned(), json!({"type": ["integer", "null"]}));
-    check_config.insert("status".to_owned(), json!({"type": "string"}));
-    check_config.insert("error".to_owned(), json!({}));
+    check_config.insert("outcome".to_owned(), json!({"type": "object"}));
     check_config.insert("report_export".to_owned(), export_schema());
     json!({
         "type": "object",
