@@ -160,8 +160,8 @@ fn observe_lists_an_operation_with_several_destinations() {
     assert_eq!(branch["click"], json!({"kind": "point", "x": 1, "y": 0}));
 }
 
-// A package entered on `home` with one guarded click whose `to` names `terminal` and
-// `alternate`; `extra_target` joins its recognition pack.
+// A package that checks its entry on `home` and has one guarded click whose `to` names
+// `terminal` and `alternate`; `extra_target` joins its recognition pack.
 fn write_package(temp: &TempDir, extra_target: Option<Value>) -> PathBuf {
     let color = |id: &str, region_x: u32, expected: [u8; 3]| {
         json!({"type": "color", "id": id,
@@ -179,6 +179,11 @@ fn write_package(temp: &TempDir, extra_target: Option<Value>) -> PathBuf {
         json!({"id": format!("neutral/{name}"), "required": [format!("page/{name}")],
                "optional": [], "forbidden": []})
     };
+    // A single `home` entry is checked only when its page is gated by an `any_of` group, so the
+    // home page is gated that way and the run has an entry check to report.
+    let mut home = page("home");
+    home["required"] = json!([]);
+    home["any_of"] = json!([["page/home"]]);
     let bytes = zip_entries(&[
         (
             "control.json",
@@ -240,7 +245,7 @@ fn write_package(temp: &TempDir, extra_target: Option<Value>) -> PathBuf {
         (
             "resources/recognition/neutral.test.pages.json",
             json!({"schema_version": "0.3",
-                   "pages": [page("home"), page("terminal"), page("alternate")]}),
+                   "pages": [home, page("terminal"), page("alternate")]}),
         ),
         (
             "resources/navigation/neutral.test.navigation.json",
