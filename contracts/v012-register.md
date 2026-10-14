@@ -738,6 +738,30 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.49 Wave 12 slice SEL-L3 (#308, frozen selector model S0 v2.1 §2.1–§2.6, §3.3, §6 row L3)
+
+SEL-L3 brings the scan session engine of a select step in the execution kernel and its offline
+`dry_run_scan`; it writes no new record type, member, wire shape or configuration key. The
+candidate projection v2 and the record's scan members are SEL-L4a's (merged); the record of a
+scan select, its admission, `Decide`, `Return`, `Confirm` and the tap are SEL-L4b's, which also
+reads `select.scan` from a package (L3 reads it only as given). A scan's drags are recorded as
+the existing `task.effect_intent` of the select step, as the row below states. The codes
+`selection_scan_start_unconfirmed`, `selection_scan_settle_incomplete`,
+`selection_scan_alignment_rejected`, `selection_scan_gap_detected`,
+`selection_scan_instance_missing`, `selection_scan_identity_mismatch`,
+`selection_scan_end_unconfirmed`, `selection_scan_position_unread` (execution-kernel, error,
+`pack_logic_mismatch`), `selection_scan_bounds_exceeded` (`budget_or_permission`) and
+`selection_scan_replay_frame_missing` (dry run only, `none`), the locations `select_scan_start`,
+`select_scan_settle`, `select_scan_align`, `select_scan_observe`, `select_scan_end` and
+`select_scan_decide` (the domain `select_` that execution-kernel already holds), and the keys
+`viewport_index`, `position_index`, `gap_px`, `expected_identity`, `observed_identity`,
+`scan_alignment_failure`, `scan_spacing_failure` and `scan_bound` with their vocabularies are
+catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3-1 | `task.effect_intent` of a select step: several per step action, one per scan drag (advance, corrective, rewind; SEL-L4b adds the return drags), each linked to the frame it was sampled on, each followed by its input; none followed by `task.effect_completed` | existing record, written more than once per select step | SEL-L3 (kernel); online from SEL-L4b, which first lets a package declare `scan` | SEL-L4b | the step's one `task.effect_completed` follows its selecting tap, so the host's count of designated effects per step (one) is unchanged; the host already keys every intent by `(step_index, operation_label)` and links it to the last captured frame, so it needs no change |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

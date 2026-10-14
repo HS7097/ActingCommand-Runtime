@@ -168,6 +168,15 @@ outcome_keys! {
     adjustment_reason: vocab(adjustment_reason),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
+    // Workflow #308 SEL-L3: a select step's scan session.
+    viewport_index: integer,
+    position_index: integer,
+    gap_px: integer,
+    expected_identity: id,
+    observed_identity: id,
+    scan_alignment_failure: vocab(scan_alignment_failure),
+    scan_spacing_failure: vocab(scan_spacing_failure),
+    scan_bound: vocab(scan_bound),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,

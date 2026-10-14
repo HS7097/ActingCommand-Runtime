@@ -149,6 +149,19 @@ actingcommand_contract::outcome_codes! {
         SelectionProjectionMismatch => "selection_projection_mismatch": error / none,
         SelectionConfirmationCaptureFailed => "selection_confirmation_capture_failed": error / environment_fault,
         SelectPageMismatch => "select_page_mismatch": error / pack_logic_mismatch,
+        // Workflow #308 SEL-L3: the scan session of a select step (frozen selector model S0 v2.1
+        // §2.7; keys `stage`, `viewport_index` and each code's own values).
+        SelectionScanStartUnconfirmed => "selection_scan_start_unconfirmed": error / pack_logic_mismatch,
+        SelectionScanSettleIncomplete => "selection_scan_settle_incomplete": error / pack_logic_mismatch,
+        SelectionScanAlignmentRejected => "selection_scan_alignment_rejected": error / pack_logic_mismatch,
+        SelectionScanGapDetected => "selection_scan_gap_detected": error / pack_logic_mismatch,
+        SelectionScanInstanceMissing => "selection_scan_instance_missing": error / pack_logic_mismatch,
+        SelectionScanIdentityMismatch => "selection_scan_identity_mismatch": error / pack_logic_mismatch,
+        SelectionScanEndUnconfirmed => "selection_scan_end_unconfirmed": error / pack_logic_mismatch,
+        SelectionScanPositionUnread => "selection_scan_position_unread": error / pack_logic_mismatch,
+        SelectionScanBoundsExceeded => "selection_scan_bounds_exceeded": error / budget_or_permission,
+        // Workflow #308 SEL-L3: a scan dry run needed a frame its saved sequence does not hold.
+        SelectionScanReplayFrameMissing => "selection_scan_replay_frame_missing": error / none,
         // Post-admission OCR.
         OcrFieldsMissing => "ocr_fields_missing": error / declaration_error,
         OcrFieldsDictionaryMissing => "ocr_fields_dictionary_missing": error / declaration_error,
@@ -266,5 +279,13 @@ actingcommand_contract::outcome_locations! {
         ObservationBeforeInput => "observation_before_input",
         ObservationAfterInput => "observation_after_input",
         ObservationPageWait => "observation_page_wait",
+        // Workflow #308 SEL-L3: the stages of a select step's scan session (the `stage` of the
+        // `selection_scan_` codes, frozen selector model S0 v2.1 §2.7).
+        SelectScanStart => "select_scan_start",
+        SelectScanSettle => "select_scan_settle",
+        SelectScanAlign => "select_scan_align",
+        SelectScanObserve => "select_scan_observe",
+        SelectScanEnd => "select_scan_end",
+        SelectScanDecide => "select_scan_decide",
     }
 }
