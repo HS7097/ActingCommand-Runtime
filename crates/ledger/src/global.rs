@@ -1563,8 +1563,9 @@ impl LedgerSubscription {
     }
 
     pub fn resume_cursor(&self) -> SubscriptionCursor {
+        // one-off (red proof 2, L-3 G8): a resume cursor skips the event after the last delivered.
         SubscriptionCursor {
-            after_sequence: self.last_delivered_sequence,
+            after_sequence: self.last_delivered_sequence + 1,
         }
     }
 
