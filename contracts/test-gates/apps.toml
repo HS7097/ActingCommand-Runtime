@@ -338,7 +338,7 @@ tests = [
 ]
 incident = ["#389 MCP-8"]
 
-# actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a)
+# actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a); an idle actingd accepts the first shutdown request right after runtime_ready, exits 0 and ends with runtime_stopped (train 11, SHUT-FU)
 [[gate]]
 key = "48"
 coverage = "Y"
@@ -349,6 +349,7 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_the_terminal_outcome_decides_by_its_category",
     "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required",
     "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
+    "actingcommand-actingd::process::an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready",
 ]
 incident = ["#378 A6a"]
 

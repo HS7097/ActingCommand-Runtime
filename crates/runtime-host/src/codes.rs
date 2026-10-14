@@ -2162,6 +2162,7 @@ pub(crate) mod test_spellings {
             InstallScheduledPolicyCheckpointTestHook => "install_scheduled_policy_checkpoint_test_hook",
             InstanceAdmissionForTest => "instance_admission_for_test",
             InstanceClaimsForTest => "instance_claims_for_test",
+            ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",
             PersistContainedTaskStabilityComparison => "persist_contained_task_stability_comparison",
             PolicyOutcomeKeySnapshotForTest => "policy_outcome_key_snapshot_for_test",
