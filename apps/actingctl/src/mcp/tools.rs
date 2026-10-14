@@ -664,6 +664,25 @@ pub(super) static TOOLS: &[ToolDef] = &[
         result_schema: job_result,
         run: operator::emulator,
     },
+    // ---- Workflow #389 MCP-13a (begin): `ac_app` ↔ actinglab `session app`; operator before
+    // U-3, option two after it (MCP-0 command table v1.1 §4.14, FCM:116). ----
+    ToolDef {
+        name: "ac_app",
+        title: "Application control",
+        tier: Tier::Operator,
+        description: concat!(
+            "Starts, restarts or stops the application the Runtime configures for one instance, as actinglab --json session app <action> --instance <instance> does (the Runtime's application lifecycle request), and answers actinglab's data verbatim. action is launch, restart, stop or force-stop; force-stop is the same action as stop. stop, force-stop and restart end what runs in the application, so the tool is destructive. instance is the Runtime instance alias. It records no Lab recording step (no --record).",
+            lab_errors!(),
+            " Not done within the call budget, the answer is {handle, job_phase} for ac_get_run; actinglab keeps running and is never stopped from here. This handle is a job of this MCP process and ends with it (ac_get_run then answers handle_unknown); afterwards read the instance with ac_overview."
+        ),
+        read_only: false,
+        destructive: true,
+        idempotent: false,
+        input_schema: lab::app_input,
+        result_schema: lab::lab_result,
+        run: lab::app,
+    },
+    // ---- Workflow #389 MCP-13a (end) ----
     ToolDef {
         name: "ac_targets_set",
         title: "Set resource targets",

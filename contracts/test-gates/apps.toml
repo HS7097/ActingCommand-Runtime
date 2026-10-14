@@ -261,7 +261,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -275,6 +275,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
 ]
 incident = ["#389"]
 
@@ -370,6 +371,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step",
 ]
 incident = ["#389 MCP-6"]
+
+# ac_app is an operator tool before U-3: a server without the operator tier neither lists it nor runs it (tier_not_enabled, mcp_blocker server_tier); with it, ac_app is listed destructive and not read-only, refuses an action actinglab session app does not have and a call without its instance (arguments_invalid), and answers lab_tool_unavailable (mcp_blocker install_root) when it knows no installation (Workflow #389 MCP-13a)
+[[gate]]
+key = "52"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_app::gate_ac_app_is_an_operator_tool_that_refuses_what_session_app_does_not_take",
+]
+incident = ["#389 MCP-13a"]
 
 # A MuMu resolution reason, as provider startup records it and check-config notes it, carries the context its resolving step recorded as values: what was counted, how many and whether exactly, the resolver rung, and how the adb, the MuMu folder and the capture DLL were configured (Workflow #378 A7; key after the wave 12 reservations apps 50 to 53)
 [[gate]]
