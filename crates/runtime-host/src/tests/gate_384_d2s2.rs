@@ -359,6 +359,14 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
     let bytes = reading_package(false, true);
     fs::write(&package, &bytes).expect("write reading package");
     let state = Arc::new(FakeState::default());
+    // A direct run needs a device instance, and a device's first frame passes the task geometry
+    // only with its display observed (Workflow #392 DA-A): the fake device observes a display of
+    // the package's 2x1 resolution and serves frames of that size.
+    state.physical_task_geometry.store(true, Ordering::Release);
+    *state
+        .physical_task_extent
+        .lock()
+        .expect("fake physical task extent") = Some((2, 1));
     state
         .transition_capture_after_inputs
         .store(1, Ordering::Release);
