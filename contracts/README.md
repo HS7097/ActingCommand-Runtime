@@ -221,8 +221,12 @@ task declares its entry page and scheduling outcome; it uses `navigable_route`
 with confirmation enabled and has no internal recovery or stability termination.
 Static reachability follows `(phase, page, designated effect)` through finite
 postconditions. The designated operation is nonretryable and cannot be reachable
-again after its effect. Source parsing, build and Runtime admission share this
-check; the operation and control phase declarations must match exactly.
+again after its effect. The members of a designated effect set (Workflow #390
+OUT-2, [resource-declarations.md](resource-declarations.md)) are nonretryable too;
+a member may be reached again up to its cap, and where it may have reached its cap
+the stage's next operation from the page is followed as well. Source parsing,
+build and Runtime admission share this check; the operation and control phase
+declarations must match exactly.
 
 Shared interrupt pages (Workflow #373 NAV-6). The game root of an installed
 standard package may name shared interrupt pages (`interrupts.json`, see

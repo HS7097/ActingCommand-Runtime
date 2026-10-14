@@ -402,6 +402,11 @@ pub struct TaskDiagnosticTemplateData {
     pub raw_score: f32,
     pub score: f32,
     pub threshold: f32,
+    /// Workflow #396 REC-5: the factor in milli the template was resampled by when it matched,
+    /// for a target that declares `scales` (the box is the resampled template's); absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_milli: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

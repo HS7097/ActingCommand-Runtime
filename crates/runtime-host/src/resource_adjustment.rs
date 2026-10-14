@@ -189,10 +189,7 @@ pub(crate) fn plan_resource_adjustments(
             // A reading of the key that held on the confirmation frame or a later one.
             let read_after = frames.iter().any(|frame| {
                 frame.captured_at >= confirmation.captured_at
-                    && frame
-                        .readings
-                        .iter()
-                        .any(|reading| reading.declaration.fact_key == key)
+                    && frame.readings.iter().any(|reading| reading.fact_key == key)
             });
             let (outcome, drops_key) = match (&declaration.amount, &adjustment.amount) {
                 (None, _) => (
@@ -347,7 +344,7 @@ fn current_base(
             continue;
         }
         for (reading_index, reading) in frame.readings.iter().enumerate() {
-            if reading.declaration.fact_key == key && newer(&base, frame.observed_at_unix_ms) {
+            if reading.fact_key == key && newer(&base, frame.observed_at_unix_ms) {
                 base = Some(Base {
                     value: i64::try_from(reading.value).ok(),
                     observed_at_unix_ms: frame.observed_at_unix_ms,
@@ -385,7 +382,7 @@ fn publication_order(
     let mut order = Vec::new();
     for (frame_index, frame) in frames.iter().enumerate() {
         for (reading_index, reading) in frame.readings.iter().enumerate() {
-            if !dropped.contains(&reading.declaration.fact_key) {
+            if !dropped.contains(&reading.fact_key) {
                 order.push((
                     frame.observed_at_unix_ms,
                     RunRecord::Reading(frame_index, reading_index),

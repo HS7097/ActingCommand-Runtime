@@ -937,6 +937,25 @@ impl Declaration<'_> {
         )
     }
 
+    /// Workflow #396 REC-5: `scales` of an `anchors[]` or `verify_templates[]` entry of task
+    /// schema `0.9`: `{"factors_milli": [...]}` of integers. Its values are checked with the
+    /// derived recognition pack.
+    fn scales(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["factors_milli"])?;
+        let factors_pointer = child(pointer, "factors_milli");
+        let factors = self.array(
+            self.required(object, pointer, "factors_milli")?,
+            &factors_pointer,
+        )?;
+        for (position, factor) in factors.iter().enumerate() {
+            self.unsigned(factor, &child(&factors_pointer, &position.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Workflow #396 REC-7: the `mask` (`{"type": "range", "lower", "upper"}`) or MAA
     /// `maskRange` (`[lower, upper]`) of an `anchors[]` or `verify_templates[]` entry of task
     /// schema `0.9`: integer gray bounds in 0..=255 with `lower <= upper`, one of the two forms.
@@ -1108,6 +1127,7 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "provenance",
                 "unique",
+                "scales",
             ],
             "verify_templates" => &[
                 "id",
@@ -1123,6 +1143,7 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "provenance",
                 "unique",
+                "scales",
             ],
             "color_probes" => &[
                 "id",
@@ -1181,6 +1202,8 @@ impl Declaration<'_> {
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
                 "unique" => self.unique(value, &pointer)?,
+                // Workflow #396 REC-5.
+                "scales" => self.scales(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 // Workflow #396 REC-7: a gray-range mask of task schema 0.9.
@@ -2483,12 +2506,45 @@ impl Declaration<'_> {
     }
 
     fn scheduling(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        let object = self.object(value, pointer, &["designated_operation", "mappings"])?;
+        let object = self.object(
+            value,
+            pointer,
+            &["designated_operation", "designated_effects", "mappings"],
+        )?;
         if let Some(operation) = object
             .get("designated_operation")
             .filter(|value| !value.is_null())
         {
             self.string(operation, &child(pointer, "designated_operation"))?;
+        }
+        // Workflow #390 OUT-2: a designated effect set is a task schema `0.9` declaration.
+        if let Some(effects) = object.get("designated_effects") {
+            let effects_pointer = child(pointer, "designated_effects");
+            if self.schema != Some("0.9") {
+                return Err(
+                    self.error(&effects_pointer, ResourceDeclarationReason::UnconsumedField)
+                );
+            }
+            for (index, effect) in self.array(effects, &effects_pointer)?.iter().enumerate() {
+                let pointer = child(&effects_pointer, &index.to_string());
+                let effect = self.object(effect, &pointer, &["operation_id", "max_repeats"])?;
+                self.string(
+                    self.required(effect, &pointer, "operation_id")?,
+                    &child(&pointer, "operation_id"),
+                )?;
+                if let Some(repeats) = effect.get("max_repeats") {
+                    let repeats_pointer = child(&pointer, "max_repeats");
+                    if repeats.is_object() {
+                        let fact = self.object(repeats, &repeats_pointer, &["fact_key"])?;
+                        self.string(
+                            self.required(fact, &repeats_pointer, "fact_key")?,
+                            &child(&repeats_pointer, "fact_key"),
+                        )?;
+                    } else {
+                        self.unsigned(repeats, &repeats_pointer)?;
+                    }
+                }
+            }
         }
         let mappings = self.required(object, pointer, "mappings")?;
         for (index, mapping) in self
@@ -2721,16 +2777,31 @@ impl Declaration<'_> {
             "minimum_confidence_milli",
             "valid_for_ms",
         ];
+        // Workflow #390 READ-1: the optional second reading key of a `current_capacity` mark.
+        let members = [
+            "id",
+            "fact_key",
+            "capacity_fact_key",
+            "page_id",
+            "target_id",
+            "trim",
+            "value",
+            "minimum_confidence_milli",
+            "valid_for_ms",
+        ];
         let mut ids = BTreeSet::new();
         let mut fact_keys = BTreeSet::new();
         for (index, reading) in readings.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
-            let object = self.object(reading, &pointer, &fields)?;
+            let object = self.object(reading, &pointer, &members)?;
             for field in fields {
                 self.required(object, &pointer, field)?;
             }
             for field in ["id", "fact_key", "page_id", "target_id", "trim"] {
                 self.string(&object[field], &child(&pointer, field))?;
+            }
+            if let Some(capacity_fact_key) = object.get("capacity_fact_key") {
+                self.string(capacity_fact_key, &child(&pointer, "capacity_fact_key"))?;
             }
             if serde_json::from_value::<actingcommand_contract::OcrFieldTrim>(
                 object["trim"].clone(),
@@ -2798,6 +2869,9 @@ impl Declaration<'_> {
                 let path: &[&str] = match refused {
                     Some(TaskflowCode::ResourceReadingIdInvalid) => &["id"],
                     Some(TaskflowCode::ResourceReadingFactKeyInvalid) => &["fact_key"],
+                    Some(TaskflowCode::ResourceReadingCapacityFactKeyInvalid) => {
+                        &["capacity_fact_key"]
+                    }
                     Some(TaskflowCode::ResourceReadingPageIdInvalid) => &["page_id"],
                     Some(TaskflowCode::ResourceReadingTargetIdInvalid) => &["target_id"],
                     Some(TaskflowCode::ResourceReadingValueMaxInvalid) => &["value", "max"],
@@ -2822,6 +2896,15 @@ impl Declaration<'_> {
             if !fact_keys.insert(declaration.fact_key) {
                 return Err(self.error(
                     &child(&pointer, "fact_key"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            // Workflow #390 READ-1: the capacity key is a reading key of the task like any other.
+            if let Some(capacity_fact_key) = declaration.capacity_fact_key
+                && !fact_keys.insert(capacity_fact_key)
+            {
+                return Err(self.error(
+                    &child(&pointer, "capacity_fact_key"),
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }

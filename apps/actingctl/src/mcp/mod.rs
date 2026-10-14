@@ -23,6 +23,8 @@ mod packs;
 mod protocol;
 // Workflow #389 MCP-3: ac_runs.
 mod run_list;
+// Workflow #389 MCP-6: ac_run_evidence.
+mod run_evidence;
 mod runs;
 mod runtime;
 mod server;

@@ -12,15 +12,15 @@ use crate::{
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    ApplicationLifecycleAction, EffectiveOperationTiming, EffectiveTaskTiming,
-    EffectiveTimingSource, EffectiveTimingValue, InputAction, InputSamplingEvidence,
-    InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary, OcrFieldReason,
-    OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration,
-    OcrFieldsReport, PHASED_CONTROL_SCHEMA, RecognizedTarget, RecognizedTargetRole,
-    ResourceAdjustmentAmount, ResourceAdjustmentDeclaration, ResourceReadingDeclaration,
-    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
-    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
-    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
+    ApplicationLifecycleAction, DesignatedEffectReach, EffectiveOperationTiming,
+    EffectiveTaskTiming, EffectiveTimingSource, EffectiveTimingValue, InputAction,
+    InputSamplingEvidence, InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary,
+    OcrFieldReason, OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue,
+    OcrFieldsDeclaration, OcrFieldsReport, PHASED_CONTROL_SCHEMA, RecognizedTarget,
+    RecognizedTargetRole, ResourceAdjustmentAmount, ResourceAdjustmentDeclaration,
+    ResourceReadingDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
     SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
     TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
     TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
@@ -51,6 +51,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+// Workflow #390 OUT-2: the caps of a designated effect set.
+mod designated_effects;
 mod linear;
 // Workflow #390 EXEC-2.
 mod observation_window;
@@ -66,6 +68,9 @@ mod text_locate_tests;
 mod timing;
 #[cfg(test)]
 mod unique_tests;
+// Workflow #396 REC-5.
+#[cfg(test)]
+mod scales_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
@@ -78,6 +83,9 @@ mod gate_387_d1cf;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
+// Workflow #390 OUT-2.
+#[cfg(test)]
+mod gate_390_out2;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -87,6 +95,9 @@ mod gate_384_d2s2;
 // Workflow #384 D2-S3.
 #[cfg(test)]
 mod gate_384_d2s3;
+// Workflow #390 READ-1: a fraction reading's denominator as a second reading key.
+#[cfg(test)]
+mod gate_390_read1;
 
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
@@ -1875,7 +1886,9 @@ pub enum ContainedTaskTrace {
     },
     /// The readings of one handed-off frame, joined before `Finalizing` in hand-off order: the
     /// marks that held and those that gave no reading (model §3.5). In memory only;
-    /// `captured_at` is that frame's device capture time.
+    /// `captured_at` is that frame's device capture time. Workflow #390 READ-1: a mark that held
+    /// and declares `capacity_fact_key` gives two readings, in mark order, its value then its
+    /// capacity; a mark that gave no reading is one miss.
     ResourceReadings {
         captured_at: SystemTime,
         readings: Vec<ResourceReadingValue>,
@@ -1902,9 +1915,13 @@ pub enum ContainedTaskTrace {
 }
 
 /// One resolved resource reading (Workflow #335 S5a). In memory only; never serialized.
+/// Workflow #390 READ-1: `fact_key` is the key the reading writes, the mark's `fact_key`, or
+/// for the capacity of a `current_capacity` mark its `capacity_fact_key`; such a mark gives
+/// both readings from one evaluation, with one confidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceReadingValue {
     pub declaration: ResourceReadingDeclaration,
+    pub fact_key: String,
     pub value: u64,
     pub confidence_milli: u16,
 }
@@ -2225,6 +2242,9 @@ pub struct ContainedTaskOutcome {
     /// A comparison-selected key for Host's consistency check. Field reports keep their
     /// report key while Host derives the business disposition from effects and terminal page.
     pub selected_scheduling_outcome: Option<String>,
+    /// Workflow #390 OUT-2: the members of the task's designated effect set with the caps the run
+    /// held them to (a fact cap as read before the first step); empty without a set.
+    pub designated_effect_caps: Vec<crate::DesignatedEffectCap>,
 }
 
 /// Workflow #336 L2b: the bounded wait for a `linear_steps` package's first step after its
@@ -2574,13 +2594,14 @@ impl PreparedContainedTask {
     }
 
     /// Workflow #384 D2-S2: the instance fact keys the task's reading marks write, in
-    /// declaration order.
+    /// declaration order (Workflow #390 READ-1: a mark's capacity key after its key).
     pub fn reading_keys(&self) -> Vec<String> {
         self.program
             .resource_readings
             .iter()
             .flatten()
-            .map(|reading| reading.fact_key.clone())
+            .flat_map(|reading| reading.fact_keys())
+            .map(str::to_owned)
             .collect()
     }
 
@@ -2599,7 +2620,7 @@ impl PreparedContainedTask {
         } else if self
             .scheduling_outcome
             .as_ref()
-            .is_some_and(|declaration| declaration.designated_operation().is_some())
+            .is_some_and(SchedulingOutcomeDeclaration::has_designated_effect)
         {
             Some(ReaderProblem::DesignatedOperation)
         } else if self.program.resource_readings.is_none() {
@@ -2763,7 +2784,7 @@ impl PreparedContainedTask {
         } else if self
             .scheduling_outcome
             .as_ref()
-            .is_some_and(|declaration| declaration.designated_operation().is_some())
+            .is_some_and(SchedulingOutcomeDeclaration::has_designated_effect)
         {
             Some("designated_operation")
         } else {
@@ -3608,6 +3629,7 @@ impl PreparedContainedTask {
                 final_page: observation.map(|observed| observed.page_label),
                 executed_steps: 0,
                 selected_scheduling_outcome: None,
+                designated_effect_caps: Vec::new(),
             });
         }
 
@@ -3640,6 +3662,9 @@ impl PreparedContainedTask {
                     .map(str::to_owned),
             );
         }
+        // Workflow #390 OUT-2: the caps of a designated effect set, its fact caps read now,
+        // before the run's first step.
+        config = config.with_designated_effect_caps(self.designated_effect_caps(runtime)?);
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         // Workflow #373 NAV-3b: a phased route enters at the stage its matched entry page starts.
@@ -4342,7 +4367,7 @@ impl PreparedContainedTask {
                         runtime,
                         ocr_collector,
                         current_page,
-                        machine.completed_steps(),
+                        (machine.completed_steps(), machine.designated_effect_caps()),
                     );
                 }
                 RunDirective::Terminal(
@@ -4451,7 +4476,7 @@ impl PreparedContainedTask {
                 runtime,
                 ocr_collector,
                 Some(observation.page_label.clone()),
-                machine.completed_steps(),
+                (machine.completed_steps(), machine.designated_effect_caps()),
             ),
             StabilityTerminalReason::MaxStepsReached => Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskRequiresScheduler.code(),
@@ -4465,7 +4490,8 @@ impl PreparedContainedTask {
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         final_page: Option<String>,
-        executed_steps: u32,
+        // The executed steps, and Workflow #390 OUT-2's designated effect caps.
+        (executed_steps, designated_effect_caps): (u32, &[crate::DesignatedEffectCap]),
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
@@ -4506,6 +4532,7 @@ impl PreparedContainedTask {
             final_page,
             executed_steps,
             selected_scheduling_outcome,
+            designated_effect_caps: designated_effect_caps.to_vec(),
         })
     }
 
@@ -6094,15 +6121,19 @@ impl TaskProgram {
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
                 )
             })?;
+            // Workflow #390 OUT-2: each designated operation of either form names one operation
+            // of the task; a designated effect set is a task schema `0.9` declaration.
             if declaration
-                .designated_operation()
-                .is_some_and(|designated| {
+                .designated_operations()
+                .into_iter()
+                .any(|designated| {
                     self.operations
                         .iter()
                         .filter(|operation| operation.id == designated)
                         .count()
                         != 1
                 })
+                || (declaration.designated_effects().is_some() && self.schema_version != "0.9")
             {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
@@ -6209,14 +6240,13 @@ impl TaskProgram {
                         ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
                     ));
                 }
-                if self
-                    .scheduling_outcome
-                    .as_ref()
-                    .and_then(|outcome| outcome.designated_operation())
-                    == Some(operation.id.as_str())
-                    && operation
-                        .retry_policy(self.defaults, control.task_timeout().milliseconds)?
-                        .is_some_and(|policy| policy.retryable())
+                if self.scheduling_outcome.as_ref().is_some_and(|outcome| {
+                    outcome
+                        .designated_operations()
+                        .contains(&operation.id.as_str())
+                }) && operation
+                    .retry_policy(self.defaults, control.task_timeout().milliseconds)?
+                    .is_some_and(|policy| policy.retryable())
                 {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
@@ -7256,7 +7286,9 @@ fn validate_scheduling_outcome_coverage(
     operations: &[TaskOperation],
     declaration: &SchedulingOutcomeDeclaration,
 ) -> Result<(), ContainedTaskError> {
-    let designated_operation = declaration.designated_operation();
+    // Workflow #390 OUT-2: a path's state is its page and the designated effects that completed
+    // on the way (a bit mask); its mapping condition is whether any did.
+    let reach = declaration.designated_effect_reach();
     let candidates = operations
         .iter()
         .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
@@ -7267,23 +7299,44 @@ fn validate_scheduling_outcome_coverage(
     let mut pending = observable_pages
         .iter()
         .filter(|page| required_home.is_none_or(|home| page.as_str() == home))
-        .map(|page| (page.clone(), SchedulingEffectCondition::NoDesignatedEffect))
+        .map(|page| (page.clone(), 0_u16))
         .collect::<VecDeque<_>>();
     let mut visited = BTreeSet::new();
     let mut reachable_terminals = BTreeSet::new();
 
-    while let Some((page, condition)) = pending.pop_front() {
-        if !visited.insert((page.clone(), condition)) {
+    while let Some((page, completed)) = pending.pop_front() {
+        if !visited.insert((page.clone(), completed)) {
             continue;
         }
         if target_pages
             .iter()
             .any(|target| crate::page_anchor_matches(game, &page, target))
         {
-            reachable_terminals.insert((condition, page));
+            reachable_terminals.insert((DesignatedEffectReach::condition(completed), page));
             continue;
         }
-        if let Some(selected) = select_run_operation(game, &page, &candidates) {
+        // Workflow #390 OUT-2: a member of a designated effect set that may have reached its
+        // cap is passed over at run time, so the page's next operation is followed too; a page
+        // left without one is refused.
+        let mut passed_over: Vec<&str> = Vec::new();
+        loop {
+            let eligible = candidates
+                .iter()
+                .filter(|candidate| !passed_over.contains(&candidate.id()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let Some(selected) = select_run_operation(game, &page, &eligible) else {
+                if passed_over.is_empty() {
+                    break;
+                }
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
+                    format!(
+                        "page={page} has no operation once designated_effects {} reached their cap",
+                        passed_over.join(",")
+                    ),
+                ));
+            };
             let operation = operations
                 .iter()
                 .find(|operation| operation.id == selected.id())
@@ -7292,8 +7345,10 @@ fn validate_scheduling_outcome_coverage(
                         ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                     )
                 })?;
-            if condition == SchedulingEffectCondition::DesignatedEffectCompleted
-                && designated_operation == Some(operation.id.as_str())
+            let member = reach.index_of(&operation.id);
+            if let Some(member) = member
+                && reach.is_single(member)
+                && completed & DesignatedEffectReach::bit(member) != 0
             {
                 return Err(ContainedTaskError::with_detail(
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
@@ -7303,14 +7358,9 @@ fn validate_scheduling_outcome_coverage(
                     ),
                 ));
             }
-            let next_condition = if condition
-                == SchedulingEffectCondition::DesignatedEffectCompleted
-                || designated_operation == Some(operation.id.as_str())
-            {
-                SchedulingEffectCondition::DesignatedEffectCompleted
-            } else {
-                SchedulingEffectCondition::NoDesignatedEffect
-            };
+            let next_completed = member.map_or(completed, |member| {
+                completed | DesignatedEffectReach::bit(member)
+            });
             let destinations = operation.destination_pages()?;
             if destinations.is_empty() {
                 return Err(ContainedTaskError::with_detail(
@@ -7334,7 +7384,13 @@ fn validate_scheduling_outcome_coverage(
                         ),
                     ));
                 };
-                pending.push_back(((*concrete_page).clone(), next_condition));
+                pending.push_back(((*concrete_page).clone(), next_completed));
+            }
+            match member {
+                Some(member) if reach.may_be_capped(member, completed) => {
+                    passed_over.push(operation.id.as_str());
+                }
+                _ => break,
             }
         }
     }
@@ -8329,6 +8385,7 @@ impl TaskClick {
                             ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                         )
                     })?;
+                    let offset = scaled_click_offset(offset, target)?;
                     rect = ClickRect {
                         x: rect.x + offset.x,
                         y: rect.y + offset.y,
@@ -8336,6 +8393,7 @@ impl TaskClick {
                         height: offset.height,
                     };
                 } else if let Some(offset) = self.offset {
+                    let offset = scaled_click_offset(offset, target)?;
                     rect = ClickRect {
                         x: rect.x + offset.x,
                         y: rect.y + offset.y,
@@ -8428,6 +8486,29 @@ fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), Cont
         },
         true,
     ))
+}
+
+/// Workflow #396 REC-5: a click `offset` from a template that matched at a declared factor,
+/// scaled by it: each of the four numbers `(v * factor + 500) div 1000` with the sign of `v`, a
+/// width or height at least 1. A template without `scales`, or a located text, keeps the offset.
+fn scaled_click_offset(
+    offset: ClickRect,
+    target: &TargetEvaluation,
+) -> Result<ClickRect, ContainedTaskError> {
+    let Some(factor) = target.template.and_then(|template| template.scale_milli) else {
+        return Ok(offset);
+    };
+    let scale = |value: i32| {
+        actingcommand_recognition::resample::scale_signed(value, factor).ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })
+    };
+    Ok(ClickRect {
+        x: scale(offset.x)?,
+        y: scale(offset.y)?,
+        width: scale(offset.width)?.max(1),
+        height: scale(offset.height)?.max(1),
+    })
 }
 
 fn target_kind_name(kind: TargetKind) -> &'static str {
@@ -13335,6 +13416,7 @@ mod retry_wiring_tests {
                 raw_score: 1.0,
                 score: 1.0,
                 threshold: 0.9,
+                scale_milli: None,
             }),
             color: None,
             ocr: None,
@@ -13482,6 +13564,7 @@ mod retry_wiring_tests {
                 raw_score: 1.0,
                 score: 1.0,
                 threshold: 0.9,
+                scale_milli: None,
             }),
             color: None,
             ocr: None,

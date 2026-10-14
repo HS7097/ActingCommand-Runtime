@@ -421,6 +421,11 @@ crate::outcome_codes! {
         TypeMismatch => "type_mismatch": error / none,
         UnsupportedSchemaVersion => "unsupported_schema_version": error / none,
         ValidationFailed => "validation_failed": error / none,
+        // Workflow #389 MCP-21 (MCP-0 command table v1.1 §4.22): a command's `--wait` ended
+        // before its request did; the request goes on in the Runtime. The contract's, because
+        // actingctl emits it before U-3 and actinglab after it (keys `operation`, `request_id`,
+        // `waited_ms`).
+        CommandWaitExpired => "command_wait_expired": error / none,
     }
 }
 
@@ -1007,6 +1012,8 @@ crate::outcome_codes! {
         ResourceReadingsCountInvalid => "resource_readings_count_invalid": error / declaration_error,
         ResourceReadingIdDuplicate => "resource_reading_id_duplicate": error / declaration_error,
         ResourceReadingFactKeyDuplicate => "resource_reading_fact_key_duplicate": error / declaration_error,
+        // Workflow #390 READ-1: a mark's second reading key, the capacity of a fraction.
+        ResourceReadingCapacityFactKeyInvalid => "resource_reading_capacity_fact_key_invalid": error / declaration_error,
         // Workflow #384 D2-S3: the `resource_adjustments` declaration.
         ResourceAdjustmentsCountInvalid => "resource_adjustments_count_invalid": error / declaration_error,
         ResourceAdjustmentIdInvalid => "resource_adjustment_id_invalid": error / declaration_error,
