@@ -721,14 +721,14 @@ fn wait_expired(
         .operation(operation)
         .waited_ms(wait);
     if let Some(request_id) = request_id {
-        let text = id_text(&request_id);
+        let text = run_evidence::id_text(&request_id);
         outcome = outcome.request_id(text.as_str());
         members.insert("request_id".to_owned(), Value::String(text));
     }
     if let Some(correlation_id) = correlation_id {
         members.insert(
             "correlation_id".to_owned(),
-            Value::String(id_text(&correlation_id)),
+            Value::String(run_evidence::id_text(&correlation_id)),
         );
     }
     members.insert("state".to_owned(), Value::String("in_progress".to_owned()));
@@ -736,15 +736,6 @@ fn wait_expired(
         members,
         outcome,
         refused: true,
-    }
-}
-
-/// An identifier as its text.
-fn id_text(id: &impl Serialize) -> String {
-    match serde_json::to_value(id) {
-        Ok(Value::String(text)) => text,
-        Ok(other) => other.to_string(),
-        Err(error) => error.to_string(),
     }
 }
 
